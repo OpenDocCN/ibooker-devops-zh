@@ -1,0 +1,500 @@
+- en: 'Chapter 6\. Serverless Functions In-Depth: Part 1'
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第6章。无服务器函数深入解析：第1部分
+- en: In [Chapter 2](ch02.xhtml#ch2), you learned how to create and interact with
+    a serverless API using API Gateway and AWS Lambda. Here, you’ll continue to learn
+    about how to use serverless functions by creating two new types of functions.
+    The functions in this chapter will be different in that, instead of using them
+    as strictly a web server or an API, you’ll be using them to interact with other
+    AWS services to aid in the application-development process.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[第2章](ch02.xhtml#ch2)中，您学会了如何使用API Gateway和AWS Lambda创建和交互无服务器API。在这里，您将继续学习如何通过创建两种新类型的函数来使用无服务器函数。本章中的函数将不同，因为您将使用它们与其他AWS服务进行交互，以帮助应用程序开发过程。
+- en: 'You’ll be creating the following two kinds of functions in this chapter:'
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，您将创建以下两种类型的函数：
+- en: A function that dynamically adds a user to a group based on their email address
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个根据用户电子邮件地址动态将用户添加到组的函数
+- en: In some applications, you will need to perform “coarse-grained” access control,
+    which typically means granting certain permissions to users in a broad way based
+    on the type of role or group they are associated with. In our example, we’ll have
+    an administrator group of users that will be identified by their email address.
+    If a user signs up with one of these email addresses, we will place them in a
+    group called *Admin*.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在一些应用程序中，您将需要执行“粗粒度”访问控制，通常意味着根据用户关联的角色或组的类型广泛授予某些权限。在我们的示例中，我们将有一个由其电子邮件地址标识的管理员用户组。如果用户使用这些电子邮件地址之一注册，我们将将他们放入名为*Admin*的组中。
+- en: A function that automatically resizes an image after it has been uploaded to
+    Amazon S3
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个在图像上传到Amazon S3后自动调整图像大小的函数
+- en: Many applications require dynamic image resizing on the server after a user
+    has uploaded an image. This is done for many reasons, ranging from the need to
+    make the web application more performant by compressing images to the need to
+    dynamically create avatars or thumbnail images of a smaller size for images.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 许多应用程序在用户上传图像后需要在服务器上进行动态图像调整。这样做的原因有很多，从需要通过压缩图像使Web应用程序更具性能到需要动态创建头像或缩略图等较小尺寸的图像。
+- en: In [Chapter 7](ch07.xhtml#ch7), we’ll continue learning about serverless functions
+    by creating an ecommerce application that interacts with a database and allows
+    the user to create, read, update, and delete items from a database by invoking
+    the function via an API call.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[第7章](ch07.xhtml#ch7)中，我们将继续学习有关无服务器函数的知识，通过创建一个与数据库交互的电子商务应用程序，并允许用户通过调用API来创建、读取、更新和删除数据库中的项目。
+- en: Event Sources and Data Structure
+  id: totrans-8
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 事件源和数据结构
+- en: 'In [Chapter 2](ch02.xhtml#ch2), we briefly talked about event sources for serverless
+    functions as part of an event-based architecture. The only event source we have
+    implemented up until this point has been from API Gateway: an HTTP request that
+    triggered the function, and fetched data from an API and returned it in the response.
+    In this chapter, we’ll be working with two other event types and sources, one
+    from Amazon S3 and one from Amazon Cognito.'
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[第2章](ch02.xhtml#ch2)中，我们简要讨论了作为事件驱动架构一部分的无服务器函数的事件源。到目前为止，我们实现的唯一事件源来自API
+    Gateway：触发函数的HTTP请求，并从API获取数据并在响应中返回。在本章中，我们将使用另外两种事件类型和来源，一种来自Amazon S3，另一种来自Amazon
+    Cognito。
+- en: 'To understand the events coming into Lambda from the event sources, it’s important
+    to underscore the following point: the shape of the event data will differ between
+    different event types. For instance, the HTTP event data structure coming from
+    API Gateway will be different than the Amazon S3 event data structure, and the
+    Amazon S3 event data structure will differ from the Amazon Cognito data structure.'
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要理解从事件源传入Lambda的事件，重要的一点是强调以下内容：不同事件类型之间的事件数据形状将不同。例如，来自API Gateway的HTTP事件数据结构将不同于Amazon
+    S3事件数据结构，而Amazon S3事件数据结构将与Amazon Cognito数据结构不同。
+- en: Understanding the shape of the event data, as well as knowing the data available
+    to you in the event, will help you understand the capabilities of what you can
+    do in the Lambda function. To understand this better, let’s take a look at the
+    shape of various data structures from different events. For now, you do not need
+    to understand every field and value in these data structures. I will outline the
+    values that will be important for us in the following examples.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 了解事件数据的结构，以及了解事件中可用的数据，将帮助您理解 Lambda 函数中可以执行的功能的能力。为了更好地理解这一点，让我们来看看来自不同事件的各种数据结构。目前，您不需要理解这些数据结构中的每个字段和值。我将在下面的示例中概述对我们重要的值。
+- en: API Gateway Event
+  id: totrans-12
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: API 网关事件
+- en: 'The API gateway event data is the data structure that will be passed into the
+    Lambda function when invoking it from an API Gateway HTTP event, like GET, PUT,
+    POST, or DELETE. This data structure holds information like the HTTP method that
+    invoked the function, the path that was invoked, the body if one was passed in,
+    and the identity of the user calling the API (inside the `requestContext.identity`
+    field) if the user was authenticated:'
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: API 网关事件数据是在从 API 网关 HTTP 事件（如 GET、PUT、POST 或 DELETE）调用时传递给 Lambda 函数的数据结构。此数据结构包含调用函数的
+    HTTP 方法、调用的路径、如果传入的话还有请求体，以及调用 API 的用户的身份信息（在 `requestContext.identity` 字段中）（如果用户已经通过身份验证）：
+- en: '[PRE0]'
+  id: totrans-14
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: Amazon S3 Event
+  id: totrans-15
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Amazon S3 事件
+- en: 'The Amazon S3 event is the data structure that will be received when invoking
+    a Lambda function from a file upload or update to Amazon S3\. This data structure
+    holds an array of records from S3\. The main information you’ll typically be working
+    with in this event data is the `s3` field. This property holds information like
+    the bucket name, the key, and the size of the item being stored:'
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Amazon S3 事件是在从文件上传或更新到 Amazon S3 时调用 Lambda 函数时将收到的数据结构。此数据结构包含来自 S3 的记录数组。在此事件数据中，您通常将使用的主要信息是
+    `s3` 字段。此属性包含存储桶名称、键和正在存储的项目的大小等信息：
+- en: '[PRE1]'
+  id: totrans-17
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: Amazon Cognito Event
+  id: totrans-18
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Amazon Cognito 事件
+- en: 'The Amazon Cognito event data is the data structure that will be passed into
+    the function when being invoked from an Amazon Cognito action. These actions could
+    be anything from a user signing up, a user confirming their account, or a user
+    signing in, among other available events:'
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Amazon Cognito 事件数据是在从 Amazon Cognito 操作调用时传递给函数的数据结构。这些操作可以是用户注册、用户确认其帐户或用户登录等事件：
+- en: '[PRE2]'
+  id: totrans-20
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: You’ll be using these events and the information contained within them to perform
+    different types of actions from within the functions.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你将使用这些事件和其中包含的信息来执行不同类型的操作，从而在函数内部执行这些操作。
+- en: IAM Permissions and Trigger Configuration
+  id: totrans-22
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: IAM 权限和触发器配置
+- en: 'When setting up these triggers using the CLI, a couple of things are happening
+    under the hood:'
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在使用 CLI 设置这些触发器时，幕后发生了几件事：
+- en: The CLI is enabling the trigger itself in the Lambda configuration. When a trigger
+    is enabled, the event will be sent to the function every time that interaction
+    happens (API event, S3 upload, etc.).
+  id: totrans-24
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: CLI 正在启用 Lambda 配置中的触发器本身。启用触发器后，每次发生互动（API 事件、S3 上传等）时，事件将发送到函数。
+- en: The CLI is giving additional permissions to the function itself to interact
+    with other services. For instance, when we enable the S3 trigger in this chapter,
+    we are wanting the Lambda function to be able to read and store images in that
+    bucket.
+  id: totrans-25
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: CLI 为函数本身提供了与其他服务交互的额外权限。例如，在本章中启用 S3 触发器时，我们希望 Lambda 函数能够读取和存储该存储桶中的图像。
+- en: To enable this, the CLI will add additional Identity and Access Management (IAM)
+    policies under the hood to the function, giving it permissions like read and write
+    access to work with S3, or permissions to interact with the Cognito user pool
+    in our other example.
+  id: totrans-26
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 为了实现这一点，CLI 将在幕后为函数添加额外的身份和访问管理（IAM）策略，为其提供诸如读取和写入访问权限以处理与 S3 的工作，或者与我们其他示例中的
+    Cognito 用户池交互的权限。
+- en: Creating the Base Project
+  id: totrans-27
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 创建基础项目
+- en: 'The first thing we’ll do is create a new React application and install the
+    dependencies we’ll need for this chapter:'
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们要做的第一件事是创建一个新的 React 应用程序并安装本章所需的依赖项：
+- en: '[PRE3]'
+  id: totrans-29
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'Next, we’ll create a new Amplify project:'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，我们将创建一个新的 Amplify 项目：
+- en: '[PRE4]'
+  id: totrans-31
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: Now that the project has been initialized, we can begin adding the services.
+    The services we’ll need for this chapter will be Amazon Cognito, Amazon S3, and
+    AWS Lambda. We’ll start by adding Amazon Cognito and testing out a post-confirmation
+    Lambda trigger.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在项目已经初始化完成，我们可以开始添加服务。本章我们需要的服务将包括Amazon Cognito、Amazon S3和AWS Lambda。我们将从添加Amazon
+    Cognito开始，并测试一下后确认Lambda触发器。
+- en: Adding a Post-Confirmation Lambda Trigger
+  id: totrans-33
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 添加后确认Lambda触发器
+- en: 'The next thing we want to do is create an authentication service. We will then
+    create and configure a post-confirmation Lambda trigger. This means we want a
+    Lambda function to be invoked every time someone successfully signs up and confirms
+    their account using our authentication service. This post-confirmation trigger
+    only fires once per confirmed user:'
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们接下来要做的是创建一个认证服务。然后，我们将创建和配置一个后确认Lambda触发器。这意味着我们希望每当有人成功注册并确认其帐户时，就会调用一个Lambda函数。此后确认触发器每个已确认的用户只触发一次：
+- en: '[PRE5]'
+  id: totrans-35
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'Now, update the function with the following code:'
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，使用以下代码更新函数：
+- en: '[PRE6]'
+  id: totrans-37
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: In this function, there is one main piece of functionality. If the user is one
+    of the admins specified in the `admins` email array, we automatically place them
+    in the group called `Admins`. Change the values in the `adminEmails` array to
+    include your email address.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这个函数中，有一个主要的功能部分。如果用户是`admins`电子邮件数组中指定的管理员之一，我们会自动将他们放入名为`Admins`的组中。请更改`adminEmails`数组中的值，以包括您的电子邮件地址。
+- en: 'To deploy the service, run the `push` command:'
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要部署服务，请运行`push`命令：
+- en: '[PRE7]'
+  id: totrans-40
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: 'Now that the backend is set up, we can test it out. To do so, we first need
+    to configure the React project to recognize the Amplify dependencies. Open *src/index.js*
+    and add the following below the last import:'
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在后端已经设置好，我们可以进行测试。为此，我们首先需要配置React项目以识别Amplify依赖项。打开*src/index.js*文件，并在最后一个导入语句下面添加以下内容：
+- en: '[PRE8]'
+  id: totrans-42
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: 'Next, we’ll sign up a new user and display a greeting if they are an admin.
+    To do so, open *src/App.js* and add the following:'
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，我们将注册一个新用户，并在他们是管理员时显示问候语。为此，打开*src/App.js*文件并添加以下内容：
+- en: '[PRE9]'
+  id: totrans-44
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: 'Run the app:'
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运行应用程序：
+- en: '[PRE10]'
+  id: totrans-46
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: Now, sign up with an admin user. If the user is indeed one of the admins, you
+    should see the `Welcome, Admin` greeting.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，使用管理员用户注册。如果用户确实是管理员之一，您应该会看到`Welcome, Admin`的问候语。
+- en: 'You can also view the Amazon Cognito authentication service and all of the
+    users and groups by running the following command:'
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您还可以通过运行以下命令查看Amazon Cognito认证服务以及所有用户和组：
+- en: '[PRE11]'
+  id: totrans-49
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: Dynamic Image Resizing with AWS Lambda and Amazon S3
+  id: totrans-50
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用AWS Lambda和Amazon S3进行动态图像调整大小
+- en: In the next example, we will add functionality that allows users to upload images
+    to Amazon S3\. We’ll also configure an S3 trigger to call a Lambda function every
+    time a file is uploaded to the bucket. In this function, we’ll check the size
+    of the image, and if it is above a certain width, we will resize it to be below
+    the width threshold.
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在下一个示例中，我们将添加功能，允许用户将图像上传到Amazon S3。我们还将配置一个S3触发器，每当文件上传到存储桶时就调用Lambda函数。在此函数中，我们将检查图像的尺寸，如果超过某个宽度阈值，则将其调整大小为低于该宽度阈值。
+- en: 'For this to work, we need to enable S3 to trigger the Lambda function in our
+    project when a file is uploaded. We can do this using the Amplify CLI by just
+    creating the S3 bucket and choosing the correct configuration. From the CLI, run
+    the following commands:'
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要使此功能正常工作，我们需要在项目中配置S3以在文件上传时触发Lambda函数。我们可以通过Amplify CLI来实现这一点，只需创建S3存储桶并选择正确的配置即可。从CLI中运行以下命令：
+- en: '[PRE12]'
+  id: totrans-53
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: This will open the function into your text editor.
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这将在您的文本编辑器中打开该函数。
+- en: Adding the Custom Logic for Resizing the Image
+  id: totrans-55
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 添加自定义逻辑以调整图像大小
+- en: Now, we can update the function to implement the image resizing.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，我们可以更新函数来实现图像调整大小。
+- en: 'In this function, we will fetch the image from S3 when the event comes through,
+    and check to see if it is greater than 1,000 pixels wide. If that’s the case,
+    then we’ll resize it to 1,000 pixels wide and save it back to the S3 bucket. If
+    the image is not larger than 1,000 pixels wide, we exit from the function without
+    taking any action:'
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这个函数中，当事件发生时，我们将从S3获取图像，并检查其是否大于1000像素宽。如果是这样，则将其调整为1000像素宽并保存回S3存储桶。如果图像未超过1000像素宽，则退出函数而不执行任何操作：
+- en: '[PRE13]'
+  id: totrans-58
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: 'For our function to work, we need to do one more thing. We are requiring the
+    Sharp library in our Lambda function, but so far we have not installed this dependency.
+    To make sure this module is installed, update the *package.json* file for the
+    function to add both the dependency for the package as well as an install script
+    that we will need in order for Sharp to run correctly in the Lambda environment.
+    The two fields we will be adding are `scripts` and `dependencies`:'
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了使我们的函数正常工作，我们需要再做一件事情。在我们的 Lambda 函数中需要引入 Sharp 库，但目前我们还没有安装这个依赖项。为了确保这个模块被安装，更新函数的
+    *package.json* 文件，添加这个包的依赖项以及我们需要的安装脚本，以便 Sharp 在 Lambda 环境中正确运行。我们将要添加的两个字段是
+    `scripts` 和 `dependencies`：
+- en: '[PRE14]'
+  id: totrans-60
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: 'Now, the service is ready to be deployed:'
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，服务已准备部署：
+- en: '[PRE15]'
+  id: totrans-62
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: Uploading Images from the React Application
+  id: totrans-63
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 从 React 应用程序上传图像
+- en: 'Next, open *src/App.js* and add the following code to render an image picker
+    and photo list:'
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，打开 *src/App.js* 文件，并添加以下代码以渲染一个图像选择器和照片列表：
+- en: '[PRE16]'
+  id: totrans-65
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: 'Next, run the app:'
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，运行应用程序：
+- en: '[PRE17]'
+  id: totrans-67
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: When you upload an image that is wider than 1,000 pixels, you’ll notice that
+    it will initially load as the original size, but if you reload the app, you will
+    see that the image has been resized to the correct 1,000-pixel width.
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您上传的图像宽度超过 1,000 像素时，您会注意到它最初会加载为原始尺寸，但如果重新加载应用程序，您会看到图像已调整为正确的 1,000 像素宽度。
+- en: Summary
+  id: totrans-69
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 总结
+- en: Congratulations, you’ve now successfully implemented two types of Lambda triggers!
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 恭喜，您现在已成功实现了两种类型的 Lambda 触发器！
+- en: 'Here are a few things to keep in mind from this chapter:'
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从本章中要记住的几点是：
+- en: Lambda functions can be invoked from many different event types, including API
+    calls, image uploads, database operations, and authentication events.
+  id: totrans-72
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Lambda 函数可以从许多不同的事件类型中调用，包括 API 调用、图像上传、数据库操作和身份验证事件。
+- en: The `event` data structure differs based on the type of event invoking the Lambda
+    function.
+  id: totrans-73
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 根据调用 Lambda 函数的事件类型，`event` 数据结构有所不同。
+- en: Understanding the data available in the event variable enables you to better
+    evaluate the things that can be accomplished within the function.
+  id: totrans-74
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 理解事件变量中的数据可以更好地评估在函数内可以完成的事情。
+- en: When a Lambda trigger is enabled by the Amplify CLI, additional IAM permissions
+    are given to the function, allowing it to directly interact with other services.
+  id: totrans-75
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 当 Amplify CLI 启用 Lambda 触发器时，函数会获得额外的 IAM 权限，允许它直接与其他服务交互。
