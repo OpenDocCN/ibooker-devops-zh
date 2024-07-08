@@ -1,0 +1,1339 @@
+- en: Chapter 8\. Working Example of Multicluster Application Delivery
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第8章。多集群应用程序交付的工作示例
+- en: Let’s take a look at a simple working example of a web application with a backing
+    datastore. For our purposes, we will deploy an app that mimics the game PAC-MAN
+    game from Atari. A user will interact with a dynamic frontend that stores information
+    in a backing MongoDB.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们来看一个简单的工作示例，一个带有后备数据存储的 Web 应用程序。为了我们的目的，我们将部署一个模仿雅达利游戏 PAC-MAN 的应用程序。用户将与一个动态前端进行交互，该前端将信息存储在后备的
+    MongoDB 中。
+- en: We will deploy this application across multiple distinct clusters using the
+    techniques discussed in [Chapter 5](ch05.html#continuous_delivery_across_clusters).
+    Each of the clusters will be provisioned from a hub running Open Cluster Management,
+    as discussed in [Chapter 6](ch06.html#multicluster_fleets_provision_and_upgrad).
+    Further, we will configure an external load balancer provided by a GSLB service
+    hosted by F5\. Incoming user requests will be routed from a global domain into
+    one of the specific clusters. If any one of the clusters or the application experiences
+    a problem, then user requests will no longer be routed to that cluster. We are
+    going to go a little further and demonstrate how to integrate off-cluster resources
+    like an F5 DNS Load Balancer Cloud Service, and we will integrate a ServiceNow
+    change ticket into the example.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将使用在[第5章](ch05.html#continuous_delivery_across_clusters)讨论的技术在多个不同的集群上部署此应用程序。每个集群将从运行
+    Open Cluster Management 的中心进行配置，如[第6章](ch06.html#multicluster_fleets_provision_and_upgrad)所述。此外，我们将配置由
+    F5 托管的 GSLB 服务提供的外部负载均衡器。来自全局域名的传入用户请求将被路由到特定集群中的一个。如果任何一个集群或应用程序遇到问题，则将不再将用户请求路由到该集群。我们将进一步探讨如何集成集群外资源，例如
+    F5 DNS 负载均衡器云服务，并将在示例中集成 ServiceNow 变更工单。
+- en: In [Figure 8-1](#a_working_example_made_up_of_multiple_cl), we see our PAC-MAN
+    application running on two OpenShift clusters with a load balancer routing traffic
+    to app instances on either cluster. We can see the hub cluster with various resources
+    that are helping to manage the overall system. Through the rest of this chapter,
+    we will explain what these various parts are doing and provide a walk-through
+    that you can do on your own to experiment with all of the moving parts.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[图 8-1](#a_working_example_made_up_of_multiple_cl)中，我们看到我们的 PAC-MAN 应用程序在两个
+    OpenShift 集群上运行，负载均衡器将流量路由到任一集群中的应用实例。我们可以看到中心集群有各种资源，这些资源有助于管理整个系统。在本章的其余部分，我们将解释这些各种部分正在做什么，并提供一个可以自行尝试的演示，涵盖所有移动部件。
+- en: '![](assets/hcok_0801.png)'
+  id: totrans-4
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](assets/hcok_0801.png)'
+- en: Figure 8-1\. A working example made up of multiple clusters and a two-tier web
+    application, managed by an Open Cluster Management hub and integrating off-cluster
+    automation
+  id: totrans-5
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图8-1。由多个集群组成的工作示例，以及一个由 Open Cluster Management 中心管理的两层 Web 应用程序，集成了集群外自动化。
+- en: Failure Is Inevitable
+  id: totrans-6
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 失败是不可避免的。
+- en: We have seen from many angles how OpenShift recovers from failures of the underlying
+    infrastructure or cloud provider and how you can achieve a responsive and adaptive
+    open hybrid cloud to support your applications. Let’s review some of the things
+    we’ve talked about.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们从多个角度看到了 OpenShift 如何从基础设施或云提供商的故障中恢复，以及如何实现响应迅速且适应性强的开放式混合云，以支持您的应用程序。让我们回顾一些我们谈论过的事情。
+- en: In [Chapter 4](ch04.html#single_cluster_availability), we discussed single cluster
+    availability where the control plane of a Kubernetes cluster is able to tolerate
+    the failure of any one availability zone. When an availability zone fails in a
+    single cluster, both the control plane and applications running within the cluster
+    can tolerate loss of supporting compute, network, or storage infrastructure. Your
+    applications must take advantage of Kubernetes concepts like services that act
+    as a load balancer within the cluster, routing user requests to multiple supporting
+    application pods. When an application pod is no longer healthy (as determined
+    by health checks) or the node supporting the pod is no longer healthy, then the
+    Kubernetes scheduler will look for a new home for the failing pod. We design applications
+    for resiliency by having redundant pods that continue to run and service incoming
+    user requests.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[第4章](ch04.html#single_cluster_availability)中，我们讨论了单个集群可用性，其中Kubernetes集群的控制平面能够容忍任何一个可用区的故障。当单个集群中的可用区失败时，控制平面和集群内运行的应用程序都能够容忍支持计算、网络或存储基础设施的丢失。您的应用程序必须利用像服务这样的Kubernetes概念，在集群内充当负载均衡器，将用户请求路由到多个支持应用程序Pod。当应用程序Pod不再健康（由健康检查确定）或支持该Pod的节点不再健康时，Kubernetes调度器将寻找一个新的Pod家。我们通过拥有继续运行并服务传入用户请求的冗余Pod来设计具有弹性的应用程序。
+- en: Now what happens if the cluster cannot reschedule the failing pod because it
+    has exhausted capacity? What happens if more than a single availability zone fails?
+    Under these scenarios, it may be preferable to deploy additional instances of
+    the application to other clusters in alternative regions or even alternative cloud
+    providers.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，如果集群由于耗尽容量而无法重新调度失败的Pod会发生什么？如果超过一个可用区失败会发生什么？在这些情况下，将应用程序的额外实例部署到其他集群中的其他区域甚至其他云提供商可能是更可取的选择。
+- en: As we saw in [Chapter 6](ch06.html#multicluster_fleets_provision_and_upgrad),
+    we can use OpenShift to provision running clusters across many different cloud
+    providers. The [Open Cluster Management](https://oreil.ly/3J1SW) project allows
+    you to manage those clusters from a central control plane, referred to as the
+    “hub” cluster.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如我们在[第6章](ch06.html#multicluster_fleets_provision_and_upgrad)中所看到的，我们可以使用OpenShift在许多不同的云提供商上提供正在运行的集群。[开放集群管理](https://oreil.ly/3J1SW)项目允许您从称为“中心”集群的中央控制平面管理这些集群。
+- en: Further, in [Chapter 7](ch07.html#multicluster_policy_configuration), we saw
+    how a given cluster was matched to required configurations through a `PlacementRule`.
+    Whenever an Open Cluster Management policy was matched against a cluster because
+    the cluster was selected by a `PlacementRule`, required configuration could be
+    audited or enforced against that cluster. Because OpenShift is very operator-centric
+    both for the control plane and for workloads, using policies to drive declarative
+    configuration is a natural and simple way to ensure that your clusters are ready
+    to support application workloads. An added benefit is that the declarative policies
+    are easily managed in your source control systems if you’re adopting a full or
+    semi-GitOps approach.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此外，在[第7章](ch07.html#multicluster_policy_configuration)中，我们看到如何通过`PlacementRule`将给定的集群与所需配置匹配。每当Open
+    Cluster Management策略与集群匹配时，因为该集群被`PlacementRule`选中，所需的配置可以被审核或强制执行到该集群。由于OpenShift对操作员中心化非常重视，无论是对控制平面还是工作负载，使用策略来驱动声明性配置是确保您的集群准备好支持应用工作负载的一种自然且简单的方式。另一个好处是，如果您正在采用完全或半GitOps方法，声明性策略可以在您的源代码控制系统中轻松管理。
+- en: In [Chapter 5](ch05.html#continuous_delivery_across_clusters), we examined how
+    an appropriate `PlacementRule` can ensure that an application is running across
+    multiple clusters. By running an application across more than one cluster in separate
+    regions, we can now tolerate the failure of an entire cloud region. Alternatively,
+    you can use this when your organization happens to have adopted different cloud
+    providers just due to organizational inertia, because of a merger and acquisition,
+    or because you need to survive the complete outage of a cloud provider. The simplest
+    example of multicluster, though, likely is that you are leveraging your existing
+    datacenter virtualization provider and adopting at least one public cloud provider
+    as well. `PlacementRule`s help separate the “what” needs to run from the “where”
+    very easily. `PlacementRule`s also enable your application to adjust if the availability
+    or labeling of clusters changes. That is, if either the `PlacementRule` is changed
+    or the set of available clusters changes due to additions or removals, then the
+    application components will be dynamically redeployed across new clusters or taken
+    off of failing clusters.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 [第5章](ch05.html#continuous_delivery_across_clusters) 中，我们探讨了如何通过适当的 `PlacementRule`
+    确保应用程序跨多个集群运行。通过在不同地区的多个集群中运行应用程序，我们现在可以容忍整个云区域的故障。或者，当您的组织仅因组织惯性、并购，或因需要抵御云服务提供商的完全故障时，也可以使用此功能。尽管多集群的最简单示例可能是利用现有的数据中心虚拟化提供商，并至少采纳一个公共云提供商。`PlacementRule`
+    很容易将“需要运行的内容”与“需要运行的位置”分开。`PlacementRule` 还可以使您的应用程序在集群的可用性或标记发生变化时进行调整。也就是说，如果
+    `PlacementRule` 更改或可用集群的集合因增加或删除而更改，则应用程序组件将动态重新部署到新的集群或从失败的集群中撤出。
+- en: So, we can create clusters easily ([Chapter 6](ch06.html#multicluster_fleets_provision_and_upgrad)),
+    we can ensure those clusters are configured correctly to support the enterprise
+    configuration and security standards ([Chapter 7](ch07.html#multicluster_policy_configuration)),
+    and we can deliver applications to those clusters ([Chapter 5](ch05.html#continuous_delivery_across_clusters)).
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，我们可以轻松创建集群（[第6章](ch06.html#multicluster_fleets_provision_and_upgrad)），我们可以确保这些集群配置正确，以支持企业配置和安全标准（[第7章](ch07.html#multicluster_policy_configuration)），并且我们可以将应用程序交付到这些集群中（[第5章](ch05.html#continuous_delivery_across_clusters)）。
+- en: Multicluster Load Balancing
+  id: totrans-14
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 多集群负载均衡
+- en: How do we ensure that user requests are routed to healthy application instances?
+    For our example, we will use a cloud-based GSLB service managed by F5.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如何确保用户请求路由到健康的应用实例？在我们的示例中，我们将使用由 F5 管理的基于云的GSLB服务。
+- en: 'There are a number of solutions to handle multicluster load balancing. We’ve
+    chosen to use an cloud-based service from F5 for these reasons:'
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 处理多集群负载均衡有多种解决方案。出于这些原因，我们选择使用来自 F5 的云服务：
+- en: It’s not supported by an operator at the time of this writing (and yet is still
+    important to automate with our application).
+  id: totrans-17
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在撰写本文时，该操作员不支持（但仍然对我们的应用程序进行自动化非常重要）。
+- en: It’s easy to sign up for a lightweight account through the AWS Marketplace.
+  id: totrans-18
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 您可以通过 AWS Marketplace 轻松注册一个轻量级帐户。
+- en: We expect most datacenters will need to automate how their applications integrate
+    with an F5 BIG-IP load balancer. Even though the cloud-based service and the F5
+    BIG-IP appliances use different APIs, we believe the example will give you enough
+    of an understanding that you can adapt the principles that are demonstrated to
+    your own applications. Also, if we used a BIG-IP virtual appliance for the example,
+    it would increase the complexity for users who want to re-create the complete
+    example.
+  id: totrans-19
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 我们预计大多数数据中心将需要自动化其应用程序如何与 F5 BIG-IP 负载均衡器集成。尽管基于云的服务和 F5 BIG-IP 设备使用不同的API，但我们相信示例将为您提供足够的理解，以便您可以根据自己的应用程序调整所展示的原则。另外，如果我们使用
+    BIG-IP 虚拟设备作为示例，这将增加用户重新创建完整示例的复杂性。
+- en: The F5 service will work for you even if your clusters run across completely
+    different cloud environments or your own datacenters with public routes exposed.
+  id: totrans-20
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 即使您的集群跨越完全不同的云环境或您自己的公共路由暴露的数据中心，F5 服务也将为您提供服务。
+- en: 'For your own awareness and reference, here are two other options to provide
+    load balancing across clusters:'
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下是为提供跨集群负载均衡的另外两个选项，仅供您参考和了解：
+- en: The [external-dns](https://oreil.ly/eyHBj) project extends the typical internal
+    cluster DNS registry for services into a public DNS record. The project is still
+    somewhat young as of the time of this writing but has a number of supported providers.
+  id: totrans-22
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[external-dns](https://oreil.ly/eyHBj) 项目将典型的内部集群 DNS 注册表服务扩展到公共 DNS 记录。截至撰写本文时，该项目仍较为年轻，但支持多个提供者。'
+- en: The [k8gb.io](https://www.k8gb.io) project will set up DNS registries within
+    each cluster. An external DNS entry must be configured in some top-level DNS provider
+    that delegates to the cluster-specific DNS registries. The architecture has the
+    benefit that there is no centralized controller that can be a single point of
+    failure. However, features like latency-based routing are not currently supported
+    (as in the F5 or external-dns options).
+  id: totrans-23
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[k8gb.io](https://www.k8gb.io) 项目将在每个集群内设置 DNS 注册表。某些顶级 DNS 提供者必须配置外部 DNS 条目，以委派到特定集群的
+    DNS 注册表。这种架构的好处是没有中心化控制器可能成为单点故障。然而，像基于延迟的路由等功能目前不受支持（例如在 F5 或 external-dns 选项中）。'
+- en: 'In our example application, you will establish a top-level DNS record (e.g.,
+    `*.www-apps.<*clusterName*>.<*baseDomain*>`) that delegates to the F5 DNS Load
+    Balancer to resolve the address (e.g., ns1.f5cloudservices.com and ns2.f5cloudservices.com).
+    Then the general flow of DNS requests to resolve the address will go through the
+    following steps:'
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在我们的示例应用程序中，您将建立一个顶级 DNS 记录（例如 `*.www-apps.<*clusterName*>.<*baseDomain*>`），将其委派给
+    F5 DNS 负载均衡器以解析地址（例如 ns1.f5cloudservices.com 和 ns2.f5cloudservices.com）。然后，DNS
+    请求解析地址的一般流程将经过以下步骤：
+- en: User resolves `app-name.www-apps.<*clusterName*>.<*baseDomain*>` against the
+    top-level DNS provider, which redirects the request to the relevant cloud DNS
+    provider for `*.<*baseDomain*>`.
+  id: totrans-25
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 用户通过顶级 DNS 提供者解析 `app-name.www-apps.<*clusterName*>.<*baseDomain*>`，该提供者将请求重定向到与
+    `*.<*baseDomain*>` 相关的云 DNS 提供者。
+- en: The `<*baseDomain*>` is resolved against your cloud provider’s DNS (e.g., Amazon
+    Route 53).
+  id: totrans-26
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: '`<*baseDomain*>` 将由您的云提供商的 DNS 解析（例如，Amazon Route 53）。'
+- en: The cloud DNS provider returns a nameserver record for `*.www-apps.<*clusterName*>.<*baseDomain*>`
+    to route the request to one of ns1.f5cloudservices.com or ns2.f5cloudservices.com.
+  id: totrans-27
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 云 DNS 提供商返回一个名字服务器记录，用于 `*.www-apps.<*clusterName*>.<*baseDomain*>` 的路由请求，以便将请求路由至
+    ns1.f5cloudservices.com 或 ns2.f5cloudservices.com 中的一个。
+- en: The final resolution request to ns1.f5cloudservices.com or ns2.f5cloudservices.com
+    evaluates the list of managed zones and, based on where the DNS request originated
+    from and current health of backing services, returns the best match to an application
+    route hosted by one of your clusters.
+  id: totrans-28
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 对 ns1.f5cloudservices.com 或 ns2.f5cloudservices.com 的最终解析请求评估托管区域列表，并根据 DNS
+    请求的来源和支持服务的当前健康状态返回与您的集群之一托管的应用程序路由最佳匹配。
+- en: As shown in [Figure 8-2](#the_ffive_dns_load_balancer_cloud_servic), in the
+    F5 DNS Load Balancer Cloud Service, you will have one DNS load balancer zone for
+    each collection of clusters that may host the application. Each of these zones
+    will correspond to a top-level DNS entry in your cloud provider DNS that delegates
+    to F5 to resolve the correct cluster for a requested application route.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如[图 8-2](#the_ffive_dns_load_balancer_cloud_servic)所示，在 F5 DNS 负载均衡器云服务中，每个集合集群的
+    DNS 负载均衡器区域将对应于您的云提供商 DNS 中的一个顶级 DNS 条目，该条目委派给 F5 以解析请求的正确集群中的应用程序路由。
+- en: '![](assets/hcok_0802.png)'
+  id: totrans-30
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](assets/hcok_0802.png)'
+- en: Figure 8-2\. The F5 DNS Load Balancer Cloud Service
+  id: totrans-31
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 8-2\. F5 DNS 负载均衡云服务
+- en: When logged into the F5 DNS Load Balancer, you will see your various DNS load
+    balancer services (each of these routes to one or more applications provided across
+    multiple clusters) and the IP endpoints that are currently registered. Each IP
+    endpoint resolves to the application router of one of the clusters hosting one
+    of the application instances.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 登录到 F5 DNS 负载均衡器时，您将看到各种 DNS 负载均衡器服务（其中每个服务跨多个集群提供一个或多个应用程序），以及当前注册的 IP 终端。每个
+    IP 终端解析为托管一个应用程序实例的集群的应用程序路由器。
+- en: Now each time that your application has an instance that becomes available or
+    is removed from a cluster, we need to update the DNS load balancer zone for that
+    application (identified by `*.www-apps.<*clusterName*>.<*baseDomain*>`). How are
+    we going to do this automatically? Here, we’re going to introduce how you can
+    automate around your clusters whenever something in your environment is not “native”
+    Kubernetes. To accomplish this, we’re going to walk through how Ansible can automate
+    an update to the F5 DNS Load Balancer whenever our application is introduced to
+    a new cluster or removed from an existing cluster.
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在每当您的应用程序有一个实例可用或从集群中移除时，我们需要更新 DNS 负载均衡器区域的相关应用程序（由 `*.www-apps.<*clusterName*>.<*baseDomain*>`
+    标识）。我们将如何自动完成这项任务？在这里，我们将介绍如何在您的环境中不是“本地” Kubernetes 时，围绕您的集群自动化。为了实现这一目标，我们将介绍如何使用
+    Ansible 在我们的应用程序引入新集群或从现有集群中删除时，自动更新 F5 DNS 负载均衡器。
+- en: 'You will need to carry out the following prerequisites for running our example
+    application:'
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您需要完成以下先决条件，以运行我们的示例应用程序：
+- en: Create an account with the F5 DNS Load Balancer Cloud Service. You can do this
+    at [F5 Cloud Services](https://oreil.ly/tmmSY) or through the [AWS Marketplace](https://oreil.ly/HF5mw).
+  id: totrans-35
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 在 F5 DNS 负载均衡器云服务上创建一个账户。你可以在 [F5 云服务](https://oreil.ly/tmmSY) 或者通过 [AWS Marketplace](https://oreil.ly/HF5mw)
+    完成这一步骤。
+- en: Delegate your global domain to the F5 DNS nameservers. Create a nameserver-delegating
+    DNS record with the global domain that you will use with F5\. You can do this
+    via Route 53 or your DNS provider. The [F5 DNS Load Balancer Cloud Service FAQ](https://oreil.ly/xK0sK)
+    answers questions related to this prerequisite.
+  id: totrans-36
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 将全局域名委托给 F5 DNS 域名服务器。创建一个委托命名服务器的 DNS 记录，使用你将在 F5 上使用的全局域名。你可以通过 Route 53 或者你的
+    DNS 提供商完成此操作。关于此先决条件的问题，可以查看 [F5 DNS 负载均衡器云服务 FAQ](https://oreil.ly/xK0sK) 获取答案。
+- en: Automating Without Operators
+  id: totrans-37
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 无操作员自动化
+- en: As we’ve covered extensively in this book, Kubernetes makes comprehensive use
+    of declarative configuration. While we believe that Kubernetes will underpin most
+    modern applications in the better part of the next decade, we recognize that not
+    all things are Kubernetes native today and may *never* be Kubernetes native.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如我们在本书中详细讨论的那样，Kubernetes 广泛使用声明性配置。虽然我们相信 Kubernetes 将在未来十年中支撑大多数现代应用程序，但我们也意识到并非所有事物今天都是
+    Kubernetes 原生的，未来也可能*永远*不会是 Kubernetes 原生的。
+- en: For those aspects of your application across multiple clusters or even multiple
+    clouds, we introduce Ansible as a method to automate any behavior that you want
+    to occur when the system introduces a change dynamically. As discussed in the
+    previous section, we want to have our OpenShift environment automatically place
+    our application instances across multiple clusters. Whenever our application is
+    deployed on a new cluster or has to be removed because a cluster is unhealthy,
+    we want our global load balancer configuration in front of the system to be updated.
+    Since we are relying heavily on automated recovery from failures, we want this
+    behavior to be automatic as well.
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于应用程序跨多个集群甚至多个云的各个方面，我们介绍 Ansible 作为一种方法，可以自动化系统引入动态变化时想要发生的任何行为。正如前一节讨论的那样，我们希望我们的
+    OpenShift 环境可以自动将我们的应用实例放置在多个集群上。每当我们的应用程序在新集群上部署或因集群不健康而被移除时，我们希望在系统前端的全局负载均衡器配置也能得到更新。由于我们严重依赖于自动恢复失败，我们希望这种行为也是自动的。
+- en: With Ansible, there is a vibrant community that uses automation to simplify
+    the lives of systems administrators managing Linux, containers, clouds, networking
+    devices, security, and so forth. We aren’t going to go into a lot of depth to
+    teach you about Ansible. However, we will introduce some basic concepts so that
+    you can see how it works and evaluate whether it is appropriate for your needs.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 Ansible，有一个充满活力的社区使用自动化简化系统管理员管理 Linux、容器、云、网络设备、安全等的生活。我们不会深入教您有关 Ansible
+    的知识。但是，我们将介绍一些基本概念，以便您了解其工作原理并评估是否适合您的需求。
+- en: Note that even if you do not have to automate anything outside of the cluster,
+    all of the details covered around availability, multicluster provisioning, configuration,
+    application delivery, and so on still apply.
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，即使您不必在集群外自动化任何事物，所有涉及可用性、多集群配置、配置、应用程序交付等细节仍然适用。
+- en: 'For our purposes, you should only need a grasp of the following concepts in
+    Ansible:'
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于我们的目的，您只需要掌握 Ansible 中以下概念：
+- en: Playbook
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Playbook
+- en: An Ansible playbook is “a blueprint of automation tasks—which are complex IT
+    actions executed with limited or no human involvement. Ansible playbooks are executed
+    on a set, group, or classification of hosts, which together make up an Ansible
+    inventory.”^([1](ch08.html#ch01fn38))
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Ansible playbook 是“自动化任务的蓝图——这些任务是在有限或无人参与的情况下执行的复杂 IT 操作。Ansible playbook 在组合、群组或主机分类上执行。”^([1](ch08.html#ch01fn38))
+- en: Project
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 项目
+- en: An Ansible project groups together playbooks along with supporting resources
+    to run those playbooks. Conveniently, projects can be backed by a source control
+    repository that is used to manage the Ansible playbooks and supporting resources.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Ansible 项目将 playbooks 与支持资源一起组合，以运行这些 playbooks。方便的是，项目可以由用于管理 Ansible playbooks
+    和支持资源的源代码控制存储库支持。
+- en: Ansible Tower
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Ansible Tower
+- en: Ansible Tower is a supported version of the open source project Ansible AWX.
+    Ansible Tower provides the capabilities to organize a set of Ansible projects
+    and an automation engine that keeps track of credentials, scheduled jobs, job
+    templates to be invoked as needed, available inventory of systems to run playbooks
+    against, and so on. In essence, think of Tower as a way to organize and track
+    everything you need to automate systems management.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Ansible Tower 是开源项目 Ansible AWX 的支持版本。Ansible Tower 提供了组织一组 Ansible 项目和自动化引擎的能力，可以跟踪凭据、定期作业、需要调用的作业模板以及可用的系统清单等。从本质上讲，可以将
+    Tower 视为组织和跟踪自动化系统管理所需的一切工具。
+- en: Job template
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作业模板
+- en: An Ansible job template defines an available playbook from an Ansible project
+    within Ansible Tower. Job templates can specify exactly which parameters to externalize
+    and which stored credentials to use, and it can associate a list of all invocations
+    of the job template for auditing or diagnostic purposes.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Ansible 作业模板定义了 Ansible Tower 中来自 Ansible 项目的可用剧本。作业模板可以指定要外部化的参数和要使用的存储凭据，还可以关联作业模板的所有调用列表，用于审核或诊断目的。
+- en: Job
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 工作
+- en: An Ansible job is a running instance of a job template.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Ansible 作业是作业模板的运行实例。
+- en: As discussed in the previous section, we are going to use Ansible to update
+    the F5 DNS Load Balancer Cloud Service for our application. We are going to use
+    a slightly modified version of [an open source tool](https://oreil.ly/p2AyH) from
+    F5 that incorporates all of the API calls required to update the service implemented
+    in Ansible. We will load the f5-bd-gslb-tool playbooks into an Ansible project
+    and define a job template that invokes the required playbook, accepting parameters
+    for the clusters that currently host the application. For an example of what the
+    Ansible project within Ansible Tower looks like, see [Figure 8-3](#an_ansible_project_within_ansible_towers).
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如前所述，我们将使用 Ansible 更新 F5 DNS 负载均衡器云服务。我们将使用来自 F5 的稍作修改的开源工具的版本，该工具集成了更新服务所需的所有
+    API 调用，并在 Ansible 中实现。我们将将 f5-bd-gslb-tool playbooks 加载到一个 Ansible 项目中，并定义一个作业模板，调用所需的
+    playbook，并接受当前托管应用程序的集群参数。要查看 Ansible Tower 中的 Ansible 项目示例，请参见 [图 8-3](#an_ansible_project_within_ansible_towers)。
+- en: '![](assets/hcok_0803.png)'
+  id: totrans-54
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](assets/hcok_0803.png)'
+- en: Figure 8-3\. An Ansible project within Ansible Tower; the contents of the project
+    are managed under source control (via [GitHub](https://github.com))
+  id: totrans-55
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 8-3\. Ansible Tower 中的 Ansible 项目；项目内容在源代码控制下管理（通过 [GitHub](https://github.com)）
+- en: We will also use Ansible to integrate a simple change management process backed
+    by ServiceNow. Our example is derived from published blogs on the topic.^([2](ch08.html#ch01fn39))
+    Many IT organizations and operators still make extensive use of ticket-driven
+    change management processes. In our example application, an Ansible job will run
+    before adjusting the placement of the app to create a change request in ServiceNow.
+    Our example will make only superficial use of ServiceNow, but you will see one
+    way that you may still use your existing process for record-keeping and auditing
+    purposes even when the system undergoes a dynamic, automatic change.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们还将使用 Ansible 集成由 ServiceNow 支持的简单变更管理流程。我们的示例源自关于该主题的已发布博客文章。^([2](ch08.html#ch01fn39))
+    许多 IT 组织和运营商仍然广泛使用基于工单的变更管理流程。在我们的示例应用程序中，将在调整应用程序位置之前使用 Ansible 作业创建一个 ServiceNow
+    中的变更请求。我们的示例仅 superficial 使用 ServiceNow，但您将看到一种在系统经历动态自动变更时如何仍然使用现有流程进行记录和审核的方法。
+- en: 'We have covered several concepts that support application deployment, including
+    the Open Cluster Management Subscription (API Group: apps.open-cluster-management.io/v1)
+    and `PlacementRule` (API Group: apps.open-cluster-management.io/v1). We now introduce
+    a new API kind that will be part of our example application: `AnsibleJob` (API
+    Group: tower.ansible.com/v1alpha1). As with other CRDs introduced throughout the
+    book, `AnsibleJob` is reconciled using an operator known as the Ansible Resource
+    Operator. Let’s deploy the Ansible Resource Operator alongside Ansible Tower so
+    that we can link the execution of Ansible jobs whenever the placement of our application
+    instances is updated by the system. The `AnsibleJob` to create a change request
+    ticket is shown in [Example 8-1](#the_ansiblejob_api_kind_allows_us_to_inv).'
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们已经介绍了支持应用程序部署的几个概念，包括 Open Cluster Management 订阅（API 组：apps.open-cluster-management.io/v1）和
+    `PlacementRule`（API 组：apps.open-cluster-management.io/v1）。现在我们介绍了一个新的 API 种类，它将成为我们示例应用程序的一部分：`AnsibleJob`（API
+    组：tower.ansible.com/v1alpha1）。与本书中介绍的其他自定义资源定义（CRD）一样，`AnsibleJob` 由一个称为 Ansible
+    资源操作器的操作员来协调。让我们将 Ansible 资源操作器与 Ansible Tower 一起部署，这样我们就可以在系统更新我们应用程序实例的放置时，链接
+    Ansible 作业的执行。用于创建变更请求票证的 `AnsibleJob` 如 [示例 8-1](#the_ansiblejob_api_kind_allows_us_to_inv)
+    所示。
+- en: Example 8-1\. The `AnsibleJob` API kind allows us to invoke an Ansible job template
+    configured in Ansible Tower; input parameters are sent via the `extra_vars` parameter
+  id: totrans-58
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 8-1\. `AnsibleJob` API 种类允许我们调用在 Ansible Tower 中配置的 Ansible 作业模板；输入参数通过 `extra_vars`
+    参数发送。
+- en: '[PRE0]'
+  id: totrans-59
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: In terms of order, the `AnsibleJob` to create a ServiceNow ticket will run before
+    the new placement decisions are applied (a prehook), and the `AnsibleJob` to update
+    the F5 load balancer will run last (a posthook).
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在顺序上，用于创建 ServiceNow 票证的 `AnsibleJob` 将在应用新的放置决策之前运行（一个预处理钩子），用于更新 F5 负载均衡器的
+    `AnsibleJob` 将在最后运行（一个后处理钩子）。
+- en: Deploying the Example Application
+  id: totrans-61
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 部署示例应用程序
+- en: We’re laying down a lot of capabilities to get to a simple web frontend application—and
+    the goal is to provide you with a realistic example of some of the concerns that
+    you will likely encounter as you adopt Kubernetes and OpenShift as part of your
+    enterprise standards.
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们正在铺设许多功能来实现一个简单的 Web 前端应用程序——目标是为您提供一个实际的示例，展示您在采用 Kubernetes 和 OpenShift
+    作为企业标准的过程中可能会遇到的一些关注点。
+- en: We’ve covered how the application will be replicated across multiple clusters
+    with a global load balancer in front of those multiple application instances and
+    how whenever the placement decisions change, we will have a simple ticket-based
+    record within ServiceNow of the change.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们已经介绍了应用程序将如何在多个集群中进行复制，并在这些多个应用程序实例前面有一个全局负载均衡器，以及每当放置决策变化时，我们将在 ServiceNow
+    中有一个简单的基于票证的记录。
+- en: 'We reviewed the PAC-MAN application extensively in [Chapter 5](ch05.html#continuous_delivery_across_clusters),
+    but here is a quick catchup:'
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在 [第 5 章](ch05.html#continuous_delivery_across_clusters) 中广泛审查了 PAC-MAN 应用程序，但这里是一个快速的回顾：
+- en: PAC-MAN is made up of two deployments (the web frontend application and a backing
+    MongoDB datastore).
+  id: totrans-65
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: PAC-MAN 由两个部署组成（Web 前端应用程序和后端 MongoDB 数据存储）。
+- en: 'PAC-MAN exposes two public routes: one for the local cluster and one for the
+    global route provided by our F5 DNS Load Balancer.'
+  id: totrans-66
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: PAC-MAN 公开了两个公共路由：一个用于本地集群，另一个由我们的 F5 DNS 负载均衡器提供的全局路由。
+- en: The PAC-MAN subscription references a Git repository where our Kubernetes manifests
+    are managed. If a change is introduced to those Kubernetes manifests, then the
+    update will automatically be rolled out to all active clusters.
+  id: totrans-67
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: PAC-MAN 订阅引用一个 Git 存储库，我们在其中管理我们的 Kubernetes 清单。如果对这些 Kubernetes 清单进行更改，则更新将自动推送到所有活动集群。
+- en: The `PlacementRule` defines a list of conditions that a cluster must match to
+    be selected to host the application.
+  id: totrans-68
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`PlacementRule` 定义了集群必须匹配的条件列表，以选择托管该应用程序的集群。'
+- en: For our purposes (and because we’re already dealing with several moving parts),
+    we are not doing anything to cluster the set of MongoDB replicas that will back
+    the application across multiple clusters. We could perform additional actions
+    (via Ansible or operators) to cluster the set of MongoDB replicas and make distributed
+    writes persistent whenever a cluster is lost. Alternatively, we could back the
+    state of the PAC-MAN application with a cloud-based MongoDB service. You will
+    likely have your own strong opinions about how persistent the backing datastores
+    of your applications need to be and what the relevant MTBF and MTTR availability
+    metrics should be for the application itself.
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 出于我们的目的（因为我们已经在处理多个移动部件），我们不会对支持跨多个集群的 MongoDB 副本集进行任何集群化操作。我们可以通过 Ansible 或操作器执行额外操作，以集群化
+    MongoDB 副本集，并在集群丢失时使分布式写入持久化。或者，我们可以使用基于云的 MongoDB 服务来备份 PAC-MAN 应用的状态。关于应用程序后备数据存储的持久性以及应用程序本身的相关
+    MTBF 和 MTTR 可用性指标，您可能会有自己的强烈意见。
+- en: Now that we’ve covered the details of how all of the parts fit together, let’s
+    dive in and get our hands on a running example!
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经讨论了所有部件如何拼合在一起的细节，让我们深入了解并操作一个运行示例！
+- en: To simplify this process, fork the example repository. You will need to make
+    a few modifications to be able to deliver the application out of your repository
+    fork.
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为简化此过程，请分叉示例存储库。您需要进行一些修改，以便能够从您的存储库分支提供应用程序。
+- en: 'Fork the [repository](https://oreil.ly/8nMgb) into your own organization and
+    then clone the repository to your laptop:'
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将 [repository](https://oreil.ly/8nMgb) 分叉到您自己的组织中，然后将存储库克隆到您的笔记本电脑上：
+- en: '[PRE1]'
+  id: totrans-73
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: All of the paths referenced in the following sections refer to files within
+    this repository.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在以下部分引用的所有路径均指此存储库中的文件。
+- en: 'You will need to update the values in the following files according to your
+    specific DNS settings for your OpenShift clusters and Route53:'
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 根据您的特定 DNS 设置更新以下文件中的值，以适应您的 OpenShift 集群和 Route53：
+- en: '*hack/install-config.yaml*'
+  id: totrans-76
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '*hack/install-config.yaml*'
+- en: '*deploy/posthook/f5-update-dns-load-balancer.yaml*'
+  id: totrans-77
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '*deploy/posthook/f5-update-dns-load-balancer.yaml*'
+- en: '*deploy/pacman-f5-route.yaml*'
+  id: totrans-78
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '*deploy/pacman-f5-route.yaml*'
+- en: '*hack/tower-setup/config/inventory*'
+  id: totrans-79
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '*hack/tower-setup/config/inventory*'
+- en: '[Table 8-1](#dns_settings_update) shows the required updates.'
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[表 8-1](#dns_settings_update) 显示了所需的更新内容。'
+- en: Table 8-1\. Required file updates
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 8-1\. 所需文件更新
+- en: '| Key | Value |'
+  id: totrans-82
+  prefs: []
+  type: TYPE_TB
+  zh: '| Key | Value |'
+- en: '| --- | --- |'
+  id: totrans-83
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| SPECIFY_YOUR_CLUSTER_NAME | The name of your hub cluster as defined in the
+    *install-config.yaml*. |'
+  id: totrans-84
+  prefs: []
+  type: TYPE_TB
+  zh: '| SPECIFY_YOUR_CLUSTER_NAME | 在 *install-config.yaml* 中定义的 Hub 集群名称。 |'
+- en: '| SPECIFY_YOUR_BASE_DOMAIN | The value of the base DNS name of your hub cluster
+    as defined in your *install-config.yaml*. |'
+  id: totrans-85
+  prefs: []
+  type: TYPE_TB
+  zh: '| SPECIFY_YOUR_BASE_DOMAIN | 在 *install-config.yaml* 中定义的 Hub 集群的基本 DNS 名称的值。
+    |'
+- en: '| SPECIFY_YOUR_CLUSTER_ADDRESS | The concatenation of *clusterName* and *clusterBaseDomain*
+    separated by a period (e.g., *clusterName.clusterBaseDomain*). |'
+  id: totrans-86
+  prefs: []
+  type: TYPE_TB
+  zh: '| SPECIFY_YOUR_CLUSTER_ADDRESS | *clusterName* 和 *clusterBaseDomain* 以点号分隔的串联（例如
+    *clusterName.clusterBaseDomain*）。 |'
+- en: '| SPECIFY_YOUR_OWN_PASSWORD | Define your own secure password. When in doubt,
+    the output of `**uuid**` can be a useful password. |'
+  id: totrans-87
+  prefs: []
+  type: TYPE_TB
+  zh: '| SPECIFY_YOUR_OWN_PASSWORD | 定义您自己的安全密码。当有疑问时，`**uuid**` 的输出可以作为有用的密码。 |'
+- en: '| SPECIFY_YOUR_EMAIL_ADDRESS | Used to assign a tag for any cloud resources
+    for tracking purposes. You can also just delete the tag if you do not wish to
+    specify your email address. |'
+  id: totrans-88
+  prefs: []
+  type: TYPE_TB
+  zh: '| SPECIFY_YOUR_EMAIL_ADDRESS | 用于为跟踪目的分配云资源的标记。如果不想指定电子邮件地址，您也可以只删除标记。 |'
+- en: '| SPECIFY_YOUR_PULL_SECRET | An image pull secret that you can download from
+    [Red Hat](https://cloud.redhat.com) after logging into the service. |'
+  id: totrans-89
+  prefs: []
+  type: TYPE_TB
+  zh: '| SPECIFY_YOUR_PULL_SECRET | 登录服务后可以从 [Red Hat](https://cloud.redhat.com) 下载的镜像拉取密钥。
+    |'
+- en: '| SPECIFY_YOUR_SSH_RSA_PUBLIC_KEY | An SSH public key that will enable you
+    to connect to hosts that are provisioned as part of your OpenShift cluster. |'
+  id: totrans-90
+  prefs: []
+  type: TYPE_TB
+  zh: '| SPECIFY_YOUR_SSH_RSA_PUBLIC_KEY | 可用于连接到作为 OpenShift 集群的一部分进行配置的主机的 SSH 公钥。
+    |'
+- en: Configure Your Hub Cluster
+  id: totrans-91
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 配置您的 Hub 集群
+- en: Recall that the hub cluster hosts components for Open Cluster Management that
+    allow managed clusters to be managed from a centralized control plane. You can
+    either provision clusters from the hub or import existing OpenShift clusters from
+    a managed provider like Red Hat OpenShift on IBM Cloud or Azure Red Hat OpenShift.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请记住，Hub 集群托管 Open Cluster Management 的组件，允许从集中控制平面管理托管集群。您可以从 Hub 提供集群，也可以从像
+    Red Hat OpenShift on IBM Cloud 或 Azure Red Hat OpenShift 这样的托管提供程序导入现有的 OpenShift
+    集群。
+- en: In the following sections, you will create a cluster to act as the hub, install
+    the Open Cluster Management hub, and provision two clusters to host the example
+    application.
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在接下来的部分中，您将创建一个用作中心的集群，安装Open Cluster Management中心，并配置两个集群以托管示例应用程序。
+- en: Provision an OpenShift Cluster to Host the Open Cluster Management Hub
+  id: totrans-94
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 配置一个OpenShift集群以托管Open Cluster Management中心
+- en: Provision an OpenShift 4.5 or later cluster following the default instructions.
+    The cluster should have at least three worker nodes with a total of 18 CPU and
+    80G of memory or m5.xlarge (times three workers) on AWS EC2.
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 遵循默认说明来配置一个OpenShift 4.5或更新的集群。集群应至少有三个工作节点，总计18个CPU和80G内存，或在AWS EC2上使用m5.xlarge（三个工作节点）。
+- en: The following example *install-config.yaml* was used to prepare the hub cluster
+    for this example, but so long as your starting cluster has the required capacity,
+    you do not need to provision a cluster exactly like the *install-config.yaml*
+    in [Example 8-2](#an_example_install_configdotyaml_t).
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下面的示例*install-config.yaml*用于准备此示例的中心集群，但只要您的起始集群具有所需的容量，您就不需要像*install-config.yaml*中的[示例8-2](#an_example_install_configdotyaml_t)一样配置一个集群。
+- en: Example 8-2\. An example *install-config.yaml* to provision a cluster to use
+    as a hub
+  id: totrans-97
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例8-2。一个*install-config.yaml*示例，用于配置用作中心的集群的集群
+- en: '[PRE2]'
+  id: totrans-98
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: Configure the Open Cluster Management Hub
+  id: totrans-99
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 配置Open Cluster Management中心
+- en: For our example, we will deploy Open Cluster Management using Red Hat’s supported
+    product offering, RHACM. Instructions for configuring RHACM were given in [Chapter 5](ch05.html#continuous_delivery_across_clusters).
+    You can also deploy RHACM directly from the Red Hat Operator Catalog or by using
+    the [documented instructions](https://oreil.ly/a1zlD).
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于我们的示例，我们将使用Red Hat支持的产品RHACM部署Open Cluster Management。有关配置RHACM的说明，请参见[第5章](ch05.html#continuous_delivery_across_clusters)。您还可以直接从Red
+    Hat Operator目录部署RHACM，或使用[文档中记录的说明](https://oreil.ly/a1zlD)。
+- en: Provision Two or More Clusters to Host the Application
+  id: totrans-101
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 配置两个或更多集群来托管应用程序
+- en: Once you have configured the hub cluster, you will be able to register your
+    cloud credentials and provision one or more clusters that will be managed automatically
+    by the hub. These clusters can be provisioned across the same cloud provider in
+    different regions or against multiple cloud providers. The example PAC-MAN app
+    is very lightweight, so you will not need a lot of capacity to run the sample
+    application.
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 配置中心集群后，您将能够注册您的云凭据并自动管理中心集群中的一个或多个集群。这些集群可以在同一云提供商的不同区域或多个云提供商中进行配置。例如PAC-MAN应用程序非常轻量级，因此您不需要大量容量来运行示例应用程序。
+- en: Deploy Ansible Tower and the Ansible Resource Operator
+  id: totrans-103
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 部署Ansible Tower和Ansible资源操作符
+- en: In addition to a containerized application, we will configure a DNS Load Balancer
+    provided by F5 and use a ServiceNow developer instance to demonstrate how you
+    might integrate a change management process into the deployment life cycle of
+    your containerized apps. Detailed instructions on setting up the Ansible Tower
+    container-based installation method are available in the [Ansible documentation](https://oreil.ly/Uzm3y).
+    The following steps capture the specific actions taken to prepare the demo captured
+    in this repository.
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了容器化应用程序外，我们还将配置由F5提供的DNS负载平衡器，并使用ServiceNow开发者实例来演示如何将变更管理流程集成到容器化应用程序的部署生命周期中。设置基于容器的Ansible
+    Tower安装方法的详细说明，请参阅[Ansible文档](https://oreil.ly/Uzm3y)。以下步骤记录了准备在此存储库中捕获的演示所采取的具体操作。
+- en: To simplify the configuration of this example, we will leverage some pre-defined
+    policies that help prepare the hub cluster to deploy Ansible.
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为简化此示例的配置，我们将利用一些预定义策略来帮助准备中心集群以部署Ansible。
+- en: 'Clone the sample repository and apply the policies under *hack/manifests/policies*:'
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 克隆示例存储库，并在*hack/manifests/policies*下应用策略：
+- en: '[PRE3]'
+  id: totrans-107
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: The result of these policies will set up the Ansible Resource Operator, prepare
+    the Ansible Tower project named `tower`, and create a `PersistentVolumeClaim`
+    using the default storage class to support Ansible Tower’s database (PostgreSQL).
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些策略的结果将设置Ansible资源操作符，准备名为`tower`的Ansible Tower项目，并使用默认存储类创建一个`PersistentVolumeClaim`来支持Ansible
+    Tower的数据库（PostgreSQL）。
+- en: 'After a few moments, verify that the resources were correctly applied on your
+    hub cluster. You can see that the `policy-ansible-tower-prep` and `policy-auth-provider`
+    are compliant from your RHACM web console (under “Govern Risk”). You can also
+    verify the resources that were created as follows:'
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 几分钟后，请验证您的 Hub 集群上是否正确应用了资源。您可以从 RHACM Web 控制台（在“治理风险”下）验证 *policy-ansible-tower-prep*
+    和 *policy-auth-provider* 是否合规。您还可以验证已创建的资源如下：
+- en: '[PRE4]'
+  id: totrans-110
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: Download the Ansible Tower installer release from the [available releases](https://oreil.ly/utowL).
+    Extract the archive into a working directory. Configure the inventory for your
+    OpenShift cluster. The inventory file should be placed directly under the folder
+    for the archive (e.g., *ansible-tower-openshift-setup-3.7.2/inventory*).
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从 [可用的发布版本](https://oreil.ly/utowL) 下载 Ansible Tower 安装程序发布版。将归档文件解压缩到工作目录中。为您的
+    OpenShift 集群配置清单。清单文件应直接放置在归档文件夹下（例如，*ansible-tower-openshift-setup-3.7.2/inventory*）。
+- en: 'The inventory in [Example 8-3](#an_example_inventory_file_that_provides) can
+    be placed under the root directory of the extracted release archive. Be sure to
+    override the following:'
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[示例 8-3](#an_example_inventory_file_that_provides) 中的清单可以放置在解压释放归档的根目录下。一定要覆盖以下内容：'
+- en: '`SPECIFY_YOUR_OWN_PASSWORD`'
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`SPECIFY_YOUR_OWN_PASSWORD`'
+- en: Choose a strong password of at least 16 characters.
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 选择一个至少 16 个字符的强密码。
+- en: '`SPECIFY_YOUR_CLUSTER_ADDRESS`'
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`SPECIFY_YOUR_CLUSTER_ADDRESS`'
+- en: Provide the correct hostname of the API server for your OpenShift cluster.
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为您的 OpenShift 集群提供 API 服务器的正确主机名。
+- en: '`SPECIFY_YOUR_OPENSHIFT_CREDENTIALS`'
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`SPECIFY_YOUR_OPENSHIFT_CREDENTIALS`'
+- en: The password for your OpenShift cluster admin user. Be sure to also override
+    kubeadmin if you have defined an alternate administrative user.
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您的 OpenShift 集群管理员用户的密码。如果您已定义替代管理用户 kubeadmin，则一定要覆盖它。
+- en: Example 8-3\. An example inventory file that provides input values for the Ansible
+    Tower installer
+  id: totrans-119
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 8-3\. 为 Ansible Tower 安装程序提供输入值的示例清单文件
+- en: '[PRE5]'
+  id: totrans-120
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: Update the default task image that is used to run the defined jobs. Because
+    the jobs use additional modules, we need to ensure that various Python module
+    dependencies are available.
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 更新用于运行已定义作业的默认任务映像。因为作业使用额外模块，我们需要确保各种 Python 模块依赖性可用。
+- en: 'In *group_vars/all*, update the following key:'
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 *group_vars/all* 中，更新以下键：
+- en: '[PRE6]'
+  id: totrans-123
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: 'You can build this image and consume it from your own registry by building
+    the *Dockerfile.taskimage* under *hack/tower-setup/container_task_image*. Optionally,
+    you could build the task image and publish to your own registry. If you’re using
+    the existing image as previously defined, you will not need to build your own
+    image. Use the correct Ansible version based on the release you downloaded:'
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以构建此镜像，并从您自己的注册表中消耗它，方法是在 *hack/tower-setup/container_task_image* 下构建 *Dockerfile.taskimage*。或者，您可以构建任务镜像并发布到您自己的注册表。如果您使用之前定义的现有镜像，则无需构建自己的镜像。根据您下载的发布版本使用正确的
+    Ansible 版本：
+- en: '[PRE7]'
+  id: totrans-125
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: 'Once you have made the relevant updates to your inventory file, you can run
+    the Ansible Tower installer. Retrieve an authentication token from the OpenShift
+    web console from the “Copy login command” action under your user name:'
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦您对清单文件进行了相关更新，您就可以运行 Ansible Tower 安装程序。从 OpenShift Web 控制台中检索认证令牌，方法是在您的用户名下的“复制登录命令”操作中：
+- en: '[PRE8]'
+  id: totrans-127
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: 'Launch the Tower web console:'
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 启动 Tower Web 控制台：
+- en: '[PRE9]'
+  id: totrans-129
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: Log in with the user and password that you specified in the inventory file.
+    You must then choose your license for Tower. If you have a Red Hat user identity,
+    you can log in and choose the 60-day evaluation license.
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用您在清单文件中指定的用户和密码登录。然后必须选择 Tower 的许可证。如果您有 Red Hat 用户身份，则可以登录并选择 60 天的评估许可证。
+- en: 'Optionally, you can customize the *hack/manifests/ansible-tower-console-link.yaml*
+    for your own cluster. Then apply the file (note: you must update the URL within
+    the file before this will work in your cluster):'
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可选择地，您可以自定义 *hack/manifests/ansible-tower-console-link.yaml* 以适合您自己的集群。然后应用文件（注意：在此之前，您必须更新文件中的
+    URL 才能在您的集群中正常工作）：
+- en: '[PRE10]'
+  id: totrans-132
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: After applying the `ConsoleLink`, refresh your OpenShift web console and view
+    the shortcut to your Ansible Tower under the Applications drop-down menu in the
+    header.
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在应用`ConsoleLink`后，刷新您的 OpenShift Web 控制台，并在标题栏的应用程序下拉菜单中查看您的 Ansible Tower 快捷方式。
+- en: Configure Projects for ServiceNow and F5 DNS Load Balancer
+  id: totrans-134
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 为 ServiceNow 和 F5 DNS 负载均衡器配置项目
+- en: 'The example application uses the F5 DNS Load Balancer Cloud Service and ServiceNow
+    to demonstrate Ansible automation. This assumes that you have completed the following
+    steps:'
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 该示例应用程序使用 F5 DNS 负载均衡器云服务和 ServiceNow 来演示 Ansible 自动化。这假设您已完成以下步骤：
+- en: Create a developer instance of ServiceNow. If you need a developer instance
+    of ServiceNow, follow the directions at [ServiceNow Developers](https://developer.servicenow.com).
+  id: totrans-136
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 创建 ServiceNow 的开发者实例。如果您需要 ServiceNow 的开发者实例，请按照[ServiceNow Developers](https://developer.servicenow.com)的说明进行操作。
+- en: Create an account with the F5 DNS Load Balancer Cloud Service. If you need to
+    create an account with [F5 DNS Load Balancer Cloud Service](https://oreil.ly/tmmSY),
+    you can do this directly or through the [AWS Marketplace](https://oreil.ly/HF5mw).
+  id: totrans-137
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 使用 F5 DNS Load Balancer Cloud Service 创建帐户。如果您需要使用[F5 DNS Load Balancer Cloud
+    Service](https://oreil.ly/tmmSY)创建帐户，您可以直接或通过[AWS Marketplace](https://oreil.ly/HF5mw)完成此操作。
+- en: Delegate your global domain to the F5 DNS nameservers. Create a nameserver-delegating
+    DNS record with the global domain that you will use with F5\. You can do this
+    via Route 53 or your DNS provider. The [F5 DNS Load Balancer Cloud Service FAQ](https://oreil.ly/ObL27)
+    answers questions related to this prerequisite.
+  id: totrans-138
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 将全球域委托给 F5 DNS 域名服务器。创建一个使用与 F5 一起使用的全球域的名称服务器委托 DNS 记录。您可以通过 Route 53 或您的 DNS
+    提供商完成此操作。[F5 DNS Load Balancer Cloud Service FAQ](https://oreil.ly/ObL27) 解答了与此先决条件相关的问题。
+- en: Once you have the credentials for these services, you can configure the Ansible
+    Tower instance that you deployed with the two relevant Ansible projects providing
+    the job templates that will be executed as part of the prehook and posthooks that
+    run when the application is placed or removed on a cluster. For convenience, all
+    of the configuration for Ansible Tower is completely automated (using Ansible
+    playbooks that talk to Ansible Tower to create the projects/job templates/jobs/credentials
+    that are needed for the example).
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦您获得了这些服务的凭据，您可以配置 Ansible Tower 实例，该实例使用两个相关的 Ansible 项目来提供将作为预钩子和后钩子执行的作业模板，当应用程序被放置或从集群中移除时。为了方便起见，所有与
+    Ansible Tower 的配置都是完全自动化的（使用与 Ansible Tower 对话以创建所需的项目/作业模板/作业/凭据的 Ansible playbook）。
+- en: 'Create a file named *tower_cli.cfg* under *hack/tower-setup* with the following
+    contents:'
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在`hack/tower-setup`目录下创建名为*tower_cli.cfg*的文件，内容如下：
+- en: '[PRE11]'
+  id: totrans-141
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: 'If you’re unsure of the host address for Tower, you can use `oc` to find the
+    correct value:'
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您不确定 Tower 的主机地址，可以使用`oc`查找正确的值：
+- en: '[PRE12]'
+  id: totrans-143
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: 'Create a file named *credentials.yml* under *hack/tower-setup/group_vars* with
+    the following contents:'
+  id: totrans-144
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在`hack/tower-setup/group_vars`目录下创建名为*credentials.yml*的文件，内容如下：
+- en: '[PRE13]'
+  id: totrans-145
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: 'You may need to install required Python libraries:'
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可能需要安装所需的 Python 库：
+- en: '[PRE14]'
+  id: totrans-147
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: 'Run the playbook that will talk to Ansible Tower and configure our two projects
+    (one for F5 and one for ServiceNow) and the relevant job templates:'
+  id: totrans-148
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运行将与 Ansible Tower 对话并配置我们的两个项目（一个用于 F5，一个用于 ServiceNow）和相关作业模板的 playbooks：
+- en: '[PRE15]'
+  id: totrans-149
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: Configure the toweraccess Secret and Create the Ansible Tower Token
+  id: totrans-150
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 配置`toweraccess`秘密并创建 Ansible Tower 令牌
+- en: 'From Ansible Tower, create an authorization token. The authorization token
+    will be used in a secret that the application will reference to invoke the Ansible
+    Tower Jobs. Follow these steps:'
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从 Ansible Tower 创建授权令牌。授权令牌将被用于应用程序引用以调用 Ansible Tower 作业。请按照以下步骤操作：
+- en: 'Log in to the Ansible Tower instance:'
+  id: totrans-152
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 登录到 Ansible Tower 实例：
+- en: '[PRE16]'
+  id: totrans-153
+  prefs:
+  - PREF_IND
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: Click on the “admin” user in the header.
+  id: totrans-154
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 点击页眉中的“admin”用户。
+- en: Click on Tokens.
+  id: totrans-155
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 点击令牌。
+- en: Click on the +.
+  id: totrans-156
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 点击+号。
+- en: Set the scope to Write.
+  id: totrans-157
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 将范围设置为写入。
+- en: Click Save and be sure to copy and save the value of the token.
+  id: totrans-158
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 点击保存，确保复制并保存令牌的值。
+- en: 'Create a file *named hack/manifests/toweraccess-secret.yaml* with the following
+    contents:'
+  id: totrans-159
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 在`hack/manifests`目录下创建名为*hack/manifests/toweraccess-secret.yaml*的文件，内容如下：
+- en: '[PRE17]'
+  id: totrans-160
+  prefs:
+  - PREF_IND
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: Deploy the pacman-app Example to Your Cluster
+  id: totrans-161
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 部署`pacman-app`示例到您的集群
+- en: Now we will deploy the manifests that govern our application placement to the
+    hub. By creating the application, subscription, and `PlacementRule`, you will
+    enable the hub to deploy the application dynamically to one or more of the clusters
+    that you created earlier.
+  id: totrans-162
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们将部署管理应用程序放置的清单到中心。通过创建应用程序、订阅和`PlacementRule`，您将使中心能够动态地将应用程序部署到您之前创建的一个或多个集群。
+- en: 'First, create the project for the application and apply the secret:'
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，为应用程序创建项目并应用秘密：
+- en: '[PRE18]'
+  id: totrans-164
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: You can either create the application manifest from the RHACM web console (Managed
+    Applications > Create application) or apply the prebuilt resources from the example
+    Git repository. An example of the final result is provided in [Example 8-4](#the_pac_man_application_manifest_and_sup).
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以通过 RHACM web 控制台（托管应用程序 > 创建应用程序）创建应用程序清单，也可以应用来自示例 Git 存储库的预构建资源。最终结果的示例在[Example 8-4](#the_pac_man_application_manifest_and_sup)中提供。
+- en: Example 8-4\. The PAC-MAN application manifest and supporting resources to allow
+    the hub cluster to deploy the application to any managed cluster in the fleet
+  id: totrans-166
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 8-4\. PAC-MAN 应用程序清单和支持资源，以允许中心集群将应用程序部署到 fleet 中的任何受管集群
+- en: '[PRE19]'
+  id: totrans-167
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: The `channel` references the source of Kubernetes manifests in GitHub. Any changes
+    that are made to the supporting GitHub repository will trigger an update across
+    the fleet. The `application` provides a way to associate a set of subscriptions
+    to a logical unit of deployment and management. The `subscription` selects a specific
+    branch and directory from within the GitHub repository. You may have a single
+    GitHub repository that feeds multiple subscriptions for one application or multiple
+    applications. Each subscription can be placed independently, so you may have different
+    parts of an application deployed to different clusters. The `PlacementRule` defines
+    a set of labels and a match expression that must be met for the subscription to
+    be deployed against a managed cluster within the fleet.
+  id: totrans-168
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`channel` 引用 GitHub 上 Kubernetes 清单的来源。对支持的 GitHub 仓库进行的任何更改都将触发整个群集的更新。`application`
+    提供了一种将一组订阅关联到部署和管理的逻辑单元的方法。`subscription` 选择 GitHub 仓库内的特定分支和目录。您可以拥有一个单一的 GitHub
+    仓库，为一个应用或多个应用提供多个订阅。每个订阅可以独立放置，因此您可以将应用的不同部分部署到不同的集群中。`PlacementRule` 定义了一组标签和匹配表达式，必须满足这些条件才能将订阅部署到
+    fleet 中的受管集群上。'
+- en: 'Be aware of how you label your clusters and the supporting `PlacementRule`.
+    You want to ensure that the `PlacementRule` indicates the selected clusters in
+    their status conditions:'
+  id: totrans-169
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要注意如何标记您的集群和支持的 `PlacementRule`。您希望确保 `PlacementRule` 在其状态条件中指示所选的集群：
+- en: '[PRE20]'
+  id: totrans-170
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: Now that you have deployed all of the supporting pieces, you can experiment
+    by adding or removing matching clusters or changing the desired labels specified
+    in the `PlacementRule`. The application instances will be added or removed to
+    supporting clusters while keeping the F5 DNS Load Balancer Cloud Service up to
+    date automatically.
+  id: totrans-171
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在您已经部署了所有支持的部件，您可以通过添加或删除匹配的集群或更改 `PlacementRule` 中指定的所需标签来进行实验。应用实例将会自动添加或删除到支持的集群，同时保持
+    F5 DNS 负载均衡器云服务的最新状态。
+- en: From the topology view, your application deployment should resemble [Figure 8-4](#pac-man_app_config_hooks).
+  id: totrans-172
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从拓扑视图看，您的应用程序部署应类似于 [图 8-4](#pac-man_app_config_hooks)
+- en: '![](assets/hcok_0804.png)'
+  id: totrans-173
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](assets/hcok_0804.png)'
+- en: Figure 8-4\. The PAC-MAN application configured with pre-hooks and post-hooks
+    with Ansible Tower Jobs
+  id: totrans-174
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 8-4\. 配置了 Ansible Tower 作业的 PAC-MAN 应用程序
+- en: Summary
+  id: totrans-175
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 概述
+- en: In this chapter, we focused on providing a practical example that demonstrates
+    how to deliver an application across multiple clusters, how to manage any parts
+    of your system that are still not natively programmable from Kubernetes operators,
+    and how to integrate a set of clusters behind a global load balancer service.
+    Many specific examples from earlier in the book were used to pull all of this
+    together, including the PAC-MAN application that used a Tekton pipeline to build
+    its supporting images in [Chapter 5](ch05.html#continuous_delivery_across_clusters).
+    We used policies to configure an operator on our cluster (the Ansible Resource
+    Operator on the hub) and used the Open Cluster Management hub to provision clusters
+    that were used to support the running application. We also introduced one way
+    that you can adapt your existing change management process using Ansible to create
+    change request tickets whenever the system dynamically reacts to a change.
+  id: totrans-176
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们专注于提供一个实际示例，演示如何跨多个集群交付应用程序，如何管理系统中任何仍不支持 Kubernetes 操作员的部分，并如何在全局负载均衡器服务后面集成一组集群。本书早期的许多具体示例都被用来整合所有这些内容，包括使用
+    Tekton 流水线构建其支持镜像的 PAC-MAN 应用程序，以及使用 Ansible Resource Operator 在中心集群上配置操作员，并使用
+    Open Cluster Management hub 提供支持正在运行的应用程序的集群。我们还介绍了一种通过 Ansible 调整现有变更管理流程的方法，以在系统动态响应变更时创建变更请求票据。
+- en: Hopefully, by now you have a firm grasp of what is possible with Kubernetes
+    and OpenShift and how you can use some of these capabilities to streamline your
+    adoption of these technologies for your organization.
+  id: totrans-177
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 希望到目前为止，您已经对 Kubernetes 和 OpenShift 的可能性有了坚实的把握，并了解了如何利用这些能力来简化您的组织对这些技术的采用。
+- en: ^([1](ch08.html#ch01fn38-marker)) From “What Is an Ansible Playbook?”, Red Hat,
+    [*https://oreil.ly/At7XY*](https://oreil.ly/At7XY).
+  id: totrans-178
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([1](ch08.html#ch01fn38-marker)) From “What Is an Ansible Playbook?”, Red Hat,
+    [*https://oreil.ly/At7XY*](https://oreil.ly/At7XY).
+- en: '^([2](ch08.html#ch01fn39-marker)) Colin McCarthy, “Ansible + ServiceNow Part
+    1: Opening and Closing Tickets,” Red Hat Ansible Blog (June 6, 2019), [*https://oreil.ly/NI9ZX*](https://oreil.ly/NI9ZX).'
+  id: totrans-179
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '^([2](ch08.html#ch01fn39-marker)) Colin McCarthy, “Ansible + ServiceNow Part
+    1: Opening and Closing Tickets,” Red Hat Ansible Blog (June 6, 2019), [*https://oreil.ly/NI9ZX*](https://oreil.ly/NI9ZX).'

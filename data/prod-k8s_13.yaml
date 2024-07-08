@@ -1,0 +1,1495 @@
+- en: Chapter 12\. Multitenancy
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第 12 章。多租户
+- en: When building a production application platform atop Kubernetes, you must consider
+    how to handle the tenants that will run on the platform. As we’ve discussed throughout
+    this book, Kubernetes provides a set of foundational features you can use to implement
+    many requirements. Workload tenancy is no different. Kubernetes offers various
+    knobs you can use to ensure tenants can safely coexist on the same platform. With
+    that said, Kubernetes does not define a tenant. A tenant can be an application,
+    a development team, a business unit, or something else. Defining a tenant is up
+    to you and your organization, and we hope this chapter will help you with that
+    task.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在构建基于 Kubernetes 的生产应用平台时，您必须考虑如何处理将在平台上运行的租户。正如我们在本书中讨论过的那样，Kubernetes 提供了一组基础功能，可以用来实现许多需求。工作负载的租赁也不例外。Kubernetes
+    提供了各种调控手段，可以确保租户可以安全地共存于同一平台上。话虽如此，Kubernetes 并未定义租户。租户可以是一个应用程序、一个开发团队、一个业务单元或其他内容。租户的定义由您和您的组织来决定，我们希望本章能够帮助您完成这项任务。
+- en: Once you establish who your tenants are, you must determine whether multiple
+    tenants should run on the same platform. In our experience helping large organizations
+    build application platforms, we’ve found that platform teams are usually interested
+    in operating a multitenant platform. With that said, this decision is firmly rooted
+    in the nature of the different tenants and the trust that exists between them.
+    For example, an enterprise offering a shared application platform is a different
+    story than a company offering containers-as-a-service to external customers.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦确定了您的租户是谁，您必须确定是否应该让多个租户在同一平台上运行。根据我们帮助大型组织构建应用程序平台的经验，我们发现平台团队通常有兴趣运行多租户平台。话虽如此，这个决定牢固地植根于不同租户的性质以及它们之间的信任关系。例如，提供共享应用程序平台的企业与为外部客户提供容器即服务的公司是两回事。
+- en: In this chapter, we will first explore the degrees of tenant isolation you can
+    achieve with Kubernetes. The nature of your workloads and your specific requirements
+    will dictate how much isolation you need to provide. The stronger the isolation,
+    the higher the investment you need to make in this area. We will then discuss
+    Kubernetes Namespaces, an essential building block that enables a large portion
+    of the multitenancy capabilities in Kubernetes. Finally, we will dig into the
+    different Kubernetes features you can leverage to isolate tenants on a multitenant
+    cluster, including Role-Based Access Control (RBAC), Resource Requests and Limits,
+    Pod Security Policies, and others.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们将首先探讨您可以在 Kubernetes 中实现的租户隔离程度。您的工作负载的性质以及您的具体需求将决定您需要提供多少隔离。隔离越强，您在这方面的投资就越大。然后，我们将讨论
+    Kubernetes 命名空间，这是实现 Kubernetes 中大部分多租户功能的基础构建块。最后，我们将深入探讨您可以利用的不同 Kubernetes
+    功能，这些功能可以在多租户集群中隔离租户，包括基于角色的访问控制（RBAC）、资源请求和限制、Pod 安全策略等等。
+- en: Degrees of Isolation
+  id: totrans-4
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 隔离程度
+- en: 'Kubernetes lends itself to various tenancy models, each with pros and cons.
+    The most critical factor that determines which model to implement is the degree
+    of isolation demanded by your workloads. For example, running untrusted code developed
+    by different third parties usually requires more robust isolation than hosting
+    your organization’s internal applications. Broadly speaking, there are two tenancy
+    models you can follow: single-tenant clusters and multitenant clusters. Let’s
+    discuss the strengths and weaknesses of each model.'
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 适合各种租户模型，每种模型都有其利弊。确定要实施的模型的最关键因素是您的工作负载所需的隔离程度。例如，运行由不同第三方开发的不受信任代码通常需要比托管您组织内部应用程序更强大的隔离。总体而言，您可以遵循两种租户模型：单租户集群和多租户集群。让我们讨论每种模型的优势和劣势。
+- en: Single-Tenant Clusters
+  id: totrans-6
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 单租户集群
+- en: The single-tenant cluster model (depicted in [Figure 12-1](#each_tenant_runs_in_a_separate_cluster))
+    provides the strongest isolation between tenants, as there is no sharing of cluster
+    resources. This model is rather appealing as you do not have to solve the complex
+    multitenancy problems that can otherwise arise. In other words, there is no tenant
+    isolation problem to solve.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 单租户集群模型（如 [图 12-1](#each_tenant_runs_in_a_separate_cluster) 所示）在租户之间提供了最强的隔离，因为集群资源不共享。这种模型相当吸引人，因为您不必解决可能出现的复杂多租户问题。换句话说，没有租户隔离问题需要解决。
+- en: '![prku 1201](assets/prku_1201.png)'
+  id: totrans-8
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1201](assets/prku_1201.png)'
+- en: Figure 12-1\. Each tenant runs in a separate cluster (CP represents a control
+    plane node).
+  id: totrans-9
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 12-1\. 每个租户在单独的集群中运行（CP 代表控制平面节点）。
+- en: 'Single-tenant clusters can be viable if you have a small number of tenants.
+    However, the model can suffer from the following downsides:'
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 单租户集群在租户数量较少时是可行的。然而，这种模型可能会面临以下几个不利因素：
+- en: Resource overhead
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 资源开销
+- en: Each single-tenant cluster has to run its own control plane, which in most cases,
+    requires at least three dedicated nodes. The more tenants you have, the more resources
+    dedicated to cluster control planes—resources that you could otherwise use to
+    run workloads. In addition to the control plane, each cluster hosts a set of workloads
+    to provide platform services. These platform services also incur overhead as they
+    could otherwise be shared among different tenants in a multitenant cluster. Monitoring
+    tools, policy controllers (e.g., Open Policy Agent), and Ingress controllers are
+    good examples.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个单租户集群都必须运行自己的控制平面，在大多数情况下，这至少需要三个专用节点。租户越多，用于集群控制平面的资源也就越多——这些资源本来可以用来运行工作负载。除了控制平面外，每个集群还承载一组工作负载以提供平台服务。这些平台服务也会带来开销，因为它们本来可以在多租户集群中不同租户之间共享。监控工具、策略控制器（如
+    Open Policy Agent）和 Ingress 控制器都是很好的例子。
+- en: Increased management complexity
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 增加的管理复杂性
+- en: Managing a large number of clusters can become a challenge for platform teams.
+    Each cluster needs to be deployed, tracked, upgraded, etc. Imagine having to remediate
+    a security vulnerability across hundreds of clusters. Investing in advanced tooling
+    is necessary for platform teams to do this effectively.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于平台团队来说，管理大量集群可能成为一个挑战。每个集群都需要部署、跟踪、升级等操作。想象一下在数百个集群中修复安全漏洞的过程。为了有效地完成这些任务，平台团队需要投资于先进的工具。
+- en: Even with the drawbacks just mentioned, we have seen many successful implementations
+    of single-tenant clusters in the field. And with cluster life cycle tooling such
+    as [Cluster API](https://oreil.ly/8QRz7) reaching maturity, the single-tenant
+    model has become easier to adopt. With that said, most of our focus in the field
+    has been helping organizations with multitenant clusters, which we’ll discuss
+    next.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管刚提到的缺点，我们在实地中看到了许多成功的单租户集群实现。随着类似 [Cluster API](https://oreil.ly/8QRz7) 这样的集群生命周期工具的成熟，单租户模型变得更易于采纳。尽管如此，我们在现场的大部分工作重点是帮助组织实施多租户集群，我们将在接下来讨论这一点。
+- en: Multitenant Clusters
+  id: totrans-16
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 多租户集群
+- en: Clusters that host multiple tenants can address the downsides of single-tenant
+    clusters we previously discussed. Instead of deploying and managing one cluster
+    per tenant, the platform team can focus on a smaller number of clusters, which
+    reduces the resource overhead and management complexity (as seen in [Figure 12-2](#a_single_cluster_shared_by_multiple_tenants)).
+    With that said, there is a trade-off being made. The implementation of multitenant
+    clusters is more complicated and nuanced, as you have to ensure that tenants can
+    coexist without affecting each other.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 承载多个租户的集群可以解决我们之前讨论过的单租户集群的不利因素。与为每个租户部署和管理一个集群相比，平台团队可以专注于更少数量的集群，这降低了资源开销和管理复杂性（如
+    [图 12-2](#a_single_cluster_shared_by_multiple_tenants) 中所示）。尽管如此，这其中存在一定的权衡。实施多租户集群更为复杂和微妙，因为您必须确保租户可以共存而不相互影响。
+- en: '![prku 1202](assets/prku_1202.png)'
+  id: totrans-18
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1202](assets/prku_1202.png)'
+- en: Figure 12-2\. A single cluster shared by multiple tenants (CP represents a control
+    plane node).
+  id: totrans-19
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 12-2\. 多个租户共享的单个集群（CP 代表控制平面节点）。
+- en: Multitenancy comes in two broad flavors, soft multitenancy and hard multitenancy.
+    *Soft multitenancy*, sometimes referred to as “multiteam,” assumes that some level
+    of trust exists between the tenants on the platform. This model is usually viable
+    when tenants belong to the same organization. For example, an enterprise application
+    platform hosting different tenants can generally assume a soft multitenancy posture.
+    This is because the tenants are incentivized to be good neighbors as they move
+    their organization toward success. Nevertheless, even though the intent is positive,
+    tenant isolation is still necessary given that unintentional issues can arise
+    (e.g., vulnerabilities, bugs, etc.).
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 多租户有两种广义的形式，即软多租户和硬多租户。*软多租户*有时被称为“多团队”，假设租户之间存在一定程度的信任。这种模型通常在租户属于同一组织时是可行的。例如，托管不同租户的企业应用平台通常可以假设采用软多租户的姿态。这是因为租户有动机成为良好的邻居，以推动他们的组织取得成功。尽管意图是积极的，但考虑到可能出现的意外问题（例如漏洞、错误等），租户隔离仍然是必要的。
+- en: On the other hand, the *hard multitenancy* model establishes that there is no
+    trust between tenants. From a security point of view, the tenants are even considered
+    adversaries to ensure the proper isolation mechanisms are put in place. A platform
+    running untrusted code that belongs to different organizations is a good example.
+    In this case, strong isolation between tenants is critical to ensure they can
+    share the cluster safely.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一方面，*硬多租户*模型建立在租户之间没有信任的基础上。从安全的角度来看，租户甚至被视为对手，以确保正确的隔离机制得以实施。一个运行来自不同组织的不受信任代码的平台就是一个很好的例子。在这种情况下，租户之间强大的隔离至关重要，以确保他们可以安全地共享集群。
+- en: Building on our housing analogy theme from [Chapter 1](ch01.html#chapter1),
+    we can say that the soft multitenancy model is equivalent to a family living together.
+    They share the kitchen, living room, and utilities, but each family member has
+    their own bedroom. In contrast, the hard multitenancy model is better represented
+    by an apartment building. Multiple families share the building, but each family
+    lives behind a locked front door.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 延续我们在[第一章](ch01.html#chapter1)中的住房类比主题，我们可以说软多租户模型相当于一家人一起生活。他们共享厨房、客厅和公共设施，但每个家庭成员都有自己的卧室。相比之下，硬多租户模型更像是一个公寓楼。多个家庭共享建筑物，但每个家庭都在一个锁定的前门后面生活。
+- en: While the soft and hard multitenancy models can help guide conversations about
+    multitenant platforms, the implementation is not as clear-cut. The reality is
+    that multitenancy is best described as a spectrum. On the one end, we have no
+    isolation at all. Tenants are free to do anything on the platform and consume
+    all its resources. On the other end, we have full tenant isolation, where tenants
+    are strictly controlled and isolated across all layers of the platform.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然软多租户和硬多租户模型可以帮助引导关于多租户平台的讨论，但实施起来并不那么明确。事实上，多租户最好描述为一个光谱。一端是完全没有隔离。租户可以在平台上自由操作并消耗所有资源。另一端是完全的租户隔离，其中租户在平台的所有层面都严格控制和隔离。
+- en: As you can imagine, establishing a production multitenant platform with no tenant
+    isolation is not viable. At the same time, building a multitenant platform with
+    complete tenant isolation can be a costly (or even futile) endeavor. Thus, it
+    is important to find the sweet spot in the multitenancy spectrum that will work
+    for your workloads and organization as a whole.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如您可以想象的那样，在没有租户隔离的生产多租户平台是不可行的。同时，建立具有完全租户隔离的多租户平台可能是一个昂贵（甚至是徒劳）的尝试。因此，找到适合您的工作负载和整个组织的多租户光谱中的甜蜜点是非常重要的。
+- en: 'To determine the isolation required for your workloads, you must consider the
+    different layers where you *can* apply isolation in a Kubernetes-based platform:'
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要确定您的工作负载所需的隔离级别，您必须考虑基于 Kubernetes 平台可以应用隔离的不同层次：
+- en: Workload plane
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 工作负载平面
+- en: The workload plane consists of the nodes where the workloads get to run. In
+    a multitenant scenario, workloads are typically scheduled across the shared pool
+    of nodes. Isolation at this level involves fair sharing of node resources, security
+    and network boundaries, etc.
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 工作负载平面由工作负载运行的节点组成。在多租户场景中，工作负载通常会在共享的节点池中进行调度。在这个级别的隔离涉及节点资源的公平共享、安全性和网络边界等方面。
+- en: Control plane
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 控制平面
+- en: The control plane encompasses the components that make up a Kubernetes cluster,
+    such as the API server, the controller manager, and the scheduler. There are different
+    mechanisms available in Kubernetes to segregate tenants at this level, including
+    authorization (i.e., RBAC), admission control, and API priority and fairness.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 控制平面包括构成 Kubernetes 集群的各种组件，如 API 服务器、控制器管理器和调度器。Kubernetes 提供了不同的机制来在这个层次上隔离租户，包括授权（即
+    RBAC）、准入控制和 API 优先级与公平性。
+- en: Platform services
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 平台服务
+- en: Platform services include centralized logging, monitoring, ingress, in-cluster
+    DNS, and others. Depending on the workloads, these services or capabilities might
+    also require some level of isolation. For example, you might want to prevent tenants
+    from inspecting each other’s logs or discovering each other’s services via the
+    cluster’s DNS server.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 平台服务包括集中日志记录，监控，入口，集群内 DNS 等等。根据工作负载的不同，这些服务或能力可能需要一定程度的隔离。例如，您可能希望阻止租户查看彼此的日志或通过集群的
+    DNS 服务器发现彼此的服务。
+- en: Kubernetes provides different primitives you can use to implement isolation
+    at each of these layers. Before digging into them, we will discuss the Kubernetes
+    Namespace, the foundational boundary that allows you to segregate tenants on a
+    cluster.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 提供了不同的原语，您可以使用这些原语在每个层次上实现隔离。在深入讨论这些之前，我们将讨论 Kubernetes Namespace，这是允许您在集群中隔离租户的基础边界。
+- en: The Namespace Boundary
+  id: totrans-33
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Namespace 边界
+- en: Namespaces enable a number of different capabilities in the Kubernetes API.
+    They allow you to organize your cluster, enforce policy, control access, etc.
+    More importantly, they are a critical building block when implementing a multitenant
+    Kubernetes platform, as they provide the foundation to onboard and isolate tenants.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Namespaces 允许在 Kubernetes API 中实现多种不同的功能。它们允许您组织您的集群，强制执行策略，控制访问等等。更重要的是，它们是实现多租户
+    Kubernetes 平台的关键构建块，因为它们提供了在集群中引入和隔离租户的基础。
+- en: When it comes to tenant isolation, however, it is important to keep in mind
+    that the Namespace is a logical construct in the Kubernetes control plane. Without
+    additional policy or configuration, the Namespace has no implications on the workload
+    plane. For example, workloads that belong to different Namespaces are likely to
+    run on the same node unless advanced scheduling constraints are put in place.
+    In the end, the Namespace is merely a piece of metadata attached to resources
+    in the Kubernetes API.
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，在涉及租户隔离时，重要的是要记住 Namespace 是 Kubernetes 控制平面中的逻辑构造。没有额外的策略或配置，Namespace 对工作负载平面没有任何影响。例如，属于不同
+    Namespace 的工作负载可能会在同一节点上运行，除非设置了高级调度约束。最终，Namespace 只是附加到 Kubernetes API 资源的元数据。
+- en: 'Having said that, many of the isolation mechanisms that we will explore in
+    this chapter hinge on the Namespace construct. RBAC, resource quotas, and network
+    policies are examples of such mechanisms. Thus, one of the first decisions to
+    make when designing your tenancy strategy is establishing how to leverage Namespaces.
+    When helping organizations in the field, we have seen the following approaches:'
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 话虽如此，本章将探讨的许多隔离机制都依赖于 Namespace 构造。RBAC、资源配额和网络策略就是这些机制的例子。因此，在设计租户策略时的首要决策之一就是确定如何利用
+    Namespaces。在帮助现场组织时，我们看到了以下几种方法：
+- en: Namespace per team
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个团队一个 Namespace
+- en: In this model, each team has access to a single Namespace in the cluster. This
+    approach makes it simple to apply policy and quota to specific teams. However,
+    it can be challenging for teams to exist within a single Namespace if they own
+    many services. Overall, we find that this model can be viable for small organizations
+    that are getting started with Kubernetes.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这种模型中，每个团队在集群中有一个单独的 Namespace。这种方法使得对特定团队应用策略和配额变得简单。然而，如果一个团队拥有许多服务，存在于单个
+    Namespace 中可能会具有挑战性。总体来看，我们发现这种模型对于刚开始使用 Kubernetes 的小型组织是可行的。
+- en: Namespace per application
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个应用程序一个 Namespace
+- en: This approach provides a Namespace for each application in the cluster, making
+    it easier to apply application-specific policy and quota. The downside is that
+    this model usually results in tenants having access to multiple Namespaces, which
+    can complicate the tenant onboarding process and the ability to apply tenant-level
+    policy and quota. With that said, this approach is perhaps the most viable for
+    large organizations and enterprises building multitenant platforms.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种方法为集群中的每个应用程序提供了一个命名空间，从而更容易应用特定于应用程序的策略和配额。缺点是，这种模型通常导致租户可以访问多个命名空间，这可能会使租户入驻流程复杂化，并且难以应用租户级别的策略和配额。尽管如此，对于构建多租户平台的大型组织和企业来说，这种方法可能是最可行的。
+- en: Namespace per tier
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每层级别一个命名空间
+- en: This pattern establishes different runtime tiers (or environments) using Namespaces.
+    We usually avoid this approach, as we prefer to use separate clusters for development,
+    staging, and production tiers.
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 该模式通过使用命名空间建立了不同的运行时层（或环境）。通常情况下，我们避免使用这种方法，因为我们更倾向于为开发、测试和生产层使用单独的集群。
+- en: The approach to use largely depends on your isolation requirements and the structure
+    of your organization. If you are leaning toward the Namespace per team model,
+    remember that all resources in the Namespace are accessible by all team members
+    or workloads in the Namespace. For example, assuming Alice and Bob are on the
+    same team, there’s no way to prevent Alice from looking at Bob’s Secrets if they
+    are both authorized to get Secrets in the team’s Namespace.
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用的方法主要取决于您的隔离要求和组织结构。如果您倾向于每个团队一个命名空间的模型，请记住命名空间中的所有资源都可以被团队中的所有成员或命名空间中的工作负载访问。例如，假设Alice和Bob在同一个团队，如果他们都被授权获取团队命名空间中的Secrets，那么无法阻止Alice查看Bob的Secrets。
+- en: Multitenancy in Kubernetes
+  id: totrans-44
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Kubernetes中的多租户
+- en: Up to this point, we have discussed the different tenancy models you can implement
+    when building a Kubernetes-based platform. In the rest of this chapter, we will
+    focus on multitenant clusters and the various Kubernetes capabilities you can
+    leverage to safely and effectively host your tenants. As you read through these
+    sections, you will find that we have covered some of these capabilities in other
+    chapters. In those cases, we will brush up on them once more, but we will focus
+    on the multitenancy aspect of them.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，我们已经讨论了构建基于Kubernetes平台的不同租户模型。在本章的其余部分，我们将重点介绍多租户集群以及您可以利用的各种Kubernetes功能，以安全有效地托管您的租户。在阅读这些部分时，您会发现我们在其他章节中已经涵盖了一些这些功能。在这些情况下，我们将再次概述它们，但我们会专注于它们的多租户方面。
+- en: First, we will focus on the isolation mechanisms available in the control plane
+    layer. Mainly, RBAC, resource quotas, and validating admission webhooks. We will
+    then move onto the workload plane, where we will discuss resource requests and
+    limits, Network Policies, and Pod Security Policies. Finally, we will touch on
+    monitoring and centralized logging as example platform services that you can design
+    with multitenancy in mind.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，我们将关注控制平面层中可用的隔离机制。主要包括RBAC、资源配额和验证入口Webhook。然后，我们将转向工作负载平面，讨论资源请求和限制、网络策略以及Pod安全策略。最后，我们将涉及监控和集中日志记录作为设计多租户的示例平台服务。
+- en: Role-Based Access Control (RBAC)
+  id: totrans-47
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 基于角色的访问控制（RBAC）
+- en: When hosting multiple tenants in the same cluster, you must enforce isolation
+    at the API server layer to prevent tenants from modifying resources that do not
+    belong to them. The RBAC authorization mechanism enables you to configure this
+    policy. As we discussed in [Chapter 10](ch10.html#chapter10), the API server supports
+    different mechanisms to establish a user’s or tenant’s identity. Once established,
+    the tenant’s identity is passed on to the RBAC system, which determines whether
+    the tenant is authorized to perform the requested action.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在同一集群中托管多个租户时，您必须在API服务器层强制执行隔离，以防止租户修改不属于他们的资源。RBAC授权机制使您能够配置这些策略。正如我们在[第10章](ch10.html#chapter10)中讨论的那样，API服务器支持不同的机制来建立用户或租户的身份。一旦建立了身份，租户的身份就会传递到RBAC系统，该系统决定是否授权租户执行请求的操作。
+- en: As you onboard tenants onto the cluster, you can grant them access to one or
+    more Namespaces in which they can create and manage API resources. To authorize
+    each tenant, you must bind Roles or ClusterRoles with their identities. The binding
+    is achieved with the RoleBinding resource. The following snippet shows an example
+    RoleBinding that grants the `app1-viewer` Group view access to the `app1` Namespace.
+    Unless you have a good use case, avoid using ClusterRoleBindings for tenants,
+    as it authorizes the tenant to leverage the bound role across all Namespaces.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在将租户引入集群时，可以授予他们访问一个或多个命名空间的权限，以便他们可以创建和管理 API 资源。为了授权每个租户，必须将角色或 ClusterRole
+    与他们的身份绑定。这通过 RoleBinding 资源实现。以下片段展示了一个示例 RoleBinding，授予 `app1-viewer` 组对 `app1`
+    命名空间的查看访问权限。除非有充分的使用案例，否则避免为租户使用 ClusterRoleBindings，因为它会授权租户在所有命名空间中利用绑定角色。
+- en: '[PRE0]'
+  id: totrans-50
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'You’ll notice in the example that the RoleBinding references a ClusterRole
+    named `view`. This is a built-in role that is available in Kubernetes. Kubernetes
+    provides a set of built-in roles that cover common use cases:'
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你会注意到示例中，RoleBinding 引用了名为 `view` 的 ClusterRole。这是 Kubernetes 中提供的一个内置角色。Kubernetes
+    提供了一组内置角色，涵盖了常见的使用案例：
+- en: view
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 查看
+- en: The view role grants tenants read-only access to Namespace-scoped resources.
+    This role can be bound to all the developers in a team, for example, as it allows
+    them to inspect and troubleshoot their resources in production clusters.
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 视图角色授予租户对命名空间范围内资源的只读访问权限。例如，该角色可以绑定到团队中的所有开发人员，因为它允许他们在生产集群中检查和排查他们的资源。
+- en: edit
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 编辑
+- en: The edit role allows tenants to create, modify, and delete Namespace-scoped
+    resources, in addition to viewing them. Given this role’s abilities, binding of
+    this role is highly dependent on your approach to application deployment.
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 编辑角色允许租户创建、修改和删除命名空间范围内的资源，以及查看这些资源。鉴于此角色的能力，该角色的绑定高度依赖于你的应用部署方法。
+- en: admin
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 管理员
+- en: In addition to viewing and editing resources, the admin role can create Roles
+    and RoleBindings. This role is usually bound to the tenant administrator to delegate
+    Namespace-management concerns.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了查看和编辑资源外，管理员角色还可以创建角色和角色绑定。通常将此角色绑定到租户管理员以委派命名空间管理问题。
+- en: These built-in roles are a good starting point. With that said, they can be
+    considered too broad, as they grant access to a vast number of resources in the
+    Kubernetes API. To follow the principle of least privilege, you can create tightly
+    scoped roles that allow the minimum set of resources and actions required to get
+    the job done. However, keep in mind that this can result in management overhead
+    as you potentially need to manage many unique roles.
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些内置角色是一个很好的起点。话虽如此，它们可能被认为过于宽泛，因为它们授予对 Kubernetes API 中大量资源的访问权限。为了遵循最小权限原则，可以创建严格范围的角色，允许完成任务所需的最小资源集和操作。然而，请注意，这可能会导致管理开销，因为你可能需要管理许多唯一的角色。
+- en: Warning
+  id: totrans-59
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: In most Kubernetes deployments, tenants are typically authorized to list all
+    Namespaces on the cluster. This is problematic if you need to prevent tenants
+    from knowing what other Namespaces exist, as there is currently no way of achieving
+    this using the Kubernetes RBAC system. If you do have this requirement, you must
+    build a higher-level abstraction to handle it (OpenShift’s [Project](https://oreil.ly/xIAT8)
+    resource is an example abstraction that addresses this).
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在大多数 Kubernetes 部署中，租户通常被授权列出集群上所有命名空间。如果你需要防止租户了解其他存在的命名空间，这会成为问题，因为目前使用 Kubernetes
+    RBAC 系统无法实现此目的。如果确实有此要求，必须构建一个更高级的抽象来处理它（OpenShift 的 [Project](https://oreil.ly/xIAT8)
+    资源是解决这个问题的一个示例抽象）。
+- en: RBAC is a must when running multiple tenants in the same cluster. It provides
+    isolation at the control plane layer, which is necessary to prevent tenants from
+    viewing and modifying each other’s resources. Make sure to leverage RBAC when
+    building a multitenant Kubernetes-based platform.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在同一集群中运行多个租户时，RBAC 是必需的。它在控制平面层提供隔离，这对防止租户查看和修改彼此资源至关重要。在构建基于 Kubernetes 的多租户平台时，请务必利用
+    RBAC。
+- en: Resource Quotas
+  id: totrans-62
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 资源配额
+- en: As a platform operator offering a multitenant platform, you need to ensure that
+    each tenant gets an appropriate share of the limited cluster resources. Otherwise,
+    nothing prevents an ambitious (or perhaps malicious) tenant from consuming the
+    entire cluster and effectively starving the other tenants.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为提供多租户平台的平台运营商，你需要确保每个租户得到有限集群资源的适当份额。否则，一个野心勃勃（或者说是恶意的）租户可能会消耗整个集群资源，从而有效地使其他租户资源匮乏。
+- en: To place a limit on resource consumption, you can use the resource quotas feature
+    of Kubernetes. Resource quotas apply at the Namespace level, and they can limit
+    two kinds of resources. On one hand, you can control the amount of compute resources
+    available to a Namespace, such as CPU, memory, and storage. On the other hand,
+    you can limit the number of API objects that can be created within a Namespace,
+    such as the number of Pods, Services, etc. A common scenario that calls for limiting
+    API objects is to control the number of LoadBalancer Services in cloud environments,
+    which can get expensive.
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了限制资源消耗，您可以使用 Kubernetes 的资源配额功能。资源配额适用于命名空间级别，可以限制两种资源。一方面，您可以控制命名空间中可用的计算资源量，如
+    CPU、内存和存储。另一方面，您可以限制可以在命名空间中创建的 API 对象的数量，如 Pod、Service 等。一个常见的场景是限制云环境中负载均衡服务的数量，因为这可能会变得昂贵。
+- en: Because quotas apply at the Namespace level, your Namespace strategy impacts
+    how you configure quotas. If tenants get access to a single Namespace, applying
+    quotas to each tenant is straightforward, as you can create a ResourceQuota for
+    each tenant in their Namespace. The story is more complicated when tenants have
+    access to multiple Namespaces. In this case, you need extra automation or an additional
+    controller to enforce quota across different Namespaces. (The [Hierarchical Namespace
+    Controller](https://oreil.ly/PyPDK) is an attempt at addressing this issue).
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于配额应用于命名空间级别，您的命名空间策略影响如何配置配额。如果租户可以访问单个命名空间，则为每个租户在其命名空间中创建资源配额是直接的。当租户可以访问多个命名空间时，情况就会变得更复杂。在这种情况下，您需要额外的自动化或额外的控制器来跨不同命名空间强制执行配额。([分层命名空间控制器](https://oreil.ly/PyPDK)是解决这个问题的一种尝试)。
+- en: 'To further explore ResourceQuotas, let’s explore them in action. The following
+    example shows a ResourceQuota that limits the Namespace to consume up to 1 CPU
+    and 512 MiB of memory:'
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了进一步探索资源配额，在下面的示例中展示了一个将命名空间限制为最多消耗 1 个 CPU 和 512 MiB 内存的资源配额：
+- en: '[PRE1]'
+  id: totrans-67
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: 'As Pods in the `app1` Namespace start to get scheduled, the quota is consumed
+    accordingly. For example, if we create a Pod that requests 0.5 CPUs and 256 MiB,
+    we can see the updated quota as follows:'
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当`app1`命名空间中的 Pod 开始被调度时，配额会相应地被消耗。例如，如果我们创建一个请求 0.5 个 CPU 和 256 MiB 内存的 Pod，我们可以看到更新后的配额如下：
+- en: '[PRE2]'
+  id: totrans-69
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'Attempts to consume resources beyond the configured quota are blocked by an
+    admission controller, as shown in the following error message. In this case, we
+    were trying to consume 2 CPUs and 2 GiB of memory but were limited by the quota:'
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尝试超出配置配额的资源将被一个准入控制器阻止，如下错误消息所示。在这种情况下，我们试图消耗 2 个 CPU 和 2 GiB 内存，但受配额限制：
+- en: '[PRE3]'
+  id: totrans-71
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: As you can see, ResourceQuotas give you the ability to control how tenants consume
+    cluster resources. They are critical when running a multitenant cluster, as they
+    ensure tenants can safely share the cluster’s limited resources.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如您所看到的，资源配额赋予了您控制租户如何消耗集群资源的能力。在运行多租户集群时，它们非常关键，因为它们确保租户可以安全地共享集群的有限资源。
+- en: Admission Webhooks
+  id: totrans-73
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 准入 Webhook
+- en: Kubernetes has a set of built-in admission controllers that you can use to enforce
+    policy. The ResourceQuota functionality we just covered is implemented using an
+    admission controller. While the built-in controllers help solve common use cases,
+    we typically find that organizations need to extend the admission layer to isolate
+    and limit tenants further.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 有一组内置的准入控制器，您可以使用这些控制器来执行策略。我们刚刚介绍的资源配额功能是使用准入控制器实现的。虽然内置控制器帮助解决了常见的用例，但我们通常发现组织需要扩展准入层以进一步隔离和限制租户。
+- en: 'Validating and mutating admission webhooks are the mechanisms that enable you
+    to inject custom logic into the admission pipeline. We will not dig into the implementation
+    details of these webhooks, as we have already covered them in [Chapter 8](ch08.html#chapter8).
+    Instead, we will explore some of the multitenancy use cases we’ve solved in the
+    field with custom admission webhooks:'
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 验证和变更准入 Webhook 是一种机制，允许您将自定义逻辑注入准入流程。我们不会深入探讨这些 Webhook 的实现细节，因为我们已经在[第 8 章](ch08.html#chapter8)中涵盖了它们。相反，我们将探讨一些我们在现场通过自定义准入
+    Webhook 解决的多租户使用案例：
+- en: Standardized labels
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 标准化标签
+- en: You can enforce a standard set of labels across all API objects using a validating
+    admission webhook. For example, you could require all resources to have an `owner`
+    label. Having a standard set of labels is useful, as labels provide a way to query
+    the cluster and even support higher-level features, such as network policies and
+    scheduling constraints.
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用验证入场 Webhook 强制所有 API 对象上的一组标准标签。例如，您可以要求所有资源都具有 `owner` 标签。具有一组标准标签很有用，因为标签提供了查询集群的方法，甚至支持更高级别的功能，如网络策略和调度约束。
+- en: Require fields
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 需要字段
+- en: Like enforcing a standard set of labels, you can use a validating admission
+    webhook to mark fields of certain resources as required. For example, you can
+    require all tenants to set the `https` field of their Ingress resources. Or perhaps
+    require tenants to always set readiness and liveness probes in their Pod specifications.
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 就像强制执行一组标准标签一样，您可以使用验证入场 Webhook 将某些资源的字段标记为必填。例如，您可以要求所有租户设置其 Ingress 资源的 `https`
+    字段。或者要求租户始终在其 Pod 规范中设置就绪和存活探针。
+- en: Set guardrails
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 设置防护栏
+- en: Kubernetes has a broad set of features that you might want to limit or even
+    disable. Webhooks allow you to set guardrails around specific functionality. Examples
+    include disabling specific Service types (e.g., NodePorts), disallowing node selectors,
+    controlling Ingress hostnames, and others.
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 拥有一系列广泛的功能，您可能希望限制甚至禁用其中的某些功能。Webhook 可让您在特定功能周围设置防护栏。例如，禁用特定的服务类型（例如
+    NodePorts），不允许节点选择器，控制 Ingress 主机名等。
+- en: MultiNamespace resource quotas
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 多命名空间资源配额
+- en: We have experienced cases in the field where organizations needed to enforce
+    resource quotas across multiple Namespaces. You can use a custom admission webhook/controller
+    to implement this functionality, as the ResourceQuota object in Kubernetes is
+    Namespace-scoped.
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在现场经历过组织需要跨多个命名空间强制实施资源配额的情况。您可以使用自定义入场 Webhook/控制器来实现此功能，因为 Kubernetes 中的
+    ResourceQuota 对象是命名空间范围的。
+- en: Overall, admission webhooks are a great way to enforce custom policy in your
+    multi-tenant clusters. And the emergence of policy engines such as [Open Policy
+    Agent (OPA)](https://www.openpolicyagent.org) and [Kyverno](https://github.com/kyverno/kyverno)
+    make it even simpler to implement them. Consider leveraging such engines to isolate
+    and limit tenants in your clusters.
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 总体而言，入场 Webhook 是在您的多租户集群中强制自定义策略的好方法。而像 [Open Policy Agent (OPA)](https://www.openpolicyagent.org)
+    和 [Kyverno](https://github.com/kyverno/kyverno) 这样的策略引擎的出现使得实施它们变得更加简单。考虑利用这些引擎来隔离和限制您集群中的租户。
+- en: Resource Requests and Limits
+  id: totrans-85
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 资源请求和限制
+- en: Kubernetes schedules workloads onto a shared pool of cluster nodes. Commonly,
+    workloads from different tenants get scheduled onto the same node and thus share
+    the node’s resources. Ensuring that the resources are shared fairly is one of
+    the most critical concerns when running a multitenant platform. Otherwise, tenants
+    can negatively affect other tenants that are colocated on the same node.
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 将工作负载安排到共享的集群节点池中。通常，来自不同租户的工作负载被安排到同一节点上，因此共享节点的资源。确保资源公平共享是运行多租户平台时最关键的问题之一。否则，租户可能会对共享同一节点的其他租户产生负面影响。
+- en: Resource requests and limits in Kubernetes are the mechanisms that isolate tenants
+    from one another when it comes to compute resources. Resource requests are generally
+    fulfilled at the Kubernetes scheduler level (CPU requests are also reflected at
+    runtime, as we will see later). In contrast, resource limits are implemented at
+    the node level using Linux control groups (cgroups) and the Linux Completely Fair
+    Scheduler (CFS).
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 中的资源请求和限制是在计算资源方面将租户相互隔离的机制。资源请求通常在 Kubernetes 调度器级别满足（CPU 请求也会在运行时反映出来，我们稍后会看到）。相比之下，资源限制是在节点级别使用
+    Linux 控制组（cgroups）和 Linux 完全公平调度器（CFS）实现的。
+- en: Note
+  id: totrans-88
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: While requests and limits provide adequate isolation for production workloads,
+    it should be known that this isolation is not as strict as that provided by a
+    hypervisor. Completely removing noisy neighbor symptoms from workloads can be
+    challenging in containerized environments. Be sure to experiment and understand
+    the implication of multiple workloads under load on a given Kubernetes node.
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然请求和限制为生产工作负载提供了足够的隔离，但应注意，在容器化环境中，这种隔离不如由虚拟化程序提供的严格。确保在给定 Kubernetes 节点上负载多个工作负载的情况下进行实验并理解其影响。
+- en: 'In addition to providing resource isolation, resource requests and limits determine
+    a Pod’s Quality of Service (QoS) class. The QoS class is important because it
+    determines the order in which the kubelet evicts Pods when a node is running low
+    on resources. Kubernetes offers the following QoS classes:'
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了提供资源隔离外，资源请求和限制还确定了 Pod 的服务质量（QoS）类。QoS 类很重要，因为它决定了 kubelet 在节点资源不足时驱逐 Pod
+    的顺序。Kubernetes 提供以下 QoS 类：
+- en: Guaranteed
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Guaranteed
+- en: Pods with CPU limits equal to CPU requests and memory limits equal to memory
+    requests. This must be true across all containers. The kubelet seldom evicts Guaranteed
+    Pods.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CPU 限制等于 CPU 请求，内存限制等于内存请求的 Pod。这必须对所有容器成立。Kubelet 很少会驱逐保证型 Pod。
+- en: Burstable
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Burstable
+- en: Pods that do not qualify as Guaranteed and have at least one container with
+    CPU or memory requests. The kubelet evicts Burstable Pods based on how many resources
+    they are consuming above their requests. Pods bursting higher above their requests
+    are evicted before Pods bursting closer to their requests.
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不符合 Guaranteed 标准且至少有一个容器具有 CPU 或内存请求的 Pod。Kubelet 根据它们消耗超出请求的资源量驱逐 Burstable
+    Pod。消耗超出请求的 Pod 将在消耗接近其请求的 Pod 之前被驱逐。
+- en: BestEffort
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: BestEffort
+- en: Pods that have no CPU or memory limits or requests. These Pods run on a “best
+    effort” basis. They are the first to be evicted by the kubelet.
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 没有 CPU 或内存限制或请求的 Pod。这些 Pod 以“尽力而为”的方式运行。它们是 kubelet 驱逐的首选对象。
+- en: Note
+  id: totrans-97
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Pod eviction is a complex process. In addition to using QoS classes to rank
+    Pods, the kubelet also considers Pod priorities when making eviction decisions.
+    The Kubernetes documentation has an excellent article that discusses [“Out of
+    Resource” handling](https://oreil.ly/LuCD9) in greater detail.
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod 驱逐是一个复杂的过程。除了使用 QoS 类来对 Pod 进行排名外，kubelet 在进行驱逐决策时还考虑 Pod 的优先级。Kubernetes
+    文档中有一篇出色的文章详细讨论了[“资源不足”处理](https://oreil.ly/LuCD9)。
+- en: Now that we know that resource requests and limits provide tenant isolation
+    and determine a Pod’s QoS class, let’s dive into the details of resource requests
+    and limits. Even though Kubernetes supports requesting and limiting different
+    resources, we will focus our discussion on CPU and memory, the essential resources
+    that all workloads need at runtime. Let’s discuss memory requests and limits first.
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们知道资源请求和限制提供了租户隔离，并确定了 Pod 的 QoS 类，让我们深入讨论资源请求和限制的详细信息。尽管 Kubernetes 支持请求和限制不同的资源，我们将专注于
+    CPU 和内存，这是所有工作负载在运行时都需要的基本资源。让我们首先讨论内存请求和限制。
+- en: Each container in a Pod can specify memory requests and limits. When memory
+    requests are set, the scheduler adds them up to get the Pod’s overall memory request.
+    With this information, the scheduler finds a node with enough memory capacity
+    to host the Pod. If none of the cluster nodes have enough memory, the Pod remains
+    in a pending state. Once scheduled, though, the containers in the Pod are guaranteed
+    the requested memory.
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个 Pod 中的容器都可以指定内存请求和限制。当设置了内存请求后，调度器会将它们相加以获取 Pod 的总体内存请求量。有了这些信息，调度器会找到一个具备足够内存容量来托管该
+    Pod 的节点。如果集群中没有节点具备足够的内存，该 Pod 将保持在等待状态。一旦被调度，Pod 中的容器则确保获得请求的内存量。
+- en: A Pod’s memory request represents a guaranteed lower bound for the memory resource.
+    However, they can consume additional memory if it’s available on the node. This
+    is problematic because the Pod uses memory that the scheduler can assign to other
+    workloads or tenants. When a new Pod is scheduled onto the same node, the Pods
+    may fight over the memory. To honor the memory requests of both Pods, the Pod
+    consuming memory above its request is terminated. [Figure 12-3](#pod_consuming_memory_above_its_request_is_terminated_to_reclaim_memory_for_the_new_pod)
+    depicts this process.
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod 的内存请求代表内存资源的保证下限。但是，如果节点上有可用的额外内存，它们可以消耗额外的内存。这是有问题的，因为 Pod 使用了调度器可以分配给其他工作负载或租户的内存。当新
+    Pod 被调度到同一节点上时，这些 Pod 可能会争夺内存。为了尊重两个 Pod 的内存请求，超出其请求的 Pod 将被终止。[图 12-3](#pod_consuming_memory_above_its_request_is_terminated_to_reclaim_memory_for_the_new_pod)
+    描述了这个过程。
+- en: '![prku 1203](assets/prku_1203.png)'
+  id: totrans-102
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1203](assets/prku_1203.png)'
+- en: Figure 12-3\. Pod consuming memory above its request is terminated to reclaim
+    memory for the new Pod.
+  id: totrans-103
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 12-3\. 当 Pod 消耗超过其请求的内存时，将终止以回收内存以供新 Pod 使用。
+- en: 'In order to control the amount of memory that tenants can consume, we must
+    include memory limits on the workloads, which enforce an upper bound on the amount
+    of memory available to a given workload. If the workload attempts to consume memory
+    above the limit, the workload is terminated. This is because memory is a noncompressible
+    resource. There is no way to throttle memory, and thus the process must be terminated
+    when the node’s memory is under contention. The following snippet shows a container
+    that was out-of-memory killed (OOMKilled). Notice the “Reason” in the “Last State”
+    section of the output:'
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了控制租户可以消耗的内存量，我们必须在工作负载上包含内存限制，这些限制强制执行给定工作负载可用内存的上限。如果工作负载试图消耗超过限制的内存，则会终止该工作负载。这是因为内存是一种不可压缩的资源。无法对内存进行节流，因此在节点的内存争用时必须终止进程。以下片段显示了一个因内存不足而被杀死（OOMKilled）的容器。请注意输出的“Last
+    State”部分中的“Reason”：
+- en: '[PRE4]'
+  id: totrans-105
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: A common question we encounter in the field is whether one should allow tenants
+    to set memory limits higher than requests. In other words, whether nodes should
+    be oversubscribed on memory. This question boils down to a trade-off between node
+    density and stability. When you oversubscribe your nodes, you increase node density
+    but decrease workload stability. As we’ve seen, workloads that consume memory
+    above their requests get terminated when memory comes under contention. In most
+    cases, we encourage platform teams to avoid oversubscribing nodes, as they typically
+    consider stability more important than tightly packing nodes. This is especially
+    the case in clusters hosting production workloads.
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在实际场景中经常遇到的一个常见问题是，是否应该允许租户将内存限制设置得高于请求。换句话说，节点是否应该在内存上进行超额订阅。这个问题归结为节点密度和稳定性之间的权衡。当您超额订阅节点时，您增加了节点密度，但降低了工作负载的稳定性。正如我们所见，当内存争用时，消耗超过其请求的内存的工作负载会被终止。在大多数情况下，我们鼓励平台团队避免超额订阅节点，因为他们通常认为稳定性比紧密打包节点更重要。特别是在托管生产工作负载的集群中。
+- en: Now that we’ve covered memory requests and limits, let’s shift our discussion
+    to CPU. In contrast to memory, CPU is a compressible resource. You can throttle
+    processes when CPU is under contention. For this reason, CPU requests and limits
+    are somewhat more complex than memory requests and limits.
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经介绍了内存请求和限制，让我们将讨论重点转移到CPU上。与内存不同，CPU是一种可压缩资源。当CPU争用时，可以对进程进行节流。因此，CPU请求和限制比内存请求和限制略显复杂。
+- en: CPU requests and limits are specified using CPU units. In most cases, 1 CPU
+    unit is equivalent to 1 CPU core. Requests and limits can be fractional (e.g.,
+    0.5 CPU) and they can be expressed using millis by adding an `m` suffix. 1 CPU
+    unit equals 1000m CPU.
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CPU请求和限制使用CPU单位来指定。在大多数情况下，1个CPU单位相当于1个CPU核心。请求和限制可以是分数（例如，0.5 CPU），并且可以通过添加`m`后缀以毫秒表示。1个CPU单位等于1000m
+    CPU。
+- en: 'When containers within a Pod specify CPU requests, the scheduler finds a node
+    with enough capacity to place the Pod. Once placed, the kubelet converts the requested
+    CPU units into cgroup CPU shares. CPU shares is a mechanism in the Linux kernel
+    that grants CPU time to cgroups (i.e., the processes within the cgroup). The following
+    are critical aspects of CPU shares to keep in mind:'
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当Pod中的容器指定CPU请求时，调度程序将找到具有足够容量放置Pod的节点。放置后，kubelet将请求的CPU单位转换为cgroup CPU份额。CPU份额是Linux内核中授予cgroup（即cgroup内进程）CPU时间的机制。以下是CPU份额的关键方面：
+- en: CPU shares are relative. 1000 CPU shares does not mean 1 CPU core or 1000 CPU
+    cores. Instead, the CPU capacity is proportionally divided among all cgroups according
+    to their relative shares. For example, consider two processes in different cgroups.
+    If process 1 (P1) has 2000 shares, and process 2 (P2) has 1000 shares, P1 will
+    get twice the CPU time as P2.
+  id: totrans-110
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: CPU份额是相对的。1000个CPU份额并不意味着1个CPU核心或1000个CPU核心。相反，CPU容量按其相对份额在所有cgroup中进行比例分配。例如，考虑两个处于不同cgroup中的进程。如果进程1（P1）有2000份额，而进程2（P2）有1000份额，则P1将获得两倍于P2的CPU时间。
+- en: CPU shares come into effect only when the CPU is under contention. If the CPU
+    is not fully utilized, processes are not throttled and can consume additional
+    CPU cycles. Following the preceding example, P1 will get twice the CPU time as
+    P2 only when the CPU is 100% busy.
+  id: totrans-111
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: CPU份额仅在CPU争用时生效。如果CPU未被充分利用，则不会对进程进行节流，进程可以消耗额外的CPU周期。根据前面的例子，只有当CPU完全忙碌时，P1才会获得比P2两倍的CPU时间。
+- en: CPU shares (CPU requests) provide the CPU resource isolation necessary to run
+    different tenants on the same node. As long as tenants declare CPU requests, the
+    CPU capacity is shared according to those requests. Consequently, tenants are
+    unable to starve other tenants from getting CPU time.
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CPU份额（CPU请求）提供了在同一节点上运行不同租户所需的CPU资源隔离。只要租户声明CPU请求，CPU容量就会根据这些请求进行共享。因此，租户无法通过获取CPU时间来使其他租户饥饿。
+- en: CPU limits work differently. They set an upper bound on the CPU time that each
+    container can use. Kubernetes leverages the bandwidth control feature of the Completely
+    Fair Scheduler (CFS) to implement CPU limits. CFS bandwidth control uses time
+    periods to limit CPU consumption. Each container gets a quota within a configurable
+    period. The quota determines how much CPU time can be consumed in every period.
+    If the container exhausts the quota, the container is throttled for the rest of
+    the period.
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CPU限制的工作方式不同。它们设定了每个容器可以使用的CPU时间的上限。 Kubernetes利用完全公平调度器（CFS）的带宽控制功能来实现CPU限制。
+    CFS带宽控制使用时间周期来限制CPU消耗。每个容器在可配置周期内获得一个配额。该配额确定每个周期可以消耗多少CPU时间。如果容器用尽了配额，则在剩余的周期内容器被节流。
+- en: By default, Kubernetes sets the period to 100 ms. A container with a limit of
+    0.5 CPUs gets 50 ms of CPU time every 100 ms, as depicted in [Figure 12-4](#cpu_consumption_and_throttling_of_a_process_running).
+    A container with a limit of 3 CPUs gets 300 ms of CPU time in every 100 millisecond
+    period, effectively allowing the container to consume up to 3 CPUs every 100 ms.
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，Kubernetes将周期设置为100毫秒。具有0.5个CPU限制的容器每100毫秒获得50毫秒的CPU时间，如[图12-4](#cpu_consumption_and_throttling_of_a_process_running)所示。具有3个CPU限制的容器在每个100毫秒周期内获得300毫秒的CPU时间，有效地允许容器每100毫秒消耗多达3个CPU。
+- en: '![prku 1204](assets/prku_1204.png)'
+  id: totrans-115
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1204](assets/prku_1204.png)'
+- en: Figure 12-4\. CPU consumption and throttling of a process running in a cgroup
+    that has a CFS period of 100 milliseconds and a CPU quota of 50 milliseconds.
+  id: totrans-116
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: Figure 12-4\. 一个在具有100毫秒CFS周期和50毫秒CPU配额的cgroup中运行的进程的CPU消耗和节流情况。
+- en: Due to the nature of CPU limits, they can sometimes result in surprising behavior
+    or unexpected throttling. This is usually the case in multithreaded applications
+    that can consume the entire quota at the very beginning of the period. For example,
+    a container with a limit of 1 CPU will get 100 ms of CPU time every 100 ms. Assuming
+    the container has 5 threads using CPU, the container consumes the 100 ms quota
+    in 20 ms and gets throttled for the remaining 80 ms. This is depicted in [Figure 12-5](#multi_threaded_application_consumes_the_entire).
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于CPU限制的性质，它们有时会导致意外行为或意外的节流现象。这通常发生在多线程应用程序中，它们可以在周期的最开始消耗整个配额。例如，具有1个CPU限制的容器每100毫秒获得100毫秒的CPU时间。假设容器有5个线程在使用CPU，则容器在20毫秒内消耗完100毫秒的配额，并在剩余的80毫秒内被节流。这在[图12-5](#multi_threaded_application_consumes_the_entire)中有所描述。
+- en: '![prku 1205](assets/prku_1205.png)'
+  id: totrans-118
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1205](assets/prku_1205.png)'
+- en: Figure 12-5\. Multithreaded application consumes the entire CPU quota in the
+    first 20 milliseconds of the 100-millisecond period.
+  id: totrans-119
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: Figure 12-5\. 多线程应用程序在100毫秒周期的前20毫秒内消耗整个CPU配额。
+- en: Enforcing CPU limits is useful to minimize the variability of an application’s
+    performance, especially when running multiple replicas across different nodes.
+    This variability in performance stems from the fact that, without CPU limits,
+    replicas can burst and consume idle CPU cycles, which *might* be available at
+    different times. By setting the CPU limits equal to the CPU requests, you remove
+    the variability as the workloads get precisely the CPU they requested. (Google
+    and IBM published an excellent [whitepaper](https://oreil.ly/39Pu7) that discusses
+    CFS bandwidth control in more detail.) In a similar vein, CPU limits play a critical
+    role in performance testing and benchmarking. Without any CPU limits, your benchmarks
+    will produce inconclusive results, as the CPU available to your workloads will
+    vary based on the nodes where they got scheduled and the amount of idle CPU available.
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 强制执行CPU限制对于最小化应用程序性能的变化非常有用，特别是在跨不同节点运行多个副本时。这种性能变化源于没有CPU限制，副本可以突发并消耗空闲的CPU周期，这些周期可能在不同的时间*可能*可用。通过将CPU限制设置为CPU请求，您消除了这种变化，因为工作负载准确获得了它们请求的CPU。
+    （Google和IBM发表了一篇关于更详细讨论CFS带宽控制的优秀[白皮书](https://oreil.ly/39Pu7)。）同样，CPU限制在性能测试和基准测试中起着关键作用。如果没有任何CPU限制，您的基准测试将产生无法确定的结果，因为可用于工作负载的CPU会根据它们被调度到的节点和可用的空闲CPU量而变化。
+- en: If your workloads require predictable access to CPU (e.g., latency-sensitive
+    applications), setting CPU limits equal to CPU requests is helpful. Otherwise,
+    placing an upper bound on CPU cycles is not necessary. When the CPU resources
+    on a node are under contention, the CPU shares mechanism ensures that workloads
+    get their fair share of CPU time, according to their container’s CPU requests.
+    When the CPU is not under contention, the idle CPU cycles are not wasted as workloads
+    opportunistically consume them.
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您的工作负载需要对 CPU 的访问具有可预测性（例如，对延迟敏感的应用程序），将 CPU 的限制设置为 CPU 请求的大小是有帮助的。否则，在 CPU
+    循环上设置上限是不必要的。当节点上的 CPU 资源存在竞争时，CPU 共享机制确保工作负载根据其容器的 CPU 请求获取公平的 CPU 时间份额。当 CPU
+    没有竞争时，空闲的 CPU 循环并不会浪费，因为工作负载可以机会性地利用它们。
+- en: Network Policies
+  id: totrans-122
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 网络策略
+- en: In most deployments, Kubernetes assumes all Pods running on the platform can
+    communicate with each other. As you can imagine, this stance is problematic for
+    multitenant clusters, where you might want to enforce network-level isolation
+    between the tenants. The NetworkPolicy API is the mechanism you can leverage to
+    ensure tenants are isolated from each other at the network layer.
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在大多数部署中，Kubernetes 假设平台上运行的所有 Pod 可以相互通信。正如您可以想象的那样，这种立场对于多租户集群是有问题的，因为您可能希望在租户之间强制执行网络层面的隔离。NetworkPolicy
+    API 是您可以利用的机制，以确保在网络层面上租户彼此隔离。
+- en: We explored Network Policies in [Chapter 5](ch05.html#chapter5), where we discussed
+    the role of the Container Networking Interface (CNI) plug-ins in enforcing network
+    policies. In this section, we will discuss the *default deny-all* network policy
+    model, a common approach to Network Policy, especially in multitenant clusters.
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在[第五章](ch05.html#chapter5)中探讨了网络策略，讨论了容器网络接口（CNI）插件在执行网络策略中的作用。在本节中，我们将讨论*默认拒绝所有*的网络策略模型，这是网络策略的常见方法，特别是在多租户集群中。
+- en: As a platform operator, you can establish a default deny-all network policy
+    across the entire cluster. By doing so, you take the strongest stance regarding
+    network security and isolation, given that tenants are fully isolated as soon
+    as they are onboarded onto the platform. Furthermore, you drive tenants to a model
+    where they have to declare their workloads’ network interactions, which improves
+    their applications’ network security.
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为平台操作员，您可以在整个集群中建立默认的拒绝所有网络策略。通过这样做，您采取了关于网络安全和隔离的最严格立场，因为一旦租户加入平台，他们就完全隔离。此外，您要求租户声明其工作负载的网络交互，这有助于提高其应用程序的网络安全性。
+- en: 'When it comes to implementing a default deny-all policy, you can follow two
+    different paths, each with its pros and cons. The first approach leverages the
+    NetworkPolicy API available in Kubernetes. Because this is a core API, this implementation
+    is portable across different CNI plug-ins. However, given that the NetworkPolicy
+    object is Namespace-scoped, it requires you to create and manage multiple default
+    deny-all NetworkPolicy resources, one per Namespace. Additionally, because tenants
+    need the authorization to create their own NetworkPolicy objects, you must implement
+    additional controls (usually via admission webhooks, as discussed earlier) to
+    prevent tenants from modifying or deleting the default deny-all policy. The following
+    snippet shows a default deny-all NetworkPolicy object. The empty Pod selector
+    selects all the Pods in the Namespace:'
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当涉及实施默认的拒绝所有策略时，您可以选择两种不同的路径，每种路径都有其优缺点。第一种方法利用了 Kubernetes 中可用的 NetworkPolicy
+    API。由于这是一个核心 API，这种实现在不同的 CNI 插件之间是可移植的。然而，由于 NetworkPolicy 对象是命名空间范围的，这要求您创建和管理多个默认的拒绝所有
+    NetworkPolicy 资源，每个命名空间一个。此外，因为租户需要授权来创建自己的 NetworkPolicy 对象，您必须实现额外的控制（通常通过之前讨论过的准入
+    Webhook）来防止租户修改或删除默认的拒绝所有策略。以下代码片段显示了一个默认的拒绝所有 NetworkPolicy 对象。空的 Pod 选择器选择命名空间中的所有
+    Pod：
+- en: '[PRE5]'
+  id: totrans-127
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'The alternative approach is to leverage CNI plug-in-specific Custom Resource
+    Definitions (CRDs). Some CNI plug-ins, such as Antrea, Calico, and Cilium, provide
+    CRDs that enable you to specify cluster-level or “global” network policy. These
+    CRDs help you reduce the implementation and management complexity of the default
+    deny-all policy, but they tie you to a specific CNI plug-in. The following snippet
+    shows an example Calico GlobalNetworkPolicy CRD that implements the default deny-all
+    policy:'
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一种方法是利用CNI插件特定的自定义资源定义（CRD）。一些CNI插件，如Antrea、Calico和Cilium，提供了CRD，使您能够指定集群级或“全局”网络策略。这些CRD帮助您减少默认拒绝所有策略的实施和管理复杂性，但它们将您绑定到特定的CNI插件。以下片段显示了一个示例Calico
+    GlobalNetworkPolicy CRD，实现了默认拒绝所有策略。
+- en: '[PRE6]'
+  id: totrans-129
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: Note
+  id: totrans-130
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Typically, default deny-all network policy implementations make exceptions to
+    allow fundamental network traffic, such as DNS queries to the cluster’s DNS server.
+    Additionally, they are not applied to the kube-system Namespace and any other
+    system-level Namespaces to prevent breaking the cluster. The YAML snippets in
+    the preceding code do not address these concerns.
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常，实施默认拒绝所有网络策略会例外允许基本网络流量，例如向集群的DNS服务器发出的DNS查询。此外，它们不适用于kube-system Namespace和任何其他系统级Namespace，以防止破坏集群。上述代码中的YAML片段未解决这些问题。
+- en: As with most choices, whether to use the built-in NetworkPolicy object or a
+    CRD results in a trade-off between portability and simplicity. In our experience,
+    we’ve found that the simplicity gained by leveraging the CNI-specific CRD is usually
+    worth the trade-off, given that switching CNI plug-ins is an uncommon event. With
+    that said, you might not have to make this choice in the future, as the Kubernetes
+    Networking Special Interest Group (sig-network) is [looking at evolving](https://oreil.ly/jVP_f)
+    the NetworkPolicy APIs to support cluster-scoped network policies.
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与大多数选择一样，是使用内置NetworkPolicy对象还是CRD之间存在可移植性和简单性的权衡。根据我们的经验，我们发现通过利用特定于CNI的CRD所获得的简单性通常是值得的，考虑到切换CNI插件是一种不常见的事件。话虽如此，未来您可能无需做出这种选择，因为Kubernetes网络特别兴趣小组（sig-network）正在考虑演变NetworkPolicy
+    API以支持集群范围的网络策略。
+- en: 'Once the default deny-all policy is in place, tenants are responsible for poking
+    holes in the network fabric to ensure their applications can function. They achieve
+    this using the NetworkPolicy resource, in which they specify ingress and egress
+    rules that apply to their workloads. For example, the following snippet shows
+    a NetworkPolicy that could be applied to a web service. It allows Ingress or incoming
+    traffic from the web frontend, and it allows Egress or outgoing traffic to its
+    database:'
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦默认的拒绝所有策略生效，租户就有责任在网络结构中打洞，以确保他们的应用程序能够正常运行。他们通过使用NetworkPolicy资源来实现这一点，在其中指定适用于他们工作负载的入站和出站规则。例如，以下片段展示了可以应用于Web服务的NetworkPolicy。它允许来自Web前端的入站流量，并允许连接到其数据库的出站流量。
+- en: '[PRE7]'
+  id: totrans-134
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: Enforcing a default deny-all network policy is a critical tenant isolation mechanism.
+    As you build your platform atop Kubernetes, we strongly encourage you to follow
+    this pattern, especially if you plan to host multiple tenants.
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 实施默认拒绝所有网络策略是一种重要的租户隔离机制。在构建基于Kubernetes的平台时，我们强烈建议您遵循这种模式，特别是如果您计划托管多个租户。
+- en: Pod Security Policies
+  id: totrans-136
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Pod安全策略
+- en: Pod Security Policies (PSPs) are another important mechanism to ensure tenants
+    can coexist safely on the same cluster. PSPs control critical security parameters
+    of Pods at runtime, such as their ability to run as privileged, access host volumes,
+    bind to the host network, and more. Without PSPs (or a similar policy enforcement
+    mechanism), workloads are free to do virtually anything on a cluster node.
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod安全策略（PSPs）是另一种重要机制，确保租户可以安全共存于同一集群中。PSPs在运行时控制Pod的关键安全参数，例如它们作为特权用户运行的能力，访问主机卷，绑定到主机网络等。没有PSPs（或类似的策略执行机制），工作负载可以在集群节点上做几乎任何事情。
+- en: Kubernetes enforces most of the controls implemented via PSPs using an admission
+    controller. (The rule that requires a nonroot user is sometimes enforced by the
+    kubelet, which verifies the runtime user of the container after downloading the
+    image.) Once the admission controller is enabled, attempts to create a Pod are
+    blocked unless they are allowed by a PSP. [Example 12-1](#sample_restrictive_podsecuritypolicy)
+    shows a restrictive PSP that we typically define as the *default* policy in multitenant
+    clusters.
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 使用准入控制器来强制执行大多数通过 PSP 实施的控制。（有时，要求非 root 用户由 kubelet 在下载镜像后验证容器的运行时用户来执行。）启用准入控制器后，除非
+    PSP 允许，否则创建 Pod 的尝试将被阻止。 [示例 12-1](#sample_restrictive_podsecuritypolicy) 展示了我们通常在多租户集群中定义为
+    *默认* 策略的限制性 PSP。
+- en: Example 12-1\. Sample restrictive PodSecurityPolicy
+  id: totrans-139
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 12-1\. 示例限制性 PodSecurityPolicy
+- en: '[PRE8]'
+  id: totrans-140
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: '[![1](assets/1.png)](#co_multitenancy_CO1-1)'
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_multitenancy_CO1-1)'
+- en: Disallow privileged containers.
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不允许特权容器。
+- en: '[![2](assets/2.png)](#co_multitenancy_CO1-2)'
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_multitenancy_CO1-2)'
+- en: Control the volume types that Pods can use.
+  id: totrans-144
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 控制 Pods 可以使用的卷类型。
+- en: '[![3](assets/3.png)](#co_multitenancy_CO1-3)'
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_multitenancy_CO1-3)'
+- en: Prevent Pods from binding to the underlying host’s network stack.
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 阻止 Pods 绑定到底层主机的网络堆栈。
+- en: '[![4](assets/4.png)](#co_multitenancy_CO1-4)'
+  id: totrans-147
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_multitenancy_CO1-4)'
+- en: Ensure that containers run as a nonroot user.
+  id: totrans-148
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 确保容器以非 root 用户身份运行。
+- en: '[![5](assets/5.png)](#co_multitenancy_CO1-5)'
+  id: totrans-149
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#co_multitenancy_CO1-5)'
+- en: This policy assumes the nodes are using AppArmor rather than SELinux.
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此策略假设节点使用的是 AppArmor 而不是 SELinux。
+- en: '[![6](assets/6.png)](#co_multitenancy_CO1-6)'
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![6](assets/6.png)](#co_multitenancy_CO1-6)'
+- en: Specify the allowed group IDs that containers can use. The root gid (0) is disallowed.
+  id: totrans-152
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 指定容器可以使用的允许组 ID。 禁止使用 root gid (0)。
+- en: '[![7](assets/7.png)](#co_multitenancy_CO1-7)'
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![7](assets/7.png)](#co_multitenancy_CO1-7)'
+- en: Control the group IDs applied to volumes. The root gid (0) is disallowed.
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 控制应用于卷的组 ID。 禁止使用 root gid (0)。
+- en: 'The existence of a PSP that allows the Pod is not enough for the Pod to be
+    admitted. The Pod must be authorized to *use* the PSP as well. PSP authorization
+    is handled using RBAC. Pods can use a PSP if their Service Account is authorized
+    to use it. Pods can also use a PSP if the actor creating the Pod is authorized
+    to use the PSP. However, given that Pods are seldom created by cluster users,
+    using Service Accounts for PSP authorization is the more common approach. The
+    following snippet shows a Role and RoleBinding that authorizes a Service Account
+    to use a specific PSP named `sample-psp`:'
+  id: totrans-155
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 允许 Pod 存在的 PSP 是不够的，Pod 必须被授权*使用*这个 PSP。 PSP 的授权是通过 RBAC 处理的。 如果它们的 Service
+    Account 被授权使用 PSP，则 Pod 可以使用 PSP。 如果创建 Pod 的执行者被授权使用 PSP，Pod 也可以使用 PSP。 然而，考虑到
+    Pod 很少由集群用户创建，使用 Service Accounts 进行 PSP 授权是更常见的方法。 以下代码片段显示了授权特定 PSP `sample-psp`
+    使用的角色和角色绑定：
+- en: '[PRE9]'
+  id: totrans-156
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: 'In most cases, the platform team is responsible for creating and managing the
+    PSPs and enabling tenants to use them. As you design the policies, always follow
+    the principle of least privilege. Only allow the minimum set of privileges and
+    capabilities required for Pods to complete their work. As a starting point, we
+    typically recommend creating the following policies:'
+  id: totrans-157
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在大多数情况下，平台团队负责创建和管理 PSP，并启用租户使用它们。 在设计策略时，始终遵循最小权限原则。 仅允许 Pods 完成其工作所需的最小权限集和能力。
+    作为起点，我们通常建议创建以下策略：
+- en: Default
+  id: totrans-158
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认
+- en: The default policy is usable by all tenants on the cluster. It should be a restrictive
+    policy that blocks all privileged operations, drops all Linux capabilities, disallows
+    running as the root user, etc. (See [Example 12-1](#sample_restrictive_podsecuritypolicy)
+    for the YAML definition of this policy.) To make it the default policy, you can
+    authorize all Pods in the cluster to use this PSP using a ClusterRole and ClusterRoleBinding.
+  id: totrans-159
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认策略可供集群中所有租户使用。 它应该是一个阻止所有特权操作、放弃所有 Linux 能力、不允许作为 root 用户运行等策略。（有关此策略的 YAML
+    定义，请参见 [示例 12-1](#sample_restrictive_podsecuritypolicy)。）要使其成为默认策略，您可以授权集群中所有
+    Pod 使用此 PSP，方法是使用 ClusterRole 和 ClusterRoleBinding。
+- en: Kube-system
+  id: totrans-160
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kube-system
+- en: The kube-system policy is for the system components that exist within the kube-system
+    Namespace. Due to the nature of these components, this policy needs to be more
+    permissive than the default policy. For example, it must allow Pods to mount `hostPath`
+    volumes and run as root. In contrast to the default policy, the RBAC authorization
+    is achieved using a RoleBinding scoped to all Service Accounts in the kube-system
+    Namespace.
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: kube-system策略适用于存在于kube-system命名空间中的系统组件。由于这些组件的性质，此策略需要比默认策略更宽松。例如，它必须允许Pod挂载`hostPath`卷并以root身份运行。与默认策略相反，RBAC授权是通过针对kube-system命名空间中所有服务账户范围的RoleBinding实现的。
+- en: Networking
+  id: totrans-162
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 网络
+- en: The networking policy is geared toward the cluster’s networking components,
+    such as the CNI plug-in. These Pods require even more privileges to manipulate
+    the networking stack of cluster nodes. To isolate this policy to networking Pods,
+    create a RoleBinding that authorizes only the networking Pods Service Accounts
+    to use the policy.
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 网络策略针对集群的网络组件，如CNI插件。这些Pod需要更多的特权来操作集群节点的网络堆栈。为了将此策略隔离到网络Pod，创建一个RoleBinding，仅授权网络Pod的服务账户使用该策略。
+- en: With these policies in place, tenants can deploy unprivileged workloads into
+    the cluster. If there is a workload that needs additional privileges, you must
+    determine whether you can tolerate the risk of running that privileged workload
+    in the same cluster. If so, create a different policy tailored to that workload.
+    Grant the privileges required by the workload and only authorize that workload’s
+    Service Account to use the PSP.
+  id: totrans-164
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有了这些策略，租户可以将非特权工作负载部署到集群中。如果有一个需要额外特权的工作负载，您必须确定是否可以容忍在同一集群中运行该特权工作负载的风险。如果可以，创建一个针对该工作负载量身定制的不同策略。授予工作负载所需的特权，并仅授权该工作负载的服务账户使用PSP。
+- en: PSPs are a critical enforcement mechanism in multitenant platforms. They control
+    what tenants can and cannot do at runtime, as they run alongside other tenants
+    on shared nodes. When building your platform, you should leverage PSPs to ensure
+    tenants are isolated and protected from each other.
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: PSP是多租户平台中的关键执行机制。它们控制租户在运行时可以做什么和不能做什么，因为它们与其他租户一起在共享节点上运行。在构建平台时，您应该利用PSP来确保租户被隔离并受到保护。
+- en: Note
+  id: totrans-166
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The Kubernetes community is [discussing](https://oreil.ly/ayN8j) the possibility
+    of removing the PodSecurityPolicy API and admission controller from the core project.
+    If removed, you can leverage a policy engine such as [Open Policy Agent](https://oreil.ly/wrz23)
+    or [Kyverno](https://oreil.ly/v7C2H) to implement similar functionality.
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes社区正在[讨论](https://oreil.ly/ayN8j)是否从核心项目中移除PodSecurityPolicy API和准入控制器的可能性。如果移除，您可以利用诸如[Open
+    Policy Agent](https://oreil.ly/wrz23)或[Kyverno](https://oreil.ly/v7C2H)之类的策略引擎来实现类似的功能。
+- en: Multitenant Platform Services
+  id: totrans-168
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 多租户平台服务
+- en: In addition to isolating the Kubernetes control plane and workload plane, you
+    can enforce isolation in the different services you offer on the platform. These
+    include services such as logging, monitoring, ingress, etc. A significant determining
+    factor in implementing this isolation is the technology you use to provide the
+    service. In some cases, the tool or technology might support multitenancy out
+    of the box, vastly simplifying your implementation.
+  id: totrans-169
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了在平台上隔离Kubernetes控制平面和工作负载平面外，您还可以在提供的不同服务中强制执行隔离。这些服务包括日志记录、监控、入口等。在实施此隔离的一个重要决定因素是您用于提供服务的技术。在某些情况下，工具或技术可能会直接支持多租户，从而极大简化您的实施。
+- en: Another important consideration to make is whether you *need* to isolate tenants
+    at this layer. Is it okay for tenants to look at each other’s logs and metrics?
+    Is it acceptable for them to freely discover each other’s services over DNS? Can
+    they share the ingress data path? Answering these and similar questions will help
+    clarify your requirements. In the end, it boils down to the level of trust between
+    the tenants you are hosting on the platform.
+  id: totrans-170
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个需要考虑的重要问题是在这一层是否*需要*隔离租户。租户之间查看彼此的日志和指标是否可以？他们可以自由地发现彼此的服务吗？他们可以共享入口数据路径吗？回答这些类似的问题将有助于澄清您的需求。最终，这归结为您在平台上托管的租户之间的信任级别。
+- en: A typical scenario we run into when helping platform teams is multitenant monitoring
+    with Prometheus. Out of the box, Prometheus does not support multitenancy. Metrics
+    are ingested and stored in a single time-series database, which is accessible
+    by anyone who has access to the Prometheus HTTP endpoint. In other words, if the
+    Prometheus instance is scraping metrics from multiple tenants, there’s no way
+    to prevent different tenants from seeing each other’s data. To address this issue,
+    we need to deploy separate Prometheus instances per tenant.
+  id: totrans-171
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在帮助平台团队时，我们经常遇到的典型情况是使用 Prometheus 进行多租户监控。Prometheus 默认情况下不支持多租户。指标被摄取并存储在单个时间序列数据库中，任何具有
+    Prometheus HTTP 端点访问权限的人都可以访问。换句话说，如果 Prometheus 实例从多个租户那里抓取指标，就没有办法阻止不同租户看到彼此的数据。为了解决这个问题，我们需要为每个租户部署单独的
+    Prometheus 实例。
+- en: When approaching this problem, we typically leverage the [prometheus-operator](https://oreil.ly/j38-Q).
+    As discussed in [Chapter 9](ch09.html#observability_chapter), the prometheus-operator
+    allows you to deploy and manage multiple instances of Prometheus using Custom
+    Resource Definitions. With this capability, you can offer a monitoring platform
+    service that can safely support various tenants. Tenants are completely isolated
+    as they get a dedicated monitoring stack that includes Prometheus, Grafana, Alertmanager,
+    etc.
+  id: totrans-172
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在解决这个问题时，我们通常利用 [prometheus-operator](https://oreil.ly/j38-Q)。正如在 [第9章](ch09.html#observability_chapter)
+    中讨论的那样，prometheus-operator 允许您使用自定义资源定义来部署和管理多个 Prometheus 实例。借助这一能力，您可以提供一个监控平台服务，安全地支持各种租户。租户完全隔离，因为他们会得到一个包括
+    Prometheus、Grafana、Alertmanager 等在内的专用监控堆栈。
+- en: Depending on the platform’s target user experience, you can either allow tenants
+    to deploy their Prometheus instance using the operator, or you can automatically
+    create an instance when you onboard a new tenant. When the platform team has the
+    capacity, we recommend the latter, as it removes the burden from the platform
+    tenants and provides an improved user experience.
+  id: totrans-173
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 根据平台的目标用户体验，您可以允许租户使用运算符部署他们自己的 Prometheus 实例，或者在租户入驻时自动创建实例。当平台团队有能力时，我们推荐后者，因为它减轻了平台租户的负担，并提供了更好的用户体验。
+- en: Centralized logging is another platform service that you can implement with
+    multi-tenancy in mind. Typically, this involves sending logs for different tenants
+    to different backends or datastores. Most log forwarders have routing features
+    that you can use to implement a multitenant solution.
+  id: totrans-174
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 集中式日志记录是另一个可以考虑多租户实现的平台服务。通常，这涉及将不同租户的日志发送到不同的后端或数据存储中。大多数日志转发器都有路由功能，可以用来实现多租户解决方案。
+- en: 'In the case of Fluentd and Fluent Bit, you can leverage their tag-based routing
+    features when configuring the forwarder. The following snippet shows a sample
+    Fluent Bit output configuration that routes Alice’s logs (Pods in the `alice-ns`
+    Namespace) to one backend and Bob’s logs (Pods in the `bob-ns` Namespace) to another
+    backend:'
+  id: totrans-175
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Fluentd 和 Fluent Bit 的情况下，当配置转发器时，您可以利用它们基于标签的路由功能。以下代码片段显示了一个样例 Fluent Bit
+    输出配置，将 Alice 的日志（`alice-ns` 命名空间中的 Pod）路由到一个后端，将 Bob 的日志（`bob-ns` 命名空间中的 Pod）路由到另一个后端：
+- en: '[PRE10]'
+  id: totrans-176
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: In addition to isolating the logs at the backend, you can also implement rate-limiting
+    or throttling to prevent one tenant from hogging the log forwarding infrastructure.
+    Both Fluentd and Fluent Bit have plug-ins you can use to enforce such limits.
+    Finally, if you have a use case that warrants it, you can leverage a logging operator
+    to support more advanced use cases, such as exposing the logging configuration
+    via a Kubernetes CRD.
+  id: totrans-177
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了在后端隔离日志外，您还可以实现速率限制或节流，以防止一个租户占用日志转发基础设施。Fluentd 和 Fluent Bit 都有您可以使用的插件来执行这些限制。最后，如果有适当的用例需要，您可以利用日志运算符来支持更高级的用例，例如通过
+    Kubernetes CRD 公开日志配置。
+- en: Multitenancy in the platform services layer is sometimes overlooked by platform
+    teams. As you build your multitenant platform, consider your requirements and
+    their implications on the platform services you want to offer. In some cases,
+    it can drive decisions around approaches and tooling that are fundamental to your
+    platform.
+  id: totrans-178
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 平台服务层的多租户有时会被平台团队忽视。在构建多租户平台时，请考虑您的需求及其对您想要提供的平台服务的影响。在某些情况下，这可能会推动对平台基础设施方案和工具的决策。
+- en: Summary
+  id: totrans-179
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 总结
+- en: Workload tenancy is a crucial concern you must consider when building a platform
+    atop Kubernetes. On one hand, you can operate single-tenant clusters for each
+    of your platform tenants. While this approach is viable, we discussed its downsides,
+    including resource and management overhead. The alternative is multitenant clusters,
+    where tenants share the cluster’s control plane, workload plane, and platform
+    services.
+  id: totrans-180
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Workload tenancy is a crucial concern you must consider when building a platform
+    atop Kubernetes. On one hand, you can operate single-tenant clusters for each
+    of your platform tenants. While this approach is viable, we discussed its downsides,
+    including resource and management overhead. The alternative is multitenant clusters,
+    where tenants share the cluster’s control plane, workload plane, and platform
+    services.
+- en: When hosting multiple tenants on the same cluster, you must ensure tenant isolation
+    such that tenants cannot negatively affect each other. We discussed the Kubernetes
+    Namespace as the foundation upon which we can build the isolation. We then discussed
+    many of the isolation mechanisms available in Kubernetes that allow you to build
+    a multitenant platform. These mechanisms are available in different layers, mainly
+    the control plane, the workload plane, and the platform services.
+  id: totrans-181
+  prefs: []
+  type: TYPE_NORMAL
+  zh: When hosting multiple tenants on the same cluster, you must ensure tenant isolation
+    such that tenants cannot negatively affect each other. We discussed the Kubernetes
+    Namespace as the foundation upon which we can build the isolation. We then discussed
+    many of the isolation mechanisms available in Kubernetes that allow you to build
+    a multitenant platform. These mechanisms are available in different layers, mainly
+    the control plane, the workload plane, and the platform services.
+- en: The control plane isolation mechanisms include RBAC to control what tenants
+    can do, resource quotas to divvy up the cluster resources, and admission webhooks
+    to enforce policy. On the workload plane, you can segregate tenants by using Resource
+    Requests and Limits to ensure fair-sharing of node resources, Network Policies
+    to segment the Pod network, and Pod Security Policies to limit Pods capabilities.
+    Finally, when it comes to platform services, you can leverage different technologies
+    to implement multitenant offerings. We explored monitoring and centralized logging
+    as example platform service that you can build to support multiple tenants.
+  id: totrans-182
+  prefs: []
+  type: TYPE_NORMAL
+  zh: The control plane isolation mechanisms include RBAC to control what tenants
+    can do, resource quotas to divvy up the cluster resources, and admission webhooks
+    to enforce policy. On the workload plane, you can segregate tenants by using Resource
+    Requests and Limits to ensure fair-sharing of node resources, Network Policies
+    to segment the Pod network, and Pod Security Policies to limit Pods capabilities.
+    Finally, when it comes to platform services, you can leverage different technologies
+    to implement multitenant offerings. We explored monitoring and centralized logging
+    as example platform service that you can build to support multiple tenants.

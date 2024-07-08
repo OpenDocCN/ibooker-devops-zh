@@ -1,0 +1,994 @@
+- en: Chapter 2\. Kubernetes API Basics
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第 2 章 Kubernetes API 基础
+- en: In this chapter we walk you through the Kubernetes API basics. This includes
+    a deep dive into the API server’s inner workings, the API itself, and how you
+    can interact with the API from the command line. We will introduce you to Kubernetes
+    API concepts such as resources and kinds, as well as grouping and versioning.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们将深入介绍 Kubernetes API 的基础知识。这包括深入了解 API 服务器的内部工作、API 本身以及如何从命令行与 API 交互。我们将向你介绍
+    Kubernetes API 概念，如资源和种类，以及分组和版本化。
+- en: The API Server
+  id: totrans-2
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: API 服务器
+- en: 'Kubernetes is made up of a bunch of nodes (machines in the cluster) with different
+    roles, as shown in [Figure 2-1](#k8s-arch-overview): the control plane on the
+    master node(s) consists of the API server, controller manager, and scheduler.
+    The API server is the central management entity and the only component that talks
+    directly with the distributed storage component `etcd`.'
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 由一组具有不同角色的节点（集群中的机器）组成，如[图 2-1](#k8s-arch-overview)所示：控制平面位于主节点上，包括
+    API 服务器、控制器管理器和调度器。API 服务器是中央管理实体，也是唯一直接与分布式存储组件 `etcd` 通信的组件。
+- en: 'The API server has the following core responsibilities:'
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: API 服务器有以下核心责任：
+- en: To serve the Kubernetes API. This API is used cluster-internally by the master
+    components, the worker nodes, and your Kubernetes-native apps, as well as externally
+    by clients such as `kubectl`.
+  id: totrans-5
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 为了提供 Kubernetes API。这个 API 在集群内部被主控组件、工作节点和你的 Kubernetes 原生应用使用，同时也可以被 `kubectl`
+    等客户端外部使用。
+- en: To proxy cluster components, such as the Kubernetes dashboard, or to stream
+    logs, service ports, or serve `kubectl exec` sessions.
+  id: totrans-6
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 代理集群组件，例如 Kubernetes 仪表板，或者流式传输日志、服务端口或服务 `kubectl exec` 会话。
+- en: 'Serving the API means:'
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 提供 API 意味着：
+- en: 'Reading state: getting single objects, listing them, and streaming changes'
+  id: totrans-8
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 读取状态：获取单个对象，列出它们，并流式传输更改
+- en: 'Manipulating state: creating, updating, and deleting objects'
+  id: totrans-9
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 操作状态：创建、更新和删除对象
+- en: State is persisted via `etcd`.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 状态通过 `etcd` 持久化。
+- en: '![Kubernetes architecture overview](assets/prku_0201.png)'
+  id: totrans-11
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Kubernetes 架构概述](assets/prku_0201.png)'
+- en: Figure 2-1\. Kubernetes architecture overview
+  id: totrans-12
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-1\. Kubernetes 架构概述
+- en: The heart of Kubernetes is its API server. But how does the API server work?
+    We’ll first treat the API server as a black box and take a closer look at its
+    HTTP interface, then we’ll move on to the inner workings of the API server.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 的核心是其 API 服务器。但 API 服务器是如何工作的呢？我们首先将 API 服务器视为一个黑盒，深入研究其 HTTP 接口，然后再深入了解
+    API 服务器的内部工作原理。
+- en: The HTTP Interface of the API Server
+  id: totrans-14
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: API 服务器的 HTTP 接口
+- en: From a client’s perspective, the API server exposes a RESTful HTTP API with
+    JSON or [*protocol buffer*](http://bit.ly/1HhFC5L) (*protobuf* for short) payload,
+    which is used mainly for cluster-internal communication, for performance reasons.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从客户端的角度来看，API 服务器公开一个具有 JSON 或 [*protocol buffer*](http://bit.ly/1HhFC5L)（简称
+    *protobuf*）有效载荷的 RESTful HTTP API，主要用于集群内部通信，出于性能考虑。
+- en: 'The API server HTTP interface handles HTTP requests to query and manipulate
+    Kubernetes resources using the following [HTTP verbs](https://mzl.la/2WX21hL)
+    (or HTTP methods):'
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: API 服务器的 HTTP 接口处理 HTTP 请求，使用以下[HTTP 动词](https://mzl.la/2WX21hL)（或 HTTP 方法）查询和操作
+    Kubernetes 资源：
+- en: The HTTP `GET` verb is used for retrieving the data with a specific resource
+    (such as a certain pod) or a collection or list of resources (for example, all
+    pods in a namespace).
+  id: totrans-17
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: HTTP `GET` 动词用于检索具有特定资源的数据（例如某个 Pod）或资源的集合或列表（例如命名空间中的所有 Pod）。
+- en: The HTTP `POST` verb is used for creating a resource, such as a service or a
+    deployment.
+  id: totrans-18
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: HTTP `POST` 动词用于创建资源，例如服务或部署。
+- en: The HTTP `PUT` verb is used for updating an existing resource—for example, changing
+    the container image of a pod.
+  id: totrans-19
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: HTTP `PUT` 动词用于更新已存在的资源，例如修改一个 Pod 的容器镜像。
+- en: The HTTP `PATCH` verb is used for partial updates of existing resources. Read
+    [“Use a JSON merge patch to update a Deployment”](http://bit.ly/2Xpbi6I) in the
+    Kubernetes documentation to learn more about the available strategies and implications
+    here.
+  id: totrans-20
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: HTTP `PATCH` 动词用于对现有资源进行部分更新。阅读 Kubernetes 文档中的 [“使用 JSON 合并补丁更新部署”](http://bit.ly/2Xpbi6I)
+    以了解更多可用的策略和影响。
+- en: The HTTP `DELETE` verb is used for destroying a resource in a nonrecoverable
+    manner.
+  id: totrans-21
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: HTTP `DELETE` 动词用于以不可恢复的方式销毁资源。
+- en: If you look at, say, the Kubernetes [1.14 API reference](http://bit.ly/2IVevBG),
+    you can see the different HTTP verbs in action. For example, to list pods in the
+    current namespace with the CLI command equivalent of `kubectl -n` `*THENAMESPACE*`
+    `get pods`, you would issue `GET /api/v1/namespaces/*THENAMESPACE*/pods` (see
+    [Figure 2-2](#api-server-list-pods)).
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你查看，比如Kubernetes [1.14 API参考](http://bit.ly/2IVevBG)，你可以看到不同的HTTP动词的操作。例如，要列出当前命名空间中的Pods，并且相当于`kubectl
+    -n` `*THENAMESPACE*` `get pods`的CLI命令，您需要发出`GET /api/v1/namespaces/*THENAMESPACE*/pods`（参见[图2-2](#api-server-list-pods)）。
+- en: '![API server HTTP interface in action: listing pods in a given namespace](assets/prku_0202.png)'
+  id: totrans-23
+  prefs: []
+  type: TYPE_IMG
+  zh: '![API服务器HTTP接口示例：列出给定命名空间中的Pods](assets/prku_0202.png)'
+- en: 'Figure 2-2\. API server HTTP interface in action: listing pods in a given namespace'
+  id: totrans-24
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图2-2\. API服务器HTTP接口示例：列出给定命名空间中的Pods
+- en: For an introduction on how the API server HTTP interface is invoked from a Go
+    program, see [“The Client Library”](ch03.html#client-go).
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 想要了解如何从Go程序调用API服务器HTTP接口的简介，请参阅[“客户端库”](ch03.html#client-go)。
+- en: API Terminology
+  id: totrans-26
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: API术语
+- en: 'Before we get into the API business, let’s first define the terms used in the
+    context of the Kubernetes API server:'
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在我们深入讨论API业务之前，让我们首先定义在Kubernetes API服务器上下文中使用的术语：
+- en: Kind
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 种类
+- en: 'The type of an entity. Each object has a field `Kind` (lowercase `kind` in
+    JSON, capitalized `Kind` in Golang), which tells a client such as `kubectl` that
+    it represents, for example, a pod. There are three categories of kinds:'
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 实体的类型。每个对象都有一个字段`Kind`（JSON中的小写`kind`，Golang中的大写`Kind`），告诉客户端（例如`kubectl`）它代表了例如一个Pod。种类有三种类别：
+- en: Objects represent *a persistent entity in the system*—for example, `Pod` or
+    `Endpoints`. Objects have names, and many of them live in namespaces.
+  id: totrans-30
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 对象表示系统中的持久实体，例如`Pod`或`Endpoints`。对象具有名称，其中许多对象存在于命名空间中。
+- en: Lists are collections of one or more kinds of entities. Lists have a limited
+    set of common metadata. Examples include `PodList`s or `NodeList`s. When you do
+    a **`kubectl get pods`**, that’s exactly what you get.
+  id: totrans-31
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 列表是一个或多个实体种类的集合。列表具有一组有限的公共元数据。例如，`PodList`或`NodeList`。当你执行**`kubectl get pods`**时，就是这样。
+- en: Special-purpose kinds are used for specific actions on objects and for nonpersistent
+    entities such as `/binding` or `/scale`. For discovery, Kubernetes uses `APIGroup`
+    and `APIResource`; for error results, it uses `Status`.
+  id: totrans-32
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 专用种类用于对象的特定操作以及用于非持久性实体，例如`/binding`或`/scale`。对于发现，Kubernetes使用`APIGroup`和`APIResource`；对于错误结果，它使用`Status`。
+- en: In Kubernetes programs, a kind directly corresponds with a Golang type. Thus,
+    as Golang types, kinds are singular and begin with a capital letter.
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在Kubernetes程序中，种类直接对应于一个Golang类型。因此，作为Golang类型，种类是单数形式并以大写字母开头。
+- en: API group
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: API组
+- en: A collection of `Kind`s that are logically related. For example, all batch objects
+    like `Job` or `ScheduledJob` are in the batch API group.
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个逻辑相关的`Kind`集合。例如，所有像`Job`或`ScheduledJob`这样的批处理对象都在批处理API组中。
+- en: Version
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 版本
+- en: Each API group can exist in multiple versions, and most of them do. For example,
+    a group first appears as `v1alpha1` and is then promoted to `v1beta1` and finally
+    graduates to `v1`. An object created in one version (e.g., `v1beta1`) can be retrieved
+    in each of the supported versions. The API server does lossless conversion to
+    return objects in the requested version. From the cluster user’s point of view,
+    versions are just different representations of the same objects.
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个API组可以存在多个版本，大多数情况下都是如此。例如，一个组首先出现为`v1alpha1`，然后晋升为`v1beta1`，最后毕业为`v1`。在一个版本（例如`v1beta1`）中创建的对象可以在每个支持的版本中检索。API服务器执行无损转换以按请求的版本返回对象。从集群用户的角度看，版本只是相同对象的不同表示。
+- en: Tip
+  id: totrans-38
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: There is no such thing as “one object is in `v1` in the cluster, and another
+    object is in `v1beta1` in the cluster.” Instead, every object can be returned
+    as a `v1` representation or in the `v1beta1` representation, as the cluster user
+    desires.
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在集群中，“一个对象在`v1`，另一个对象在`v1beta1`”这种说法是不成立的。相反，每个对象可以作为`v1`或`v1beta1`表示返回，根据集群用户的需求。
+- en: Resource
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 资源
+- en: 'A usually lowercase, plural word (e.g., `pods`) identifying a set of HTTP endpoints
+    (paths) exposing the CRUD (create, read, update, delete) semantics of a certain
+    object type in the system. Common paths are:'
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常是小写的复数词（例如`pods`），用于标识系统中某种对象类型的一组HTTP端点（路径），公开了特定对象类型的CRUD（创建、读取、更新、删除）语义。常见的路径包括：
+- en: The root, such as *…/pods*, which lists all instances of that type
+  id: totrans-42
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 根，例如*…/pods*，列出该类型的所有实例
+- en: A path for individual named resources, such as *…/pods/nginx*
+  id: totrans-43
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一个路径用于单个命名资源，例如*…/pods/nginx*
+- en: Typically, each of these endpoints returns and receives one kind (a `PodList`
+    in the first case, and a `Pod` in the second). But in other situations (e.g.,
+    in case of errors), a `Status` kind object is returned.
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 典型情况下，每个这些端点返回和接收一种类型（第一个情况下是`PodList`，第二个情况下是`Pod`）。但在其他情况下（例如错误情况），将返回一种`Status`类型的对象。
+- en: In addition to the main resource with full CRUD semantics, a resource can have
+    further endpoints to perform specific actions (e.g., *…/pod/nginx/port-forward*,
+    *…/pod/nginx/exec*, or *…/pod/nginx/logs*). We call these *subresources* (see
+    [“Subresources”](ch04.html#crd-subresources)). These usually implement custom
+    protocols instead of REST—for example, some kind of streaming connection via WebSockets
+    or imperative APIs.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了具有完整CRUD语义的主资源外，资源还可以具有进一步的端点以执行特定操作（例如，*…/pod/nginx/port-forward*、*…/pod/nginx/exec*或*…/pod/nginx/logs*）。我们称这些为*子资源*（参见[“子资源”](ch04.html#crd-subresources)）。通常这些实现自定义协议而不是REST，例如通过WebSockets进行的某种类型的流连接或命令式API。
+- en: Tip
+  id: totrans-46
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: 'Resources and kinds are often mixed up. Note the clear distinction:'
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 资源和种类经常混淆。注意清晰的区别：
+- en: Resources correspond to HTTP paths.
+  id: totrans-48
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 资源对应于HTTP路径。
+- en: Kinds are the types of objects returned by and received by these endpoints,
+    as well as persisted into `etcd`.
+  id: totrans-49
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 种类是由这些端点返回和接收的对象类型，以及持久存储到`etcd`中。
+- en: Resources are always part of an API group and a version, collectively referred
+    to as *GroupVersionResource* (or GVR). A GVR uniquely defines an HTTP path. A
+    concrete path, for example, in the `default` namespace would be */apis/batch/v1/namespaces/default/jobs*.
+    [Figure 2-3](#gvr) shows an example GVR for a namespaced resource, a `Job`.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 资源始终属于API组和版本，统称为*GroupVersionResource*（或GVR）。GVR唯一定义了HTTP路径。例如，在`default`命名空间中的具体路径将是*/apis/batch/v1/namespaces/default/jobs*。[图 2-3](#gvr)显示了一个命名空间资源（`Job`）的GVR示例。
+- en: '![Kubernetes API—Group, Version, Resource (GVR)](assets/prku_0203.png)'
+  id: totrans-51
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Kubernetes API—Group, Version, Resource (GVR)](assets/prku_0203.png)'
+- en: Figure 2-3\. Kubernetes API—GroupVersionResource (GVR)
+  id: totrans-52
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图2-3\. Kubernetes API—GroupVersionResource (GVR)
+- en: 'In contrast to the `jobs` GVR example, cluster-wide resources such as nodes
+    or namespaces themselves do not have the *$NAMESPACE* part in the path. For example,
+    a `nodes` GVR example might look as follows: */api/v1/nodes*. Note that namespaces
+    show up in other resources’ HTTP paths but are also a resource themselves, accessible
+    at */api/v1/namespaces*.'
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与`jobs` GVR示例相比，像节点或命名空间本身这样的集群范围资源在路径中不包含*$NAMESPACE*部分。例如，`nodes` GVR示例可能如下所示：*/api/v1/nodes*。请注意，命名空间出现在其他资源的HTTP路径中，但它们也是资源本身，可通过*/api/v1/namespaces*访问。
+- en: Similarly to GVRs, each kind lives in an API group, is versioned, and is identified
+    via a *GroupVersionKind* (GVK).
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 类似于GVR，每个种类都属于一个API组，被版本化，并通过*GroupVersionKind*（GVK）进行标识。
+- en: GVKs and GVRs are related. GVKs are served under HTTP paths identified by GVRs.
+    The process of mapping a GVK to a GVR is called REST mapping. We will see `RESTMappers`
+    that implement REST mapping in Golang in [“REST Mapping”](ch03.html#RESTMapping).
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: GVK和GVR是相关联的。GVK在由GVR标识的HTTP路径下提供服务。将GVK映射到GVR的过程称为REST映射。我们将在[“REST映射”](ch03.html#RESTMapping)中看到在Golang中实现REST映射的*RESTMappers*。
+- en: From a global point of view, the API resource space logically forms a tree with
+    top-level nodes including */api*, */apis*, and some nonhierarchical endpoints
+    such as */healthz* or */metrics*. An example rendering of this API space is shown
+    in [Figure 2-4](#api-space-tree). Note that the exact shape and paths depend on
+    the Kubernetes version, with an increasing tendency to stabilize over the years.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从全局角度看，API资源空间在逻辑上形成一个树，顶级节点包括*/api*、*/apis*以及一些非分层的端点，如*/healthz*或*/metrics*。此API空间的一个示例呈现如图[2-4](#api-space-tree)。请注意，确切的形状和路径取决于Kubernetes版本，而这些版本随着年份的推移趋于稳定。
+- en: '![An example Kubernetes API space](assets/prku_0204.png)'
+  id: totrans-57
+  prefs: []
+  type: TYPE_IMG
+  zh: '![一个示例 Kubernetes API 空间](assets/prku_0204.png)'
+- en: Figure 2-4\. An example Kubernetes API space
+  id: totrans-58
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图2-4\. 一个示例 Kubernetes API 空间
+- en: Kubernetes API Versioning
+  id: totrans-59
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Kubernetes API版本控制
+- en: 'For extensibility reasons, Kubernetes supports multiple API versions at different
+    API paths, such as */api/v1* or */apis/extensions/v1beta1*. Different API versions
+    imply different levels of stability and support:'
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 出于可扩展性原因，Kubernetes支持在不同的API路径下使用多个API版本，例如*/api/v1*或*/apis/extensions/v1beta1*。不同的API版本意味着不同的稳定性和支持水平：
+- en: '*Alpha* level (e.g., `v1alpha1`) is usually disabled by default; support for
+    a feature may be dropped at any time without notice and should be used only in
+    short-lived testing clusters.'
+  id: totrans-61
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '*Alpha*级别（例如，`v1alpha1`）通常默认禁用；支持某项功能可能随时停止且无需通知，并且仅应在短期测试集群中使用。'
+- en: '*Beta* level (e.g., `v2beta3`) is enabled by default, meaning that the code
+    is well tested; however, the semantics of objects may change in incompatible ways
+    in a subsequent beta or stable release.'
+  id: totrans-62
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '*Beta*级别（例如`v2beta3`）默认启用，表示代码经过了良好的测试；但是，对象的语义可能会在后续的beta或稳定版本中以不兼容的方式发生变化。'
+- en: '*Stable* (generally available, or GA) level (e.g., `v1`) will appear in released
+    software for many subsequent versions.'
+  id: totrans-63
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '*稳定*（通常可用或GA）级别（例如`v1`）将出现在后续许多版本的发布软件中。'
+- en: 'Let’s look at how the HTTP API space is constructed: at the top level we distinguish
+    between the core group—that is, everything below */api/v1*—and the named groups
+    in paths of the form */apis/$`NAME`/$*`*VERSION*`.'
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们来看看HTTP API空间是如何构建的：在顶层，我们区分核心组（即位于*/api/v1*下的所有内容）和路径形式为*/apis/$`NAME`/$*`*VERSION*的命名组。
+- en: Note
+  id: totrans-65
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The core group is located under `/api/v1` and not, as one would expect, under
+    */apis/core/v1*, for historic reasons. The core group existed before the concept
+    of an API group was introduced.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 核心组位于`/api/v1`下，并且不是如人们所期望的位于*/apis/core/v1*下，这是由于历史原因。在引入API组概念之前，核心组已经存在。
+- en: 'There is a third type of HTTP paths—ones that are not resource aligned—that
+    the API server exposes: cluster-wide entities such as */metrics*, */logs*, or
+    */healthz*. In addition, the API server supports watches; that is, rather than
+    polling resources at set intervals, you can add a `?watch=true` to certain requests
+    and the API server changes into a [watch modus](http://bit.ly/2x5PnTl).'
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 还有第三种类型的HTTP路径—不与资源对齐的路径，API服务器公开：全局集群实体，如*/metrics*、*/logs*或*/healthz*。此外，API服务器支持观察；也就是说，而不是在设定的间隔内轮询资源，您可以在某些请求中添加`?watch=true`，API服务器会进入[观察模式](http://bit.ly/2x5PnTl)。
+- en: Declarative State Management
+  id: totrans-68
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 声明性状态管理
+- en: Most API objects make a distinction between the specification of the *desired
+    state* of the resource and the *status* of the object at the current time. A *specification*,
+    or spec for short, is a complete description of the desired state of a resource
+    and is typically persisted in stable storage, usually `etcd`.
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大多数API对象在资源的*期望状态*和对象当前时间的*状态*之间做出了区分。*规范*（或简称规范）是资源期望状态的完整描述，通常存储在稳定存储中，通常是`etcd`。
+- en: Note
+  id: totrans-70
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Why do we say “usually `etcd`“? Well, there are Kubernetes distros and offerings,
+    such as [k3s](https://k3s.io) or Microsoft’s AKS, that have replaced or are working
+    on replacing `etcd` with something else. Thanks to the modular architecture of
+    the Kubernetes control plane, this works just fine.
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为什么我们说“通常是`etcd`“？嗯，有一些Kubernetes发行版和提供，如[k3s](https://k3s.io)或Microsoft的AKS，已经或正在用其他替代`etcd`。由于Kubernetes控制平面的模块化架构，这完全没问题。
+- en: Let’s talk a little more about spec (desired state) versus status (observed
+    state) in the context of the API server.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们在API服务器的上下文中更详细地讨论规范（期望状态）与状态（观察状态）之间的区别。
+- en: 'The spec describes your desired state for the resource, something you need
+    to provide via a command-line tool such as `kubectl` or programmatically via your
+    Go code. The status describes the observed or actual state of the resource and
+    is managed by the control plane, either by core components such as the controller
+    manager or by your own custom controller (see [“Controllers and Operators”](ch01.html#ch_controllers-operators)).
+    For example, in a deployment you might specify that you want 20 replicas of the
+    application to be running at all times. The deployment controller, part of the
+    controller manager in the control plane, reads the deployment spec you provided
+    and creates a replica set, which then takes care of managing the replicas: it
+    creates the respective number of pods, which eventually (via the `kubelet`) results
+    in containers being launched on worker nodes. If any replica fails, the deployment
+    controller would make this known to you in the status. This is what we call *declarative
+    state management*—that is, declaring the desired state and letting Kubernetes
+    take care of the rest.'
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 规范描述了资源的期望状态，您需要通过命令行工具（如`kubectl`）或通过您的Go代码以编程方式提供。状态描述了资源的观察或实际状态，并由控制平面管理，可以是核心组件（如控制器管理器）或您自己的自定义控制器管理（参见[“控制器和操作员”](ch01.html#ch_controllers-operators)）。例如，在部署中，您可能指定希望应用程序始终运行20个副本。控制平面中的部署控制器，作为控制器管理器的一部分，读取您提供的部署规范，并创建一个副本集，然后负责管理副本：它创建相应数量的Pod，最终（通过`kubelet`）在工作节点上启动容器。如果任何副本失败，部署控制器会在状态中通知您。这就是我们所说的*声明性状态管理*—即声明期望的状态，然后让Kubernetes处理剩余部分。
+- en: We will see declarative state management in action in the next section, as we
+    start to explore the API from the command line.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将在下一节看到声明性状态管理的实际操作，从命令行开始探索 API。
+- en: Using the API from the Command Line
+  id: totrans-75
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用命令行访问 API
+- en: In this section we’ll be using `kubectl` and `curl` to demonstrate the use of
+    the Kubernetes API. If you’re not familiar with these CLI tools, now is a good
+    time to install them and try them out.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本节中，我们将使用 `kubectl` 和 `curl` 来演示 Kubernetes API 的使用。如果您对这些 CLI 工具不熟悉，现在是安装并尝试它们的好时机。
+- en: 'For starters, let’s have a look at the desired and observed state of a resource.
+    We will be using a control plane component that is likely available in every cluster,
+    the CoreDNS plug-in (old Kubernetes versions were using `kube-dns` instead) in
+    the `kube-system` namespace (this output is heavily edited to highlight the important
+    parts):'
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，让我们查看资源的期望状态和观察到的状态。我们将使用控制平面组件作为例子，这个组件在每个集群中都可能可用，即 `kube-system` 命名空间中的
+    CoreDNS 插件（旧版 Kubernetes 使用 `kube-dns`）（此输出已经过大量编辑以突出重要部分）。
+- en: '[PRE0]'
+  id: totrans-78
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: As you can see from this `kubectl` command, in the `spec` section of the deployment
+    you’d define characteristics such as which container image to use and how many
+    replicas you want to run in parallel, and in the `status` section you’d learn
+    how many replicas at the current point in time are actually running.
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如您从这个 `kubectl` 命令中可以看到的，在部署的 `spec` 部分，您可以定义诸如要使用的容器镜像以及要并行运行多少个副本之类的特性，在
+    `status` 部分，您可以了解当前时间点有多少个副本实际在运行。
+- en: 'To carry out CLI-related operations, we will, for the remainder of this chapter,
+    be using batch operations as the running example. Let’s start by executing the
+    following command in a terminal:'
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了进行与 CLI 相关的操作，本章的剩余部分我们将使用批量操作作为运行示例。让我们从在终端中执行以下命令开始：
+- en: '[PRE1]'
+  id: totrans-81
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: 'This command proxies the Kubernetes API to our local machine and also takes
+    care of the authentication and authorization bits. It allows us to directly issue
+    requests via HTTP and receive JSON payloads in return. Let’s do that by launching
+    a second terminal session where we query `v1`:'
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此命令将 Kubernetes API 代理到我们的本地机器，并处理认证和授权部分。它允许我们通过 HTTP 直接发出请求，并收到 JSON 负载作为返回。让我们通过启动第二个终端会话来执行
+    `v1` 查询：
+- en: '[PRE2]'
+  id: totrans-83
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: Tip
+  id: totrans-84
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: 'You don’t have to use `curl` along with the `kubectl proxy` command to get
+    direct HTTP API access to the Kubernetes API. You can instead use the `kubectl
+    get --raw` command: for example, replace `curl http://127.0.0.1:8080/apis/batch/v1`
+    with `kubectl get --raw /apis/batch/v1`.'
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您不必与 `kubectl proxy` 命令一起使用 `curl` 来直接访问 Kubernetes API 的 HTTP API。您可以使用 `kubectl
+    get --raw` 命令：例如，将 `curl http://127.0.0.1:8080/apis/batch/v1` 替换为 `kubectl get
+    --raw /apis/batch/v1`。
+- en: 'Compare this with the `v1beta1` version, noting that you can get a list of
+    supported versions for the batch API group when looking at *http://127.0.0.1:8080/apis/batch*
+    `v1beta1`:'
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将此与 `v1beta1` 版本进行比较，注意当查看 *http://127.0.0.1:8080/apis/batch* `v1beta1` 时，您可以获取批处理
+    API 组的支持版本列表：
+- en: '[PRE3]'
+  id: totrans-87
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: As you can see, the `v1beta1` version also contains the `cronjobs` resource
+    with the kind `CronJob`. At the time of this writing, cron jobs have not been
+    promoted to `v1`.
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如您所见，`v1beta1` 版本还包含带有 `CronJob` 类型的 `cronjobs` 资源。在撰写本文时，cron 作业尚未升级到 `v1`。
+- en: 'If you want to get an idea of what API resources are supported in your cluster,
+    including their kinds, whether or not they are namespaced, and their short names
+    (primarily for `kubectl` on the command line), you can use the following command:'
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您想了解集群中支持的 API 资源（包括其类型、是否命名空间以及其短名称（主要用于 `kubectl` 命令行），您可以使用以下命令：
+- en: '[PRE4]'
+  id: totrans-90
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: 'The following is a related command that can be very useful to determine the
+    different resource versions supported in your cluster:'
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下面是一个相关的命令，用于确定集群中支持的不同资源版本的列表：
+- en: '[PRE5]'
+  id: totrans-92
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: How the API Server Processes Requests
+  id: totrans-93
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: API 服务器如何处理请求
+- en: Now that you have an understanding of the external-facing HTTP interface, let’s
+    focus on the inner workings of the API server. [Figure 2-5](#api-server-high-level-flow)
+    shows a high-level overview of the request processing in the API server.
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在您已经了解了外部 HTTP 接口，让我们专注于 API 服务器的内部工作。[图 2-5](#api-server-high-level-flow)展示了
+    API 服务器中请求处理的高级概述。
+- en: '![Kubernetes API server request processing overview](assets/prku_0205.png)'
+  id: totrans-95
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Kubernetes API 服务器请求处理概述](assets/prku_0205.png)'
+- en: Figure 2-5\. Kubernetes API server request processing overview
+  id: totrans-96
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-5\. Kubernetes API 服务器请求处理概述
+- en: 'So, what actually happens now when an HTTP request hits the Kubernetes API?
+    On a high level, the following interactions take place:'
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 那么，当HTTP请求到达Kubernetes API时实际上发生了什么？从高层次来看，以下交互发生：
+- en: The HTTP request is processed by a chain of filters registered in `DefaultBuildHandlerChain()`.
+    This chain is defined in [*k8s.io/apiserver/pkg/server/config.go*](http://bit.ly/2x9t27e)
+    and discussed in detail shortly. It applies a series of filter operations on said
+    request. Either the filter passes and attaches respective information to the context—to
+    be precise, `ctx.RequestInfo`, with `ctx` being the [context](https://golang.org/pkg/context)
+    in Go (e.g., the authenticated user)—or, if a request does not pass a filter,
+    it returns an appropriate HTTP response code stating the reason (e.g., a [`401`
+    response](https://httpstatuses.com/401) if the user authentication failed).
+  id: totrans-98
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: HTTP请求由注册在`DefaultBuildHandlerChain()`中的一系列过滤器处理。此链在[*k8s.io/apiserver/pkg/server/config.go*](http://bit.ly/2x9t27e)中定义，并且稍后将详细讨论。它在该请求上应用一系列的过滤器操作。如果过滤器通过并向上下文附加了相应的信息—确切地说是`ctx.RequestInfo`，其中`ctx`是Go语言中的[上下文](https://golang.org/pkg/context)（例如，认证用户）—或者如果请求未通过过滤器，则返回适当的HTTP响应代码，说明原因（例如，如果用户认证失败，则返回[`401`响应](https://httpstatuses.com/401)）。
+- en: Next, depending on the HTTP path, the multiplexer in [*k8s.io/apiserver/pkg/server/handler.go*](http://bit.ly/2WUd0c6)
+    routes the HTTP request to the respective handler.
+  id: totrans-99
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 接下来，根据HTTP路径，[*k8s.io/apiserver/pkg/server/handler.go*](http://bit.ly/2WUd0c6)中的多路复用器将HTTP请求路由到相应的处理程序。
+- en: A handler is registered for each API group—see [*k8s.io/apiserver/pkg/endpoints/groupversion.go*](http://bit.ly/2IvvSKA)
+    and [*k8s.io/apiserver/pkg/endpoints/installer.go*](http://bit.ly/2Y1eySV) for
+    details. It takes the HTTP request as well as the context (for example, user and
+    access rights) and retrieves as well as delivers the requested object from `etcd`
+    storage.
+  id: totrans-100
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 为每个API组注册了一个处理程序—详细信息请参阅[*k8s.io/apiserver/pkg/endpoints/groupversion.go*](http://bit.ly/2IvvSKA)和[*k8s.io/apiserver/pkg/endpoints/installer.go*](http://bit.ly/2Y1eySV)。它接收HTTP请求以及上下文（例如用户和访问权限），从`etcd`存储中检索并传递请求的对象。
+- en: 'Let’s now take a closer look at the chain of filters that `DefaultBuildHandlerChain()`
+    in [*server/config.go*](http://bit.ly/2LWUUnQ) sets up, and what happens in each
+    of them:'
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在让我们更详细地看一下`DefaultBuildHandlerChain()`在[*server/config.go*](http://bit.ly/2LWUUnQ)中设置的过滤器链，以及每个过滤器中发生的事情：
+- en: '[PRE6]'
+  id: totrans-102
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: 'All packages are in [*k8s.io/apiserver/pkg*](http://bit.ly/2LUzTdx). To review
+    more specifically:'
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有的包都在[*k8s.io/apiserver/pkg*](http://bit.ly/2LUzTdx)中。更具体地说：
+- en: '`WithPanicRecovery()`'
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`WithPanicRecovery()`'
+- en: Takes care of recovery and log panics. Defined in [*server/filters/wrap.go*](http://bit.ly/2N0zfNB).
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 负责恢复和记录恐慌。定义在[*server/filters/wrap.go*](http://bit.ly/2N0zfNB)中。
+- en: '`WithRequestInfo()`'
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`WithRequestInfo()`'
+- en: Attaches a `RequestInfo` to the context. Defined in [*endpoints/filters/requestinfo.go*](http://bit.ly/2KvKjQH).
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将`RequestInfo`附加到上下文中。定义在[*endpoints/filters/requestinfo.go*](http://bit.ly/2KvKjQH)中。
+- en: '`WithWaitGroup()`'
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`WithWaitGroup()`'
+- en: Adds all non-long-running requests to a wait group; used for graceful shutdown.
+    Defined in [*server/filters/waitgroup.go*](http://bit.ly/2ItnsD6).
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将所有非长时间运行的请求添加到等待组中；用于优雅关闭。定义在[*server/filters/waitgroup.go*](http://bit.ly/2ItnsD6)中。
+- en: '`WithTimeoutForNonLongRunningRequests()`'
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`WithTimeoutForNonLongRunningRequests()`'
+- en: Times out non-long-running requests (like most `GET`, `PUT`, `POST`, and `DELETE`
+    requests), in contrast to long-running requests such as watches and proxy requests.
+    Defined in [*server/filters/timeout.go*](http://bit.ly/2KrKk8r).
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对非长时间运行的请求（如大多数`GET`、`PUT`、`POST`和`DELETE`请求）设置超时，与观察和代理请求等长时间运行的请求形成对比。定义在[*server/filters/timeout.go*](http://bit.ly/2KrKk8r)中。
+- en: '`WithCORS()`'
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`WithCORS()`'
+- en: Provides a [CORS](https://enable-cors.org) implementation. CORS, short for cross-origin
+    resource sharing, is a mechanism that allows JavaScript embedded in an HTML page
+    to make XMLHttpRequests to a domain different from the one that the JavaScript
+    originated in. Defined in [*server/filters/cors.go*](http://bit.ly/2L2A6uJ).
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 提供了一个[CORS](https://enable-cors.org)实现。CORS是跨源资源共享的缩写，是一种机制，允许嵌入在HTML页面中的JavaScript向与其来源不同的域名发出XMLHttpRequests。定义在[*server/filters/cors.go*](http://bit.ly/2L2A6uJ)中。
+- en: '`WithAuthentication()`'
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`WithAuthentication()`'
+- en: Attempts to authenticate the given request as a human or machine user and stores
+    the user info in the provided context. On success, the `Authorization` HTTP header
+    is removed from the request. If the authentication fails, it returns an HTTP `401`
+    status code. Defined in [*endpoints/filters/authentication.go*](http://bit.ly/2Fjzr4b).
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尝试将给定请求验证为人类或机器用户，并将用户信息存储在提供的上下文中。验证成功后，将从请求中删除`Authorization` HTTP头部。如果身份验证失败，则返回HTTP
+    `401`状态码。定义在[*endpoints/filters/authentication.go*](http://bit.ly/2Fjzr4b)中。
+- en: '`WithAudit()`'
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`WithAudit()`方法'
+- en: Decorates the handler with audit logging information for all incoming requests.
+    The audit log entries contain information such as the source IP of the request,
+    user invoking the operation, and namespace of the request. Defined in [*admission/audit.go*](http://bit.ly/2XpQN9U).
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为所有传入请求装饰处理程序，并记录审计日志信息。审计日志条目包含请求的源IP、执行操作的用户和请求的命名空间。定义在[*admission/audit.go*](http://bit.ly/2XpQN9U)中。
+- en: '`WithImpersonation()`'
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`WithImpersonation()`方法'
+- en: Handles user impersonation by checking requests that attempt to change the user
+    (similar to `sudo`). Defined in [*endpoints/filters/impersonation.go*](http://bit.ly/2L2UETP).
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过检查尝试更改用户的请求来处理用户模拟（类似于`sudo`）。定义在[*endpoints/filters/impersonation.go*](http://bit.ly/2L2UETP)中。
+- en: '`WithMaxInFlightLimit()`'
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`WithMaxInFlightLimit()`方法'
+- en: Limits the number of in-flight requests. Defined in [*server/filters/maxinflight.go*](http://bit.ly/2IY4unl).
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 限制正在处理的请求数量。定义在[*server/filters/maxinflight.go*](http://bit.ly/2IY4unl)中。
+- en: '`WithAuthorization()`'
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`WithAuthorization()`方法'
+- en: Checks permissions by invoking authorization modules and passes all authorized
+    requests on to a multiplexer, which dispatches the request to the right handler.
+    If the user doesn’t have sufficient rights, it returns an HTTP `403` status code.
+    Kubernetes nowadays uses role-based access control (RBAC). Defined in [*endpoints/filters/authorization.go*](http://bit.ly/31M2NSA).
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过调用授权模块检查权限，并将所有已授权的请求传递给多路复用器，该复用器将请求分派给正确的处理程序。如果用户权限不足，则返回HTTP `403`状态码。如今的Kubernetes使用基于角色的访问控制（RBAC）。定义在[*endpoints/filters/authorization.go*](http://bit.ly/31M2NSA)中。
+- en: 'After this generic handler chain is passed (the first box in [Figure 2-5](#api-server-high-level-flow)),
+    the actual request processing starts (i.e., the semantics of the request handler
+    is executed):'
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在通过通用处理程序链之后（图2-5中的第一个框），实际的请求处理开始执行（即，执行请求处理程序的语义）：
+- en: Requests for */*, */version*, */apis*, */healthz*, and other nonRESTful APIs
+    are directly handled.
+  id: totrans-125
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 直接处理非RESTful API的请求，如*/*、*/version*、*/apis*、*/healthz*等。
+- en: 'Requests for RESTful resources go into the request pipeline consisting of:'
+  id: totrans-126
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: RESTful资源的请求进入由以下组成的请求管道：
+- en: '*admission*'
+  id: totrans-127
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: '*审批*'
+- en: Incoming objects go through an admission chain. That chain has some 20 different
+    admission plug-ins.^([1](ch02.html#idm46336866991944)) Each plug-in can be part
+    of the mutating phase (see the third box in [Figure 2-5](#api-server-high-level-flow)),
+    part of the validating phase (see the fourth box in the figure), or both.
+  id: totrans-128
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 对象经过审批链。该链具有大约20个不同的审批插件。^([1](ch02.html#idm46336866991944)) 每个插件可以是变异阶段的一部分（见图2-5中的第三个框），验证阶段的一部分（见图中的第四个框），或者两者兼而有之。
+- en: In the mutating phase, the incoming request payload can be changed; for example,
+    the image pull policy is set to `Always`, `IfNotPresent`, or `Never` depending
+    on the admission configuration.
+  id: totrans-129
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 在变异阶段，可以更改传入请求的有效负载；例如，根据审批配置将镜像拉取策略设置为`Always`、`IfNotPresent`或`Never`。
+- en: The second admission phase is purely for validation; for example, security settings
+    in pods are verified, or the existence of a namespace is verified before creating
+    objects in that namespace.
+  id: totrans-130
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 第二个审批阶段纯粹用于验证；例如，验证Pod中的安全设置，或在创建该命名空间中的对象之前验证命名空间的存在。
+- en: '*validation*'
+  id: totrans-131
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: '*验证*'
+- en: Incoming objects are checked against a large validation logic, which exists
+    for each object type in the system. For example, string formats are checked to
+    verify that only valid DNS-compatible characters are used in service names, or
+    that all container names in a pod are unique.
+  id: totrans-132
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 对象经过大型验证逻辑进行检查，该逻辑对系统中的每种对象类型都存在。例如，字符串格式检查以验证服务名称中仅使用有效的DNS兼容字符，或验证Pod中所有容器名称的唯一性。
+- en: '`etcd`-*backed CRUD logic*'
+  id: totrans-133
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: '`etcd`支持的CRUD逻辑'
+- en: Here the different verbs we saw in [“The HTTP Interface of the API Server”](#api-server-http-interface)
+    are implemented; for example, the update logic reads the object from `etcd`, checks
+    that no other user has modified the object in the sense of [“Optimistic Concurrency”](ch01.html#optimistic-concurrency),
+    and, if not, writes the request object to `etcd`.
+  id: totrans-134
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 在这里，我们看到的不同动词在[“API 服务器的 HTTP 接口”](#api-server-http-interface)中得到了实现；例如，更新逻辑从
+    `etcd` 读取对象，检查没有其他用户以[“乐观并发”](ch01.html#optimistic-concurrency)的方式修改该对象，如果没有，则将请求对象写入
+    `etcd`。
+- en: 'We will look into all these steps in greater detail in the following chapters;
+    for example:'
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将在接下来的章节中更详细地探讨这些步骤；例如：
+- en: Custom resources
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 自定义资源
+- en: Validation in [“Validating Custom Resources”](ch04.html#crd-validation), admission
+    in [“Admission Webhooks”](ch09.html#admission-webhooks), and general CRUD semantics
+    in [Chapter 4](ch04.html#ch_crds)
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[“验证自定义资源”](ch04.html#crd-validation)中的验证，[“Admission Webhooks”](ch09.html#admission-webhooks)中的接收，以及[第
+    4 章](ch04.html#ch_crds)中的一般 CRUD 语义。'
+- en: Golang native resource
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Golang 原生资源
+- en: Validation in [“Validation”](ch08.html#aggregated-apiserver-development-validation),
+    admission in [“Admission”](ch08.html#aggregated-apiserver-development-admission),
+    and the implementation of CRUD semantics in [“Registry and Strategy”](ch08.html#aggregated-apiserver-development-registry)
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[“验证”](ch08.html#aggregated-apiserver-development-validation)中的验证，[“Admission”](ch08.html#aggregated-apiserver-development-admission)中的接收，以及[“Registry
+    and Strategy”](ch08.html#aggregated-apiserver-development-registry)中 CRUD 语义的实现。'
+- en: Summary
+  id: totrans-140
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 总结
+- en: In this chapter we first discussed the Kubernetes API server as a black box
+    and had a look at its HTTP interface. Then you learned how to interact with that
+    black box on the command line, and finally we opened up the black box and explored
+    its inner workings. By now you should know how the API server works internally,
+    and how to interact with it using the CLI tool `kubectl` for resource exploration
+    and manipulation.
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们首先将 Kubernetes API 服务器作为一个黑盒进行讨论，并查看了它的 HTTP 接口。然后你学习了如何在命令行中与这个黑盒交互，最后我们打开了这个黑盒，探索其内部工作。到现在，你应该知道
+    API 服务器的内部工作原理，以及如何使用 CLI 工具 `kubectl` 进行资源的探索和操作。
+- en: 'It’s now time to leave the manual interaction on the command line behind us
+    and get started with programmatic API server access using Go: meet `client-go`,
+    the core of the Kubernetes “standard library.”'
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在是时候告别命令行上的手动交互，开始使用 Go 编程接口服务器访问：介绍 `client-go`，Kubernetes“标准库”的核心。
+- en: '^([1](ch02.html#idm46336866991944-marker)) In a Kubernetes 1.14 cluster, these
+    are (in this order): `AlwaysAdmit`, `NamespaceAutoProvision`, `NamespaceLifecycle`,
+    `NamespaceExists`, `SecurityContextDeny`, `LimitPodHardAntiAffinityTopology`,
+    `PodPreset`, `LimitRanger`, `ServiceAccount`, `NodeRestriction`, `TaintNodesByCondition`,
+    `AlwaysPullImages`, `ImagePolicyWebhook`, `PodSecurityPolicy`, `PodNodeSelector`,
+    `Priority`, `DefaultTolerationSeconds`, `PodTolerationRestriction`, `DenyEscalatingExec`,
+    `DenyExecOnPrivileged`, `EventRateLimit`, `ExtendedResourceToleration`, `PersistentVolumeLabel`,
+    `DefaultStorageClass`, `StorageObjectInUseProtection`, `OwnerReferencesPermissionEnforcement`,
+    `PersistentVolumeClaimResize`, `MutatingAdmissionWebhook`, `ValidatingAdmissionWebhook`,
+    `ResourceQuota`, and `AlwaysDeny`.'
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([1](ch02.html#idm46336866991944-marker)) 在 Kubernetes 1.14 集群中，这些（按此顺序）是：`AlwaysAdmit`，`NamespaceAutoProvision`，`NamespaceLifecycle`，`NamespaceExists`，`SecurityContextDeny`，`LimitPodHardAntiAffinityTopology`，`PodPreset`，`LimitRanger`，`ServiceAccount`，`NodeRestriction`，`TaintNodesByCondition`，`AlwaysPullImages`，`ImagePolicyWebhook`，`PodSecurityPolicy`，`PodNodeSelector`，`Priority`，`DefaultTolerationSeconds`，`PodTolerationRestriction`，`DenyEscalatingExec`，`DenyExecOnPrivileged`，`EventRateLimit`，`ExtendedResourceToleration`，`PersistentVolumeLabel`，`DefaultStorageClass`，`StorageObjectInUseProtection`，`OwnerReferencesPermissionEnforcement`，`PersistentVolumeClaimResize`，`MutatingAdmissionWebhook`，`ValidatingAdmissionWebhook`，`ResourceQuota`，和
+    `AlwaysDeny`。

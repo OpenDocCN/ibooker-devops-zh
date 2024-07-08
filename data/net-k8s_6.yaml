@@ -1,0 +1,4736 @@
+- en: Chapter 6\. Kubernetes and Cloud Networking
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第 6 章 Kubernetes 和云网络
+- en: 'The use of the cloud and its service offerings has grown tremendously: 77%
+    of enterprises are using the public cloud in some capacity, and 81% can innovate
+    more quickly with the public cloud than on-premise. With the popularity and innovation
+    available in the cloud, it follows that running Kubernetes in the cloud is a logical
+    step. Each major cloud provider has its own managed service offering for Kubernetes
+    using its cloud network services.'
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 云及其服务的使用增长迅速：77% 的企业在某种程度上使用公共云，81% 可以比本地更快地进行创新。随着云中的流行和创新，将 Kubernetes 运行在云中是一个逻辑的步骤。每个主要云提供商都有其自己的托管
+    Kubernetes 服务，使用其云网络服务。
+- en: In this chapter, we’ll explore the network services offered by the major cloud
+    providers AWS, Azure, and GCP with a focus on how they affect the networking needed
+    to run a Kubernetes cluster inside that specific cloud. All the providers also
+    have a CNI project that makes running a Kubernetes cluster smoother from an integration
+    perspective with their cloud network APIs, so an exploration of the CNIs is warranted.
+    After reading this chapter, administrators will understand how cloud providers
+    implement their managed Kubernetes on top of their cloud network services.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们将探讨主要云服务提供商 AWS、Azure 和 GCP 提供的网络服务，重点关注它们对在特定云环境中运行 Kubernetes 集群所需网络的影响。所有提供商还都有一个
+    CNI 项目，通过与其云网络 API 的集成视角，使运行 Kubernetes 集群更加顺畅，因此有必要探索这些 CNI。阅读本章后，管理员将了解云提供商如何在其云网络服务的基础上实现其托管
+    Kubernetes。
+- en: Amazon Web Services
+  id: totrans-3
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Amazon Web Services
+- en: Amazon Web Services (AWS) has grown its cloud service offerings from Simple
+    Queue Service (SQS) and Simple Storage Service (S3) to well over 200 services.
+    Gartner Research positions AWS in the Leaders quadrant of its 2020 Magic Quadrant
+    for Cloud Infrastructure & Platform Services. Many services are built atop of
+    other foundational services. For example, Lambda uses S3 for code storage and
+    DynamoDB for metadata. AWS CodeCommit uses S3 for code storage. EC2, S3, and CloudWatch
+    are integrated into the Amazon Elastic MapReduce service, creating a managed data
+    platform. The AWS networking services are no different. Advanced services such
+    as peering and endpoints use building blocks from core networking fundamentals.
+    Understanding those fundamentals, which enable AWS to build a comprehensive Kubernetes
+    service, is needed for administrators and developers.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 亚马逊网络服务（AWS）已经从简单队列服务（SQS）和简单存储服务（S3）扩展到超过 200 多种服务。Gartner 研究将 AWS 定位在其 2020
+    年云基础设施与平台服务的魔力象限图的领导者象限中。许多服务都建立在其他基础服务之上。例如，Lambda 使用 S3 进行代码存储，使用 DynamoDB 进行元数据存储。AWS
+    CodeCommit 使用 S3 进行代码存储。EC2、S3 和 CloudWatch 集成到亚马逊弹性 MapReduce 服务中，创建一个托管数据平台。AWS
+    网络服务也是如此。高级服务如对等连接和端点使用核心网络基础组件构建。了解这些基础组件，这些组件使 AWS 能够构建全面的 Kubernetes 服务，对管理员和开发人员至关重要。
+- en: AWS Network Services
+  id: totrans-5
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: AWS 网络服务
+- en: AWS has many services that allow users to extend and secure their cloud networks.
+    Amazon Elastic Kubernetes Service (EKS) makes extensive use of those network components
+    available in the AWS cloud. We will discuss the basics of AWS networking components
+    and how they are related to deploying an EKS cluster network. This section will
+    also discuss several other open source tools that make managing a cluster and
+    application deployments simple. The first is `eksctl`, a CLI tool that deploys
+    and manages EKS clusters. As we have seen from previous chapters, there are many
+    components needed to run a cluster, and that is also true on the AWS network.
+    `eksctl` will deploy all the components in AWS for cluster and network administrators.
+    Then, we will discuss the AWS VPC CNI, which allows the cluster to use native
+    AWS services to scale pods and manage their IP address space. Finally, we will
+    examine the AWS Application Load Balancer ingress controller, which automates,
+    manages, and simplifies deployments of application load balancers and ingresses
+    for developers running applications on the AWS network.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: AWS拥有许多服务，允许用户扩展和保护其云网络。Amazon Elastic Kubernetes Service（EKS）充分利用了AWS云中可用的这些网络组件。我们将讨论AWS网络组件的基础知识，以及它们与部署EKS集群网络的关系。本节还将讨论几种其他开源工具，这些工具使集群和应用程序部署变得简单。第一个是`eksctl`，这是一个CLI工具，用于部署和管理EKS集群。正如我们在之前的章节中所看到的，运行集群需要许多组件，在AWS网络中也是如此。`eksctl`将为集群和网络管理员在AWS中部署所有组件。接下来，我们将讨论AWS
+    VPC CNI，它允许集群使用原生的AWS服务来扩展Pod并管理其IP地址空间。最后，我们将研究AWS应用负载均衡器入口控制器，它自动化、管理和简化了在AWS网络上运行应用程序负载均衡器和入口的部署。
+- en: Virtual private cloud
+  id: totrans-7
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 虚拟私有云
+- en: The basis of the AWS network is the virtual private cloud (VPC). A majority
+    of AWS resources will work inside the VPC. VPC networking is an isolated virtual
+    network defined by administrators for only their account and its resources. In
+    [Figure 6-1](#VPC), we can see a VPC defined with a single CIDR of `192.168.0.0/16`.
+    All resources inside the VPC will use that range for private IP addresses. AWS
+    is constantly enhancing its service offerings; now, network administrators can
+    use multiple nonoverlapping CIDRs in a VPC. The pod IP addresses will also come
+    from VPC CIDR and host IP addressing; more on that in [“AWS VPC CNI”](#awsvpccni).
+    A VPC is set up per AWS region; you can have multiple VPCs per region, but a VPC
+    is defined in only one.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: AWS网络的基础是虚拟私有云（VPC）。大多数AWS资源将在VPC内部工作。VPC网络是由管理员定义的孤立虚拟网络，仅用于其帐户及其资源。在[图6-1](#VPC)中，我们可以看到一个VPC，其定义了一个CIDR为`192.168.0.0/16`的单一范围。VPC内的所有资源将使用该范围的私有IP地址。AWS不断增强其服务提供；现在，网络管理员可以在VPC中使用多个不重叠的CIDR。Pod
+    IP地址也将来自VPC CIDR和主机IP地址；关于这一点更多内容请参阅[“AWS VPC CNI”](#awsvpccni)。每个AWS区域设置一个VPC；您可以在每个区域拥有多个VPC，但VPC仅在一个区域中定义。
+- en: '![neku 0601](Images/neku_0601.png)'
+  id: totrans-9
+  prefs: []
+  type: TYPE_IMG
+  zh: '![neku 0601](Images/neku_0601.png)'
+- en: Figure 6-1\. AWS virtual private cloud
+  id: totrans-10
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图6-1\. AWS虚拟私有云
+- en: Region and availability zones
+  id: totrans-11
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 区域和可用区
+- en: 'Resources are defined by boundaries in AWS, such as global, region, or availability
+    zone. AWS networking comprises multiple regions; each AWS region consists of multiple
+    isolated and physically separate availability zones (AZs) within a geographic
+    area. An AZ can contain multiple data centers, as shown in [Figure 6-2](#aws-regiom).
+    Some regions can contain six AZs, while newer regions could contain only two.
+    Each AZ is directly connected to the others but is isolated from the failures
+    of another AZ. This design is important to understand for multiple reasons: high
+    availability, load balancing, and subnets are all affected. In one region a load
+    balancer will route traffic over multiple AZs, which have separate subnets and
+    thus enable HA for applications.'
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: AWS资源是由边界定义的，例如全局、区域或可用区。AWS网络包括多个区域；每个AWS区域由多个隔离且物理上分离的可用区（AZ）组成，位于地理区域内。一个AZ可以包含多个数据中心，如[图6-2](#aws-regiom)所示。一些区域可能包含六个AZ，而较新的区域可能只包含两个。每个AZ直接连接到其他AZ，但与另一个AZ的故障是隔离的。这种设计对于多个原因都很重要：高可用性、负载均衡和子网都会受到影响。在一个区域中，负载均衡器将通过多个AZ路由流量，这些AZ有单独的子网，因此为应用程序提供了高可用性。
+- en: '![neku 0602](Images/neku_0602.png)'
+  id: totrans-13
+  prefs: []
+  type: TYPE_IMG
+  zh: '![neku 0602](Images/neku_0602.png)'
+- en: Figure 6-2\. AWS region network layout
+  id: totrans-14
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图6-2\. AWS区域网络布局
+- en: Note
+  id: totrans-15
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: An up-to-date list of AWS regions and AZs is available in the [documentation](https://oreil.ly/gppRp).
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: AWS区域和AZ的最新列表可以在[文档](https://oreil.ly/gppRp)中找到。
+- en: Subnet
+  id: totrans-17
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 子网
+- en: A VPC is compromised of multiple subnets from the CIDR range and deployed to
+    a single AZ. Applications that require high availability should run in multiple
+    AZs and be load balanced with any one of the load balancers available, as discussed
+    in [“Region and availability zones”](#region).
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: VPC由多个子网组成，这些子网来自CIDR范围并部署到单个AZ。需要高可用性的应用程序应在多个AZ中运行，并且可以使用任何可用的负载均衡器进行负载平衡，如[“区域和可用区”](#region)中讨论的。
+- en: A subnet is public if the routing table has a route to an internet gateway.
+    In [Figure 6-3](#Private-subnet), there are three public and private subnets.
+    Private subnets have no direct route to the internet. These subnets are for internal
+    network traffic, such as databases. The size of your VPC CIDR range and the number
+    of public and private subnets are a design consideration when deploying your network
+    architecture. Recent improvements to VPC like allowing multiple CIDR ranges help
+    lessen the ramification of poor design choices, since now network engineers can
+    simply add another CIDR range to a provisioned VPC.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果路由表有通往互联网网关的路由，则子网是公共的。在[图 6-3](#Private-subnet)中，有三个公共子网和私有子网。私有子网没有直接通往互联网的路由。这些子网用于内部网络流量，如数据库。在部署网络架构时，VPC
+    CIDR范围的大小和公共与私有子网的数量是设计考虑因素。VPC最近的改进允许多个CIDR范围，有助于减少设计选择不良的影响，因为现在网络工程师可以简单地向预配的VPC添加另一个CIDR范围。
+- en: '![Subnet](Images/neku_0603.png)'
+  id: totrans-20
+  prefs: []
+  type: TYPE_IMG
+  zh: '![子网](Images/neku_0603.png)'
+- en: Figure 6-3\. VPC subnets
+  id: totrans-21
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图6-3\. VPC子网
+- en: Let’s discuss those components that help define if a subnet is public or private.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们讨论那些有助于定义子网是公共还是私有的组件。
+- en: Routing tables
+  id: totrans-23
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 路由表
+- en: Each subnet has exactly one route table associated with it. If one is not explicitly
+    associated with it, the main route table is the default one. Network connectivity
+    issues can manifest here; developers deploying applications inside a VPC must
+    know to manipulate route tables to ensure traffic flows where it’s intended.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个子网恰好与一个路由表关联。如果未明确关联，则主路由表是默认的路由表。在VPC内部部署应用程序的开发人员必须了解如何操作路由表，以确保流量按预期流动。
+- en: 'The following are rules for the main route table:'
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下是主路由表的规则：
+- en: The main route table cannot be deleted.
+  id: totrans-26
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 主路由表无法删除。
+- en: A gateway route table cannot be set as the main.
+  id: totrans-27
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 网关路由表不能设为主路由表。
+- en: The main route table can be replaced with a custom route table.
+  id: totrans-28
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 主路由表可以替换为自定义路由表。
+- en: Admins can add, remove, and modify routes in the main route table.
+  id: totrans-29
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 管理员可以在主路由表中添加、移除和修改路由。
+- en: The local route is the most specific.
+  id: totrans-30
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 本地路由是最具体的。
+- en: Subnets can explicitly associate with the main route table.
+  id: totrans-31
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 子网可以明确关联到主路由表。
+- en: 'There are route tables with specific goals in mind; here is a list of them
+    and a description of how they are different:'
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有特定目标的路由表；以下是它们的列表及其区别的描述：
+- en: Main route table
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 主路由表
+- en: This route table automatically controls routing for all subnets that are not
+    explicitly associated with any other route table.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此路由表自动控制未明确关联到任何其他路由表的所有子网的路由。
+- en: Custom route table
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 自定义路由表
+- en: A route table network engineers create and customize for specific application
+    traffic flow.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 网络工程师为特定应用程序流量创建和定制的路由表。
+- en: Edge association
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 边缘关联
+- en: A routing table to route inbound VPC traffic to an edge appliance.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用于将入站VPC流量路由至边缘设备的路由表。
+- en: Subnet route table
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 子网路由表
+- en: A route table that’s associated with a subnet.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与子网相关联的路由表。
+- en: Gateway route table
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 网关路由表
+- en: A route table that’s associated with an internet gateway or virtual private
+    gateway.
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与互联网网关或虚拟专用网关相关联的路由表。
+- en: 'Each route table has several components that determine its responsibilities:'
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个路由表有几个组件确定其职责：
+- en: Route table association
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 路由表关联
+- en: The association between a route table and a subnet, internet gateway, or virtual
+    private gateway.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 路由表与子网、互联网网关或虚拟专用网关之间的关联。
+- en: Rules
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 规则
+- en: A list of routing entries that define the table; each rule has a destination,
+    target, status, and propagated flag.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 定义表的路由条目列表；每条规则都有目标、目的地、状态和传播标志。
+- en: Destination
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 目的地
+- en: The range of IP addresses where you want traffic to go (destination CIDR).
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 想要传输流量的IP地址范围（目标CIDR）。
+- en: Target
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 目标
+- en: The gateway, network interface, or connection through which to send the destination
+    traffic; for example, an internet gateway.
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 发送目标流量的网关、网络接口或连接；例如，互联网网关。
+- en: Status
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 状态
+- en: 'The state of a route in the route table: active or blackhole. The blackhole
+    state indicates that the route’s target isn’t available.'
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 路由表中路由的状态：活动或黑洞。黑洞状态表示路由的目标不可用。
+- en: Propagation
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 传播
+- en: Route propagation allows a virtual private gateway to automatically propagate
+    routes to the route tables. This flag lets you know if it was added via propagation.
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 路由传播允许虚拟私有网关自动向路由表传播路由。此标志指示您该路由是否通过传播添加。
+- en: Local route
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本地路由
+- en: A default route for communication within the VPC.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用于VPC内部通信的默认路由。
+- en: In [Figure 6-4](#route-table_6), there are two routes in the route table. Any
+    traffic destined for `11.0.0.0/16` stays on the local network inside the VPC.
+    All other traffic, `0.0.0.0/0`, goes to the internet gateway, `igw-f43c4690`,
+    making it a public subnet.
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[图6-4](#route-table_6)中，路由表中有两条路由。所有目标为`11.0.0.0/16`的流量保持在VPC内的本地网络上。所有其他流量，`0.0.0.0/0`，都经由Internet网关`igw-f43c4690`到达，使其成为公共子网。
+- en: '![Route](Images/neku_0604.png)'
+  id: totrans-59
+  prefs: []
+  type: TYPE_IMG
+  zh: '![路由](Images/neku_0604.png)'
+- en: Figure 6-4\. Route table
+  id: totrans-60
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图6-4\. 路由表
+- en: Elastic network interface
+  id: totrans-61
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 弹性网络接口
+- en: An elastic network interface (ENI) is a logical networking component in a VPC
+    that is equivalent to a virtual network card. ENIs contain an IP address, for
+    the instance, and they are elastic in the sense that they can be associated and
+    disassociated to an instance while retaining its properties.
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 弹性网络接口（ENI）是VPC中的一个逻辑网络组件，相当于虚拟网络卡。ENI包含一个IP地址，用于实例，它们在弹性上意味着可以在保留其属性的同时关联和取消关联到实例。
+- en: 'ENIs have these properties:'
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ENI具有以下属性：
+- en: Primary private IPv4 address
+  id: totrans-64
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 主要私有IPv4地址
+- en: Secondary private IPv4 addresses
+  id: totrans-65
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 次要私有IPv4地址
+- en: One elastic IP (EIP) address per private IPv4 address
+  id: totrans-66
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 每个私有IPv4地址一个弹性IP（EIP）地址
+- en: One public IPv4 address, which can be auto-assigned to the network interface
+    for `eth0` when you launch an instance
+  id: totrans-67
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在启动实例时，可以将一个公共IPv4地址自动分配给网络接口`eth0`。
+- en: One or more IPv6 addresses
+  id: totrans-68
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一个或多个IPv6地址
+- en: One or more security groups
+  id: totrans-69
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一个或多个安全组
+- en: MAC address
+  id: totrans-70
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: MAC地址
+- en: Source/destination check flag
+  id: totrans-71
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 源/目标检查标志
+- en: Description
+  id: totrans-72
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 描述
+- en: A common use case for ENIs is the creation of management networks that are accessible
+    only from a corporate network. AWS services like Amazon WorkSpaces use ENIs to
+    allow access to the customer VPC and the AWS-managed VPC. Lambda can reach resources,
+    like databases, inside a VPC by provisioning and attaching to an ENI.
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ENI的一个常见用例是创建仅从公司网络访问的管理网络。AWS服务如Amazon WorkSpaces使用ENI允许访问客户VPC和AWS管理的VPC。Lambda可以通过提供并附加到ENI来访问VPC内的资源，如数据库。
+- en: Later in the section we will see how the AWS VPC CNI uses and manages ENIs along
+    with IP addresses for pods.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本节后面，我们将看到AWS VPC CNI如何与IP地址一起使用和管理ENI。
+- en: Elastic IP address
+  id: totrans-75
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 弹性IP地址
+- en: An EIP address is a static public IPv4 address used for dynamic network addressing
+    in the AWS cloud. An EIP is associated with any instance or network interface
+    in any VPC. With an EIP, application developers can mask an instance’s failures
+    by remapping the address to another instance.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: EIP地址是用于AWS云中动态网络寻址的静态公共IPv4地址。EIP与任何VPC中的任何实例或网络接口相关联。借助EIP，应用程序开发人员可以通过将地址重新映射到另一个实例来掩盖实例的故障。
+- en: An EIP address is a property of an ENI and is associated with an instance by
+    updating the ENI attached to the instance. The advantage of associating an EIP
+    with the ENI rather than directly to the instance is that all the network interface
+    attributes move from one instance to another in a single step.
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: EIP地址是ENI的属性，并通过更新附加到实例的ENI与实例关联。将EIP与ENI关联而不是直接与实例关联的优势在于，所有网络接口属性可以一次性从一个实例移动到另一个实例。
+- en: 'The following rules apply:'
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下规则适用：
+- en: An EIP address can be associated with either a single instance or a network
+    interface at a time.
+  id: totrans-79
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一个EIP地址一次可以与单个实例或网络接口关联。
+- en: An EIP address can migrate from one instance or network interface to another.
+  id: totrans-80
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: EIP地址可以从一个实例或网络接口迁移到另一个实例。
+- en: There is a (soft) limit of five EIP addresses.
+  id: totrans-81
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 最多五个EIP地址的（软）限制。
+- en: IPv6 is not supported.
+  id: totrans-82
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 不支持IPv6。
+- en: Services like NAT and internet gateway use EIPs for consistency between the
+    AZ. Other gateway services like a bastion can benefit from using an EIP. Subnets
+    can automatically assign public IP addresses to EC2 instances, but that address
+    could change; using an EIP would prevent that.
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 类似NAT和Internet网关的服务使用EIP以保持AZ之间的一致性。其他网关服务（如堡垒）可以从使用EIP中受益。子网可以自动为EC2实例分配公共IP地址，但该地址可能会更改；使用EIP可以防止这种情况发生。
+- en: Security controls
+  id: totrans-84
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 安全控制
+- en: 'There are two fundamental security controls within AWS networking: security
+    groups and network access control lists (NACLs). In our experience, lots of issues
+    arise from misconfigured security groups and NACLs. Developers and network engineers
+    need to understand the differences between the two and the impacts of changes
+    on them.'
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: AWS网络中有两个基本安全控制：安全组和网络访问控制列表（NACL）。根据我们的经验，许多问题源于安全组和NACL的配置错误。开发人员和网络工程师需要理解两者之间的区别以及对它们的更改影响。
+- en: Security groups
+  id: totrans-86
+  prefs:
+  - PREF_H4
+  type: TYPE_NORMAL
+  zh: 安全组
+- en: Security groups operate at the instance or network interface level and act as
+    a firewall for those devices associated with them. A security group is a group
+    of network devices that require common network access to each other and other
+    devices on the network. In [Figure 6-5](#sec-group) ,we can see that security
+    works across AZs. Security groups have two tables, for inbound and outbound traffic
+    flow. Security groups are stateful, so if traffic is allowed on the inbound flow,
+    the outgoing traffic is allowed. Each security group has a list of rules that
+    define the filter for traffic. Each rule is evaluated before a forwarding decision
+    is made.
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安全组在实例或网络接口级别操作，并充当这些设备的防火墙。安全组是一组需要彼此和网络上其他设备共享网络访问的网络设备。在[图6-5](#sec-group)中，我们可以看到安全组跨AZ运行。安全组有两张表，用于入站和出站流量。安全组是有状态的，因此如果允许入站流量，则允许出站流量。每个安全组都有一系列规则，定义了流量的过滤器。在做出转发决策之前，会评估每条规则。
+- en: '![Security Group](Images/neku_0605.png)'
+  id: totrans-88
+  prefs: []
+  type: TYPE_IMG
+  zh: '![安全组](Images/neku_0605.png)'
+- en: Figure 6-5\. Security group
+  id: totrans-89
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图6-5. 安全组
+- en: 'The following is a list of components of security group rules:'
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下是安全组规则组件的列表：
+- en: Source/destination
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 源/目的地
+- en: 'Source (inbound rules) or destination (outbound rules) of the traffic inspected:'
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 流量检查的源（入站规则）或目的地（出站规则）：
+- en: Individual or range of IPv4 or IPv6 addresses
+  id: totrans-93
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: IPv4或IPv6地址的个体或范围
+- en: Another security group
+  id: totrans-94
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 另一个安全组
+- en: Other ENIs, gateways, or interfaces
+  id: totrans-95
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 其他ENIs、网关或接口
+- en: Protocol
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 协议
+- en: Which layer 4 protocol being filtered, 6 (TCP), 17 (UDP), and 1 (ICMP)
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 被过滤的第4层协议是哪个，6（TCP），17（UDP）和1（ICMP）
+- en: Port range
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 端口范围
+- en: Specific ports for the protocol being filtered
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正在过滤的协议的特定端口
+- en: Description
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 描述
+- en: User-defined field to inform others of the intent of the security group
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用户定义字段，以通知其他人安全组的意图
+- en: Security groups are similar to the Kubernetes network policies we discussed
+    in earlier chapters. They are a fundamental network technology and should always
+    be used to secure your instances in the AWS VPC. EKS deploys several security
+    groups for communication between the AWS-managed data plane and your worker nodes.
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安全组类似于我们在前几章中讨论的Kubernetes网络策略。它们是一种基本的网络技术，应始终用于保护AWS VPC中的实例。EKS部署了几个安全组，用于AWS管理的数据平面与您的工作节点之间的通信。
+- en: Network access control lists
+  id: totrans-103
+  prefs:
+  - PREF_H4
+  type: TYPE_NORMAL
+  zh: 网络访问控制列表
+- en: Network access control lists operate similarly to how they do in other firewalls
+    so that network engineers will be familiar with them. In [Figure 6-6](#NACL),
+    you can see each subnet has a default NACL associated with it and is bounded to
+    an AZ, unlike the security group. Filter rules must be defined explicitly in both
+    directions. The default rules are quite permissive, allowing all traffic in both
+    directions. Users can define their own NACLs to use with a subnet for an added
+    security layer if the security group is too open. By default, custom NACLs deny
+    all traffic, and therefore add rules when deployed; otherwise, instances will
+    lose connectivity.
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 网络访问控制列表的操作方式与其他防火墙中的操作方式类似，因此网络工程师将熟悉它们。在[图6-6](#NACL)中，您可以看到每个子网都有一个默认的NACL与之关联，并且与AZ绑定，与安全组不同。过滤规则必须在两个方向上明确定义。默认规则非常宽松，允许在两个方向上的所有流量。用户可以为子网定义自己的NACL以增加安全层级，如果安全组过于开放。默认情况下，自定义NACL会拒绝所有流量，因此在部署时添加规则；否则，实例将失去连接。
+- en: 'Here are the components of an NACL:'
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是NACL的组成部分：
+- en: Rule number
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 规则编号
+- en: Rules are evaluated starting with the lowest numbered rule.
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 规则从编号最低的规则开始评估。
+- en: Type
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 类型
+- en: The type of traffic, such as SSH or HTTP.
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 交通类型，如SSH或HTTP。
+- en: Protocol
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 协议
+- en: 'Any protocol that has a standard protocol number: TCP/UDP or ALL.'
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 任何具有标准协议号的协议：TCP/UDP或ALL。
+- en: Port range
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 端口范围
+- en: The listening port or port range for the traffic. For example, 80 for HTTP traffic.
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 流量的监听端口或端口范围。例如，HTTP流量的80端口。
+- en: Source
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 来源
+- en: Inbound rules only; the CIDR range source of the traffic.
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 仅入站规则；流量的CIDR范围源。
+- en: Destination
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 目的地
+- en: Outbound rules only; the destination for the traffic.
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 只有出站规则；流量的目的地。
+- en: Allow/Deny
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 允许/拒绝
+- en: Whether to allow or deny the specified traffic.
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 是否允许或拒绝指定的流量。
+- en: '![NACL](Images/neku_0606.png)'
+  id: totrans-120
+  prefs: []
+  type: TYPE_IMG
+  zh: '![NACL](Images/neku_0606.png)'
+- en: Figure 6-6\. NACL
+  id: totrans-121
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-6\. NACL
+- en: NACLs add an extra layer of security for subnets that may protect from lack
+    or misconfiguration of security groups.
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: NACL 为可能受保护免于安全组缺乏或配置错误的子网增加了一层额外的安全性。
+- en: '[Table 6-1](#security_and_nacl_comparison_table) summarizes the fundamental
+    differences between security groups and network ACLs.'
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[表 6-1](#security_and_nacl_comparison_table) 总结了安全组和网络 ACL 之间的基本区别。'
+- en: Table 6-1\. Security and NACL comparison table
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 6-1\. 安全组和 NACL 比较表
+- en: '| Security group | Network ACL |'
+  id: totrans-125
+  prefs: []
+  type: TYPE_TB
+  zh: '| 安全组 | 网络 ACL |'
+- en: '| --- | --- |'
+  id: totrans-126
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| Operates at the instance level. | Operates at the subnet level. |'
+  id: totrans-127
+  prefs: []
+  type: TYPE_TB
+  zh: '| 操作在实例级别。 | 操作在子网级别。 |'
+- en: '| Supports allow rules only. | Supports allow rules and deny rules. |'
+  id: totrans-128
+  prefs: []
+  type: TYPE_TB
+  zh: '| 仅支持允许规则。 | 支持允许和拒绝规则。 |'
+- en: '| Stateful: Return traffic is automatically allowed, regardless of any rules.
+    | Stateless: Return traffic must be explicitly allowed by rules. |'
+  id: totrans-129
+  prefs: []
+  type: TYPE_TB
+  zh: '| 有状态：返回流量始终允许，不受任何规则限制。 | 无状态：返回流量必须按规则显式允许。 |'
+- en: '| All rules are evaluated before a forwarding decision is made. | Rules are
+    processed in order, starting with the lowest numbered rule. |'
+  id: totrans-130
+  prefs: []
+  type: TYPE_TB
+  zh: '| 所有规则在进行转发决策之前都会被评估。 | 规则按顺序处理，从最低编号规则开始。 |'
+- en: '| Applies to an instance or network interface. | All rules apply to all instances
+    in the subnets that it’s associated with. |'
+  id: totrans-131
+  prefs: []
+  type: TYPE_TB
+  zh: '| 适用于实例或网络接口。 | 所有规则适用于其关联的所有子网中的所有实例。 |'
+- en: It is crucial to understand the differences between NACL and security groups.
+    Network connectivity issues often arise due to a security group not allowing traffic
+    on a specific port or someone not adding an outbound rule on an NACL. When troubleshooting
+    issues with AWS networking, developers and network engineers alike should add
+    checking these components to their troubleshooting list.
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 了解 NACL 和安全组之间的区别至关重要。由于安全组未允许特定端口上的流量或某人未在 NACL 上添加出站规则，AWS 网络连接问题经常会出现。在排除
+    AWS 网络问题时，开发人员和网络工程师都应该将这些组件添加到其排查列表中进行检查。
+- en: 'All the components we have discussed thus far manage traffic flow inside the
+    VPC. The following services manage traffic into the VPC from client requests and
+    ultimately to applications running inside a Kubernetes cluster: network address
+    translation devices, internet gateway, and load balancers. Let’s dig into those
+    a little more.'
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，我们讨论的所有组件都管理 VPC 内部的流量。以下服务管理来自客户请求进入 VPC 并最终到运行在 Kubernetes 集群内的应用程序的流量：网络地址转换设备、互联网网关和负载均衡器。让我们深入了解一下这些服务。
+- en: Network address translation devices
+  id: totrans-134
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 网络地址转换设备
+- en: Network address translation (NAT) devices are used when instances inside a VPC
+    require internet connectivity, but network connections should not be made directly
+    to instances. Examples of instances that should run behind a NAT device are database
+    instances or other middleware needed to run applications.
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当 VPC 内部的实例需要互联网连接，但不能直接连接到实例时，使用网络地址转换（NAT）设备。应该运行在 NAT 设备后面的实例的示例包括数据库实例或其他中间件，这些中间件需要运行应用程序。
+- en: In AWS, network engineers have several options for running NAT devices. They
+    can manage their own NAT devices deployed as EC2 instances or use the AWS Managed
+    Service NAT gateway (NAT GW). Both require public subnets deployed in multiple
+    AZs for high availability and EIP. A restriction of a NAT GW is that the IP address
+    of it cannot change after you deploy it. Also, that IP address will be the source
+    IP address used to communicate with the internet gateway.
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 AWS 中，网络工程师有几种选项可以运行 NAT 设备。他们可以管理自己部署的 EC2 实例作为 NAT 设备，也可以使用 AWS 托管服务 NAT
+    网关（NAT GW）。无论选择哪种方式，都需要在多个可用区部署公共子网以实现高可用性和 EIP。NAT GW 的限制是部署后其 IP 地址不能更改。此外，该
+    IP 地址将是与互联网网关通信时使用的源 IP 地址。
+- en: In the VPC route table in [Figure 6-7](#Nat-Int-Routing-Diagram), we can see
+    how the two route tables exist to establish a connection to the internet. The
+    main route table has two rules, a local route for the inter-VPC and a route for
+    `0.0.0.0/0` with a target of the NAT GW ID. The private subnet’s database servers
+    will route traffic to the internet via that NAT GW rule in their route tables.
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 [图 6-7](#Nat-Int-Routing-Diagram) 中的 VPC 路由表中，我们可以看到两个路由表的存在，以建立到互联网的连接。主路由表有两条规则，一个是用于
+    VPC 内部的本地路由，另一个是目标为 NAT GW ID 的 `0.0.0.0/0` 路由。私有子网的数据库服务器将通过其路由表中的 NAT GW 规则路由流量到互联网。
+- en: Pods and instances in EKS will need to egress the VPC, so a NAT device must
+    be deployed. Your choice of NAT device will depend on the operational overhead,
+    cost, or availability requirements for your network design.
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: EKS中的Pod和实例将需要流出VPC，因此必须部署NAT设备。您选择的NAT设备将取决于网络设计的操作开销、成本或可用性要求。
+- en: '![net-int](Images/neku_0607.png)'
+  id: totrans-139
+  prefs: []
+  type: TYPE_IMG
+  zh: '![net-int](Images/neku_0607.png)'
+- en: Figure 6-7\. VPC routing diagram
+  id: totrans-140
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-7\. VPC路由图
+- en: Internet gateway
+  id: totrans-141
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 互联网网关
+- en: 'The internet gateway is an AWS-managed service and device in the VPC network
+    that allows connectivity to the internet for all devices in the VPC. Here are
+    the steps to ensure access to or from the internet in a VPC:'
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 互联网网关是VPC网络中的AWS托管服务和设备，允许VPC中的所有设备连接到互联网。以下是确保在VPC中访问互联网的步骤：
+- en: Deploy and attach an IGW to the VPC.
+  id: totrans-143
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 部署并附加一个互联网网关（IGW）到VPC。
+- en: Define a route in the subnet’s route table that directs internet-bound traffic
+    to the IGW.
+  id: totrans-144
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 在子网的路由表中定义一条路由，将互联网流量引导到互联网网关（IGW）。
+- en: Verify NACLs and security group rules allow the traffic to flow to and from
+    instances.
+  id: totrans-145
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 验证网络访问控制列表（NACLs）和安全组规则允许流向和从实例流动的流量。
+- en: All of this is shown in the VPC routing from [Figure 6-7](#Nat-Int-Routing-Diagram).
+    We see the IGW deploy for the VPC, a custom route table setup that routes all
+    traffic, `0.0.0.0/0`, to the IGW. The web instances have an IPv4 internet routable
+    address, `198.51.100.1-3`.
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有这些都显示在VPC路由中，来自[图 6-7](#Nat-Int-Routing-Diagram)。我们看到了为VPC部署的IGW，一个自定义的路由表设置，将所有流量`0.0.0.0/0`路由到IGW。Web实例具有IPv4互联网可路由地址，`198.51.100.1-3`。
+- en: Elastic load balancers
+  id: totrans-147
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 弹性负载均衡器
+- en: Now that traffic flows from the internet and clients can request access to applications
+    running inside a VPC, we will need to scale and distribute the load for requests.
+    AWS has several options for developers, depending on the type of application load
+    and network traffic requirements needed.
+  id: totrans-148
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在从互联网流入的流量，并且客户端可以请求访问运行在VPC内的应用程序，我们需要扩展和分发请求的负载。AWS为开发者提供了几种选项，具体取决于应用程序负载和网络流量的需求。
+- en: 'The elastic load balancer has four options:'
+  id: totrans-149
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 弹性负载均衡器有四个选项：
+- en: Classic
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 经典
+- en: A classic load balancer provides fundamental load balancing of EC2 instances.
+    It operates at the request and the connection level. Classic load balancers are
+    limited in functionality and are not to be used with containers.
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 经典负载均衡器为EC2实例提供基本的负载均衡。它在请求和连接级别操作。经典负载均衡器功能有限，不适用于容器。
+- en: Application
+  id: totrans-152
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用程序
+- en: Application load balancers are layer 7 aware. Traffic routing is made with request-specific
+    information like HTTP headers or HTTP paths. The application load balancer is
+    used with the application load balancer controller. The ALB controller allows
+    devs to automate the deployment and ALB without using the console or API, instead
+    just a few YAML lines.
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用程序负载均衡器具有第7层感知能力。流量路由是通过特定于请求的信息，如HTTP头或HTTP路径来进行的。应用程序负载均衡器与应用程序负载均衡器控制器一起使用。ALB控制器允许开发人员无需使用控制台或API，只需几行YAML代码即可自动化部署和管理ALB。
+- en: Network
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 网络
+- en: The network load balancer operates at layer 4\. Traffic can be routed based
+    on incoming TCP/UDP ports to individual hosts running services on that port. The
+    network load balancer also allows admins to deploy then with an EIP, a feature
+    unique to the network load balancer.
+  id: totrans-155
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 网络负载均衡器在第4层运行。流量可以基于传入TCP/UDP端口路由到运行该端口服务的个体主机。网络负载均衡器还允许管理员使用EIP部署它们，这是网络负载均衡器独有的功能。
+- en: Gateway
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 网关
+- en: The gateway load balancer manages traffic for appliances at the VPC level. Such
+    network devices like deep packet inspection or proxies can be used with a gateway
+    load balancer. The gateway load balancer is added here to complete the AWS service
+    offering but is not used within the EKS ecosystem.
+  id: totrans-157
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 网关负载均衡器管理VPC级别的设备流量。可以使用网关负载均衡器处理的网络设备包括深度数据包检查或代理。网关负载均衡器被添加到AWS服务中，但不在EKS生态系统内使用。
+- en: 'AWS load balancers have several attributes that are important to understand
+    when working with not only containers but other workloads inside the VPC:'
+  id: totrans-158
+  prefs: []
+  type: TYPE_NORMAL
+  zh: AWS负载均衡器在处理不仅限于容器的工作负载时具有几个重要属性：
+- en: Rule
+  id: totrans-159
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 规则
+- en: (ALB only) The rules that you define for your listener determine how the load
+    balancer routes all requests to the targets in the target groups.
+  id: totrans-160
+  prefs: []
+  type: TYPE_NORMAL
+  zh: （仅ALB）您为监听器定义的规则决定负载均衡器如何将所有请求路由到目标组中的目标。
+- en: Listener
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 监听器
+- en: Checks for requests from clients. They support HTTP and HTTPS on ports 1–65535.
+  id: totrans-162
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 检查来自客户端的请求。它们支持HTTP和HTTPS在端口1-65535上。
+- en: Target
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 目标
+- en: An EC2 instance, IP address, pods, or lambda running application code.
+  id: totrans-164
+  prefs: []
+  type: TYPE_NORMAL
+  zh: EC2实例、IP地址、Pods或运行应用程序代码的Lambda。
+- en: Target Group
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 目标组
+- en: Used to route requests to a registered target.
+  id: totrans-166
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用于将请求路由到注册的目标。
+- en: Health Check
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 健康检查
+- en: Test to ensure targets are still able to accept client requests.
+  id: totrans-168
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 确保目标仍能接受客户请求。
+- en: 'Each of these components of an ALB is outlined in [Figure 6-8](#loadbalancer_6).
+    When a request comes into the load balancer, a listener is continually checking
+    for requests that match the protocol and port defined for it. Each listener has
+    a set of rules that define where to direct the request. The rule will have an
+    action type to determine how to handle the request:'
+  id: totrans-169
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个ALB的这些组件在[图6-8](#loadbalancer_6)中概述。当请求进入负载均衡器时，侦听器将持续检查是否有与其定义的协议和端口匹配的请求。每个侦听器都有一组规则，定义了如何处理请求。规则将有一个操作类型来确定如何处理请求：
+- en: authenticate-cognito
+  id: totrans-170
+  prefs: []
+  type: TYPE_NORMAL
+  zh: authenticate-cognito
+- en: (HTTPS listeners) Use Amazon Cognito to authenticate users.
+  id: totrans-171
+  prefs: []
+  type: TYPE_NORMAL
+  zh: （HTTPS侦听器）使用Amazon Cognito对用户进行身份验证。
+- en: authenticate-oidc
+  id: totrans-172
+  prefs: []
+  type: TYPE_NORMAL
+  zh: authenticate-oidc
+- en: (HTTPS listeners) Use an identity provider that is compliant with OpenID Connect
+    to authenticate users.
+  id: totrans-173
+  prefs: []
+  type: TYPE_NORMAL
+  zh: （HTTPS侦听器）使用符合OpenID Connect的身份提供者对用户进行身份验证。
+- en: fixed-response
+  id: totrans-174
+  prefs: []
+  type: TYPE_NORMAL
+  zh: fixed-response
+- en: Returns a custom HTTP response.
+  id: totrans-175
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 返回自定义HTTP响应。
+- en: forward
+  id: totrans-176
+  prefs: []
+  type: TYPE_NORMAL
+  zh: forward
+- en: Forward requests to the specified target groups.
+  id: totrans-177
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将请求转发到指定的目标组。
+- en: redirect
+  id: totrans-178
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 重定向
+- en: Redirect requests from one URL to another.
+  id: totrans-179
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将请求从一个URL重定向到另一个URL。
+- en: 'The action with the lowest order value is performed first. Each rule must include
+    exactly one of the following actions: forward, redirect, or fixed-response. In
+    [Figure 6-8](#loadbalancer_6), we have target groups, which will be the recipient
+    of our forward rules. Each target in the target group will have health checks
+    so the load balancer will know which instances are healthy and ready to receive
+    requests.'
+  id: totrans-180
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 具有最低顺序值的动作首先执行。每个规则必须包括以下动作之一：转发、重定向或固定响应。在[图6-8](#loadbalancer_6)中，我们有目标组，这些组将成为我们转发规则的接收者。目标组中的每个目标都将进行健康检查，因此负载均衡器将知道哪些实例是健康且准备好接收请求。
+- en: '![loadbalancer](Images/neku_0608.png)'
+  id: totrans-181
+  prefs: []
+  type: TYPE_IMG
+  zh: '![负载均衡器](Images/neku_0608.png)'
+- en: Figure 6-8\. Load balancer components
+  id: totrans-182
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图6-8\. 负载均衡器组件
+- en: Now that we have a basic understanding of how AWS structures its networking
+    components, we can begin to see how EKS leverages these components to the network
+    and secure the managed Kubernetes cluster and network.
+  id: totrans-183
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们对AWS如何构建其网络组件有了基本的理解，我们可以开始看到EKS如何利用这些组件来构建和保护托管的Kubernetes集群和网络。
+- en: Amazon Elastic Kubernetes Service
+  id: totrans-184
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Amazon Elastic Kubernetes Service
+- en: Amazon Elastic Kubernetes Service (EKS) is AWS’s managed Kubernetes service.
+    It allows developers, cluster administrators, and network administrators to quickly
+    deploy a production-scale Kubernetes cluster. Using the scaling nature of the
+    cloud and AWS network services, with one API request, many services are deployed,
+    including all the components we reviewed in the previous sections.
+  id: totrans-185
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Amazon Elastic Kubernetes Service（EKS）是AWS的托管Kubernetes服务。它允许开发人员、集群管理员和网络管理员快速部署生产规模的Kubernetes集群。利用云的扩展性和AWS网络服务，一个API请求可以部署许多服务，包括我们在前面章节中审查的所有组件。
+- en: How does EKS accomplish this? Like with any new service AWS releases, EKS has
+    gotten significantly more feature-rich and easier to use. EKS now supports on-prem
+    deploys with EKS Anywhere, serverless with EKS Fargate, and even Windows nodes.
+    EKS clusters can be deployed traditionally with the AWS CLI or console. `eksctl`
+    is a command-line tool developed by Weaveworks, and it is by far the easiest way
+    to date to deploy all the components needed to run EKS. Our next section will
+    detail the requirements to run an EKS cluster and how `eksctl` accomplishes this
+    for cluster admins and devs.
+  id: totrans-186
+  prefs: []
+  type: TYPE_NORMAL
+  zh: EKS是如何实现这一点的？与AWS发布的任何新服务一样，EKS变得功能更加丰富且易于使用。EKS现在支持在EKS Anywhere上进行本地部署，在EKS
+    Fargate上进行无服务器部署，甚至支持Windows节点。EKS集群可以通过AWS CLI或控制台传统部署。`eksctl`是Weaveworks开发的命令行工具，迄今为止是部署运行EKS所需组件的最简单方法。我们的下一节将详细介绍运行EKS集群的要求以及`eksctl`如何为集群管理员和开发人员完成这一任务。
+- en: Let’s discuss the components of EKS cluster networking.
+  id: totrans-187
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们讨论EKS集群网络的组件。
+- en: EKS nodes
+  id: totrans-188
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: EKS节点
+- en: 'Workers nodes in EKS come in three flavors: EKS-managed node groups, self-managed
+    nodes, and AWS Fargate. The choice for the administrator is how much control and
+    operational overhead they would like to accrue.'
+  id: totrans-189
+  prefs: []
+  type: TYPE_NORMAL
+  zh: EKS中的工作节点有三种类型：EKS管理的节点组、自管理节点和AWS Fargate。管理员的选择在于他们想要承担多少控制和运营开销。
+- en: Managed node group
+  id: totrans-190
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 管理的节点组
+- en: Amazon EKS managed node groups create and manage EC2 instances for you. All
+    managed nodes are provisioned as part of an EC2 Auto Scaling group that’s managed
+    by Amazon EKS as well. All resources including EC2 instances and Auto Scaling
+    groups run within your AWS account. A managed-node group’s Auto Scaling group
+    spans all the subnets that you specify when you create the group.
+  id: totrans-191
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Amazon EKS 管理的节点组为您创建和管理 EC2 实例。所有托管节点都作为由 Amazon EKS 管理的 EC2 自动扩展组的一部分进行预配。所有资源，包括
+    EC2 实例和自动扩展组，都在您的 AWS 帐户内运行。托管节点组的自动扩展组跨越您创建组时指定的所有子网。
+- en: Self-managed node group
+  id: totrans-192
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 自管理节点组
+- en: 'Amazon EKS nodes run in your AWS account and connect to your cluster’s control
+    plane via the API endpoint. You deploy nodes into a node group. A node group is
+    a collection of EC2 instances that are deployed in an EC2 Auto Scaling group.
+    All instances in a node group must do the following:'
+  id: totrans-193
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Amazon EKS 节点在您的 AWS 帐户中运行，并通过 API 端点连接到集群的控制平面。您将节点部署到一个节点组中。节点组是部署在 EC2 自动扩展组中的
+    EC2 实例集合。节点组中的所有实例必须执行以下操作：
+- en: Be the same instance type
+  id: totrans-194
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 必须是相同的实例类型
+- en: Be running the same Amazon Machine Image
+  id: totrans-195
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 必须运行相同的 Amazon Machine Image
+- en: Use the same Amazon EKS node IAM role
+  id: totrans-196
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用相同的 Amazon EKS 节点 IAM 角色
+- en: Fargate
+  id: totrans-197
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Fargate
+- en: Amazon EKS integrates Kubernetes with AWS Fargate by using controllers that
+    are built by AWS using the upstream, extensible model provided by Kubernetes.
+    Each pod running on Fargate has its own isolation boundary and does not share
+    the underlying kernel, CPU, memory, or elastic network interface with another
+    pod. You also cannot use security groups for pods with pods running on Fargate.
+  id: totrans-198
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Amazon EKS 通过使用由 AWS 构建的控制器将 Kubernetes 与 AWS Fargate 集成，使用 Kubernetes 提供的上游可扩展模型。在
+    Fargate 上运行的每个 Pod 都有自己的隔离边界，不与另一个 Pod 共享底层内核、CPU、内存或弹性网络接口。您也不能使用安全组来管理运行在 Fargate
+    上的 Pod。
+- en: The instance type also affects the cluster network. In EKS the number of pods
+    that can run on the nodes is defined by the number of IP addresses that instance
+    can run. We discuss this further in [“AWS VPC CNI”](#awsvpccni) and [“eksctl”](#eksctl).
+  id: totrans-199
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 实例类型还影响集群网络。在 EKS 中，节点上可以运行的 Pod 数量由实例可以运行的 IP 地址数量定义。我们在 [“AWS VPC CNI”](#awsvpccni)
+    和 [“eksctl”](#eksctl) 中进一步讨论这个问题。
+- en: 'Nodes must be able to communicate with the Kubernetes control plane and other
+    AWS services. The IP address space is crucial to run an EKS cluster. Nodes, pods,
+    and all other services will use the VPC CIDR address ranges for components. The
+    EKS VPC requires a NAT gateway for private subnets and that those subnets be tagged
+    for use with EKS:'
+  id: totrans-200
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 节点必须能够与 Kubernetes 控制平面和其他 AWS 服务进行通信。IP 地址空间对于运行 EKS 集群至关重要。节点、Pod 和所有其他服务将使用
+    VPC CIDR 地址范围进行组件通信。EKS VPC 需要一个 NAT 网关用于私有子网，并且这些子网需要标记以供 EKS 使用：
+- en: '[PRE0]'
+  id: totrans-201
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: The placement of each node will determine the network “mode” that EKS operates;
+    this has design considerations for your subnets and Kubernetes API traffic routing.
+  id: totrans-202
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个节点的放置将决定 EKS 运行的网络“模式”；这对你的子网和 Kubernetes API 的流量路由有设计考量。
+- en: EKS mode
+  id: totrans-203
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: EKS 模式
+- en: '[Figure 6-9](#eks-comms) outlines EKS components. The Amazon EKS control plane
+    creates up to four cross-account elastic network interfaces in your VPC for each
+    cluster. EKS uses two VPCs, one for the Kubernetes control plane, including the
+    Kubernetes API masters, API loadbalancer, and etcd depending on the networking
+    model; the other is the customer VPC where the EKS worker nodes run your pods.
+    As part of the boot process for the EC2 instance, the Kubelet is started. The
+    node’s Kubelet reaches out to the Kubernetes cluster endpoint to register the
+    node. It connects either to the public endpoint outside the VPC or to the private
+    endpoint within the VPC. `kubectl` commands reach out to the API endpoint in the
+    EKS VPC. End users reach applications running in the customer VPC.'
+  id: totrans-204
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 6-9](#eks-comms) 概述了 EKS 的组件。Amazon EKS 控制平面为每个集群在您的 VPC 中创建高达四个跨帐户弹性网络接口。EKS
+    使用两个 VPC，一个用于 Kubernetes 控制平面，包括 Kubernetes API 主节点、API 负载均衡器和根据网络模型的 etcd；另一个是客户
+    VPC，用于在其中运行您的 Pod 的 EKS 工作节点。在 EC2 实例的引导过程中，启动 Kubelet。节点的 Kubelet 将联系 Kubernetes
+    集群端点注册节点。它连接到 VPC 外的公共端点或 VPC 内的私有端点。`kubectl` 命令连接到 EKS VPC 中的 API 端点。最终用户可以访问运行在客户
+    VPC 中的应用程序。'
+- en: '![eks-comms](Images/neku_0609.png)'
+  id: totrans-205
+  prefs: []
+  type: TYPE_IMG
+  zh: '![eks-comms](Images/neku_0609.png)'
+- en: Figure 6-9\. EKS communication path
+  id: totrans-206
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-9\. EKS 通信路径
+- en: There are three ways to configure cluster control traffic and the Kubernetes
+    API endpoint for EKS, depending on where the control and data planes of the Kubernetes
+    components run.
+  id: totrans-207
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 根据 Kubernetes 组件的控制和数据平面运行位置，有三种配置 EKS 集群控制流量和 Kubernetes API 端点的方式。
+- en: 'The networking modes are as follows:'
+  id: totrans-208
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 网络模式如下：
+- en: Public-only
+  id: totrans-209
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 仅公共
+- en: Everything runs in a public subnet, including worker nodes.
+  id: totrans-210
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有内容均在公共子网中运行，包括工作节点。
+- en: Private-only
+  id: totrans-211
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 仅私有
+- en: Runs solely in a private subnet, and Kubernetes cannot create internet-facing
+    load balancers.
+  id: totrans-212
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 仅在私有子网中运行，Kubernetes 无法创建面向 Internet 的负载均衡器。
+- en: Mixed
+  id: totrans-213
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 混合
+- en: Combo of public and private.
+  id: totrans-214
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 公共和私有的组合。
+- en: The public endpoint is the default option; it is public because the load balancer
+    for the API endpoint is on a public subnet, as shown in [Figure 6-10](#eks-public).
+    Kubernetes API requests that originate from within the cluster’s VPC, like when
+    the worker node reaches out to the control plane, leave the customer VPC, but
+    not the Amazon network. One security concern to consider when using a public endpoint
+    is that the API endpoints are on a public subnet and reachable on the internet.
+  id: totrans-215
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 公共端点是默认选项；它是公共的，因为 API 端点的负载均衡器位于公共子网上，如 [图 6-10](#eks-public) 所示。来自集群 VPC 内的
+    Kubernetes API 请求（例如当工作节点连接到控制平面时）离开客户 VPC，但不离开 Amazon 网络。使用公共端点时需要考虑的一个安全问题是
+    API 端点位于公共子网上，并且可以通过 Internet 访问。
+- en: '![eks-public](Images/neku_0610.png)'
+  id: totrans-216
+  prefs: []
+  type: TYPE_IMG
+  zh: '![eks-public](Images/neku_0610.png)'
+- en: Figure 6-10\. EKS public-only network mode
+  id: totrans-217
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-10\. EKS 仅公共网络模式
+- en: '[Figure 6-11](#eks-priv) shows the private endpoint mode; all traffic to your
+    cluster API must come from within your cluster’s VPC. There’s no internet access
+    to your API server; any `kubectl` commands must come from within the VPC or a
+    connected network. The cluster’s API endpoint is resolved by public DNS to a private
+    IP address in the VPC.'
+  id: totrans-218
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 6-11](#eks-priv) 显示了私有端点模式；所有访问集群 API 的流量必须来自集群的 VPC。API 服务器没有 Internet
+    访问权限；任何 `kubectl` 命令必须来自 VPC 内或连接的网络。集群的 API 端点通过公共 DNS 解析为 VPC 内的私有 IP 地址。'
+- en: '![eks-priv](Images/neku_0611.png)'
+  id: totrans-219
+  prefs: []
+  type: TYPE_IMG
+  zh: '![eks-priv](Images/neku_0611.png)'
+- en: Figure 6-11\. EKS private-only network mode
+  id: totrans-220
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-11\. EKS 仅私有网络模式
+- en: When both public and private endpoints are enabled, any Kubernetes API requests
+    from within the VPC communicate to the control plane by the EKS-managed ENIs within
+    the customer VPC, as demonstrated in [Figure 6-12](#eks-combo). The cluster API
+    is still accessible from the internet, but it can be limited using security groups
+    and NACLs.
+  id: totrans-221
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当启用公共和私有端点时，从 VPC 内的任何 Kubernetes API 请求都通过客户 VPC 中的 EKS 管理的 ENI 与控制平面通信，如 [图
+    6-12](#eks-combo) 所示。集群 API 仍可通过 Internet 访问，但可以使用安全组和 NACLs 进行限制。
+- en: Note
+  id: totrans-222
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Please see the [AWS documentation](https://oreil.ly/mW7ii) for more ways to
+    deploy an EKS.
+  id: totrans-223
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请参阅 [AWS 文档](https://oreil.ly/mW7ii) 了解更多部署 EKS 的方法。
+- en: Determining what mode to operate in is a critical decision administrators will
+    make. It will affect the application traffic, the routing for load balancers,
+    and the security of the cluster. There are many other requirements when deploying
+    a cluster in EKS as well. `eksctl` is one tool to help manage all those requirements.
+    But how does `eksctl` accomplish that?
+  id: totrans-224
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 确定运行模式是管理员们需要做出的关键决策。它会影响应用程序流量、负载均衡器的路由以及集群的安全性。在 EKS 部署集群时，还有许多其他要求。`eksctl`
+    是一种工具，可以帮助管理所有这些要求。但是`eksctl` 是如何做到的呢？
+- en: '![eks-combo](Images/neku_0612.png)'
+  id: totrans-225
+  prefs: []
+  type: TYPE_IMG
+  zh: '![eks-combo](Images/neku_0612.png)'
+- en: Figure 6-12\. EKS public and private network mode
+  id: totrans-226
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-12\. EKS 公共和私有网络模式
+- en: eksctl
+  id: totrans-227
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: eksctl
+- en: '`eksctl` is a command-line tool developed by Weaveworks, and it is by far the
+    easiest way to deploy all the components needed to run EKS.'
+  id: totrans-228
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`eksctl` 是由 Weaveworks 开发的命令行工具，是部署运行 EKS 所需的所有组件最简单的方式。'
+- en: Note
+  id: totrans-229
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: All the information about `eksctl` is available on its [website](https://eksctl.io).
+  id: totrans-230
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 关于 `eksctl` 的所有信息都可以在其 [网站](https://eksctl.io) 上找到。
+- en: '`eksctl` defaults to creating a cluster with the following default parameters:'
+  id: totrans-231
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`eksctl` 默认使用以下默认参数创建集群：'
+- en: An autogenerated cluster name
+  id: totrans-232
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一个自动生成的集群名称
+- en: Two m5.large worker nodes
+  id: totrans-233
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 两个 m5.large 工作节点
+- en: Use of the official AWS EKS AMI
+  id: totrans-234
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用官方 AWS EKS AMI
+- en: Us-west-2 default AWS region
+  id: totrans-235
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Us-west-2 默认的 AWS 区域
+- en: A dedicated VPC
+  id: totrans-236
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一个专用的 VPC
+- en: 'A dedicated VPC with 192.168.0.0/16 CIDR range, `eksctl` will create by default
+    8 /19 subnets: three private, three public, and two reserved subnets. `eksctl`
+    will also deploy a NAT GW that allows for communication of nodes placed in private
+    subnets and an internet gateway to enable access for needed container images and
+    communication to the Amazon S3 and Amazon ECR APIs.'
+  id: totrans-237
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个带有 192.168.0.0/16 CIDR 范围的专用 VPC，默认情况下，`eksctl` 将创建 8 个 /19 子网：三个私有子网、三个公共子网和两个保留子网。`eksctl`
+    还将部署一个 NAT GW，允许位于私有子网中的节点进行通信，并部署一个 Internet Gateway，以便访问所需的容器镜像和与 Amazon S3
+    以及 Amazon ECR API 的通信。
+- en: 'Two security groups are set up for the EKS cluster:'
+  id: totrans-238
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为 EKS 集群设置了两个安全组：
+- en: Ingress inter node group SG
+  id: totrans-239
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Ingress inter node group SG
+- en: Allows nodes to communicate with each other on all ports
+  id: totrans-240
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 允许节点在所有端口上彼此通信
+- en: Control plane security group
+  id: totrans-241
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 控制平面安全组
+- en: Allows communication between the control plane and worker node groups
+  id: totrans-242
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 允许控制平面和工作节点组之间的通信
+- en: Node groups in public subnets will have SSH disabled. EC2 instances in the initial
+    node group get a public IP and can be accessed on high-level ports.
+  id: totrans-243
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 公共子网中的节点组将禁用 SSH。初始节点组中的 EC2 实例会获得公共 IP，并且可以通过高级别端口进行访问。
+- en: 'One node group containing two m5.large nodes is the default for `eksctl`. But
+    how many pods can that node run? AWS has a formula based on the node type and
+    the number of interfaces and IP addresses it can support. That formula is as follows:'
+  id: totrans-244
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，一个包含两个 m5.large 节点的节点组是 `eksctl` 的默认设置。但是一个节点可以运行多少个 Pod 呢？AWS 提供了一个基于节点类型、接口数量和支持的
+    IP 地址数量的公式。该公式如下：
+- en: '[PRE1]'
+  id: totrans-245
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: Using the preceding formula and the default instance size on `eksctl`, an m5.large
+    can support a maximum of 29 pods.
+  id: totrans-246
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用上述公式和 `eksctl` 的默认实例大小，一个 m5.large 实例最多支持 29 个 Pod。
+- en: Warning
+  id: totrans-247
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: System pods count toward the maximum pods. The CNI plugin and `kube-proxy` pods
+    run on every node in a cluster, so you’re only able to deploy 27 additional pods
+    to an m5.large instance. CoreDNS runs on nodes in the cluster, which further decrements
+    the maximum number of pods a node can run.
+  id: totrans-248
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 系统 Pod 会计入最大 Pod 数量。CNI 插件和 `kube-proxy` Pod 在集群中的每个节点上运行，因此您只能额外部署 27 个 Pod
+    到一个 m5.large 实例中。CoreDNS 也会在集群中的节点上运行，这进一步减少了节点可以运行的最大 Pod 数量。
+- en: Teams running clusters must decide on cluster sizing and instance types to ensure
+    no deployment issues with hitting node and IP limitations. Pods will sit in the
+    “waiting” state if there are no nodes available with the pod’s IP address. Scaling
+    events for the EKS node groups can also hit EC2 instance type limits and cause
+    cascading issues.
+  id: totrans-249
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运行集群的团队必须决定集群大小和实例类型，以确保不会因为节点和 IP 限制而导致部署问题。如果没有可用具有 Pod IP 地址的节点，Pod 将处于“等待”状态。EKS
+    节点组的扩展事件也可能触及 EC2 实例类型限制并引发级联问题。
+- en: All of these networking options are configurable via the `eksctl` config file.
+  id: totrans-250
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有这些网络选项都可以通过 `eksctl` 配置文件进行配置。
+- en: Note
+  id: totrans-251
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: '`eksctl` VPC options are available in the [eksctl documentation](https://oreil.ly/m2Nqc).'
+  id: totrans-252
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`eksctl` 中的 VPC 选项详见 [eksctl 文档](https://oreil.ly/m2Nqc)。'
+- en: We have discussed how the size node is important for pod IP addressing and the
+    number of them we can run. Once the node is deployed, the AWS VPC CNI manages
+    pod IP addressing for nodes. Let’s dive into the inner workings of the CNI.
+  id: totrans-253
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们已经讨论过节点大小对于 Pod IP 地址分配及其可运行数量的重要性。一旦节点部署完成，AWS VPC CNI 将管理节点的 Pod IP 地址分配。让我们深入了解一下
+    CNI 的内部工作原理。
+- en: AWS VPC CNI
+  id: totrans-254
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: AWS VPC CNI
+- en: AWS has its open source implementation of a CNI. AWS VPC CNI for the Kubernetes
+    plugin offers high throughput and availability, low latency, and minimal network
+    jitter on the AWS network. Network engineers can apply existing AWS VPC networking
+    and security best practices for building Kubernetes clusters on AWS. It includes
+    using native AWS services like VPC flow logs, VPC routing policies, and security
+    groups for network traffic isolation.
+  id: totrans-255
+  prefs: []
+  type: TYPE_NORMAL
+  zh: AWS 有自己的 CNI 开源实现。AWS VPC CNI 用于 Kubernetes 插件在 AWS 网络上提供高吞吐量和可用性、低延迟以及最小的网络抖动。网络工程师可以应用现有的
+    AWS VPC 网络和安全最佳实践来构建在 AWS 上的 Kubernetes 集群。这包括使用像 VPC 流日志、VPC 路由策略和安全组进行网络流量隔离。
+- en: Note
+  id: totrans-256
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The open source for AWS VPC CNI is on [GitHub](https://oreil.ly/akwqx).
+  id: totrans-257
+  prefs: []
+  type: TYPE_NORMAL
+  zh: AWS VPC CNI 的开源代码可以在 [GitHub](https://oreil.ly/akwqx) 上找到。
+- en: 'There are two components to the AWS VPC CNI:'
+  id: totrans-258
+  prefs: []
+  type: TYPE_NORMAL
+  zh: AWS VPC CNI 有两个组成部分：
+- en: CNI plugin
+  id: totrans-259
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CNI 插件
+- en: The CNI plugin is responsible for wiring up the host’s and pod’s network stack
+    when called. It also configures the interfaces and virtual Ethernet pairs.
+  id: totrans-260
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当调用时，CNI 插件负责连接主机和 Pod 的网络堆栈。它还配置接口和虚拟以太网对。
+- en: ipamd
+  id: totrans-261
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ipamd
+- en: A long-running node-local IPAM daemon is responsible for maintaining a warm
+    pool of available IP addresses and assigning an IP address to a pod.
+  id: totrans-262
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 长时间运行的节点本地 IPAM 守护程序负责维护一组可用 IP 地址，并为 Pod 分配 IP 地址。
+- en: '[Figure 6-13](#aws-VPC-cni) demonstrates what the VPC CNI will do for nodes.
+    A customer VPC with a subnet 10.200.1.0/24 in AWS gives us 250 usable addresses
+    in this subnet. There are two nodes in our cluster. In EKS, the managed nodes
+    run with the AWS CNI as a daemon set. In our example, each node has only one pod
+    running, with a secondary IP address on the ENI, `10.200.1.6` and `10.200.1.8`,
+    for each pod. When a worker node first joins the cluster, there is only one ENI
+    and all its addresses in the ENI. When pod three gets scheduled to node 1, ipamd
+    assigns the IP address to the ENI for that pod. In this case, `10.200.1.7` is
+    the same thing on node 2 with pod 4.'
+  id: totrans-263
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 6-13](#aws-VPC-cni) 演示了 VPC CNI 对节点的影响。在 AWS 中，客户 VPC 在子网 10.200.1.0/24
+    中提供给我们此子网中的 250 个可用地址。我们的集群中有两个节点。在 EKS 中，托管节点作为守护进程运行 AWS CNI。在我们的示例中，每个节点只有一个运行的
+    pod，在 ENI 上有一个次要 IP 地址，即 `10.200.1.6` 和 `10.200.1.8`，分别对应每个 pod。当工作节点首次加入集群时，只有一个
+    ENI 及其所有地址在 ENI 中。当第三个 pod 被调度到节点 1 时，ipamd 为该 pod 分配 IP 地址。在这种情况下，`10.200.1.7`
+    是节点 2 上的 pod 4 的同样情况。'
+- en: When a worker node first joins the cluster, there is only one ENI and all of
+    its addresses in the ENI. Without any configuration, `ipamd` always tries to keep
+    one extra ENI. When several pods running on the node exceeds the number of addresses
+    on a single ENI, the CNI backend starts allocating a new ENI. The CNI plugin works
+    by allocating multiple ENIs to EC2 instances and then attaches secondary IP addresses
+    to these ENIs. This plugin allows the CNI to allocate as many IPs per instance
+    as possible.
+  id: totrans-264
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当工作节点首次加入集群时，只有一个 ENI 及其所有地址在 ENI 中。没有任何配置时，`ipamd` 总是尝试保持额外的一个 ENI。当节点上运行的多个
+    pod 数量超过单个 ENI 上的地址数量时，CNI 后端开始分配新的 ENI。CNI 插件通过为 EC2 实例分配多个 ENI，然后将次要 IP 地址附加到这些
+    ENI 上来工作。此插件允许 CNI 尽可能多地为每个实例分配 IP。
+- en: '![neku 0613](Images/neku_0613.png)'
+  id: totrans-265
+  prefs: []
+  type: TYPE_IMG
+  zh: '![neku 0613](Images/neku_0613.png)'
+- en: Figure 6-13\. AWS VPC CNI example
+  id: totrans-266
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-13\. AWS VPC CNI 示例
+- en: 'The AWS VPC CNI is highly configurable. This list includes just a few options:'
+  id: totrans-267
+  prefs: []
+  type: TYPE_NORMAL
+  zh: AWS VPC CNI 高度可配置。此列表仅包括一些选项：
+- en: AWS_VPC_CNI_NODE_PORT_SUPPORT
+  id: totrans-268
+  prefs: []
+  type: TYPE_NORMAL
+  zh: AWS_VPC_CNI_NODE_PORT_SUPPORT
+- en: Specifies whether NodePort services are enabled on a worker node’s primary network
+    interface. This requires additional `iptables` rules and that the kernel’s reverse
+    path filter on the primary interface is set to loose.
+  id: totrans-269
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 指定是否在工作节点的主要网络接口上启用了 NodePort 服务。这需要额外的 `iptables` 规则，并且需要将内核的反向路径过滤器设置为宽松模式。
+- en: AWS_VPC_K8S_CNI_CUSTOM_NETWORK_CFG
+  id: totrans-270
+  prefs: []
+  type: TYPE_NORMAL
+  zh: AWS_VPC_K8S_CNI_CUSTOM_NETWORK_CFG
+- en: Worker nodes can be configured in public subnets, so you need to configure pods
+    to be deployed in private subnets, or if pods’ security requirement needs are
+    different from others running on the node, setting this to `true` will enable
+    that.
+  id: totrans-271
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 工作节点可以配置在公共子网中，因此您需要将 pod 配置为部署在私有子网中，或者如果 pod 的安全需求与其他节点上运行的需求不同，将其设置为 `true`
+    将启用这一功能。
+- en: AWS_VPC_ENI_MTU
+  id: totrans-272
+  prefs: []
+  type: TYPE_NORMAL
+  zh: AWS_VPC_ENI_MTU
+- en: 'Default: 9001\. Used to configure the MTU size for attached ENIs. The valid
+    range is from 576 to 9001.'
+  id: totrans-273
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认值：9001。用于配置附加 ENI 的 MTU 大小。有效范围为 576 到 9001。
+- en: WARM_ENI_TARGET
+  id: totrans-274
+  prefs: []
+  type: TYPE_NORMAL
+  zh: WARM_ENI_TARGET
+- en: Specifies the number of free elastic network interfaces (and all of their available
+    IP addresses) that the `ipamd` daemon should attempt to keep available for pod
+    assignment on the node. By default, `ipamd` attempts to keep one elastic network
+    interface and all of its IP addresses available for pod assignment. The number
+    of IP addresses per network interface varies by instance type.
+  id: totrans-275
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 指定 `ipamd` 守护进程应尝试保持供分配给节点上的 pod 的弹性网络接口及其所有可用 IP 地址的数量。默认情况下，`ipamd` 尝试保持一个弹性网络接口及其所有
+    IP 地址供 pod 分配使用。每个网络接口的 IP 地址数量因实例类型而异。
+- en: AWS_VPC_K8S_CNI_EXTERNALSNAT
+  id: totrans-276
+  prefs: []
+  type: TYPE_NORMAL
+  zh: AWS_VPC_K8S_CNI_EXTERNALSNAT
+- en: Specifies whether an external NAT gateway should be used to provide SNAT of
+    secondary ENI IP addresses. If set to `true`, the SNAT `iptables` rule and external
+    VPC IP rule are not applied, and these rules are removed if they have already
+    been applied. Disable SNAT if you need to allow inbound communication to your
+    pods from external VPNs, direct connections, and external VPCs, and your pods
+    do not need to access the internet directly via an internet gateway.
+  id: totrans-277
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 指定是否应使用外部 NAT 网关来提供次要 ENI IP 地址的 SNAT。如果设置为 `true`，则不会应用 SNAT `iptables` 规则和外部
+    VPC IP 规则，并且如果已经应用了这些规则，则将其删除。如果需要允许来自外部 VPN、直接连接和外部 VPC 的入站通信，并且您的 pod 不需要通过互联网网关直接访问互联网，则禁用
+    SNAT。
+- en: 'For example, if your pods with a private IP address need to communicate with
+    others’ private IP address spaces, you enable `AWS_VPC_K8S_CNI_EXTERNALSNAT` by
+    using this command:'
+  id: totrans-278
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，如果您的带有私有 IP 地址的 Pod 需要与其他人的私有 IP 地址空间通信，您可以使用以下命令启用 `AWS_VPC_K8S_CNI_EXTERNALSNAT`：
+- en: '[PRE2]'
+  id: totrans-279
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: Note
+  id: totrans-280
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: All the information for EKS pod networking can be found in the [EKS documentation](https://oreil.ly/RAVVY).
+  id: totrans-281
+  prefs: []
+  type: TYPE_NORMAL
+  zh: EKS Pod 网络的所有信息都可以在 [EKS 文档](https://oreil.ly/RAVVY) 中找到。
+- en: The AWS VPC CNI allows for maximum control over the networking options on EKS
+    in the AWS network.
+  id: totrans-282
+  prefs: []
+  type: TYPE_NORMAL
+  zh: AWS VPC CNI 允许在 AWS 网络中对 EKS 的网络选项进行最大控制。
+- en: There is also the AWS ALB ingress controller that makes managing and deploying
+    applications on the AWS cloud network smooth and automated. Let’s dig into that
+    next.
+  id: totrans-283
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 还有 AWS ALB 入口控制器，使在 AWS 云网络上管理和部署应用程序变得顺畅和自动化。让我们接着深入了解。
+- en: AWS ALB ingress controller
+  id: totrans-284
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: AWS ALB 入口控制器
+- en: Let’s walk through the example in [Figure 6-14](#alb) of how the AWS ALB works
+    with Kubernetes. For a review of what an ingress controller is, please check out
+    [Chapter 5](ch05.xhtml#kubernetes_networking_abstractions).
+  id: totrans-285
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们通过 [图 6-14](#alb) 中的示例来了解 AWS ALB 与 Kubernetes 的工作原理。要了解什么是入口控制器，请查看 [第 5
+    章](ch05.xhtml#kubernetes_networking_abstractions)。
+- en: 'Let’s discuss all the moving parts of ALB Ingress controller:'
+  id: totrans-286
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们讨论 ALB 入口控制器的所有组成部分：
+- en: The ALB ingress controller watches for ingress events from the API server. When
+    requirements are met, it will start the creation process of an ALB.
+  id: totrans-287
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: ALB 入口控制器会监视来自 API 服务器的入口事件。当满足要求时，它将开始创建 ALB 的过程。
+- en: An ALB is created in AWS for the new ingress resource. Those resources can be
+    internal or external to the cluster.
+  id: totrans-288
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 在 AWS 中为新的入口资源创建 ALB。这些资源可以是集群内部或外部的。
+- en: Target groups are created in AWS for each unique Kubernetes service described
+    in the ingress resource.
+  id: totrans-289
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 为每个在入口资源中描述的唯一 Kubernetes 服务在 AWS 中创建目标组。
+- en: Listeners are created for every port detailed in your ingress resource annotations.
+    Default ports for HTTP and HTTPS traffic are set up if not specified. NodePort
+    services for each service create the node ports that are used for our health checks.
+  id: totrans-290
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 为入口资源注释中详细说明的每个端口创建侦听器。如果未指定，默认设置 HTTP 和 HTTPS 流量的默认端口。每个服务的 NodePort 服务创建用于我们的健康检查的节点端口。
+- en: Rules are created for each path specified in your ingress resource. This ensures
+    traffic to a specific path is routed to the correct Kubernetes service.
+  id: totrans-291
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 为入口资源中指定的每个路径创建规则。这确保将流量路由到正确的 Kubernetes 服务的特定路径。
+- en: '![ALB](Images/neku_0614.png)'
+  id: totrans-292
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ALB](Images/neku_0614.png)'
+- en: Figure 6-14\. AWS ALB example
+  id: totrans-293
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-14\. AWS ALB 示例
+- en: 'How traffic reaches nodes and pods is affected by one of two modes the ALB
+    can run:'
+  id: totrans-294
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 流量如何到达节点和 Pod 受 ALB 运行的两种模式之一的影响：
+- en: Instance mode
+  id: totrans-295
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 实例模式
+- en: Ingress traffic starts at the ALB and reaches the Kubernetes nodes through each
+    service’s NodePort. This means that services referenced from ingress resources
+    must be exposed by `type:NodePort` to be reached by the ALB.
+  id: totrans-296
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 入口流量从 ALB 开始，并通过每个服务的 NodePort 到达 Kubernetes 节点。这意味着从入口资源引用的服务必须通过 `type:NodePort`
+    暴露才能被 ALB 访问。
+- en: IP mode
+  id: totrans-297
+  prefs: []
+  type: TYPE_NORMAL
+  zh: IP 模式
+- en: Ingress traffic starts at the ALB and reaches directly to the Kubernetes pods.
+    CNIs must support a directly accessible pod IP address via secondary IP addresses
+    on ENI.
+  id: totrans-298
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 入口流量从 ALB 开始，直接到达 Kubernetes Pod。CNIs 必须支持通过 ENI 上的辅助 IP 地址直接访问的 Pod IP 地址。
+- en: The AWS ALB ingress controller allows developers to manage their network needs
+    like their application components. There is no need for other tool sets in the
+    pipeline.
+  id: totrans-299
+  prefs: []
+  type: TYPE_NORMAL
+  zh: AWS ALB 入口控制器允许开发人员管理其网络需求，如应用程序组件。在流水线中不需要其他工具集。
+- en: The AWS networking components are tightly integrated with EKS. Understanding
+    the basic options of how they work is fundamental for all those looking to scale
+    their applications on Kubernetes on AWS using EKS. The size of your subnets, the
+    placements of the nodes in those subnets, and of course the size of nodes will
+    affect how large of a network of pods and services you can run on the AWS network.
+    Using a managed service such as EKS, with open source tools like `eksctl`, will
+    greatly reduce the operational overhead of running an AWS Kubernetes cluster.
+  id: totrans-300
+  prefs: []
+  type: TYPE_NORMAL
+  zh: AWS 网络组件与 EKS 紧密集成。了解它们的基本工作方式的选项对于所有希望在 AWS 上使用 EKS 扩展其应用程序的人来说是基本的。子网的大小，节点在这些子网中的放置位置，当然还有节点的大小将影响您可以在
+    AWS 网络上运行多大规模的 Pod 和服务的网络。使用像 `eksctl` 这样的开源工具与托管服务（如 EKS）将大大减少运行 AWS Kubernetes
+    集群的操作开销。
+- en: Deploying an Application on an AWS EKS Cluster
+  id: totrans-301
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 在 AWS EKS 集群上部署应用程序
+- en: 'Let’s walk through deploying an EKS cluster to manage our Golang web server:'
+  id: totrans-302
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们逐步部署一个 EKS 集群来管理我们的 Golang Web 服务器：
+- en: Deploy the EKS cluster.
+  id: totrans-303
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 部署 EKS 集群。
+- en: Deploy the web server Application and LoadBalancer.
+  id: totrans-304
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 部署 Web 服务器应用程序和 LoadBalancer。
+- en: Verify.
+  id: totrans-305
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 验证。
+- en: Deploy ALB Ingress Controller and Verify.
+  id: totrans-306
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 部署 ALB Ingress Controller 并验证。
+- en: Clean up.
+  id: totrans-307
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 清理。
+- en: Deploy EKS cluster
+  id: totrans-308
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 部署 EKS 集群。
+- en: 'Let’s deploy an EKS cluster, with the current and latest version EKS supports,
+    1.20:'
+  id: totrans-309
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们部署一个 EKS 集群，使用当前和最新版本 EKS 支持的版本 1.20：
+- en: '[PRE3]'
+  id: totrans-310
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'In the output we can see that EKS creating a nodegroup, `eksctl-eks-demo-nodegroup-ng-90b7a9a5`,
+    with three nodes:'
+  id: totrans-311
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在输出中，我们可以看到 EKS 正在创建一个节点组，`eksctl-eks-demo-nodegroup-ng-90b7a9a5`，包含三个节点：
+- en: '[PRE4]'
+  id: totrans-312
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: 'They are all inside a VPC with three public and three private subnets across
+    three AZs:'
+  id: totrans-313
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 它们都位于一个 VPC 内，有三个公共子网和三个私有子网，跨三个 AZ：
+- en: '[PRE5]'
+  id: totrans-314
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: Warning
+  id: totrans-315
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: We used the default settings of eksctl, and it deployed the k8s API as a public
+    endpoint, `{publicAccess=true, privateAccess=false}`.
+  id: totrans-316
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们使用了 eksctl 的默认设置，并且将 k8s API 部署为公共端点，`{publicAccess=true, privateAccess=false}`。
+- en: Now we can deploy our Golang web application in the cluster and expose it with
+    a LoadBalancer service.
+  id: totrans-317
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们可以在集群中部署我们的 Golang Web 应用程序，并使用 LoadBalancer 服务暴露它。
+- en: Deploy test application
+  id: totrans-318
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 部署测试应用程序。
+- en: 'You can deploy applications individually or all together. *dnsutils.yml* is
+    our `dnsutils` testing pod, *database.yml* is the Postgres database for pod connectivity
+    testing, *web.yml* is the Golang web server and the LoadBalancer service:'
+  id: totrans-319
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以分别或一起部署应用程序。*dnsutils.yml* 是我们的 `dnsutils` 测试 Pod，*database.yml* 是用于 Pod
+    连通性测试的 Postgres 数据库，*web.yml* 是 Golang Web 服务器和 LoadBalancer 服务：
+- en: '[PRE6]'
+  id: totrans-320
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: 'Let’s run a `kubectl get pods` to see if all the pods are running fine:'
+  id: totrans-321
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们运行 `kubectl get pods` 来查看所有的 Pod 是否运行正常：
+- en: '[PRE7]'
+  id: totrans-322
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: 'Now check on the LoadBalancer service:'
+  id: totrans-323
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在检查 LoadBalancer 服务：
+- en: '[PRE8]'
+  id: totrans-324
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: 'The service has endpoints as well:'
+  id: totrans-325
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 服务还有端点：
+- en: '[PRE9]'
+  id: totrans-326
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: 'We should verify the application is reachable inside the cluster, with the
+    ClusterIP and port, `10.100.159.28:8080`; service name and port, `clusterip-service:80`;
+    and finally pod IP and port, `192.168.15.108:8080`:'
+  id: totrans-327
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们应该验证应用程序是否可以在集群内访问，使用 ClusterIP 和端口 `10.100.159.28:8080`；服务名和端口 `clusterip-service:80`；最后是
+    Pod IP 和端口 `192.168.15.108:8080`：
+- en: '[PRE10]'
+  id: totrans-328
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: 'The database port is reachable from `dnsutils`, with the pod IP and port `192.168.70.170:5432`,
+    and the service name and port - `postgres:5432`:'
+  id: totrans-329
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 数据库端口可以从 `dnsutils` 到达，使用 Pod IP 和端口 `192.168.70.170:5432`，服务名和端口 `postgres:5432`：
+- en: '[PRE11]'
+  id: totrans-330
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: The application inside the cluster is up and running. Let’s test it from external
+    to the cluster.
+  id: totrans-331
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 集群内的应用程序已经运行起来了。让我们从集群外部测试一下。
+- en: Verify LoadBalancer services for Golang web server
+  id: totrans-332
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 验证 Golang Web 服务器的 LoadBalancer 服务。
+- en: '`kubectl` will return all the information we will need to test, the ClusterIP,
+    the external IP, and all the ports:'
+  id: totrans-333
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kubectl` 将返回我们测试所需的所有信息，包括 ClusterIP、外部 IP 和所有端口：'
+- en: '[PRE12]'
+  id: totrans-334
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: 'Using the external IP of the load balancer:'
+  id: totrans-335
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用负载均衡器的外部 IP：
+- en: '[PRE13]'
+  id: totrans-336
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: 'Let’s test the load balancer and make multiple requests to our backends:'
+  id: totrans-337
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们测试负载均衡器，并向后端发起多个请求：
+- en: '[PRE14]'
+  id: totrans-338
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: '`kubectl get pods -o wide` again will verify our pod information matches the
+    loadbalancer requests:'
+  id: totrans-339
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 再次运行 `kubectl get pods -o wide` 将验证我们的 Pod 信息是否与负载均衡器请求匹配：
+- en: '[PRE15]'
+  id: totrans-340
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: 'We can also check the nodeport, since `dnsutils` is running inside our VPC,
+    on an EC2 instance; it can do a DNS lookup on the private host, `ip-192-168-0-94.us-west-2.compute.internal`,
+    and the `kubectl get service` command gave us the node port, 32671:'
+  id: totrans-341
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们还可以检查节点端口，因为 `dnsutils` 正在我们的 VPC 内的 EC2 实例上运行，它可以在私有主机 `ip-192-168-0-94.us-west-2.compute.internal`
+    上进行 DNS 查询，并且 `kubectl get service` 命令给出了我们的节点端口，32671：
+- en: '[PRE16]'
+  id: totrans-342
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: Everything seems to running just fine externally and locally in our cluster.
+  id: totrans-343
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在我们的集群中，一切似乎在外部和本地都运行良好。
+- en: Deploy ALB ingress and verify
+  id: totrans-344
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 部署 ALB Ingress 并验证。
+- en: 'For some sections of the deployment, we will need to know the AWS account ID
+    we are deploying. Let’s put that into an environment variable. To get your account
+    ID, you can run the following:'
+  id: totrans-345
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在部署的某些部分，我们需要知道我们正在部署的 AWS 账户 ID。让我们将其放入一个环境变量中。要获取您的账户 ID，您可以运行以下命令：
+- en: '[PRE17]'
+  id: totrans-346
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: If it is not set up for the cluster already, we will have to set up an OIDC
+    provider with the cluster.
+  id: totrans-347
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果集群还没有设置，我们需要为集群设置 OIDC 提供程序。
+- en: 'This step is needed to give IAM permissions to a pod running in the cluster
+    using the IAM for SA:'
+  id: totrans-348
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这一步是为了给在集群中运行的 Pod 使用 SA 的 IAM 权限赋予 IAM 权限：
+- en: '[PRE18]'
+  id: totrans-349
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: 'For the SA role, we will need to create an IAM policy to determine the permissions
+    for the ALB controller in AWS:'
+  id: totrans-350
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于 SA 角色，我们需要创建一个 IAM 策略，来确定 ALB 控制器在 AWS 中的权限：
+- en: '[PRE19]'
+  id: totrans-351
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: 'Now we need to create the SA and attach it to the IAM role we created:'
+  id: totrans-352
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们需要创建 SA 并将其附加到我们创建的 IAM 角色：
+- en: '[PRE20]'
+  id: totrans-353
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: 'We can see all the details of the SA with the following:'
+  id: totrans-354
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以通过以下方法查看SA的所有细节：
+- en: '[PRE21]'
+  id: totrans-355
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: 'The `TargetGroupBinding` CRD allows the controller to bind a Kubernetes service
+    endpoint to an AWS `TargetGroup`:'
+  id: totrans-356
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`TargetGroupBinding` CRD允许控制器将Kubernetes服务端点绑定到AWS的`TargetGroup`：'
+- en: '[PRE22]'
+  id: totrans-357
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: Now we’re ready to the deploy the ALB controller with Helm.
+  id: totrans-358
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们准备用Helm部署ALB控制器。
+- en: 'Set the version environment to deploy:'
+  id: totrans-359
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 设置版本环境进行部署：
+- en: '[PRE23]'
+  id: totrans-360
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: Now deploy it, add the `eks` Helm repo, get the VPC ID the cluster is running
+    in, and finally deploy via Helm.
+  id: totrans-361
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在部署它，添加`eks` Helm仓库，获取集群运行的VPC ID，最后通过Helm部署。
+- en: '[PRE24]'
+  id: totrans-362
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: 'We can watch the deploy logs here:'
+  id: totrans-363
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以在这里观看部署日志：
+- en: '[PRE25]'
+  id: totrans-364
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE25]'
+- en: 'Now to deploy our ingress with ALB:'
+  id: totrans-365
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在使用ALB部署我们的入口：
+- en: '[PRE26]'
+  id: totrans-366
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE26]'
+- en: With the `kubectl describe ing app` output, we can see the ALB has been deployed.
+  id: totrans-367
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过`kubectl describe ing app`输出，我们可以看到ALB已经部署。
+- en: We can also see the ALB public DNS address, the rules for the instances, and
+    the endpoints backing the service.
+  id: totrans-368
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们还可以看到ALB的公共DNS地址、实例规则和支持服务的端点。
+- en: '[PRE27]'
+  id: totrans-369
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE27]'
+- en: It’s time to test our ALB!
+  id: totrans-370
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 是时候测试我们的ALB了！
+- en: '[PRE28]'
+  id: totrans-371
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE28]'
+- en: Cleanup
+  id: totrans-372
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 清理工作：
+- en: 'Once you are done working with EKS and testing, make sure to delete the applications
+    pods and the service to ensure that everything is deleted:'
+  id: totrans-373
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您完成与EKS的工作和测试后，请确保删除应用程序的Pod和服务，以确保一切都已删除：
+- en: '[PRE29]'
+  id: totrans-374
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE29]'
+- en: 'Clean up the ALB:'
+  id: totrans-375
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 清理ALB：
+- en: '[PRE30]'
+  id: totrans-376
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE30]'
+- en: 'Remove the IAM policy for ALB controller:'
+  id: totrans-377
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 删除ALB控制器的IAM策略：
+- en: '[PRE31]'
+  id: totrans-378
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE31]'
+- en: 'Verify there are no leftover EBS volumes from the PVCs for test application.
+    Delete any EBS volumes found for the PVC’s for the Postgres test database:'
+  id: totrans-379
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 验证没有残留的EBS卷来自于测试应用程序的PVC。删除任何发现的为Postgres测试数据库的PVC的EBS卷：
+- en: '[PRE32]'
+  id: totrans-380
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE32]'
+- en: 'Verify there are no load balancers running, ALB or otherwise:'
+  id: totrans-381
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 验证没有运行的负载均衡器，无论是ALB还是其他类型的：
+- en: '[PRE33]'
+  id: totrans-382
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE33]'
+- en: '[PRE34]'
+  id: totrans-383
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE34]'
+- en: 'Let’s make sure we delete the cluster, so you don’t get charged for a cluster
+    doing nothing:'
+  id: totrans-384
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们确保删除集群，以免因没有运行的集群而产生费用：
+- en: '[PRE35]'
+  id: totrans-385
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE35]'
+- en: We deployed a service load balancer that will for each service deploy a classical
+    ELB into AWS. The ALB controller allows developers to use ingress with ALB or
+    NLBs to expose the application externally. If we were to scale our application
+    to multiple backend services, the ingress allows us to use one load balancer and
+    route based on layer 7 information.
+  id: totrans-386
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们部署了一个服务负载均衡器，每个服务都会在AWS中部署一个经典ELB。ALB控制器允许开发者使用ALB或NLB通过入口来外部暴露应用程序。如果我们要将应用程序扩展到多个后端服务，入口允许我们使用一个负载均衡器，并基于第7层信息进行路由。
+- en: In the next section, we will explore GCP in the same manner we just did for
+    AWS.
+  id: totrans-387
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在下一节中，我们将以与AWS相同的方式探索GCP。
+- en: Google Compute Cloud (GCP)
+  id: totrans-388
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Google Compute Cloud（GCP）
+- en: In 2008, Google announced App Engine, a platform as a service to deploy Java,
+    Python, Ruby, and Go applications. Like its competitors, GCP has extended its
+    service offerings. Cloud providers work to distinguish their offerings, so no
+    two products are ever the same. Nonetheless, many products do have a lot in common.
+    For instance, GCP Compute Engine is an infrastructure as a service to run virtual
+    machines. The GCP network consists of 25 cloud regions, 76 zones, and 144 network
+    edge locations. Utilizing both the scale of the GCP network and Compute Engine,
+    GCP has released Google Kubernetes Engine, its container as a service platform.
+  id: totrans-389
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 2008年，Google宣布推出App Engine，一个平台即服务，用于部署Java、Python、Ruby和Go应用程序。像其竞争对手一样，GCP已扩展了其服务提供。云服务提供商致力于区分其产品，因此没有两个产品完全相同。尽管如此，许多产品确实有许多共同点。例如，GCP
+    Compute Engine是一个基础设施即服务，用于运行虚拟机。GCP网络由25个云区域、76个区域和144个网络边缘位置组成。利用GCP网络和Compute
+    Engine的规模，GCP推出了Google Kubernetes Engine，其容器即服务平台。
+- en: GCP Network Services
+  id: totrans-390
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: GCP网络服务：
+- en: Managed and unmanaged Kubernetes clusters on GCP share the same networking principles.
+    Nodes in either managed or unmanaged clusters run as Google Compute Engine instances.
+    Networks in GCP are VPC networks. GCP VPC networks, like in AWS, contain functionality
+    for IP management, routing, firewalling, and peering.
+  id: totrans-391
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在GCP上，托管和非托管的Kubernetes集群共享相同的网络原则。托管或非托管集群中的节点都作为Google Compute Engine实例运行。GCP的网络是VPC网络。GCP
+    VPC网络像AWS一样，包含IP管理、路由、防火墙和对等连接功能。
+- en: The GCP network is divided into tiers for customers to choose from; there are
+    premium and standard tiers. They differ in performance, routing, and functionality,
+    so network engineers must decide which is suitable for their workloads. The premium
+    tier is the highest performance for your workloads. All the traffic between the
+    internet and instances in the VPC network is routed within Google’s network as
+    far as possible. If your services need global availability, you should use premium.
+    Make sure to remember that the premium tier is the default unless you make configuration
+    changes.
+  id: totrans-392
+  prefs: []
+  type: TYPE_NORMAL
+  zh: GCP网络分为不同的层级供客户选择；有高级和标准层级。它们在性能、路由和功能上有所不同，因此网络工程师必须决定哪种适合其工作负载。高级层级为您的工作负载提供最高性能。VPC网络中所有与互联网和实例之间的流量尽可能通过Google网络路由。如果您的服务需要全球可用性，应使用高级层级。请记住，默认情况下高级层级是默认设置，除非您进行配置更改。
+- en: The standard tier is a cost-optimized tier where traffic between the internet
+    and VMs in the VPC network is routed over the internet in general. Network engineers
+    should pick this tier for services that are going to be hosted entirely within
+    a region. The standard tier cannot guarantee performance as it is subject to the
+    same performance that all workloads share on the internet.
+  id: totrans-393
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 标准层级是一种成本优化的层级，互联网和VPC网络中的VM之间的流量通常通过互联网一般路由。网络工程师应为完全托管在一个区域内的服务选择此层级。标准层级不能保证性能，因为它受到所有工作负载在互联网上共享的性能的限制。
+- en: The GCP network differs from the other providers by having what is called *global*
+    resources. Global because users can access them in any zone within the same project.
+    These resources include such things as VPC, firewalls, and their routes.
+  id: totrans-394
+  prefs: []
+  type: TYPE_NORMAL
+  zh: GCP网络不同于其他提供商，其拥有所谓的*全局*资源。全局意味着用户可以在同一项目的任何区域访问这些资源。这些资源包括VPC、防火墙及其路由等。
+- en: Note
+  id: totrans-395
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: See the [GCP documentation](https://oreil.ly/mzgG2) for a more comprehensive
+    overview of the network tiers.
+  id: totrans-396
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 查看[GCP文档](https://oreil.ly/mzgG2)以获取网络层的更全面概述。
+- en: Regions and zones
+  id: totrans-397
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 区域和区域
+- en: Regions are independent geographic areas that contain multiple zones. Regional
+    resources offer redundancy by being deployed across multiple zones for that region.
+    Zones are deployment areas for resources within a region. One zone is typically
+    a data center within a region, and administrators should consider them a single
+    fault domain. In fault-tolerant application deployments, the best practice is
+    to deploy applications across multiple zones within a region, and for high availability,
+    you should deploy applications across various regions. If a zone becomes unavailable,
+    all the zone resources will be unavailable until owners restore services.
+  id: totrans-398
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 区域是独立的地理区域，包含多个区域。区域资源通过在该区域的多个区域部署来提供冗余。区域是区域内资源的部署区域。一个区域通常是一个区域内的数据中心，管理员应将其视为单一故障域。在容错应用程序部署中，最佳实践是在区域内的多个区域部署应用程序，对于高可用性，应在各个区域部署应用程序。如果某个区域不可用，所有区域资源将不可用，直到所有者恢复服务。
+- en: Virtual private cloud
+  id: totrans-399
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 虚拟专用云
+- en: A VPC is a virtual network that provides connectivity for resources within a
+    GCP project. Like accounts and subscriptions, projects can contain multiple VPC
+    networks, and by default, new projects start with a default auto-mode VPC network
+    that also includes one subnet in each region. Custom-mode VPC networks can contain
+    no subnets. As stated earlier, VPC networks are global resources and are not associated
+    with any particular region or zone.
+  id: totrans-400
+  prefs: []
+  type: TYPE_NORMAL
+  zh: VPC是为GCP项目内的资源提供连接性的虚拟网络。与账户和订阅一样，项目可以包含多个VPC网络，默认情况下，新项目将使用默认自动模式VPC网络，并在每个区域包括一个子网。自定义模式VPC网络可以不包含子网。正如前文所述，VPC网络是全局资源，不与任何特定区域或区域关联。
+- en: A VPC network contains one or more regional subnets. Subnets have a region,
+    CIDR, and globally unique name. You can use any CIDR for a subnet, including one
+    that overlaps with another private address space. The specific choice of subnet
+    CIDR impacts which IP addresses you can reach and which networks you can peer.
+  id: totrans-401
+  prefs: []
+  type: TYPE_NORMAL
+  zh: VPC网络包含一个或多个区域子网。子网具有区域、CIDR和全局唯一名称。您可以为子网使用任何CIDR，包括与另一个私有地址空间重叠的CIDR。特定选择的子网CIDR将影响您可以访问的IP地址和可以互连的网络。
+- en: Warning
+  id: totrans-402
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Google creates a “default” VPC network, with randomly generated subnets for
+    each region. Some subnets may overlap with another VPC’s subnet (such as the default
+    VPC network in another Google Cloud project), which will prevent peering.
+  id: totrans-403
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Google 创建了一个“默认”VPC网络，为每个区域随机生成子网。一些子网可能与另一个VPC网络的子网重叠（例如另一个Google Cloud项目中的默认VPC网络），这将阻止对等连接。
+- en: VPC networks support peering and shared VPC configuration. Peering a VPC network
+    allows the VPC in one project to route to the VPC in another, placing them on
+    the same L3 network. You cannot peer with any overlapping VPC network, as some
+    IP addresses exist in both networks. A shared VPC allows another project to use
+    specific subnets, such as creating machines that are part of that subnet. The
+    [VPC documentation](https://oreil.ly/98Wav) has more information.
+  id: totrans-404
+  prefs: []
+  type: TYPE_NORMAL
+  zh: VPC网络支持对等连接和共享VPC配置。对等连接VPC网络允许一个项目中的VPC路由到另一个项目中的VPC，使它们位于同一个L3网络上。您不能与任何重叠的VPC网络进行对等连接，因为某些IP地址存在于两个网络中。共享VPC允许另一个项目使用特定的子网，例如创建属于该子网的机器。[VPC文档](https://oreil.ly/98Wav)提供更多信息。
+- en: Tip
+  id: totrans-405
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 小贴士
+- en: Peering VPC networks is standard, as organizations often assign different teams,
+    applications, or components to their project in Google Cloud. Peering has upsides
+    for access control, quota, and reporting. Some admins may also create multiple
+    VPC networks within a project for similar reasons.
+  id: totrans-406
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对等连接VPC网络是标准的，因为组织通常会将不同的团队、应用程序或组件分配给其Google Cloud项目。对等连接对于访问控制、配额和报告有益。一些管理员也可能在一个项目中创建多个VPC网络出于类似的原因。
+- en: Subnet
+  id: totrans-407
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 子网
+- en: 'Subnets are portions within a VPC network with one primary IP range with the
+    ability to have zero or more secondary ranges. Subnets are regional resources,
+    and each subnet defines a range of IP addresses. A region can have more than one
+    subnet. There are two modes of subnet formulation when you create them: auto or
+    custom. When you create an auto-mode VPC network, one subnet from each region
+    is automatically created within it using predefined IP ranges. When you define
+    a custom-mode VPC network, GCP does not provision any subnets, giving administrators
+    control over the ranges. Custom-mode VPC networks are suited for enterprises and
+    production environments for network engineers to use.'
+  id: totrans-408
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 子网是VPC网络中的部分，具有一个主要IP范围和零个或多个次要范围的能力。子网是区域资源，每个子网定义了一系列IP地址。一个区域可以拥有多个子网。在创建子网时有两种模式：自动或自定义。当您创建自动模式的VPC网络时，将自动在其中的每个区域创建一个子网，使用预定义的IP范围。当您定义自定义模式的VPC网络时，GCP不会提供任何子网，使管理员可以控制范围。自定义模式的VPC网络适用于企业和网络工程师在生产环境中使用。
+- en: Google Cloud allows you to “reserve” static IP addresses for internal and external
+    IP addresses. Users can utilize reserved IP addresses for GCE instances, load
+    balancers, and other products beyond our scope. Reserved internal IP addresses
+    have a name and can be generated automatically or assigned manually. Reserving
+    an internal static IP address prevents it from being randomly automatically assigned
+    while not in use.
+  id: totrans-409
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Google Cloud允许您为内部和外部IP地址“预留”静态IP地址。用户可以将保留的IP地址用于GCE实例、负载均衡器和我们的其他产品。保留的内部IP地址有一个名称，可以自动生成或手动分配。保留内部静态IP地址可以防止在不使用时随机自动分配。
+- en: Reserving external IP addresses is similar; although you can request an automatically
+    assigned IP address, you cannot choose what IP address to reserve. Because you
+    are reserving a globally routable IP address, charges apply in some circumstances.
+    You cannot secure an external IP address that you were assigned automatically
+    as an ephemeral IP address.
+  id: totrans-410
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 保留外部IP地址类似；虽然您可以请求自动分配的IP地址，但您不能选择要保留的IP地址。因为您正在保留一个全球可路由的IP地址，在某些情况下会产生费用。您不能保护分配给您的外部IP地址作为短暂IP地址的自动分配。
+- en: Routes and firewall rules
+  id: totrans-411
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 路由和防火墙规则
+- en: When deploying a VPC, you can use firewall rules to allow or deny connections
+    to and from your application instances based on the rules you deploy. Each firewall
+    rule can apply to ingress or egress connections, but not both. The instance level
+    is where GCP enforces rules, but the configuration pairs with the VPC network,
+    and you cannot share firewall rules among VPC networks, peered networks included.
+    VPC firewall rules are stateful, so when a TCP session starts, firewall rules
+    allow bidirectional traffic similar to an AWS security group.
+  id: totrans-412
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 部署 VPC 时，您可以使用防火墙规则根据部署的规则允许或拒绝与应用实例之间的连接。每个防火墙规则可以应用于入站或出站连接，但不能同时应用于两者。实例级别是
+    GCP 强制执行规则的地方，但配置与 VPC 网络配对，您不能在 VPC 网络之间共享防火墙规则，包括对等网络。VPC 防火墙规则是有状态的，因此当 TCP
+    会话启动时，防火墙规则允许类似 AWS 安全组的双向流量。
+- en: Cloud load balancing
+  id: totrans-413
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 云负载均衡
+- en: Google Cloud Load Balancer (GCLB) offers a fully distributed, high-performance,
+    scalable load balancing service across GCP, with various load balancer options.
+    With GCLB, you get a single Anycast IP that fronts all your backend instances
+    across the globe, including multiregion failover. In addition, software-defined
+    load balancing services enable you to apply load balancing to your HTTP(S), TCP/SSL,
+    and UDP traffic. You can also terminate your SSL traffic with an SSL proxy and
+    HTTPS load balancing. Internal load balancing enables you to build highly available
+    internal services for your internal instances without requiring any load balancers
+    to be exposed to the internet.
+  id: totrans-414
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Google Cloud 负载均衡器（GCLB）在 GCP 中提供全分布式、高性能、可扩展的负载均衡服务，具有各种负载均衡器选项。通过 GCLB，您可以获得一个
+    Anycast IP，它覆盖全球所有后端实例，包括多区域故障转移。此外，软件定义的负载均衡服务使您能够将负载均衡应用于您的 HTTP(S)、TCP/SSL
+    和 UDP 流量。您还可以使用 SSL 代理和 HTTPS 负载均衡终止 SSL 流量。内部负载均衡使您能够为内部实例构建高可用的内部服务，而无需将任何负载均衡器暴露到互联网上。
+- en: 'The vast majority of GCP users make use of GCP’s load balancers with Kubernetes
+    ingress. GCP has internal-facing and external-facing load balancers, with L4 and
+    L7 support. GKE clusters default to creating a GCP load balancer for ingresses
+    and `type: LoadBalancer` services.'
+  id: totrans-415
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '绝大多数 GCP 用户使用 GCP 的负载均衡器与 Kubernetes Ingress。GCP 提供内部和外部负载均衡器，支持 L4 和 L7。GKE
+    集群默认为 Ingress 和 `type: LoadBalancer` 服务创建 GCP 负载均衡器。'
+- en: 'To expose applications outside a GKE cluster, GKE provides a built-in GKE ingress
+    controller and GKE service controller, which deploys a Google Cloud load balancer
+    on behalf of GKE users. GKE provides three different load balancers to control
+    access and spread incoming traffic across your cluster as evenly as possible.
+    You can configure one service to use multiple types of load balancers simultaneously:'
+  id: totrans-416
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要将应用程序暴露在 GKE 集群外部，GKE 提供内置的 GKE Ingress 控制器和 GKE 服务控制器，代表 GKE 用户部署 Google Cloud
+    负载均衡器。GKE 提供三种不同的负载均衡器以控制访问并尽可能均匀地分布入站流量到您的集群中。您可以配置一个服务同时使用多种类型的负载均衡器：
+- en: External load balancers
+  id: totrans-417
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 外部负载均衡器
+- en: Manage traffic from outside the cluster and outside the VPC network. External
+    load balancers use forwarding rules associated with the Google Cloud network to
+    route traffic to a Kubernetes node.
+  id: totrans-418
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 管理来自集群外部和 VPC 网络外部的流量。外部负载均衡器使用与 Google Cloud 网络关联的转发规则将流量路由到 Kubernetes 节点。
+- en: Internal load balancers
+  id: totrans-419
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 内部负载均衡器
+- en: Manage traffic coming from within the same VPC network. Like external load balancers,
+    internal ones use forwarding rules associated with the Google Cloud network to
+    route traffic to a Kubernetes node.
+  id: totrans-420
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 管理来自同一 VPC 网络内部的流量。与外部负载均衡器类似，内部负载均衡器使用与 Google Cloud 网络关联的转发规则将流量路由到 Kubernetes
+    节点。
+- en: HTTP load balancers
+  id: totrans-421
+  prefs: []
+  type: TYPE_NORMAL
+  zh: HTTP 负载均衡器
+- en: Specialized external load balancers used for HTTP traffic. They use an ingress
+    resource rather than a forwarding rule to route traffic to a Kubernetes node.
+  id: totrans-422
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 专门用于 HTTP 流量的外部负载均衡器。它们使用 Ingress 资源而不是转发规则将流量路由到 Kubernetes 节点。
+- en: When you create an ingress object, the GKE ingress controller configures a Google
+    Cloud HTTP(S) load balancer according to the ingress manifest and the associated
+    Kubernetes service rules manifest. The client sends a request to the load balancer.
+    The load balancer is a proxy; it chooses a node and forwards the request to that
+    node’s NodeIP:NodePort combination. The node uses its `iptables` NAT table to
+    select a pod. As we learned in earlier chapters, `kube-proxy` manages the `iptables`
+    rules on that node.
+  id: totrans-423
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您创建一个入口对象时，GKE入口控制器根据入口清单和相关的Kubernetes服务规则清单配置Google Cloud HTTP(S)负载均衡器。客户端向负载均衡器发送请求。负载均衡器是一个代理；它选择一个节点并将请求转发到该节点的NodeIP:NodePort组合。节点使用其`iptables`
+    NAT表来选择一个pod。正如我们在早期章节中学到的，`kube-proxy`在该节点上管理`iptables`规则。
+- en: When an ingress creates a load balancer, the load balancer is “pod aware” instead
+    of routing to all nodes (and relying on the service to route requests to a pod),
+    and the load balancer routes to individual pods. It does this by tracking the
+    underlying `Endpoints`/`EndpointSlice` object (as covered in [Chapter 5](ch05.xhtml#kubernetes_networking_abstractions))
+    and using individual pod IP addresses as target addresses.
+  id: totrans-424
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当入口创建负载均衡器时，负载均衡器是“pod感知的”，而不是路由到所有节点（并依赖服务将请求路由到pod），负载均衡器会路由到单个pod。它通过跟踪底层的`Endpoints`/`EndpointSlice`对象（如[第5章](ch05.xhtml#kubernetes_networking_abstractions)中所述）并使用单个pod
+    IP地址作为目标地址来实现这一点。
+- en: Cluster administrators can use an in-cluster ingress provider, such as ingress-Nginx
+    or Contour. A load balancer points to applicable nodes running the ingress proxy
+    in such a setup, which routes requests to the applicable pods from there. This
+    setup is cheaper for clusters that have many ingresses but incurs performance
+    overhead.
+  id: totrans-425
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 集群管理员可以使用集群内的入口提供者，例如ingress-Nginx或Contour。在这种设置中，负载均衡器指向运行入口代理的适用节点，该代理从那里将请求路由到适用的pod。对于具有许多入口的集群来说，这种设置更便宜，但会产生性能开销。
+- en: GCE instances
+  id: totrans-426
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: GCE实例
+- en: GCE instances have one or more network interfaces. A network interface has a
+    network and subnetwork, a private IP address, and a public IP address. The private
+    IP address must be part of the subnetwork. Private IP addresses can be automatic
+    and ephemeral, custom and ephemeral, or static. External IP addresses can be automatic
+    and ephemeral, or static. You can add more network interfaces to a GCE instance.
+    Additional network interfaces don’t need to be in the same VPC network. For example,
+    you may have an instance that bridges two VPCs with varying levels of security.
+    Let’s discuss how GKE uses these instances and manages the network services that
+    empower GKE.
+  id: totrans-427
+  prefs: []
+  type: TYPE_NORMAL
+  zh: GCE实例具有一个或多个网络接口。网络接口具有网络和子网络、私有IP地址和公共IP地址。私有IP地址必须是子网的一部分。私有IP地址可以是自动和临时的、自定义和临时的或静态的。外部IP地址可以是自动和临时的或静态的。您可以向GCE实例添加更多网络接口。附加网络接口不需要在同一个VPC网络中。例如，您可能有一个实例，它在具有不同安全级别的两个VPC之间进行桥接。让我们讨论一下GKE如何使用这些实例并管理赋予GKE力量的网络服务。
+- en: GKE
+  id: totrans-428
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: GKE
+- en: Google Kubernetes Engine (GKE) is Google’s managed Kubernetes service. GKE runs
+    a hidden control plane, which cannot be directly viewed or accessed. You can only
+    access specific control plane configurations and the Kubernetes API.
+  id: totrans-429
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Google Kubernetes Engine（GKE）是谷歌的托管Kubernetes服务。GKE运行一个隐藏的控制平面，无法直接查看或访问。您只能访问特定的控制平面配置和Kubernetes
+    API。
+- en: GKE exposes broad cluster config around things like machine types and cluster
+    scaling. It reveals only some network-related settings. At the time of writing,
+    NetworkPolicy support (via Calico), max pods per node (`maxPods` in the kubelet,
+    `--node-CIDR-mask-size` in `kube-controller-manager`), and the pod address range
+    (`--cluster-CIDR` in `kube-controller-manager`) are the customizable options.
+    It is not possible to directly set `apiserver/kube-controller-manager` flags.
+  id: totrans-430
+  prefs: []
+  type: TYPE_NORMAL
+  zh: GKE公开了围绕诸如机器类型和集群扩展等方面的广泛集群配置。它仅显示一些与网络相关的设置。在撰写本文时，NetworkPolicy支持（通过Calico）、每个节点的最大pod数（kubelet中的`maxPods`，`kube-controller-manager`中的`--node-CIDR-mask-size`）和pod地址范围（`kube-controller-manager`中的`--cluster-CIDR`）是可定制的选项。无法直接设置`apiserver/kube-controller-manager`标志。
+- en: GKE supports public and private clusters. Private clusters don’t issue public
+    IP addresses to nodes, which means nodes are accessible only within your private
+    network. Private clusters also allow you to restrict access to the Kubernetes
+    API to specific IP addresses. GKE runs worker nodes using automatically managed
+    GCE instances by creating creates *node pools*.
+  id: totrans-431
+  prefs: []
+  type: TYPE_NORMAL
+  zh: GKE 支持公共和私有集群。私有集群不向节点分配公共 IP 地址，这意味着节点只能在您的私有网络内访问。私有集群还允许您将对 Kubernetes API
+    的访问限制为特定的 IP 地址。GKE 通过创建 *节点池* 来使用自动管理的 GCE 实例来运行工作节点。
+- en: GCP GKE nodes
+  id: totrans-432
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: GCP GKE 节点
+- en: Networking for GKE nodes is comparable to networking for self-managed Kubernetes
+    clusters on GKE. GKE clusters define *node pools,* which are a set of nodes with
+    an identical configuration. This configuration contains GCE-specific settings
+    as well as general Kubernetes settings. Node pools define (virtual) machine type,
+    autoscaling, and the GCE service account. You can also set custom taints and labels
+    per node pool.
+  id: totrans-433
+  prefs: []
+  type: TYPE_NORMAL
+  zh: GKE 节点的网络配置与在 GKE 上管理的 Kubernetes 集群的网络配置类似。GKE 集群定义 *节点池*，这是一组具有相同配置的节点。此配置包含
+    GCE 特定设置以及一般 Kubernetes 设置。节点池定义（虚拟）机器类型、自动缩放和 GCE 服务帐户。您还可以为每个节点池设置自定义污点和标签。
+- en: 'A cluster exists on exactly one VPC network. Individual nodes can have their
+    network tags for crafting specific firewall rules. Any GKE cluster running 1.16
+    or later will have a `kube-proxy` DaemonSet so that all new nodes in the cluster
+    will automatically have the `kube-proxy` start. The size of the subnet allows
+    will affect the size of the cluster. So, pay attention to the size of that when
+    you deploy clusters that scale. There is a formula you can use to calculate the
+    maximum number of nodes, `N`, that a given netmask can support. Use `S` for the
+    netmask size, whose valid range is between 8 and 29:'
+  id: totrans-434
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 集群存在于一个 VPC 网络上。单个节点可以具有其网络标记，以制定特定的防火墙规则。任何运行版本为 1.16 或更高版本的 GKE 集群都将拥有 `kube-proxy`
+    DaemonSet，因此集群中的所有新节点将自动启动 `kube-proxy`。子网的大小将影响集群的大小。因此，在部署可扩展的集群时，请注意子网大小。有一个公式可以用来计算给定
+    netmask 可支持的节点的最大数量 `N`，使用 `S` 表示 netmask 大小，其有效范围为 8 到 29：
+- en: '[PRE36]'
+  id: totrans-435
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE36]'
+- en: 'Calculate the size of the netmask, `S`, required to support a maximum of `N`
+    nodes:'
+  id: totrans-436
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 计算所需的 netmask 大小 `S`，以支持最多 `N` 个节点：
+- en: '[PRE37]'
+  id: totrans-437
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE37]'
+- en: '[Table 6-2](#cluster_node_scale_with_subnet_size) also outlines cluster node
+    and how it scales with subnet size.'
+  id: totrans-438
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[表 6-2](#cluster_node_scale_with_subnet_size) 还概述了集群节点和随子网大小如何缩放。'
+- en: Table 6-2\. Cluster node scale with subnet size
+  id: totrans-439
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 6-2\. 随子网大小缩放的集群节点规模
+- en: '| Subnet primary IP range | Maximum nodes |'
+  id: totrans-440
+  prefs: []
+  type: TYPE_TB
+  zh: '| 子网主 IP 范围 | 最大节点数 |'
+- en: '| --- | --- |'
+  id: totrans-441
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| /29 | Minimum size for a subnet’s primary IP range: 4 nodes |'
+  id: totrans-442
+  prefs: []
+  type: TYPE_TB
+  zh: '| /29 | 子网主 IP 范围的最小大小：4 节点 |'
+- en: '| /28 | 12 nodes |'
+  id: totrans-443
+  prefs: []
+  type: TYPE_TB
+  zh: '| /28 | 12 节点 |'
+- en: '| /27 | 28 nodes |'
+  id: totrans-444
+  prefs: []
+  type: TYPE_TB
+  zh: '| /27 | 28 节点 |'
+- en: '| /26 | 60 nodes |'
+  id: totrans-445
+  prefs: []
+  type: TYPE_TB
+  zh: '| /26 | 60 节点 |'
+- en: '| /25 | 124 nodes |'
+  id: totrans-446
+  prefs: []
+  type: TYPE_TB
+  zh: '| /25 | 124 节点 |'
+- en: '| /24 | 252 nodes |'
+  id: totrans-447
+  prefs: []
+  type: TYPE_TB
+  zh: '| /24 | 252 节点 |'
+- en: '| /23 | 508 nodes |'
+  id: totrans-448
+  prefs: []
+  type: TYPE_TB
+  zh: '| /23 | 508 节点 |'
+- en: '| /22 | 1,020 nodes |'
+  id: totrans-449
+  prefs: []
+  type: TYPE_TB
+  zh: '| /22 | 1,020 节点 |'
+- en: '| /21 | 2,044 nodes |'
+  id: totrans-450
+  prefs: []
+  type: TYPE_TB
+  zh: '| /21 | 2,044 节点 |'
+- en: '| /20 | The default size of a subnet’s primary IP range in auto mode networks:
+    4,092 nodes |'
+  id: totrans-451
+  prefs: []
+  type: TYPE_TB
+  zh: '| /20 | 在自动模式网络中子网主 IP 范围的默认大小：4,092 节点 |'
+- en: '| /19 | 8,188 nodes |'
+  id: totrans-452
+  prefs: []
+  type: TYPE_TB
+  zh: '| /19 | 8,188 节点 |'
+- en: '| /8 | Maximum size for a subnet’s primary IP range: 16,777,212 nodes |'
+  id: totrans-453
+  prefs: []
+  type: TYPE_TB
+  zh: '| /8 | 子网主 IP 范围的最大大小：16,777,212 节点 |'
+- en: If you use GKE’s CNI, one end of the veth pair is attached to the pod in its
+    namespace and connects the other side to the Linux bridge device cbr0.1, exactly
+    how we outlined it in Chapters [2](ch02.xhtml#linux_networking) and [3](ch03.xhtml#container_networking_basics).
+  id: totrans-454
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果使用 GKE 的 CNI，veth 对中的一端附加到其命名空间中的 pod，并连接到 Linux 桥接设备 cbr0.1 的另一端，与我们在第 [2](ch02.xhtml#linux_networking)
+    和 [3](ch03.xhtml#container_networking_basics) 章节中概述的方式完全一致。
+- en: 'Clusters span either the zone or region boundary; zonal clusters have only
+    a single control plane. Regional clusters have multiple replicas of the control
+    plane. Also, when you deploy clusters, there are two cluster modes with GKE: VPC-native
+    and routes based. A cluster that uses alias IP address ranges is considered a
+    VPC-native cluster. A cluster that uses custom static routes in a VPC network
+    is called a *routes-based cluster*. [Table 6-3](#cluster_mode_with_cluster_creation_method)
+    outlines how the creation method maps with the cluster mode.'
+  id: totrans-455
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 集群跨越区域或区域边界；区域集群仅具有单个控制平面的副本。当您部署集群时，GKE 有两种集群模式：VPC-native 和基于路由的。使用别名 IP 地址范围的集群称为
+    VPC-native 集群。在 VPC 网络中使用自定义静态路由的集群称为 *基于路由的集群*。[表 6-3](#cluster_mode_with_cluster_creation_method)
+    概述了创建方法与集群模式的映射。
+- en: Table 6-3\. Cluster mode with cluster creation method
+  id: totrans-456
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 6-3\. 使用集群创建方法的集群模式
+- en: '| Cluster creation method | Cluster network mode |'
+  id: totrans-457
+  prefs: []
+  type: TYPE_TB
+  zh: '| 集群创建方法 | 集群网络模式 |'
+- en: '| --- | --- |'
+  id: totrans-458
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| Google Cloud Console | VPC-native |'
+  id: totrans-459
+  prefs: []
+  type: TYPE_TB
+  zh: '| Google Cloud 控制台 | VPC 原生 |'
+- en: '| REST API | Routes-based |'
+  id: totrans-460
+  prefs: []
+  type: TYPE_TB
+  zh: '| REST API | 基于路由 |'
+- en: '| gcloud v256.0.0 and higher or v250.0.0 and lower | Routes-based |'
+  id: totrans-461
+  prefs: []
+  type: TYPE_TB
+  zh: '| gcloud v256.0.0 及更高或 v250.0.0 及更低 | 基于路由 |'
+- en: '| gcloud v251.0.0–255.0.0 | VPC-native |'
+  id: totrans-462
+  prefs: []
+  type: TYPE_TB
+  zh: '| gcloud v251.0.0–255.0.0 | VPC 原生 |'
+- en: When using VPC-native, administrators can also take advantage of network endpoint
+    groups (NEG), which represent a group of backends served by a load balancer. NEGs
+    are lists of IP addresses managed by an NEG controller and are used by Google
+    Cloud load balancers. IP addresses in an NEG can be primary or secondary IP addresses
+    of a VM, which means they can be pod IPs. This enables container-native load balancing
+    that sends traffic directly to pods from a Google Cloud load balancer.
+  id: totrans-463
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当使用 VPC 原生时，管理员还可以利用网络端点组（NEG），表示由负载均衡器服务的一组后端。 NEGs 是由 NEG 控制器管理的 IP 地址列表，并由
+    Google Cloud 负载均衡器使用。 NEG 中的 IP 地址可以是虚拟机的主要或次要 IP 地址，这意味着它们可以是 pod IP。这使得容器原生负载均衡能够通过
+    Google Cloud 负载均衡器直接向 pod 发送流量。
+- en: 'VPC-native clusters have several benefits:'
+  id: totrans-464
+  prefs: []
+  type: TYPE_NORMAL
+  zh: VPC 原生集群有几个好处：
+- en: Pod IP addresses are natively routable inside the cluster’s VPC network.
+  id: totrans-465
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Pod IP 地址在集群的 VPC 网络内本地可路由。
+- en: Pod IP addresses are reserved in network before pod creation.
+  id: totrans-466
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在创建 pod 之前，网络中预留了 pod IP 地址。
+- en: Pod IP address ranges are dependent on custom static routes.
+  id: totrans-467
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Pod IP 地址范围依赖于自定义静态路由。
+- en: Firewall rules apply to just pod IP address ranges instead of any IP address
+    on the cluster’s nodes.
+  id: totrans-468
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 防火墙规则仅适用于集群节点上的 pod IP 地址范围，而不适用于任何 IP 地址。
+- en: GCP cloud network connectivity to on-premise extends to pod IP address ranges.
+  id: totrans-469
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: GCP 云网络连接到本地的扩展到 pod IP 地址范围。
+- en: '[Figure 6-15](#neg) shows the mapping of GKE to GCE components.'
+  id: totrans-470
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 6-15](#neg) 显示了 GKE 与 GCE 组件的映射。'
+- en: '![NEG](Images/neku_0615.png)'
+  id: totrans-471
+  prefs: []
+  type: TYPE_IMG
+  zh: '![NEG](Images/neku_0615.png)'
+- en: Figure 6-15\. NEG to GCE components
+  id: totrans-472
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-15\. NEG 到 GCE 组件的映射
+- en: 'Here is a list of improvements that NEGs bring to the GKE network:'
+  id: totrans-473
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里是 NEGs 带给 GKE 网络的改进列表：
+- en: Improved network performance
+  id: totrans-474
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 改善的网络性能
+- en: The container-native load balancer talks directly with the pods, and connections
+    have fewer network hops; both latency and throughput are improved.
+  id: totrans-475
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器原生负载均衡器直接与 pod 进行通信，连接的网络跳数较少，延迟和吞吐量都得到了改善。
+- en: Increased visibility
+  id: totrans-476
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 增强的可见性
+- en: With container-native load balancing, you have visibility into the latency from
+    the HTTP load balancer to the pods. The latency from the HTTP load balancer to
+    each pod is visible, which was aggregated with node IP-based container-native
+    load balancing. This increased visibility makes troubleshooting your services
+    at the NEG level easier.
+  id: totrans-477
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用容器原生负载均衡时，您可以查看从 HTTP 负载均衡器到 pod 的延迟。可以看到从 HTTP 负载均衡器到每个 pod 的延迟，这在基于节点 IP
+    的容器原生负载均衡中是汇总的。这增加的可见性使得在 NEG 级别更容易排除故障您的服务。
+- en: Support for advanced load balancing
+  id: totrans-478
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 支持高级负载均衡
+- en: Container-native load balancing offers native support in GKE for several HTTP
+    load-balancing features, such as integration with Google Cloud services like Google
+    Cloud Armor, Cloud CDN, and Identity-Aware Proxy. It also features load-balancing
+    algorithms for accurate traffic distribution.
+  id: totrans-479
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器原生负载均衡为 GKE 提供了对多个 HTTP 负载均衡功能的原生支持，例如与 Google Cloud Armor、Cloud CDN 和身份验证代理的集成。它还具有用于准确流量分发的负载均衡算法。
+- en: Like most managed Kubernetes offerings from major providers, GKE is tightly
+    integrated with Google Cloud offerings. Although much of the software driving
+    GKE is opaque, it uses standard resources such as GCE instances that can be inspected
+    and debugged like any other GCP resources. If you really need to manage your own
+    clusters, you will lose out on some functionality, such as container-aware load
+    balancing.
+  id: totrans-480
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与主要提供商的大多数托管 Kubernetes 提供的解决方案一样，GKE 与 Google Cloud 提供紧密集成。虽然驱动 GKE 的许多软件是不透明的，但它使用标准资源，如可以像其他
+    GCP 资源一样检查和调试的 GCE 实例。如果您确实需要管理自己的集群，您将错过一些功能，例如容器感知负载均衡。
+- en: It’s worth noting that GCP does not yet support IPv6, unlike AWS and Azure.
+  id: totrans-481
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 值得注意的是，与 AWS 和 Azure 不同，GCP 尚不支持 IPv6。
+- en: Finally, we’ll look at Kubernetes networking on Azure.
+  id: totrans-482
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，我们将看一下 Azure 上的 Kubernetes 网络。
+- en: Azure
+  id: totrans-483
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Azure
+- en: Microsoft Azure, like other cloud providers, offers an assortment of enterprise-ready
+    network solutions and services. Before we can discuss how Azure AKS networking
+    works, we should discuss Azure deployment models. Azure has gone through some
+    significant iterations and improvements over the years, resulting in two different
+    deployment models that can encounter Azure. These models differ in how resources
+    are deployed and managed and may impact how users leverage the resources.
+  id: totrans-484
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 就像其他云提供商一样，Microsoft Azure提供了各种企业就绪的网络解决方案和服务。在讨论Azure AKS网络如何工作之前，我们应该讨论Azure部署模型。多年来，Azure经历了一些重大迭代和改进，导致两种不同的部署模型，这些模型在资源部署和管理方式上存在差异，可能会影响用户如何利用这些资源。
+- en: The first deployment model was the classic deployment model. This model was
+    the initial deployment and management method for Azure. All resources existed
+    independently of each other, and you could not logically group them. This was
+    cumbersome; users had to create, update, and delete each component of a solution,
+    leading to errors, missed resources, and additional time, effort, and cost. Finally,
+    these resources could not even be tagged for easy searching, adding to the difficulty
+    of the solution.
+  id: totrans-485
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 第一个部署模型是经典部署模型。这个模型是Azure的初始部署和管理方法。所有资源都是独立存在的，无法逻辑分组。这很麻烦；用户必须为解决方案的每个组件创建、更新和删除，导致错误、遗漏资源以及额外的时间、精力和成本。最后，这些资源甚至无法轻松标记以便搜索，增加了解决方案的难度。
+- en: In 2014, Microsoft introduced the Azure Resource Manager as the second model.
+    This new model is the recommended model from Microsoft, with the recommendation
+    going so far as to say that you should redeploy your resources using the Azure
+    Resource Manager (ARM). The primary change with this model was the introduction
+    of the resource group. Resource groups are a logical grouping of resources that
+    allows for tracking, tagging, and configuring the resources as a group rather
+    than individually.
+  id: totrans-486
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 2014年，微软推出了Azure资源管理器作为第二个模型。这种新模型是微软推荐的模型，甚至建议您应该使用Azure资源管理器（ARM）重新部署您的资源。这个模型的主要变化是引入了资源组。资源组是资源的逻辑分组，允许对资源进行跟踪、标记和组配置，而不是单独进行配置。
+- en: Now that we understand the basics of how resources are deployed and managed
+    in Azure, we can discuss the Azure network service offerings and how they interact
+    with the Azure Kubernetes Service (AKS) and non-Azure Kubernetes offerings.
+  id: totrans-487
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们了解了如何在Azure中部署和管理资源的基础知识，我们可以讨论Azure网络服务提供的服务和与Azure Kubernetes服务（AKS）及非Azure
+    Kubernetes服务的互动方式。
+- en: Azure Networking Services
+  id: totrans-488
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Azure 网络服务
+- en: The core of Azure networking services is the virtual network, also known as
+    an Azure Vnet. The Vnet establishes an isolated virtual network infrastructure
+    to connect your deployed Azure resources such as virtual machines and AKS clusters.
+    Through additional resources, Vnets connect your deployed resources to the public
+    internet as well as your on-premise infrastructure. Unless the configuration is
+    changed, all Azure Vnets can communicate with the internet through a default route.
+  id: totrans-489
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Azure 网络服务的核心是虚拟网络，也称为Azure Vnet。Vnet建立了一个隔离的虚拟网络基础设施，用于连接您部署的Azure资源，如虚拟机和AKS集群。通过附加资源，Vnet将您的部署资源连接到公共互联网以及您的本地基础设施。除非更改配置，所有Azure
+    Vnet都可以通过默认路由与互联网通信。
+- en: In [Figure 6-16](#Vnet), an Azure Vnet has a single CIDR of `192.168.0.0/16`.
+    Vnets, like other Azure resources, require a subscription to place the Vnet into
+    a resource group for the Vnet. The security of the Vnet can be configured while
+    some options, such as IAM permissions, are inherited from the resource group and
+    the subscription. The Vnet is confined to a specified region. Multiple Vnets can
+    exist within a single region, but a Vnet can exist within only one region.
+  id: totrans-490
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[图 6-16](#Vnet)中，Azure Vnet具有单个CIDR为`192.168.0.0/16`。像其他Azure资源一样，Vnets需要订阅将Vnet放入资源组。可以配置Vnet的安全性，但某些选项（如IAM权限）是从资源组和订阅继承的。Vnet限制在指定的区域内。一个区域内可以存在多个Vnet，但一个Vnet只能存在于一个区域内。
+- en: '![Vnet](Images/neku_0616.png)'
+  id: totrans-491
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Vnet](Images/neku_0616.png)'
+- en: Figure 6-16\. Azure Vnet
+  id: totrans-492
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-16\. Azure Vnet
+- en: Azure backbone infrastructure
+  id: totrans-493
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: Azure 骨干基础设施
+- en: Microsoft Azure leverages a globally dispersed network of data centers and zones.
+    The foundation of this dispersal is the Azure region, which comprises a set of
+    data centers within a latency-defined area, connected by a low-latency, dedicated
+    network infrastructure. A region can contain any number of data centers that meet
+    these criteria, but two to three are often present per region. Any area of the
+    world containing at least one Azure region is known as Azure geography.
+  id: totrans-494
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Microsoft Azure 利用全球分布的数据中心和区域网络。这种分布的基础是 Azure 区域，它包括一组在延迟定义区域内的数据中心，通过低延迟的专用网络基础设施连接。一个区域可以包含任意数量符合这些标准的数据中心，但每个区域通常包含两到三个。包含至少一个
+    Azure 区域的任何区域都称为 Azure 地理位置。
+- en: Availability zones further divide a region. Availability zones are physical
+    locations that can consist of one or more data centers maintained by independent
+    power, cooling, and networking infrastructure. The relationship of a region to
+    its availability zones is architected so that a single availability zone failure
+    cannot bring down an entire region of services. Each availability zone in a region
+    is connected to the other availability zones in the region but not dependent on
+    the different zones. Availability zones allow Azure to offer 99.99% uptime for
+    supported services. A region can consist of multiple availability zones, as shown
+    in [Figure 6-17](#Region), which can, in turn, consist of numerous data centers.
+  id: totrans-495
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可用区进一步划分区域。可用区是物理位置，可以包含由独立电源、冷却和网络基础设施维护的一个或多个数据中心。区域与其可用区的关系经过设计，以确保单个可用区故障不会使整个服务区域崩溃。区域中的每个可用区与该区域中的其他可用区连接，但不依赖于不同的区域。可用区使得
+    Azure 能够为支持的服务提供 99.99% 的可用性。一个区域可以包含多个可用区，如 [图 6-17](#Region) 所示，这些可用区可以进一步包含大量数据中心。
+- en: '![Region](Images/neku_0617.png)'
+  id: totrans-496
+  prefs: []
+  type: TYPE_IMG
+  zh: '![区域](Images/neku_0617.png)'
+- en: Figure 6-17\. Region
+  id: totrans-497
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-17\. 区域
+- en: Since a Vnet is within a region and regions are divided into availability zones,
+    Vnets are also available across the availability zones of the region they are
+    deployed. As shown in [Figure 6-18](#VnetWithAzs), it is a best practice when
+    deploying infrastructure for high availability to leverage multiple availability
+    zones for redundancy. Availability zones allow Azure to offer 99.99% uptime for
+    supported services. Azure allows for the use of load balancers for networking
+    across redundant systems such as these.
+  id: totrans-498
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于 Vnet 在区域内，而区域被划分为可用区，因此部署的 Vnet 也跨区域的可用区。如 [图 6-18](#VnetWithAzs) 所示，在部署基础设施以实现高可用性时，最佳做法是利用多个可用区进行冗余。可用区使得
+    Azure 能够为支持的服务提供 99.99% 的可用性。Azure 允许使用负载均衡器用于跨这些冗余系统的网络。
+- en: '![Vnet With availability zones](Images/neku_0618.png)'
+  id: totrans-499
+  prefs: []
+  type: TYPE_IMG
+  zh: '![具有可用区的 Vnet](Images/neku_0618.png)'
+- en: Figure 6-18\. Vnet with availability zones
+  id: totrans-500
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-18\. 具有可用区的 Vnet
+- en: Note
+  id: totrans-501
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The Azure [documentation](https://oreil.ly/Pv0iq) has an up-to-date list of
+    Azure geographies, regions, and availability zones.
+  id: totrans-502
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Azure [文档](https://oreil.ly/Pv0iq) 提供了 Azure 地理位置、区域和可用区的最新列表。
+- en: Subnets
+  id: totrans-503
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 子网
+- en: Resource IPs are not assigned directly from the Vnet. Instead, subnets divide
+    and define a Vnet. The subnets receive their address space from the Vnet. Then,
+    private IPs are allocated to provisioned resources within each subnet. This is
+    where the IP addressing AKS clusters and pods will come. Like Vnets, Azure subnets
+    span availability zones, as depicted in [Figure 6-19](#SubnetsAcrossAzs).
+  id: totrans-504
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 资源 IP 不直接从 Vnet 分配。而是子网划分并定义了 Vnet。子网从 Vnet 接收其地址空间。然后，在每个子网中为已配置的资源分配私有 IP。这是
+    AKS 集群和 pod 的 IP 地址分配的地方。与 Vnet 类似，Azure 子网跨可用区，如 [图 6-19](#SubnetsAcrossAzs)
+    所示。
+- en: '![Subnets Across availability zones](Images/neku_0619.png)'
+  id: totrans-505
+  prefs: []
+  type: TYPE_IMG
+  zh: '![跨可用区的子网](Images/neku_0619.png)'
+- en: Figure 6-19\. Subnets across availability zones
+  id: totrans-506
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-19\. 跨可用区的子网
+- en: Route tables
+  id: totrans-507
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 路由表
+- en: As mentioned in previous sections, a route table governs subnet communication
+    or an array of directions on where to send network traffic. Each newly provisioned
+    subnet comes equipped with a default route table populated with some default system
+    routes. This route cannot be deleted or changed. The system routes include a route
+    to the Vnet the subnet is defined within, routes for `10.0.0.0/8` and `192.168.0.0/16`
+    that are by default set to go nowhere, and most importantly a default route to
+    the internet. The default route to the internet allows any newly provisioned resource
+    with an Azure IP to communicate out to the internet by default. This default route
+    is an essential difference between Azure and some other cloud service providers
+    and requires adequate security measures to protect each Azure Vnet.
+  id: totrans-508
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如前面所述，路由表管理子网通信或指示网络流量发送的方向数组。每个新创建的子网都配备有一个默认的路由表，其中包含一些默认的系统路由。这些路由无法删除或更改。系统路由包括到定义子网的
+    Vnet 的路由，以及默认设置为无效的`10.0.0.0/8`和`192.168.0.0/16`的路由，最重要的是到互联网的默认路由。互联网的默认路由允许任何新创建的具有
+    Azure IP 的资源默认与互联网通信。这种默认路由是 Azure 与某些其他云服务提供商之间的重要区别，需要足够的安全措施来保护每个 Azure Vnet。
+- en: '[Figure 6-20](#Route_Table) shows a standard route table for a newly provisioned
+    AKS setup. There are routes for the agent pools with their CIDRs as well as their
+    next-hop IP. The next-hop IP is the route the table has defined for the path,
+    and the next-hop type is set for a virtual appliance, which would be the load
+    balancer in this case. What is not present are those default system routes. The
+    default routes are still in the configuration, just not viewable in the route
+    table. Understanding Azure’s default networking behavior is critical from a security
+    perspective and from troubleshooting and planning perspectives.'
+  id: totrans-509
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 6-20](#Route_Table) 显示了一个新创建的 AKS 设置的标准路由表。其中包括代理池的路由及其 CIDR 和它们的下一跳 IP。下一跳
+    IP 是路由表为该路径定义的下一跳，下一跳类型设置为虚拟设备，这在此案例中是负载均衡器。这些默认系统路由并不在路由表中显示。理解 Azure 的默认网络行为对于安全、故障排除和规划至关重要。'
+- en: '![AKS Route Table](Images/neku_0620.png)'
+  id: totrans-510
+  prefs: []
+  type: TYPE_IMG
+  zh: '![AKS 路由表](Images/neku_0620.png)'
+- en: Figure 6-20\. Route table
+  id: totrans-511
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-20\. 路由表
+- en: Some system routes, known as optional default routes, affect only if the capabilities,
+    such as Vnet peering, are enabled. Vnet peering allows Vnets anywhere globally
+    to establish a private connection across the Azure global infrastructure backbone
+    to communicate.
+  id: totrans-512
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 某些系统路由称为可选的默认路由，仅在启用功能（如 Vnet 对等连接）时才会影响。Vnet 对等连接允许全球任何位置的 Vnet 通过 Azure 全局基础设施骨干建立私有连接以进行通信。
+- en: Custom routes can also populate route tables, which the Border Gateway Protocol
+    either creates if leveraged or uses user-defined routes. User-defined routes are
+    essential because they allow the network administrators to define routes beyond
+    what Azure establishes by default, such as proxies or firewall routes. Custom
+    routes also impact the system default routes. While you cannot alter the default
+    routes, a customer route with a higher priority can overrule it. An example of
+    this is to use a user-defined route to send traffic bound for the internet to
+    a next-hop of a virtual firewall appliance rather than the internet directly.
+    [Figure 6-21](#Route_Table_with_Custom_Route) defines a custom route called Google
+    with a next-hop type of internet. As long as the priorities are set up correctly,
+    this custom route will send that traffic out the default system route for the
+    internet, even if another rule redirects the remaining internet traffic.
+  id: totrans-513
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 自定义路由还可以填充路由表，边界网关协议可以创建或使用用户定义的路由。用户定义的路由非常重要，因为它们允许网络管理员定义超出 Azure 默认建立的路由，例如代理或防火墙路由。自定义路由还会影响系统默认路由。虽然无法更改默认路由，但具有更高优先级的客户路由可以覆盖它。一个例子是使用用户定义的路由将流向互联网的流量发送到虚拟防火墙设备的下一跳，而不是直接发送到互联网。[图
+    6-21](#Route_Table_with_Custom_Route) 定义了一个名为 Google 的自定义路由，其下一跳类型为互联网。只要设置优先级正确，这个自定义路由将把流量发送到互联网的默认系统路由，即使其他规则重定向剩余的互联网流量。
+- en: '![AKS Route Table with Custom Route](Images/neku_0621.png)'
+  id: totrans-514
+  prefs: []
+  type: TYPE_IMG
+  zh: '![AKS 路由表与自定义路由](Images/neku_0621.png)'
+- en: Figure 6-21\. Route table with custom route
+  id: totrans-515
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-21\. 带有自定义路由的路由表
+- en: Route tables can also be created on their own and then used to configure a subnet.
+    This is useful for maintaining a single route table for multiple subnets, especially
+    when there are many user-defined routes involved. A subnet can have only one route
+    table associated with it, but a route table can be associated with multiple subnets.
+    The rules of configuring a user-created route table and a route table created
+    as part of the subnet’s default creation are the same. They have the same default
+    system routes and will update with the same optional default routes as they come
+    into effect.
+  id: totrans-516
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 路由表也可以单独创建，然后用于配置子网。这对于为多个子网维护单个路由表特别有用，尤其是涉及许多用户定义的路由时。一个子网只能关联一个路由表，但一个路由表可以关联多个子网。配置用户创建的路由表和作为子网默认创建的路由表的规则是相同的。它们具有相同的默认系统路由，并且将随着生效而更新相同的可选默认路由。
+- en: While most routes within a route table will use an IP range as the source address,
+    Azure has begun to introduce the concept of using service tags for sources. A
+    service tag is a phrase that represents a collection of service IPs within the
+    Azure backend, such as SQL.EastUs, which is a service tag that describes the IP
+    address range for the Microsoft SQL Platform service offering in the eastern US.
+    With this feature, it could be possible to define a route from one Azure service,
+    such as AzureDevOps, as the source, and another service, such as Azure AppService,
+    as the destination without knowing the IP ranges for either.
+  id: totrans-517
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然路由表中的大多数路由将使用IP范围作为源地址，但Azure已经开始引入使用服务标记作为源的概念。服务标记是表示Azure后端内的一组服务IP的短语，例如SQL.EastUs，这是一个描述美国东部Microsoft
+    SQL平台服务提供的IP地址范围的服务标记。通过这个功能，可能可以定义一个从一个Azure服务（如AzureDevOps）到另一个服务（如Azure AppService）的路由，而不需要知道任何IP范围。
+- en: Note
+  id: totrans-518
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The [Azure documentation](https://oreil.ly/CDedn) has a list of available service
+    tags.
+  id: totrans-519
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Azure文档](https://oreil.ly/CDedn)中列出了可用的服务标记列表。'
+- en: Public and private IPs
+  id: totrans-520
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 公共和私有IP地址
+- en: Azure allocates IP addresses as independent resources themselves, which means
+    that a user can create a public IP or private IP without attaching it to anything.
+    These IP addresses can be named and built in a resource group that allows for
+    future allocation. This is a crucial step when preparing for AKS cluster scaling
+    as you want to make sure that enough private IP addresses have been reserved for
+    the possible pods if you decide to leverage Azure CNI for networking. Azure CNI
+    will be discussed in a later section.
+  id: totrans-521
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Azure将IP地址分配为独立的资源，这意味着用户可以创建公共IP或私有IP而不将其附加到任何内容。这些IP地址可以命名并构建在允许未来分配的资源组中。这是准备AKS集群扩展的关键步骤，因为您希望确保为可能的pod保留足够的私有IP地址，如果决定利用Azure
+    CNI进行网络连接。Azure CNI将在后面的部分中讨论。
+- en: IP address resources, both public and private, are also defined as either dynamic
+    or static. A static IP address is reserved to not change, while a dynamic IP address
+    can change if it is not allocated to a resource, such as a virtual machine or
+    AKS pod.
+  id: totrans-522
+  prefs: []
+  type: TYPE_NORMAL
+  zh: IP地址资源，包括公共和私有IP地址，也被定义为动态或静态。静态IP地址保留不变，而动态IP地址如果未分配给资源（如虚拟机或AKS pod）则可以更改。
+- en: Network security groups
+  id: totrans-523
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 网络安全组
+- en: NSGs are used to configure Vnets, subnets, and network interface cards (NICs)
+    with inbound and outbound security rules. The rules filter traffic and determine
+    whether the traffic will be allowed to proceed or be dropped. NSG rules are flexible
+    to filter traffic based on source and destination IP addresses, network ports,
+    and network protocols. An NSG rule can use one or multiple of these filter items
+    and can apply many NSGs.
+  id: totrans-524
+  prefs: []
+  type: TYPE_NORMAL
+  zh: NSG用于配置虚拟网络（Vnets）、子网和网络接口卡（NIC），具有入站和出站安全规则。这些规则过滤流量，并确定流量是否允许继续传输或被丢弃。NSG规则灵活，可以根据源IP地址、目标IP地址、网络端口和网络协议来过滤流量。一个NSG规则可以使用一个或多个这些过滤项，并且可以应用多个NSG。
+- en: 'An NSG rule can have any of the following components to define its filtering:'
+  id: totrans-525
+  prefs: []
+  type: TYPE_NORMAL
+  zh: NSG规则可以具有以下任何组件来定义其过滤：
+- en: Priority
+  id: totrans-526
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 优先级
+- en: This is a number between 100 and 4096\. The lowest numbers are evaluated first,
+    and the first match is the rule that is used. Once a match is found, no further
+    rules are evaluated.
+  id: totrans-527
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是100到4096之间的数字。数字越小，优先级越高，第一个匹配的规则将被使用。一旦找到匹配项，将不再评估其他规则。
+- en: Source/destination
+  id: totrans-528
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 源/目标
+- en: 'Source (inbound rules) or destination (outbound rules) of the traffic inspected.
+    The source/destination can be any of the following:'
+  id: totrans-529
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 被检查流量的源（入站规则）或目标（出站规则）。源/目标可以是以下任何一种：
+- en: Individual IP address
+  id: totrans-530
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 单个IP地址
+- en: CIDR block (i.e., 10.2.0.0/24)
+  id: totrans-531
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: CIDR 块（即，10.2.0.0/24）
+- en: Microsoft Azure service tag
+  id: totrans-532
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Microsoft Azure 服务标记
+- en: Application security groups
+  id: totrans-533
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 应用安全组
+- en: Protocol
+  id: totrans-534
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 协议
+- en: TCP, UDP, ICMP, ESP, AH, or Any.
+  id: totrans-535
+  prefs: []
+  type: TYPE_NORMAL
+  zh: TCP、UDP、ICMP、ESP、AH 或 Any。
+- en: Direction
+  id: totrans-536
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 方向
+- en: The rule for inbound or outbound traffic.
+  id: totrans-537
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 入站或出站流量的规则。
+- en: Port range
+  id: totrans-538
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 端口范围
+- en: Single ports or ranges can be specified here.
+  id: totrans-539
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以在此处指定单个端口或范围。
+- en: Action
+  id: totrans-540
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 操作
+- en: Allow or deny the traffic.
+  id: totrans-541
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 允许或拒绝流量。
+- en: '[Figure 6-22](#Azure_NSG) shows an example of an NSG.'
+  id: totrans-542
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 6-22](#Azure_NSG) 显示了一个 NSG 的示例。'
+- en: '![Azure NSG](Images/neku_0622.png)'
+  id: totrans-543
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Azure NSG](Images/neku_0622.png)'
+- en: Figure 6-22\. Azure NSG
+  id: totrans-544
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-22\. Azure NSG
+- en: There are some considerations to keep in mind when configuring Azure network
+    security groups. First, two or more rules cannot exist with the same priority
+    and direction. The priority or direction can match as long as the other does not.
+    Second, port ranges can be used only in the Resource Manager deployment model,
+    not the classic deployment model. This limitation also applies to IP address ranges
+    and service tags for the source/destination. Third, when specifying the IP address
+    for an Azure resource as the source/destination, if the resource has both a public
+    and private IP address, use the private IP address. Azure performs the translation
+    from public to private IP addressing outside this process, and the private IP
+    address will be the right choice at the time of processing.
+  id: totrans-545
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在配置 Azure 网络安全组时需要注意几点。首先，不能存在两个或更多具有相同优先级和方向的规则。只要优先级或方向匹配，就可以进行匹配，但其他方面则不能。其次，在资源管理器部署模型中可以使用端口范围，但在经典部署模型中不能。此限制还适用于源/目标的
+    IP 地址范围和服务标记。第三，在指定 Azure 资源作为源/目标的 IP 地址时，如果资源同时具有公共和私有 IP 地址，则应使用私有 IP 地址。Azure
+    在此过程之外执行从公共到私有 IP 地址的转换，因此在处理时选择私有 IP 地址是正确的选择。
+- en: Communication outside the virtual network
+  id: totrans-546
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 虚拟网络之外的通信
+- en: The concepts described so far have mainly pertained to Azure networking within
+    a single Vnet. This type of communication is vital in Azure networking but far
+    from the only type. Most Azure implementations will require communication outside
+    the virtual network to other networks, including, but not limited to, on-premise
+    networks, other Azure virtual networks, and the internet. These communication
+    paths require many of the same considerations as the internal networking processes
+    and use many of the same resources, with a few differences. This section will
+    expand on some of those differences.
+  id: totrans-547
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止描述的概念主要涉及单个 Vnet 内的 Azure 网络。这种类型的通信在 Azure 网络中至关重要，但远非唯一类型。大多数 Azure 实施需要与虚拟网络之外的其他网络进行通信，包括但不限于本地网络、其他
+    Azure 虚拟网络和互联网。这些通信路径需要与内部网络处理相同的许多考虑因素，并使用许多相同的资源，但也有一些不同之处。本节将扩展一些这些差异。
+- en: Vnet peering can connect Vnets in different regions using global virtual network
+    peering, but there are constraints with certain services such as load balancers.
+  id: totrans-548
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Vnet 互连可以使用全局虚拟网络互连将位于不同区域的 Vnet 连接起来，但在某些服务（如负载均衡器）上存在约束。
+- en: Note
+  id: totrans-549
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: For a list of these constraints, see the Azure [documentation](https://oreil.ly/wnaEi).
+  id: totrans-550
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有关这些约束的列表，请参阅 Azure [文档](https://oreil.ly/wnaEi)。
+- en: Communication outside of Azure to the internet uses a different set of resources.
+    Public IPs, as discussed earlier, can be created and assigned to a resource in
+    Azure. The resource uses its private IP address for all networking internal to
+    Azure. When the traffic from the resource needs to exit the internal networks
+    to the internet, Azure translates the private IP address into the resource’s assigned
+    public IP. At this point, the traffic can leave to the internet. Incoming traffic
+    bound for the public IP address of an Azure resource translates to the resource’s
+    assigned private IP address at the Vnet boundary, and the private IP is used from
+    then on for the rest of the traffic’s trip to its destination. This traffic path
+    is why all subnet rules for things like NSGs are defined using private IP addresses.
+  id: totrans-551
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到互联网的 Azure 外部通信使用不同的资源集。如前所述，公共 IP 可以在 Azure 中创建并分配给资源。资源在 Azure 内部网络中使用其私有
+    IP 地址进行所有网络通信。当来自资源的流量需要从内部网络退出到互联网时，Azure 将私有 IP 地址转换为资源分配的公共 IP。此时，流量可以离开到互联网。针对
+    Azure 资源的公共 IP 地址的传入流量在 Vnet 边界处将其转换为资源分配的私有 IP 地址，并从此使用私有 IP 地址完成其余通向目标的流量。这种流量路径是为什么诸如
+    NSG 的所有子网规则都使用私有 IP 地址定义的原因。
+- en: NAT can also be configured on a subnet. If configured, resources on a subnet
+    with NAT enabled do not need a public IP address to communicate with the internet.
+    NAT is enabled on a subnet to allow outbound-only internet traffic with a public
+    IP from a pool of provisioned public IP addresses. NAT will enable resources to
+    route traffic to the internet for requests such as updates or installs and return
+    with the requested traffic but prevents the resources from being accessible on
+    the internet. It is important to note that, when configured, NAT takes priority
+    over all other outbound rules and replaces the default internet destination for
+    the subnet. NAT also uses port address translation (PAT) by default.
+  id: totrans-552
+  prefs: []
+  type: TYPE_NORMAL
+  zh: NAT 也可以在子网上配置。如果配置了，具有启用 NAT 的子网上的资源无需公共 IP 地址即可与互联网通信。NAT 在子网上启用，以允许仅出站的互联网流量，使用从预配置的公共
+    IP 地址池中获取的公共 IP。NAT 将使资源能够路由到互联网以进行更新或安装等请求，并返回所请求的流量，但防止这些资源对互联网可访问。需要注意的是，当配置了
+    NAT 时，它将优先于所有其他出站规则，并替换子网的默认互联网目的地。NAT 还默认使用端口地址转换（PAT）。
+- en: Azure load balancer
+  id: totrans-553
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: Azure 负载均衡器
+- en: 'Now that you have a method of communicating outside the network and communication
+    to flow back into the Vnet, a way to keep those lines of communication available
+    is needed. Azure load balancers are often used to accomplish this by distributing
+    traffic across backend pools of resources rather than a single resource to handle
+    the request. There are two primary load balancer types in Azure: the standard
+    load balancer and the application gateway.'
+  id: totrans-554
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在您有了在网络外部进行通信并使通信回流到 Vnet 的方法，需要一种方式来保持这些通信线路可用。Azure 负载均衡器通常用于通过将流量分发到后端资源池而不是单个资源来实现此目的。Azure
+    中有两种主要的负载均衡器类型：标准负载均衡器和应用网关。
+- en: Azure standard load balancers are layer 4 systems that distribute incoming traffic
+    based on layer 4 protocols such as TCP and UDP, meaning traffic is routed based
+    on IP address and port. These load balancers filter incoming traffic from the
+    internet, but they can also load balance traffic from one Azure resource to a
+    set of other Azure resources. The standard load balancer uses a zero-trust network
+    model. This model requires an NSG to “open” traffic to be inspected by the load
+    balancer. If the attached NSG does not permit the traffic, the load balancer will
+    not attempt to route it.
+  id: totrans-555
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Azure 标准负载均衡器是第 4 层系统，根据诸如 TCP 和 UDP 的第 4 层协议分发传入流量，这意味着流量基于 IP 地址和端口路由。这些负载均衡器过滤来自互联网的传入流量，但也可以将来自一个
+    Azure 资源的流量负载均衡到一组其他 Azure 资源。标准负载均衡器使用零信任网络模型。该模型要求 NSG 打开要由负载均衡器检查的流量。如果附加的
+    NSG 不允许该流量，则负载均衡器将不尝试路由该流量。
+- en: Azure application gateways are similar to standard load balancers in that they
+    distribute incoming traffic but differently in that they do so at layer 7\. This
+    allows for the inspection of incoming HTTP requests to filter based on URI or
+    host headers. Application gateways can also be used as web application firewalls
+    to further secure and filter traffic. Additionally, the application gateway can
+    also be used as the ingress controller for AKS clusters.
+  id: totrans-556
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Azure 应用网关与标准负载均衡器类似，它们分发传入流量，但不同之处在于它们在第 7 层执行此操作。这允许检查传入的 HTTP 请求，以便基于 URI
+    或主机头部进行过滤。应用网关还可以用作 Web 应用程序防火墙，以进一步安全和过滤流量。此外，应用网关还可用作 AKS 集群的入口控制器。
+- en: 'Load balancers, whether standard or application gateways, have some basic concepts
+    that sound be considered:'
+  id: totrans-557
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 负载均衡器，无论是标准还是应用网关，都具有一些基本概念，应予考虑：
+- en: Frontend IP address
+  id: totrans-558
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 前端 IP 地址
+- en: Either public or private depending on the use, this is the IP address used to
+    target the load balancer and, by extension, the backend resources it is balancing.
+  id: totrans-559
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 根据使用情况可为公共或私有 IP 地址，此 IP 地址用于定位负载均衡器及其平衡的后端资源。
+- en: SKU
+  id: totrans-560
+  prefs: []
+  type: TYPE_NORMAL
+  zh: SKU
+- en: Like other Azure resources, this defines the “type” of the load balancer and,
+    therefore, the different configuration options available.
+  id: totrans-561
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 像其他 Azure 资源一样，这定义了负载均衡器的“类型”，因此也定义了可用的不同配置选项。
+- en: Backend pool
+  id: totrans-562
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 后端池
+- en: This is the collection of resources that the load balancer is distributing traffic
+    to, such as a collection of virtual machines or the pods within an AKS cluster.
+  id: totrans-563
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是负载均衡器分发流量的资源集合，例如一组虚拟机或 AKS 集群中的 Pod。
+- en: Health probes
+  id: totrans-564
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 健康探针
+- en: 'These are methods used by the load balancer to ensure the backend resource
+    is available for traffic, such as a health endpoint that returns an OK status:'
+  id: totrans-565
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些是负载均衡器用于确保后端资源可用于流量的方法，例如返回 OK 状态的健康端点：
+- en: Listener
+  id: totrans-566
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 监听器
+- en: A configuration that tells the load balancer what type of traffic to expect,
+    such as HTTP requests.
+  id: totrans-567
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个配置，告诉负载均衡器期望的流量类型，例如 HTTP 请求。
+- en: Rules
+  id: totrans-568
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 规则
+- en: Determines how to route the incoming traffic for that listener.
+  id: totrans-569
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 确定如何路由该监听器的传入流量。
+- en: '[Figure 6-23](#Azure_Load_Balancer_Components) illustrates some of these primary
+    components within the Azure load balancer architecture. Traffic comes into the
+    load balancer and is compared to the listeners to determine if the load balancer
+    balances the traffic. Then the traffic is evaluated against the rules and finally
+    sent on to the backend pool. Backend pool resources with appropriately responding
+    health probes will process the traffic.'
+  id: totrans-570
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 6-23](#Azure_Load_Balancer_Components) 展示了 Azure 负载均衡器架构中的一些主要组件。流量进入负载均衡器并与监听器进行比较，以确定负载均衡器是否平衡流量。然后根据规则评估流量，最终发送到后端池。具有适当响应健康探测的后端池资源将处理流量。'
+- en: '![Azure Load Balancer Components](Images/neku_0623.png)'
+  id: totrans-571
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Azure 负载均衡器组件](Images/neku_0623.png)'
+- en: Figure 6-23\. Azure load balancer components
+  id: totrans-572
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-23\. Azure 负载均衡器组件
+- en: '[Figure 6-24](#AKS_Load_Balancing) shows how AKS would use the load balancer.'
+  id: totrans-573
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 6-24](#AKS_Load_Balancing) 展示了 AKS 如何使用负载均衡器。'
+- en: Now that we have a basic knowledge of the Azure network, we can discuss how
+    Azure uses these constructs in its managed Kubernetes offering, Azure Kubernetes
+    Service.
+  id: totrans-574
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经对 Azure 网络有了基本了解，我们可以讨论 Azure 如何在其托管 Kubernetes 提供中使用这些构建，即 Azure Kubernetes
+    服务（AKS）。
+- en: '![AKS Load Balancing](Images/neku_0624.png)'
+  id: totrans-575
+  prefs: []
+  type: TYPE_IMG
+  zh: '![AKS 负载均衡](Images/neku_0624.png)'
+- en: Figure 6-24\. AKS load balancing
+  id: totrans-576
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-24\. AKS 负载均衡
+- en: Azure Kubernetes Service
+  id: totrans-577
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Azure Kubernetes 服务
+- en: Like other cloud providers, Microsoft understood the need to leverage the power
+    of Kubernetes and therefore introduced the Azure Kubernetes Service as the Azure
+    Kubernetes offering. AKS is a hosted service offering from Azure and therefore
+    handles a large portion of the overhead of managing Kubernetes. Azure handles
+    components such as health monitoring and maintenance, leaving more time for development
+    and operations engineers to leverage the scalability and power of Kubernetes for
+    their solutions.
+  id: totrans-578
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与其他云提供商一样，微软理解了利用 Kubernetes 的力量的必要性，因此推出了 Azure Kubernetes 服务作为 Azure Kubernetes
+    提供。AKS 是 Azure 的托管服务提供，因此处理大部分管理 Kubernetes 的开销。Azure 处理健康监控和维护等组件，使开发和运维工程师有更多时间利用
+    Kubernetes 的可扩展性和强大功能来解决问题。
+- en: AKS can have clusters created and managed using the Azure CLI, Azure PowerShell,
+    the Azure Portal, and other template-based deployment options such as ARM templates
+    and HashiCorp’s Terraform. With AKS, Azure manages the Kubernetes masters so that
+    the user only needs to handle the node agents. This allows Azure to offer the
+    core of AKS as a free service where the only payment required is for the agent
+    nodes and peripheral services such as storage and networking.
+  id: totrans-579
+  prefs: []
+  type: TYPE_NORMAL
+  zh: AKS 可以使用 Azure CLI、Azure PowerShell、Azure 门户以及其他基于模板的部署选项（如 ARM 模板和 HashiCorp
+    的 Terraform）来创建和管理集群。在 AKS 中，Azure 管理 Kubernetes 主节点，因此用户只需处理节点代理。这使得 Azure 能够将
+    AKS 的核心作为免费服务提供，用户只需支付节点代理和存储、网络等外围服务的费用。
+- en: The Azure Portal allows for easy management and configuration of the AKS environment.
+    [Figure 6-25](#Azure_Portal_AKS_Overview) shows the overview page of a newly provisioned
+    AKS environment. On this page, you can see information and links to many of the
+    crucial integrations and properties. The cluster’s resource group, DNS address,
+    Kubernetes version, networking type, and a link to the node pools are visible
+    in the Essentials section.
+  id: totrans-580
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Azure 门户允许轻松管理和配置 AKS 环境。[图 6-25](#Azure_Portal_AKS_Overview) 显示了新配置的 AKS 环境的概述页面。在此页面上，您可以看到许多关键集成和属性的信息和链接。在基本信息部分中可见集群的资源组、DNS
+    地址、Kubernetes 版本、网络类型以及节点池的链接。
+- en: '[Figure 6-26](#Azure_Portal_AKS_Properties) zooms in on the Properties section
+    of the overview page, where users can find additional information and links to
+    corresponding components. Most of the data is the same as the information in the
+    Essentials section. However, the various subnet CIDRs for the AKS environment
+    components can be viewed here for things such as the Docker bridge and the pod
+    subnet.'
+  id: totrans-581
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 6-26](#Azure_Portal_AKS_Properties) 放大了概述页面的属性部分，用户可以在此找到额外的信息和相应组件的链接。大部分数据与基本信息部分中的信息相同。但是，可以在此查看
+    AKS 环境组件的各种子网 CIDR，例如 Docker 桥接和 pod 子网。'
+- en: '![Azure Portal AKS Overview](Images/neku_0625.png)'
+  id: totrans-582
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Azure 门户 AKS 概述](Images/neku_0625.png)'
+- en: Figure 6-25\. Azure Portal AKS overview
+  id: totrans-583
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-25\. Azure 门户 AKS 概述
+- en: '![Azure Portal AKS Properties](Images/neku_0626.png)'
+  id: totrans-584
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Azure 门户 AKS 属性](Images/neku_0626.png)'
+- en: Figure 6-26\. Azure Portal AKS properties
+  id: totrans-585
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-26\. Azure 门户 AKS 属性
+- en: Kubernetes pods created within AKS are attached to virtual networks and can
+    access network resources through abstraction. The kube-proxy on each AKS node
+    creates this abstraction, and this component allows for inbound and outbound traffic.
+    Additionally, AKS seeks to make Kubernetes management even more streamlined by
+    simplifying how to roll changes to virtual network changes. Network services in
+    AKS are autoconfigured when specific changes occur. For example, opening a network
+    port to a pod will also trigger relevant changes to the attached NSGs to open
+    those ports.
+  id: totrans-586
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 AKS 内创建的 Kubernetes pod 附加到虚拟网络，并可以通过抽象访问网络资源。每个 AKS 节点上的 kube-proxy 创建此抽象，此组件允许入站和出站流量。此外，AKS
+    通过简化如何对虚拟网络进行变更来使 Kubernetes 管理更加流畅。在特定变更发生时，AKS 会自动配置网络服务。例如，向 pod 打开网络端口也会触发相应的更改以打开这些端口所附的
+    NSG。
+- en: By default, AKS will create an Azure DNS record that has a public IP. However,
+    the default network rules prevent public access. The private mode can create the
+    cluster to use no public IPs and block public access for only internal use of
+    the cluster. This mode will cause the cluster access to be available only from
+    within the Vnet. By default, the standard SKU will create an AKS load balancer.
+    This configuration can be changed during deployment if deploying via the CLI.
+    Resources not included in the cluster are made in a separate, auto-generated resource
+    group.
+  id: totrans-587
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，AKS 将创建一个具有公共 IP 的 Azure DNS 记录。但默认网络规则阻止了公共访问。私有模式可以创建集群以使用没有公共 IP 的方式，并且仅允许集群内部使用来阻止公共访问。此模式将使集群仅能从
+    Vnet 内部访问。默认情况下，标准 SKU 将创建一个 AKS 负载均衡器。如果通过 CLI 部署，则可以在部署期间更改此配置。未包含在集群中的资源将在单独生成的资源组中创建。
+- en: 'When leveraging the kubenet networking model for AKS, the following rules are
+    true:'
+  id: totrans-588
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当在 AKS 中利用 kubenet 网络模型时，以下规则为真：
+- en: Nodes receive an IP address from the Azure virtual network subnet.
+  id: totrans-589
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 节点从 Azure 虚拟网络子网接收 IP 地址。
+- en: Pods receive an IP address from a logically different address space than the
+    nodes.
+  id: totrans-590
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Pod 从逻辑上不同的地址空间中接收 IP 地址，而不是从节点中。
+- en: The source IP address of the traffic switches to the node’s primary address.
+  id: totrans-591
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 流量的源 IP 地址会切换到节点的主要地址。
+- en: NAT is configured for the pods to reach Azure resources on the Vnet.
+  id: totrans-592
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 为了使 pod 能够在 Vnet 上访问 Azure 资源，已配置 NAT。
+- en: It is important to note that only the nodes receive a routable IP; the pods
+    do not.
+  id: totrans-593
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 需要注意的是，只有节点会接收可路由的 IP；而 pod 不会。
+- en: While kubenet is an easy way to administer Kubernetes networking within the
+    Azure Kubernetes Service, it is not the only way. Like other cloud providers,
+    Azure also allows for the use the CNI when managing Kubernetes infrastructure.
+    Let’s discuss CNI in the next section.
+  id: totrans-594
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然 kubenet 是在 Azure Kubernetes 服务内部管理 Kubernetes 网络的一种简单方式，但并非唯一方式。与其他云提供商一样，Azure
+    在管理 Kubernetes 基础设施时也允许使用 CNI。我们在下一节来讨论 CNI。
+- en: Azure CNI
+  id: totrans-595
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: Azure CNI
+- en: Microsoft has provided its own CNI plugin for Azure and AKS, Azure CNI. The
+    first significant difference between this and kubenet is that the pods receive
+    routable IP information and can be accessed directly. This difference places additional
+    importance on the need for IP address space planning. Each node has a maximum
+    number of pods it can use, and many IP addresses are reserved for that use.
+  id: totrans-596
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Microsoft 为 Azure 和 AKS 提供了自己的 CNI 插件，即 Azure CNI。这与 kubenet 的一个显著区别是，pod 接收可路由的
+    IP 信息，并且可以直接访问。这种差异增加了 IP 地址空间规划的重要性。每个节点可以使用的 pod 的最大数量和为此使用保留的许多 IP 地址。
+- en: Note
+  id: totrans-597
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: More information can be found on the Azure Container Networking [GitHub](https://oreil.ly/G2zyC).
+  id: totrans-598
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Azure 容器网络的更多信息可以在 [GitHub](https://oreil.ly/G2zyC) 上找到。
+- en: With Azure CNI, traffic inside the Vnet is no longer NAT’d to the node’s IP
+    address but to the pod’s IP itself, as illustrated in [Figure 6-27](#Azure_CNI).
+    Outside traffic, such as to the internet, is still NAT’d to the node’s IP address.
+    Azure CNI still performs the backend IP address management and routing for these
+    items, though, as all resources on the same Azure Vnet can communicate with each
+    other by default.
+  id: totrans-599
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 Azure CNI 后，Vnet 内部的流量不再通过节点的 IP 地址进行 NAT 转发，而是直接到 pod 的 IP 地址本身，正如 [图 6-27](#Azure_CNI)
+    所示。外部流量（例如互联网流量）仍然会经过节点的 IP 地址进行 NAT 转发。Azure CNI 仍然为这些项执行后端 IP 地址管理和路由，因为在同一个
+    Azure Vnet 上的所有资源默认可以相互通信。
+- en: The Azure CNI can also be used for Kubernetes deployments outside AKS. While
+    there is additional work to be done on the cluster that Azure would typically
+    handle, this allows you to leverage Azure networking and other resources while
+    maintaining more control over the customarily managed aspects of Kubernetes under
+    AKS.
+  id: totrans-600
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Azure CNI 也可以用于 AKS 之外的 Kubernetes 部署。虽然需要在 Azure 通常会处理的集群上进行额外的工作，但这使您可以利用
+    Azure 网络和其他资源，同时保持对 AKS 下通常管理的 Kubernetes 方面的更多控制。
+- en: '![Azure CNI](Images/neku_0627.png)'
+  id: totrans-601
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Azure CNI](Images/neku_0627.png)'
+- en: Figure 6-27\. Azure CNI
+  id: totrans-602
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-27\. Azure CNI
+- en: Azure CNI also provides the added benefit of allowing for the separation of
+    duties while maintaining the AKS infrastructure. The Azure CNI creates the networking
+    resources in a separate resource group. Being in a different resource group allows
+    for more control over permissions at the resource group level within the Azure
+    Resource Management deployment model. Different teams can access some components
+    of AKS, such as the networking, without needing access to others, such as the
+    application deployments.
+  id: totrans-603
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Azure CNI 还提供了一个额外的好处，即在保持 AKS 基础架构的同时分离职责。Azure CNI 在单独的资源组中创建网络资源。处于不同的资源组中可以更好地控制
+    Azure 资源管理部署模型中资源组级别的权限。不同的团队可以访问 AKS 的某些组件，如网络，而无需访问应用程序部署等其他组件。
+- en: Azure CNI is not the only way to leverage additional Azure services to enhance
+    your Kubernetes network infrastructure. The next section will discuss the use
+    of an Azure application gateway as a means of controlling ingress into your Kubernetes
+    cluster.
+  id: totrans-604
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Azure CNI 并非利用额外 Azure 服务增强 Kubernetes 网络基础架构的唯一方式。接下来的部分将讨论使用 Azure 应用网关作为控制入口到
+    Kubernetes 集群的手段。
+- en: Application gateway ingress controller
+  id: totrans-605
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 应用网关入口控制器
+- en: Azure allows for the deployment of an application gateway inside the AKS cluster
+    deployment to serve as the application gateway ingress controller (AGIC). This
+    deployment model eliminates the need for maintaining a secondary load balancer
+    outside the AKS infrastructure, thereby reducing maintenance overhead and error
+    points. AGIC deploys its pods in the cluster. It then monitors other aspects of
+    the cluster for configuration changes. When a change is detected, AGIC updates
+    the Azure Resource Manager template that configures the load balancer and then
+    applies the updated configuration. [Figure 6-28](#Azure_AGIC) illustrates this.
+  id: totrans-606
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Azure 允许在 AKS 集群部署内部部署应用网关作为应用网关入口控制器 (AGIC)。这种部署模型消除了在 AKS 基础架构外部维护辅助负载均衡器的需要，从而减少了维护开销和错误点。AGIC
+    在集群中部署其 Pod。然后，它监视集群的其他方面以进行配置更改。当检测到变更时，AGIC 更新 Azure 资源管理器模板，配置负载均衡器，然后应用更新后的配置。[图 6-28](#Azure_AGIC)
+    说明了这一过程。
+- en: '![Azure Application Gateway Ingress Controller](Images/neku_0628.png)'
+  id: totrans-607
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Azure 应用网关入口控制器](Images/neku_0628.png)'
+- en: Figure 6-28\. Azure AGIC
+  id: totrans-608
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-28\. Azure AGIC
+- en: 'There are AKS SKU limitations for the use of the AGIC, only supporting Standard_v2
+    and WAF_v2, but those SKUs also have autoscaling capabilities. Use cases for using
+    such a form of ingress, such as the need for high scalability, have the potential
+    for the AKS environment to scale. Microsoft supports the use of both Helm and
+    the AKS add-on as deployment options for the AGIC. These are the critical differences
+    between the two options:'
+  id: totrans-609
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于 AGIC 的使用，AKS SKU 有限制，仅支持 Standard_v2 和 WAF_v2，但这些 SKU 还具有自动缩放能力。使用这种形式的入口的用例，如需要高可扩展性，有潜力让
+    AKS 环境扩展。Microsoft 支持使用 Helm 和 AKS 插件作为 AGIC 的部署选项。这些是两种选项之间的关键区别：
+- en: Helm deployment values cannot be edited when using the AKS add-on.
+  id: totrans-610
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用 AKS 插件时，无法编辑 Helm 部署值。
+- en: Helm supports Prohibited Target configuration. An AGIC can configure the application
+    gateway to target only the AKS instances without impacting other backend components.
+  id: totrans-611
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Helm 支持被禁止目标配置。AGIC 可以配置应用网关仅针对 AKS 实例，而不影响其他后端组件。
+- en: The AKS add-on, as a managed service, will be automatically updated to its current
+    and more secure versions. Helm deployments will need manual updating.
+  id: totrans-612
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 作为托管服务的 AKS 插件将自动更新到当前版本和更安全的版本。Helm 部署将需要手动更新。
+- en: Even though AGIC is configured as the Kubernetes ingress resource, it still
+    carries the full benefit of the cluster’s standard layer 7 application gateway.
+    Application gateway services such as TLS termination, URL routing, and the web
+    application firewall capability are all configurable for the cluster as part of
+    the AGIC.
+  id: totrans-613
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 即使 AGIC 被配置为 Kubernetes 入口资源，它仍然能够带来整个集群标准的第7层应用程序网关的全部优势。应用程序网关服务，如 TLS 终结、URL
+    路由和 Web 应用程序防火墙功能，都可以作为 AGIC 的一部分配置到集群中。
+- en: While many Kubernetes and networking fundamentals are universal across cloud
+    providers, Azure offers its own spin on Kubernetes networking through its enterprise-focused
+    resource design and management. Whether you have a need for a single cluster using
+    basic settings and kubenet or a large-scale deployment with advanced networking
+    through the use of deployed load balancers and application gateways, Microsoft’s
+    Azure Kubernetes Service can be leveraged to deliver a reliable, managed Kubernetes
+    infrastructure.
+  id: totrans-614
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管许多 Kubernetes 和网络基础在各云服务提供商之间是通用的，但 Azure 通过其面向企业的资源设计和管理，为 Kubernetes 网络提供了自己的特色。无论您是需要一个使用基本设置和
+    kubenet 的单个集群，还是通过部署的负载均衡器和应用程序网关实现高级网络的大规模部署，微软的 Azure Kubernetes 服务都可以提供可靠的托管
+    Kubernetes 基础设施。
+- en: Deploying an Application to Azure Kubernetes Service
+  id: totrans-615
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 在 Azure Kubernetes 服务上部署应用程序
+- en: Standing up an Azure Kubernetes Service cluster is one of the basic skills needed
+    to begin exploring AKS networking. This section will go through the steps of standing
+    up a sample cluster and deploying the Golang web server example from [Chapter 1](ch01.xhtml#networking_introduction)
+    to that cluster. We will be using a combination of the Azure Portal, the Azure
+    CLI, and `kubectl` to perform these actions.
+  id: totrans-616
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 部署 Azure Kubernetes 服务集群是开始探索 AKS 网络的基本技能之一。本节将介绍如何创建一个示例集群，并将来自 [第1章](ch01.xhtml#networking_introduction)
+    的 Golang Web 服务器示例部署到该集群。我们将使用 Azure 门户、Azure CLI 和 `kubectl` 的组合来执行这些操作。
+- en: Before we begin with the cluster deployment and configuration, we should discuss
+    the Azure Container Registry (ACR). The ACR is where you store container images
+    in Azure. For this example, we will use the ACR as the location for the container
+    image we will be deploying. To import an image to the ACR, you will need to have
+    the image locally available on your computer. Once you have the image available,
+    we have to prep it for the ACR.
+  id: totrans-617
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在开始集群部署和配置之前，我们应该讨论 Azure 容器注册表 (ACR)。ACR 是您在 Azure 中存储容器镜像的位置。在本例中，我们将使用 ACR
+    作为将要部署的容器镜像的位置。要将图像导入到 ACR，您需要将图像在本地计算机上可用。一旦图像可用，我们就需要为 ACR 准备好它。
+- en: First, identify the ACR repository you want to store the image in and log in
+    from the Docker CLI with `docker login <acr_repository>.azurecr.io`. For this
+    example, we will use the ACR repository `tjbakstestcr`, so the command would be
+    `docker login tjbakstestcr.azurecr.io`. Next, tag the local image you wish to
+    import to the ACR with `<acr_repository>.azurecr.io\<imagetag>`. For this example,
+    we will use an image currently tagged `aksdemo`. Therefore, the tag would be `tjbakstestcr.azure.io/aksdemo`.
+    To tag the image, use the command `docker tag <local_image_tag> <acr_image_tag>`.
+    This example would use the command `docker tag aksdemo tjbakstestcr.azure.io/aksdem`.
+    Finally, we push the image to the ACR with `docker push tjbakstestcr.azure.io/aksdem`.
+  id: totrans-618
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，识别您想要将图像存储在的 ACR 仓库，并使用 `docker login <acr_repository>.azurecr.io` 从 Docker
+    CLI 登录。在本例中，我们将使用 ACR 仓库 `tjbakstestcr`，因此命令将是 `docker login tjbakstestcr.azurecr.io`。接下来，使用
+    `<acr_repository>.azurecr.io\<imagetag>` 对本地想要导入到 ACR 的图像进行标记。在本例中，我们将使用当前标记为
+    `aksdemo` 的图像。因此，标记将是 `tjbakstestcr.azure.io/aksdemo`。要标记图像，请使用命令 `docker tag
+    <local_image_tag> <acr_image_tag>`。本示例将使用命令 `docker tag aksdemo tjbakstestcr.azure.io/aksdemo`。最后，使用
+    `docker push tjbakstestcr.azure.io/aksdemo` 将图像推送到 ACR。
+- en: Note
+  id: totrans-619
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: You can find additional information on Docker and the Azure Container Registry
+    in the official [documentation](https://oreil.ly/5swhT).
+  id: totrans-620
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在官方 [文档](https://oreil.ly/5swhT) 中找到有关 Docker 和 Azure 容器注册表的额外信息。
+- en: Once the image is in the ACR, the final prerequisite is to set up a service
+    principal. This is easier to set up before you begin, but you can do this during
+    the AKS cluster creation. An Azure service principal is a representation of an
+    Azure Active Directory Application object. Service principals are generally used
+    to interact with Azure through application automation. We will be using a service
+    principal to allow the AKS cluster to pull the `aksdemo` image from the ACR. The
+    service principal needs to have access to the ACR repository that you store the
+    image in. You will need to record the client ID and secret of the service principal
+    you want to use.
+  id: totrans-621
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦镜像位于 ACR 中，最后一个先决条件是设置一个服务主体。在开始之前设置这一点更容易，但您也可以在创建 AKS 集群期间执行此操作。Azure 服务主体是
+    Azure Active Directory 应用程序对象的表示。服务主体通常用于通过应用程序自动化与 Azure 交互。我们将使用服务主体允许 AKS 集群从
+    ACR 拉取 `aksdemo` 镜像。服务主体需要访问您存储图像的 ACR 仓库。您需要记录您要使用的服务主体的客户端 ID 和密钥。
+- en: Note
+  id: totrans-622
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: You can find additional information on Azure Active Directory service principals
+    in the [documentation](https://oreil.ly/pnZTw).
+  id: totrans-623
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 [文档](https://oreil.ly/pnZTw) 中可以找到有关 Azure Active Directory 服务主体的额外信息。
+- en: Now that we have our image in the ACR and our service principal client ID and
+    secret, we can begin deploying the AKS cluster.
+  id: totrans-624
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，我们在 ACR 中有我们的镜像和服务主体的客户端 ID 和密钥，可以开始部署 AKS 集群。
+- en: Deploying an Azure Kubernetes Service cluster
+  id: totrans-625
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 部署 Azure Kubernetes Service 集群
+- en: The time has come to deploy our cluster. We are going to start in the Azure
+    Portal. Go to [*portal.azure.com*](https://oreil.ly/Wx4Ny) to log in. Once logged
+    in, you should see a dashboard with a search bar at the top that will be used
+    to locate services. From the search bar, we will be typing **kubernetes** and
+    selecting the Kubernetes Service option from the drop-down menu, which is outlined
+    in [Figure 6-29](#Azure_Kubernetes_Search).
+  id: totrans-626
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在是部署我们的集群的时候了。我们将从 Azure 门户开始。转到 [*portal.azure.com*](https://oreil.ly/Wx4Ny)
+    登录。登录后，您应该看到一个仪表板，顶部有一个搜索栏，用于定位服务。从搜索栏中，我们将键入 **kubernetes** 并从下拉菜单中选择 Kubernetes
+    服务选项，如 [图 6-29](#Azure_Kubernetes_Search) 所示。
+- en: '![Azure Kubernetes Search](Images/neku_0629.png)'
+  id: totrans-627
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Azure Kubernetes Search](Images/neku_0629.png)'
+- en: Figure 6-29\. Azure Kubernetes search
+  id: totrans-628
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-29\. Azure Kubernetes 搜索
+- en: Now we are on the Azure Kubernetes Services blade. Deployed AKS clusters are
+    viewed from this screen using filters and queries. This is also the screen for
+    creating new AKS clusters. Near the top of the screen, we are going to select
+    Create as shown in [Figure 6-30](#Azure_Kubernetes_Create). This will cause a
+    drop-down menu to appear, where we will select “Create a Kubernetes cluster.”
+  id: totrans-629
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们在 Azure Kubernetes 服务页面上。使用过滤器和查询查看部署的 AKS 集群。这也是创建新 AKS 集群的屏幕。在屏幕顶部附近，我们将选择
+    Create，如 [图 6-30](#Azure_Kubernetes_Create) 所示。这将导致一个下拉菜单出现，在其中我们将选择“创建 Kubernetes
+    集群”。
+- en: '![Azure Kubernetes Create](Images/neku_0630.png)'
+  id: totrans-630
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Azure Kubernetes Create](Images/neku_0630.png)'
+- en: Figure 6-30\. Creating an Azure Kubernetes cluster
+  id: totrans-631
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-30\. 创建 Azure Kubernetes 集群
+- en: Next we will define the properties of the AKS cluster from the “Create Kubernetes
+    cluster” screen. First, we will populate the Project Details section by selecting
+    the subscription that the cluster will be deployed to. There is a drop-down menu
+    that allows for easier searching and selection. For this example, we are using
+    the `tjb_azure_test_2` subscription, but any subscription can work as long as
+    you have access to it. Next, we have to define the resource group we will use
+    to group the AKS cluster. This can be an existing resource group or a new one
+    can be created. For this example, we will create a new resource group named `go-web`.
+  id: totrans-632
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，我们将从“创建 Kubernetes 集群”屏幕中定义 AKS 集群的属性。首先，我们将通过选择将部署集群的订阅来填充“项目详细信息”部分。有一个下拉菜单，可以更轻松地搜索和选择。在本例中，我们使用
+    `tjb_azure_test_2` 订阅，但只要您有访问权限，任何订阅都可以使用。接下来，我们必须定义将用于分组 AKS 集群的资源组。这可以是现有的资源组，也可以是新建的。在本例中，我们将创建一个名为
+    `go-web` 的新资源组。
+- en: After the Project Details section is complete, we move on to the Cluster Details
+    section. Here, we will define the name of the cluster, which will be “go-web”
+    for this example. The region, availability zones, and Kubernetes version fields
+    are also defined in this section and will have predefined defaults that can be
+    changed. For this example, however, we will use the default “(US) West 2” region
+    with no availability zones and the default Kubernetes version of 1.19.11.
+  id: totrans-633
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 完成项目详情部分后，我们将转到集群详情部分。在这里，我们将定义集群的名称，例如本示例中将为“go-web”。区域、可用性区域和Kubernetes版本字段也在此部分定义，并将具有可以更改的预定义默认值。然而，对于本例，我们将使用默认的“(US)
+    West 2”区域，没有可用性区域，并且默认的Kubernetes版本为1.19.11。
+- en: Note
+  id: totrans-634
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Not all Azure regions have availability zones that can be selected. If availability
+    zones are part of the AKS architecture that is being deployed, the appropriate
+    regions should be considered. You can find more information on AKS regions in
+    the availability zones [documentation](https://oreil.ly/enxii).
+  id: totrans-635
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不是所有的Azure区域都有可选择的可用性区域。如果可用性区域是部署的AKS架构的一部分，应考虑适当的区域。您可以在可用性区域的[文档](https://oreil.ly/enxii)中找到更多关于AKS区域的信息。
+- en: Finally, we will complete the Primary Node Pool section of the “Create Kubernetes
+    cluster” screen by selecting the node size and node count. For this example, we
+    are going to keep the default node size of DS2 v2 and the default node count of
+    3\. While most virtual machines, sizes are available for use within AKS, there
+    are some restrictions. [Figure 6-31](#Azure_Kubernetes_Create_Page) shows the
+    options we have selected filled in.
+  id: totrans-636
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，我们将通过选择节点大小和节点数来完成“创建Kubernetes集群”屏幕的主节点池部分。例如，我们将保持DS2 v2的默认节点大小和3个默认节点数。虽然大多数虚拟机大小在AKS中可供使用，但也有一些限制。[图 6-31](#Azure_Kubernetes_Create_Page)
+    显示了我们已经选择填写的选项。
+- en: Note
+  id: totrans-637
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: You can find more information on AKS restrictions, including restricted node
+    sizes, in the [documentation](https://oreil.ly/A4bHq).
+  id: totrans-638
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在[文档](https://oreil.ly/A4bHq)中找到更多关于AKS限制的信息，包括受限节点大小。
+- en: 'Click the “Next: Node pools” button to move to the Node Pools tab. This page
+    allows for the configuration of additional node pools for the AKS cluster. For
+    this example, we are going to leave the defaults on this page and move on to the
+    Authentication page by clicking the “Next: Authentication” button at the bottom
+    of the screen.'
+  id: totrans-639
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 单击“下一步：节点池”按钮以转到节点池选项卡。此页面允许为AKS集群配置额外的节点池。例如，我们将在此页面保留默认设置，并通过点击屏幕底部的“下一步：认证”按钮转到认证页面。
+- en: '![Azure Kubernetes Create Page](Images/neku_0631.png)'
+  id: totrans-640
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Azure Kubernetes 创建页面](Images/neku_0631.png)'
+- en: Figure 6-31\. Azure Kubernetes create page
+  id: totrans-641
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图6-31\. Azure Kubernetes 创建页面
+- en: '[Figure 6-32](#Azure_Kubernetes_Authentication_Page) shows the Authentication
+    page, where we will define the authentication method that the AKS cluster will
+    use to connect to attached Azure services such as the ACR we discussed previously
+    in this chapter. “System-Assigned Managed Identity” is the default authentication
+    method, but we are going to select the “Service principal” radio button.'
+  id: totrans-642
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 6-32](#Azure_Kubernetes_Authentication_Page) 显示了认证页面，我们将在此页面定义AKS集群连接到附加的Azure服务（如我们在本章前面讨论过的ACR）所使用的认证方法。“系统分配的托管标识”是默认的认证方法，但我们将选择“服务主体”单选按钮。'
+- en: If you did not create a service principal at the beginning of this section,
+    you can create a new one here. If you create a service principal at this stage,
+    you will have to go back and grant that service principal permissions to access
+    the ACR. However, since we will use a previously created service principal, we
+    are going to click the “Configure service principal” link and enter the client
+    ID and secret.
+  id: totrans-643
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您在本节开头没有创建服务主体，可以在此处创建一个新的服务主体。如果在此阶段创建服务主体，则必须返回并授予该服务主体访问ACR的权限。然而，由于我们将使用先前创建的服务主体，因此我们将点击“配置服务主体”链接并输入客户端ID和密钥。
+- en: '![Azure Kubernetes Authentication Page](Images/neku_0632.png)'
+  id: totrans-644
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Azure Kubernetes 认证页面](Images/neku_0632.png)'
+- en: Figure 6-32\. Azure Kubernetes Authentication page
+  id: totrans-645
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图6-32\. Azure Kubernetes 认证页面
+- en: The remaining configurations will remain at the defaults at this time. To complete
+    the AKS cluster creation, we are going to click the “Review + create” button.
+    This will take us to the validation page. As shown in [Figure 6-33](#Azure_Kubernetes_Validation_Page),
+    if everything is defined appropriately, the validation will return a “Validation
+    Passed” message at the top of the screen. If something is misconfigured, a “Validation
+    Failed” message will be there instead. As long as validation passes, we will review
+    the settings and click Create.
+  id: totrans-646
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 其余配置将暂时保持默认设置。要完成AKS集群的创建，我们将点击“Review + create”按钮。这将带我们到验证页面。如[Figure 6-33](#Azure_Kubernetes_Validation_Page)所示，如果一切都被正确定义，验证将在屏幕顶部返回一个“Validation
+    Passed”消息。如果有配置错误，则会显示“Validation Failed”消息。只要验证通过，我们将审查设置并点击Create。
+- en: '![Azure Kubernetes Validation Page](Images/neku_0633.png)'
+  id: totrans-647
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Azure Kubernetes 验证页面](Images/neku_0633.png)'
+- en: Figure 6-33\. Azure Kubernetes validation page
+  id: totrans-648
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: Figure 6-33\. Azure Kubernetes 验证页面
+- en: You can view the deployment status from the notification bell on the top of
+    the Azure screen. [Figure 6-34](#Azure_Kubernetes_Deployment_Progress) shows our
+    example deployment in progress. This page has information that can be used to
+    troubleshoot with Microsoft should an issue arise such as the deployment name,
+    start time, and correlation ID.
+  id: totrans-649
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以从Azure屏幕顶部的通知钟查看部署状态。[Figure 6-34](#Azure_Kubernetes_Deployment_Progress)显示了我们示例部署正在进行中的情况。此页面包含可用于与Microsoft进行故障排除的信息，例如部署名称、开始时间和关联ID。
+- en: Our example deployed completely without issue, as shown in [Figure 6-35](#Azure_Kubernetes_Deployment_Complete).
+    Now that the AKS cluster is deployed, we need to connect to it and configure it
+    for use with our example web server.
+  id: totrans-650
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们的示例完全没有问题地部署完成，如[Figure 6-35](#Azure_Kubernetes_Deployment_Complete)所示。现在AKS集群已部署，我们需要连接并配置它以便与我们的示例Web服务器一起使用。
+- en: '![Azure Kubernetes Deployment Progress](Images/neku_0634.png)'
+  id: totrans-651
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Azure Kubernetes 部署进度](Images/neku_0634.png)'
+- en: Figure 6-34\. Azure Kubernetes deployment progress
+  id: totrans-652
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: Figure 6-34\. Azure Kubernetes 部署进度
+- en: '![Azure Kubernetes Deployment Complete](Images/neku_0635.png)'
+  id: totrans-653
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Azure Kubernetes 部署完成](Images/neku_0635.png)'
+- en: Figure 6-35\. Azure Kubernetes deployment complete
+  id: totrans-654
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: Figure 6-35\. Azure Kubernetes 部署完成
+- en: Connecting to and configuring AKS
+  id: totrans-655
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 连接和配置AKS
+- en: We will now shift to working with the example `go-web` AKS cluster from the
+    command line. To manage AKS clusters from the command line, we will primarily
+    use the `kubectl` command. Azure CLI has a simple command, `az aks install-cli`,
+    to install the `kubectl` program for use. Before we can use `kubectl`, though,
+    we need to gain access to the cluster. The command `az aks get-credentials` `--resource-group`
+    `<resource_group_name> --name <aks_cluster_name>` is used to gain access to the
+    AKS cluster. For our example, we will use `az aks get-credentials --resource-group
+    go-web --name go-web` to access our `go-web` cluster in the `go-web` resource
+    group.
+  id: totrans-656
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们现在将转向从命令行操作示例`go-web` AKS集群。要从命令行管理AKS集群，我们将主要使用`kubectl`命令。Azure CLI有一个简单的命令`az
+    aks install-cli`，用于安装`kubectl`程序以便使用。不过，在使用`kubectl`之前，我们需要访问集群。命令`az aks get-credentials
+    --resource-group <resource_group_name> --name <aks_cluster_name>`用于访问AKS集群。对于我们的示例，我们将使用`az
+    aks get-credentials --resource-group go-web --name go-web`来访问我们的`go-web`资源组中的`go-web`集群。
+- en: Next we will attach the Azure container registry that has our `aksdemo` image.
+    The command `az aks update -n` `<aks_cluster_name> -g` `<clus⁠⁠ter_resource_​​group_name>`
+    `--attach-acr <acr_repo_name>` will attach a named ACR repo to an existing AKS
+    cluster. For our example, we will use the command `az aks update -n tjbakstest
+    -g tjbakstest --attach-acr tjbakstestcr`. Our example runs for a few moments and
+    then produces the output shown in [Example 6-1](#EX6).
+  id: totrans-657
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，我们将附加包含我们的`aksdemo`镜像的Azure容器注册表。命令`az aks update -n` `<aks_cluster_name>
+    -g` `<clus⁠⁠ter_resource_​​group_name>` `--attach-acr <acr_repo_name>`将命名的ACR存储库附加到现有的AKS集群。对于我们的示例，我们将使用命令`az
+    aks update -n tjbakstest -g tjbakstest --attach-acr tjbakstestcr`。我们的示例运行片刻后，将生成[Example 6-1](#EX6)中显示的输出。
+- en: Example 6-1\. AttachACR output
+  id: totrans-658
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: Example 6-1\. AttachACR 输出
+- en: '[PRE38]'
+  id: totrans-659
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE38]'
+- en: This output is the CLI representation of the AKS cluster information. This means
+    that the attachment was successful. Now that we have access to the AKS cluster
+    and the ACR is attached, we can deploy the example Go web server to the AKS cluster.
+  id: totrans-660
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此输出是AKS集群信息的CLI表示。这意味着附加成功。现在我们可以访问AKS集群并附加了ACR后，可以将示例Go Web服务器部署到AKS集群上。
+- en: Deploying the Go web server
+  id: totrans-661
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 部署Go Web服务器
+- en: We are going to deploy the Golang code shown in [Example 6-2](#kubernetes_podspec_for_golang_minimal_webserver).
+    As mentioned earlier in this chapter, this code has been built into a Docker image
+    and now is stored in the ACR in the `tjbakstestcr` repository. We will be using
+    the following deployment YAML file to deploy the application.
+  id: totrans-662
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将部署示例 6-2 中显示的 Golang 代码 [Example 6-2](#kubernetes_podspec_for_golang_minimal_webserver)。正如本章前面提到的，此代码已构建为
+    Docker 镜像，并存储在 `tjbakstestcr` 仓库的 ACR 中。我们将使用以下部署 YAML 文件来部署应用程序。
+- en: Example 6-2\. Kubernetes Podspec for Golang minimal webserver
+  id: totrans-663
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 6-2\. Golang 极简 Web 服务器的 Kubernetes Podspec
+- en: '[PRE39]'
+  id: totrans-664
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE39]'
+- en: 'Breaking down this YAML file, we see that we are creating two AKS resources:
+    a deployment and a service. The deployment is configured for the creation of a
+    container named `go-web` and a container port 8080\. The deployment also references
+    the `aksdemo` ACR image with the line `image: tjbakstestcr.azurecr.io/aksdemo`
+    as the image that will be deployed to the container. The service is also configured
+    with the name go-web. The YAML specifies the service is a load balancer listening
+    on port 8080 and targeting the `go-web` app.'
+  id: totrans-665
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '解析这个 YAML 文件，我们可以看到我们正在创建两个 AKS 资源：一个部署（deployment）和一个服务（service）。部署被配置为创建一个名为`go-web`的容器，以及一个容器端口
+    8080。部署还引用了`aksdemo` ACR 镜像，具体在这行 `image: tjbakstestcr.azurecr.io/aksdemo` 中指定将部署到容器中的镜像。服务也被配置为名为
+    go-web。YAML 指定服务是一个负载均衡器，监听端口 8080 并指向`go-web`应用。'
+- en: 'Now we need to publish the application to the AKS cluster. The command `kubectl
+    apply -f <yaml_file_name>.yaml` will publish the application to the cluster. We
+    will see from the output that two things are created: `deployment.apps/go-web`
+    and `service/go-web`. When we run the command `kubectl get pods`, we can see an
+    output like that shown here:'
+  id: totrans-666
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们需要将应用程序发布到 AKS 集群。命令`kubectl apply -f <yaml_file_name>.yaml`将应用程序发布到集群。从输出中我们可以看到两个东西被创建：`deployment.apps/go-web`和`service/go-web`。当我们运行命令`kubectl
+    get pods`时，我们可以看到如下输出：
+- en: '[PRE40]'
+  id: totrans-667
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE40]'
+- en: 'Now that the application is deployed, we will connect to it to verify it is
+    up and running. When a default AKS cluster is stood up, a load balancer is deployed
+    with it with a public IP address. We could go through the portal and locate that
+    load balancer and public IP address, but `kubectl` offers an easier path. The
+    command `kubectl get` [.keep-together]#`service` `go-web` produces this output:'
+  id: totrans-668
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在应用程序已部署，我们将连接到它以验证其正常运行。当默认的 AKS 集群启动时，会随之部署一个带有公共 IP 地址的负载均衡器。我们可以通过门户找到该负载均衡器和公共
+    IP 地址，但是 `kubectl` 提供了一条更简单的路径。命令 `kubectl get` [.keep-together]#`service` `go-web`
+    生成了这样的输出：
+- en: '[PRE41]'
+  id: totrans-669
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE41]'
+- en: 'In this output, we see the external IP address of 13.88.96.117\. Therefore,
+    if everything deployed correctly, we should be able to cURL 13.88.96.117 at port
+    8080 with the command `curl 13.88.96.117:8080`. As we can see from this output,
+    we have a successful deployment:'
+  id: totrans-670
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这个输出中，我们看到外部 IP 地址为 13.88.96.117。因此，如果一切部署正确，我们应该能够使用命令 `curl 13.88.96.117:8080`
+    来 cURL 13.88.96.117 的端口 8080。正如我们从这个输出中看到的，我们已经成功部署了：
+- en: '[PRE42]'
+  id: totrans-671
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE42]'
+- en: Going to a web browser and navigating to http://13.88.96.117:8080 will also
+    be available, as shown in [Figure 6-36](#Azure_Kubernetes_Hello_App).
+  id: totrans-672
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 进入网页浏览器并导航到 http://13.88.96.117:8080 也是可以的，如图所示 [Figure 6-36](#Azure_Kubernetes_Hello_App)。
+- en: '![Azure Kubernetes Hello App](Images/neku_0636.png)'
+  id: totrans-673
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Azure Kubernetes Hello App](Images/neku_0636.png)'
+- en: Figure 6-36\. Azure Kubernetes Hello app
+  id: totrans-674
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-36\. Azure Kubernetes Hello 应用程序
+- en: AKS conclusion
+  id: totrans-675
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: AKS 结论
+- en: In this section, we deployed an example Golang web server to an Azure Kubernetes
+    Service cluster. We used the Azure Portal, the `az cli`, and `kubectl` to deploy
+    and configure the cluster and then deploy the application. We leveraged the Azure
+    container registry to host our web server image. We also used a YAML file to deploy
+    the application and tested it with cURL and web browsing.
+  id: totrans-676
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本节中，我们将一个示例 Golang web 服务器部署到 Azure Kubernetes Service 集群。我们使用了 Azure 门户，`az
+    cli` 和 `kubectl` 来部署和配置集群，然后部署应用程序。我们利用了 Azure 容器注册表来托管我们的 Web 服务器镜像。我们还使用了一个
+    YAML 文件来部署应用程序，并用 cURL 和 Web 浏览进行了测试。
+- en: Conclusion
+  id: totrans-677
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 结论
+- en: Each cloud provider has its nuanced differences when it comes to network services
+    provided for Kubernetes clusters. [Table 6-4](#cloud_network_and_kubernetes_summary)
+    highlights some of those differences. There are lots of factors to choose from
+    when picking a cloud service provider, and even more when selecting the managed
+    Kubernetes platform to run. Our aim in this chapter was to educate administrators
+    and developers on the choices you will have to make when managing workloads on
+    Kubernetes.
+  id: totrans-678
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当涉及到为Kubernetes集群提供网络服务时，每个云提供商都有其微妙的差异。[Table 6-4](#cloud_network_and_kubernetes_summary)
+    强调了其中一些差异。在选择云服务提供商和运行的托管Kubernetes平台时，有很多因素可以选择。本章的目标是教育管理员和开发人员，在管理Kubernetes上的工作负载时需要做出的选择。
+- en: Table 6-4\. Cloud network and Kubernetes summary
+  id: totrans-679
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表6-4\. 云网络和Kubernetes总结
+- en: '|  | AWS | Azure | GCP |'
+  id: totrans-680
+  prefs: []
+  type: TYPE_TB
+  zh: '|  | AWS | Azure | GCP |'
+- en: '| --- | --- | --- | --- |'
+  id: totrans-681
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- | --- |'
+- en: '| Virtual network | VPC | Vnet | VPC |'
+  id: totrans-682
+  prefs: []
+  type: TYPE_TB
+  zh: '| 虚拟网络 | VPC | Vnet | VPC |'
+- en: '| Network scope | Region | Region | Global |'
+  id: totrans-683
+  prefs: []
+  type: TYPE_TB
+  zh: '| 网络范围 | 区域 | 区域 | 全球 |'
+- en: '| Subnet boundary | Zone | Region | Region |'
+  id: totrans-684
+  prefs: []
+  type: TYPE_TB
+  zh: '| 子网边界 | 区域 | 区域 | 区域 |'
+- en: '| Routing scope | Subnet | Subnet | VPC |'
+  id: totrans-685
+  prefs: []
+  type: TYPE_TB
+  zh: '| 路由范围 | 子网 | 子网 | VPC |'
+- en: '| Security controls | NACL/SecGroups | Network security groups/Application
+    SecGroup | Firewall |'
+  id: totrans-686
+  prefs: []
+  type: TYPE_TB
+  zh: '| 安全控制 | NACL/SecGroups | 网络安全组/应用程序安全组 | 防火墙 |'
+- en: '| IPv6 | Yes | Yes | No |'
+  id: totrans-687
+  prefs: []
+  type: TYPE_TB
+  zh: '| IPv6 | 是 | 是 | 否 |'
+- en: '| Kubernetes managed | eks | aks | gke |'
+  id: totrans-688
+  prefs: []
+  type: TYPE_TB
+  zh: '| Kubernetes管理 | eks | aks | gke |'
+- en: '| ingress | AWS ALB controller | Nginx-Ingress | GKE ingress controller |'
+  id: totrans-689
+  prefs: []
+  type: TYPE_TB
+  zh: '| 入口 | AWS ALB控制器 | Nginx-Ingress | GKE入口控制器 |'
+- en: '| Cloud custom CNI | AWS VPC CNI | Azure CNI | GKE CNI |'
+  id: totrans-690
+  prefs: []
+  type: TYPE_TB
+  zh: '| 云自定义CNI | AWS VPC CNI | Azure CNI | GKE CNI |'
+- en: '| Load Balancer support | ALB L7, L4 w/NLB, and Nginx | L4 Azure Load Balancer,
+    L7 w/Nginx | L7, HTTP(S) |'
+  id: totrans-691
+  prefs: []
+  type: TYPE_TB
+  zh: '| 负载均衡器支持 | ALB L7、L4 w/NLB和Nginx | L4 Azure负载均衡器、L7 w/Nginx | L7、HTTP(S) |'
+- en: '| Network policies | Yes (Calico/Cilium) | Yes (Calico/Cilium) | Yes (Calico/Cilium)
+    |'
+  id: totrans-692
+  prefs: []
+  type: TYPE_TB
+  zh: '| 网络策略 | 是（Calico/Cilium） | 是（Calico/Cilium） | 是（Calico/Cilium） |'
+- en: We have covered many layers, from the OSI foundation to running networks in
+    the cloud for our clusters. Cluster administrators, network engineers, and developers
+    alike have many decisions to make, such as the subnet size, the CNI to choose,
+    and the load balancer type, to name a few. Understanding all of those and how
+    they will affect the cluster network was the basis for this book. This is just
+    the beginning of your journey for managing your clusters at scale. We have managed
+    to cover only the networking options available for managing Kubernetes clusters.
+    Storage, compute, and even how to deploy workloads onto those clusters are decisions
+    you will have to make now. The O’Reilly library has an extensive number of books
+    to help, such as [*Production Kubernetes*](https://oreil.ly/Xx12u) (Rosso et al.),
+    where you learn what the path to production looks like when using Kubernetes,
+    and [*Hacking Kubernetes*](https://oreil.ly/FcU8C) (Martin and Hausenblas), on
+    how to harden Kubernetes and how to review Kubernetes clusters for security weaknesses.
+  id: totrans-693
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们涵盖了许多层次，从OSI基础到为我们的集群在云中运行的网络。集群管理员、网络工程师和开发人员都需要做出许多决策，比如子网大小、选择的CNI以及负载均衡器类型等。理解所有这些以及它们对集群网络的影响是本书的基础。这只是你在大规模管理集群旅程的开始。我们已经涵盖了管理Kubernetes集群可用的网络选项。存储、计算甚至如何将工作负载部署到这些集群上都是你现在需要做出的决策。O'Reilly图书馆有大量的书籍可以帮助，如[*生产Kubernetes*](https://oreil.ly/Xx12u)（Rosso等著）中，你将了解在使用Kubernetes时通向生产环境的路径，以及[*黑客攻击Kubernetes*](https://oreil.ly/FcU8C)（Martin和Hausenblas著），介绍如何加固Kubernetes并审查Kubernetes集群中的安全弱点。
+- en: We hope this guide has helped make those networking choices easy for you. We
+    were inspired to see what the Kubernetes community has done and are excited to
+    see what you build on top of the abstractions Kubernetes provides for you.
+  id: totrans-694
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 希望本指南能帮助您轻松做出这些网络选择。我们受到Kubernetes社区的启发，并期待看到您在Kubernetes提供的抽象之上构建的内容。

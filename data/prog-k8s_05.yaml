@@ -1,0 +1,724 @@
+- en: Chapter 5\. Automating Code Generation
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第 5 章 自动化代码生成
+- en: In this chapter you’ll learn how to use the Kubernetes code generators in Go
+    projects to write custom resources in a natural way. Code generators are used
+    a lot in the implementation of native Kubernetes resources, and we’ll use the
+    very same generators here.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，您将学习如何在 Go 项目中使用 Kubernetes 代码生成器以一种自然的方式编写自定义资源。代码生成器在实现本机 Kubernetes
+    资源时被广泛使用，我们也将在这里使用完全相同的生成器。
+- en: Why Code Generation
+  id: totrans-2
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 为什么要代码生成
+- en: Go is a simple language by design. It lacks higher-level or even metaprogramming-like
+    mechanisms to express algorithms on different data types in a generic (i.e., type-independent)
+    way. The “Go way” is to use external code generation instead.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Go 是一种设计简单的语言。它缺乏高级或者类似元编程的机制来以通用的方式表达对不同数据类型的算法。在 Go 中，“Go way” 是使用外部代码生成。
+- en: Very early in the Kubernetes development process, more and more code had to
+    be rewritten as more resources were added to the system. Code generation made
+    the maintenance of this code much easier. Very early on, the [Gengo library](http://bit.ly/2L9kwNJ)
+    was created, and eventually, based on Gengo, [*k8s.io/code-generator*](http://bit.ly/2Kw8I8U)
+    was developed as an externally usable collection of generators. We will use these
+    generators in the following sections for CRs.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 开发的早期阶段，随着系统增加更多资源，越来越多的代码需要重写。代码生成大大简化了这些代码的维护。早期，创建了[Gengo 库](http://bit.ly/2L9kwNJ)，并最终基于
+    Gengo 开发了[*k8s.io/code-generator*](http://bit.ly/2Kw8I8U)，作为一个可以外部使用的生成器集合。我们将在接下来的章节中使用这些生成器来处理
+    CRs。
+- en: Calling the Generators
+  id: totrans-5
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 调用生成器
+- en: Usually, the code generators are called in mostly the same way in every controller
+    project. Only packages, group names, and API versions differ. Calling the script
+    *k8s.io/code-generator/generate-groups.sh* or a bash script like *hack/update-codegen.sh*
+    is the easiest way to add code generation to CR Go types from the build system
+    (see [the book’s GitHub repository](http://bit.ly/2J0s2YL)).
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常情况下，几乎每个控制器项目中调用代码生成器的方式都是大致相同的。只有包、组名和 API 版本不同。从构建系统调用 *k8s.io/code-generator/generate-groups.sh*
+    或类似 *hack/update-codegen.sh* 的 bash 脚本是向 CR Go 类型添加代码生成的最简单方法（参见[该书的 GitHub 仓库](http://bit.ly/2J0s2YL)）。
+- en: 'Note that some projects call the generator binaries directly due to very special
+    requirements and often historic reasons. For the use case of building a controller
+    for CRs, it is much easier to just call the *generate-groups.sh* script from the
+    *k8s.io/code-generator* repository:'
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，由于非常特殊的需求和历史原因，一些项目直接调用生成器二进制文件。对于构建 CRs 控制器的用例，直接从 *k8s.io/code-generator*
+    仓库调用 *generate-groups.sh* 脚本要简单得多：
+- en: '[PRE0]'
+  id: totrans-8
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'Here, `all` means to call all four standard code generators for CRs:'
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这里，“all” 表示调用所有四个用于 CRs 的标准代码生成器：
+- en: '`deepcopy-gen`'
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`deepcopy-gen`'
+- en: Generates `func` `(t *T)` `DeepCopy()` `*T` and `func` `(t *T)` `DeepCopyInto(*T)`
+    methods.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 生成 `func` `(t *T)` `DeepCopy()` `*T` 和 `func` `(t *T)` `DeepCopyInto(*T)` 方法。
+- en: '`client-gen`'
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`client-gen`'
+- en: Creates typed client sets.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建类型化的客户端集。
+- en: '`informer-gen`'
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`informer-gen`'
+- en: Creates informers for CRs that offer an event-based interface to react to changes
+    of CRs on the server.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为 CRs 创建 informers，提供基于事件的接口以便在服务器上对 CRs 的更改做出响应。
+- en: '`lister-gen`'
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`lister-gen`'
+- en: Creates listers for CRs that offer a read-only caching layer for `GET` and `LIST`
+    requests.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为 CRs 创建 listers，为 `GET` 和 `LIST` 请求提供只读缓存层。
+- en: The last two are the basis for building controllers (see [“Controllers and Operators”](ch01.html#ch_controllers-operators)).
+    These four code generators make up a powerful basis for building full-featured,
+    production-ready controllers using the same mechanisms and packages that the Kubernetes
+    upstream controllers are using.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后两个方法是构建控制器的基础（参见[“控制器和操作员”](ch01.html#ch_controllers-operators)）。这四个代码生成器构成了使用相同机制和包构建功能齐全、生产就绪的控制器的强大基础，与
+    Kubernetes 上游控制器使用的相同。
+- en: Note
+  id: totrans-19
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: 'There are some more generators in *k8s.io/code-generator*, mostly for other
+    contexts. For example, if you build your own aggregated API server (see [Chapter 8](ch08.html#ch_custom-api-servers)),
+    you will work with internal types in addition to versioned types, and you have
+    to define defaulting functions. Then these two generators, which you can access
+    by calling the [*generate-internal-groups.sh*](http://bit.ly/2L9kSE3) script from
+    *k8s.io/code-generator*, will become relevant:'
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*k8s.io/code-generator* 中还有一些其他生成器，主要用于其他情境。例如，如果您构建自己的聚合 API 服务器（参见[第 8 章](ch08.html#ch_custom-api-servers)），您将同时使用内部类型和版本化类型，并且必须定义默认函数。那么，您可以通过调用
+    *k8s.io/code-generator/generate-internal-groups.sh* 脚本来访问这两个生成器，它们将变得相关：'
+- en: '`conversion-gen`'
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`conversion-gen`'
+- en: Creates functions for converting between internal and external types.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建用于在内部类型和外部类型之间进行转换的函数。
+- en: '`defaulter-gen`'
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`defaulter-gen`'
+- en: Takes care of defaulting certain fields.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 处理某些字段的默认值。
+- en: 'Now let’s look in detail at the parameters to `generate-groups.sh`:'
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在让我们详细看看 `generate-groups.sh` 的参数：
+- en: The second parameter is the target package name for the generated clients, listers,
+    and informers.
+  id: totrans-26
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 生成的客户端、列表和通知者的目标包名是第二个参数。
+- en: The third parameter is the base package for the API group.
+  id: totrans-27
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: API 组的基础包是第三个参数。
+- en: The fourth parameter is a space-separated list of API groups with their versions.
+  id: totrans-28
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 第四个参数是 API 组与其版本的空格分隔列表。
+- en: '`--output-base` is passed as a flag to all generators to define the base directory
+    where the given packages are found.'
+  id: totrans-29
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`--output-base` 作为一个标志传递给所有生成器，用来定义给定包所在的基础目录。'
+- en: '`--go-header-file` enables us to put copyright headers into generated code.'
+  id: totrans-30
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`--go-header-file` 允许我们将版权头放入生成的代码中。'
+- en: Some generators, like `deepcopy-gen`, create files directly inside the API group
+    packages. Those files follow a standard naming scheme with a *zz_generated.* prefix
+    such that it is easy to exclude them from version control systems (e.g., via *.gitignore*
+    file), though most projects decide to check generated files in because the Go
+    tooling around code generators is not well developed.^([1](ch05.html#idm46336860111320))
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一些生成器，比如 `deepcopy-gen`，直接在 API 组包内部创建文件。这些文件遵循一个以 *zz_generated.* 前缀命名的标准命名方案，因此很容易通过版本控制系统（例如
+    *.gitignore* 文件）排除它们，尽管大多数项目决定检查生成的文件，因为围绕代码生成器的 Go 工具尚未很好地发展。^([1](ch05.html#idm46336860111320))
+- en: 'If the project follows the pattern of [*k8s.io/sample-controller*](http://bit.ly/2UppsTN)—the
+    `sample-controller` is a blueprint project replicating the patterns established
+    by the many controllers built in Kubernetes itself—then the code generation starts
+    with:'
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果项目遵循 [*k8s.io/sample-controller*](http://bit.ly/2UppsTN) 的模式 —— `sample-controller`
+    是一个蓝图项目，复制了 Kubernetes 自身构建的许多控制器的模式 —— 那么代码生成从以下内容开始：
+- en: '[PRE1]'
+  id: totrans-33
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: The `cnat` example in the `sample-controller+client-go` variant in [“Following
+    sample-controller”](ch06.html#cnat-client-go) goes this route.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 [“Following sample-controller”](ch06.html#cnat-client-go) 中的 `sample-controller+client-go`
+    变体中，`cnat` 示例沿着这条路线前进。
+- en: Tip
+  id: totrans-35
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: Usually, in addition to the [`hack/update-codegen.sh`](http://bit.ly/2J0s2YL)
+    script, there is a second script called [`hack/verify-codegen.sh`](http://bit.ly/2IXUWsy).
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常，除了 [`hack/update-codegen.sh`](http://bit.ly/2J0s2YL) 脚本之外，还有一个名为 [`hack/verify-codegen.sh`](http://bit.ly/2IXUWsy)
+    的第二个脚本。
+- en: This script calls the `hack/update-codegen.sh` script and checks whether anything
+    changed, and then it terminates with a nonzero return code if any of the generated
+    files is not up-to-date.
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此脚本调用 `hack/update-codegen.sh` 脚本并检查是否有任何更改，如果生成的文件中有任何文件不是最新的，则以非零返回码终止。
+- en: 'This is very helpful in a continuous integration (CI) script: if a developer
+    modified the files by accident or if the files are just outdated, CI will notice
+    and complain.'
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在持续集成（CI）脚本中非常有帮助：如果开发人员意外修改了文件或者文件仅仅是过时的，CI 将注意到并提出投诉。
+- en: Controlling the Generators with Tags
+  id: totrans-39
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用标签控制生成器
+- en: 'While some of the code-generator behavior is controlled via command-line flags
+    as described earlier (especially the packages to process), a lot more properties
+    are controlled via *tags* in your Go files. A tag is a specially formatted Go
+    comment in the following form:'
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然某些代码生成器的行为是通过命令行标志控制的（如前面描述的特别是要处理的包），但更多的属性是通过 *标签* 在您的 Go 文件中控制的。标签是以下格式的特殊格式化
+    Go 注释：
+- en: '[PRE2]'
+  id: totrans-41
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'There are two kind of tags:'
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有两种类型的标签：
+- en: Global tags above the `package` line in a file called *doc.go*
+  id: totrans-43
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 文件 *doc.go* 中 `package` 行上方的全局标签
+- en: Local tags above a type declaration (e.g., above a struct definition)
+  id: totrans-44
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 类型声明（例如结构定义）之前的本地标签
+- en: Depending on the tags in question, the position of the comment might be important.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 根据问题中的标签，注释的位置可能很重要。
+- en: Global Tags
+  id: totrans-46
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 全局标签
+- en: 'Global tags are written into a package’s *doc.go*. A typical *pkg/apis/`group`/`version`/doc.go*
+    file looks like this:'
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 全局标签写入包的 *doc.go*。一个典型的 *pkg/apis/`group`/`version`/doc.go* 文件如下所示：
+- en: '[PRE3]'
+  id: totrans-48
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: The first line of this file tells `deepcopy-gen` to create deep-copy methods
+    by default for every type in that package. If you have types where deep copy is
+    not necessary, not desired, or even not possible, you can opt out for them with
+    the local tag `// +k8s:deepcopy-gen=false`. If you do not enable package-wide
+    deep copy, you have to opt in to deep copy for each desired type via `// +k8s:deepcopy-gen=true`.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此文件的第一行告诉`deepcopy-gen`默认为该包中的每种类型创建深度复制方法。如果您有不需要、不希望或甚至不可能进行深度复制的类型，您可以通过本地标签`//
+    +k8s:deepcopy-gen=false`为其选择退出。如果您没有启用包范围的深度复制，您必须通过`// +k8s:deepcopy-gen=true`为每种所需类型选择深度复制。
+- en: The second tag, `// +groupName=example.com`, defines the fully qualified API
+    group name. This tag is necessary if the Go parent package name does not match
+    the group name.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 第二个标签，`// +groupName=example.com`，定义了完全限定的API组名。如果Go父包名称与组名不匹配，则此标签是必需的。
+- en: The file shown here actually comes from the [`cnat client-go` example *pkg/apis/cnat/v1alpha1/doc.go*
+    file](http://bit.ly/2L6M9ad) (see [“Following sample-controller”](ch06.html#cnat-client-go)).
+    There, `cnat` is the parent package, but `cnat.programming-kubernetes.info` is
+    the group name.
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里显示的文件实际上来自[`cnat client-go`示例 *pkg/apis/cnat/v1alpha1/doc.go*文件](http://bit.ly/2L6M9ad)（请参阅[“跟踪示例控制器”](ch06.html#cnat-client-go)）。在那里，`cnat`是父包，但`cnat.programming-kubernetes.info`是组名。
+- en: 'With the `// +groupName` tag, the client generator (see [“Typed client created
+    via client-gen”](ch04.html#clientgen-client)) will generate a client using the
+    correct HTTP path */apis/foo.project.example.com*. Besides `+groupName` there
+    is also `+groupGoName`, which defines a custom Go identifier (for variable and
+    type names) to be used instead of the parent package name. For example, the generators
+    will use the uppercase parent package name for identifies by default, which in
+    our example is `Cnat`. A better identifier would be `CNAt` for “Cloud Native At.”
+    With `// +groupGoName=CNAt` we could use that instead of `Cnat` (though we don’t
+    do that in this example—we’ve stayed with `Cnat`), and the `client-gen` result
+    would look like the following:'
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用`// +groupName`标签，客户端生成器（请参阅[“通过client-gen创建的类型化客户端”](ch04.html#clientgen-client)）将生成一个使用正确HTTP路径
+    */apis/foo.project.example.com*的客户端。除了`+groupName`之外，还有`+groupGoName`，它定义了一个自定义的Go标识符（用于变量和类型名称），用于替代父包名称。例如，生成器默认使用大写的父包名称作为标识符，在我们的示例中是`Cnat`。一个更好的标识符将是`CNAt`，代表“Cloud
+    Native At”。使用`// +groupGoName=CNAt`，我们可以使用它而不是`Cnat`（尽管在此示例中我们没有这样做——我们仍然使用了`Cnat`），`client-gen`生成的结果将如下所示：
+- en: '[PRE4]'
+  id: totrans-53
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: Local Tags
+  id: totrans-54
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 本地标签
+- en: 'Local tags are written either directly above an API type or in the second comment
+    block above it. Here are the main types in the *types.go* file of the [`cnat`
+    example](http://bit.ly/31QosJw):'
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本地标签可以直接写在API类型的上方，也可以写在其上方的第二个注释块中。以下是[`cnat`示例](http://bit.ly/31QosJw)中*types.go*文件中的主要类型：
+- en: '[PRE5]'
+  id: totrans-56
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: In the following sections we’ll walk through the tags of this example.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在以下各节中，我们将详细介绍本示例的标签。
+- en: Tip
+  id: totrans-58
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: In this example, the API documentation is in the first comment block, while
+    we put the tags into the second comment block. This helps to keep the tags out
+    of the API documentation, if you use some tool to extract the Go doc comments
+    for that purpose.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这个示例中，API文档位于第一个注释块中，而我们将标签放在第二个注释块中。如果您使用某些工具来提取Go doc注释，这有助于将标签排除在API文档之外。
+- en: deepcopy-gen Tags
+  id: totrans-60
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: deepcopy-gen 标签
+- en: Deep-copy method generation is usually enabled for all types by default via
+    the global `// +k8s:deepcopy-gen=package` tag (see [“Global Tags”](#global-tags))—that
+    is, with possible opt-out. However, in the preceding example file (and actually
+    the whole package), all API types need deep-copy methods. Hence, we don’t have
+    to opt out locally.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常通过全局`// +k8s:deepcopy-gen=package`标签为所有类型启用深度复制方法（请参阅[“全局标签”](#global-tags)），即通过可能的选择退出。然而，在前述示例文件中（实际上是整个包中），所有API类型都需要深度复制方法。因此，我们不必在本地选择退出。
+- en: 'If we had a helper struct in the API types package (this is usually discouraged
+    to keep API packages clean), we would have to disable deep-copy generation. For
+    example:'
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果我们在API类型包中有一个辅助结构体（通常不鼓励这样做以保持API包的清洁），我们将不得不禁用深度复制生成。例如：
+- en: '[PRE6]'
+  id: totrans-63
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: runtime.Object and DeepCopyObject
+  id: totrans-64
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: runtime.Object 和 DeepCopyObject
+- en: 'There is a special deep-copy tag that needs more explanation:'
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有一个需要更多解释的特殊深度复制标签：
+- en: '[PRE7]'
+  id: totrans-66
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: In [“Kubernetes Objects in Go”](ch03.html#kube-objects) we saw that `runtime.Object`s
+    have to implement the `DeepCopyObject() runtime.Object` method. The reason is
+    that generic code within Kubernetes has to be able to create deep copies of objects.
+    This method allows that.
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[《Go中的Kubernetes对象》](ch03.html#kube-objects)中，我们看到`runtime.Object`必须实现`DeepCopyObject()
+    runtime.Object`方法。原因是Kubernetes内部的通用代码必须能够创建对象的深拷贝。这个方法允许了这一点。
+- en: 'The `DeepCopyObject()` method does nothing other than calling the generated
+    `DeepCopy` method. The signature of the latter varies from type to type (`DeepCopy()`
+    `*T` depends on `T`). The signature of the former is always `DeepCopyObject()`
+    `runtime.Object`:'
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`DeepCopyObject()`方法除了调用生成的`DeepCopy`方法外什么也不做。后者的签名因类型而异（`DeepCopy()` `*T`
+    取决于 `T`）。前者的签名始终是 `DeepCopyObject()` `runtime.Object`：'
+- en: '[PRE8]'
+  id: totrans-69
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: Put the local tag `//` `+k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object`
+    above your top-level API types to generate this method with `deepcopy-gen`. This
+    tells `deepcopy-gen` to create such a method for `runtime.Object`, called `DeepCopyObject()`.
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在你的顶层API类型上方放置本地标签 `//` `+k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object`
+    可以生成带有`deepcopy-gen`的这种方法。这告诉`deepcopy-gen`为`runtime.Object`创建这样一个方法，称为`DeepCopyObject()`。
+- en: Tip
+  id: totrans-71
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: In the previous example, both `At` and `AtList` are top-level types because
+    they are used as `runtime.Object`s.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在前面的例子中，`At`和`AtList`都是顶层类型，因为它们作为`runtime.Object`使用。
+- en: As a rule of thumb, top-level types are those that have `metav1.TypeMeta` embedded.
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为一个经验法则，顶层类型是那些嵌入了`metav1.TypeMeta`的类型。
+- en: 'It happens that other interfaces need a way to be deep-copied. This is usually
+    the case if, for example, API types have a field of interface type `Foo`:'
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 其他接口需要一种方式进行深拷贝。例如，如果API类型有一个接口类型的字段`Foo`，通常情况下就会是这样：
+- en: '[PRE9]'
+  id: totrans-75
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: As we have seen, API types must be deep-copyable, and hence the field `Foo`
+    must be deep-copied too. How could you do that in a generic way (without type-casts)
+    without adding `DeepCopyFoo() Foo` to the `Foo` interface?
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如我们所见，API类型必须能够进行深拷贝，因此字段`Foo`也必须进行深拷贝。在不使用类型转换的情况下，您如何以通用方式实现这一点，而不是将`DeepCopyFoo()
+    Foo`添加到`Foo`接口中呢？
+- en: '[PRE10]'
+  id: totrans-77
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: 'In that case the same tag can be used:'
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在那种情况下，可以使用相同的标签：
+- en: '[PRE11]'
+  id: totrans-79
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: 'There are a few examples beyond `runtime.Object` in the Kubernetes source where
+    this tag is actually used:'
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在Kubernetes源码中，实际上有几个超出`runtime.Object`范围的示例使用了此标签：
+- en: '[PRE12]'
+  id: totrans-81
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: client-gen Tags
+  id: totrans-82
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: client-gen标签
+- en: 'Finally, there are a number of tags to control `client-gen`, one of which we
+    saw in the earlier example for `At` and `AtList`:'
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，有许多标签来控制`client-gen`，我们在早期关于`At`和`AtList`的示例中看到了其中之一：
+- en: '[PRE13]'
+  id: totrans-84
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: It tells `client-gen` to create a client for this type (this is always opt-in).
+    Note that you don’t have to and indeed *must not* put it above the `List` type
+    of the API objects.
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 它告诉`client-gen`为此类型创建一个客户端（这总是可选择的）。请注意，您不必，实际上*不得*将其放在API对象的`List`类型之上。
+- en: 'In our `cnat` example, we use the */status* subresource and update the status
+    of the CRs with the `UpdateStatus` method of the client (see [“Status subresource”](ch04.html#status-subresource)).
+    There are instances of CRs without a status or without a spec-status split. In
+    those cases, the following tag avoids the generation of that `UpdateStatus()`
+    method:'
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在我们的`cnat`示例中，我们使用*/status*子资源并使用客户端的`UpdateStatus`方法来更新CR的状态（参见[“状态子资源”](ch04.html#status-subresource)）。存在没有状态或没有规范-状态分离的CR实例。在这些情况下，以下标签避免了生成`UpdateStatus()`方法：
+- en: '[PRE14]'
+  id: totrans-87
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: Warning
+  id: totrans-88
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Without this tag, `client-gen` will blindly generate the `UpdateStatus()` method.
+    It is important to understand, however, that the spec-status split works only
+    if the */status* subresource is actually enabled in the CustomResourceDefinition
+    manifest (see [“Subresources”](ch04.html#crd-subresources)).
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 没有这个标签，`client-gen`将盲目地生成`UpdateStatus()`方法。然而，重要的是要理解，仅当CustomResourceDefinition清单中实际启用了*/status*子资源时，规范-状态分离才起作用（参见[“子资源”](ch04.html#crd-subresources)）。
+- en: The existence of the method alone in the client has no effect. Requests to it
+    without the change in the manifest will even fail.
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 仅仅是客户端中存在该方法本身并没有什么影响。在没有清单中的更改的情况下，对它的请求甚至会失败。
+- en: 'The client generator has to choose the right HTTP path, either with or without
+    a namespace. For cluster-wide resources, you have to use the tag:'
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 客户端生成器必须选择正确的HTTP路径，无论是否有命名空间。对于集群范围的资源，您必须使用此标签：
+- en: '[PRE15]'
+  id: totrans-92
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: 'The default is to generate a namespaced client. Again, this has to match the
+    scope setting in the CRD manifest. For special-purpose clients, you might also
+    want to control in detail which HTTP methods are offered. You can do this by using
+    a couple of tags, for example:'
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认生成的是命名空间客户端。同样，这必须与 CRD 清单中的范围设置相匹配。对于特定用途的客户端，您可能还希望详细控制提供的 HTTP 方法。例如，您可以通过使用一些标签来实现这一点：
+- en: '[PRE16]'
+  id: totrans-94
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: The first three should be pretty self-explanatory, but the last one warrants
+    some explanation.
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 前三个应该相当容易理解，但最后一个需要一些解释。
+- en: The type this tag is written above will be create-only and will not return the
+    API type itself, but a `metav1.Status`. For CRs this does not make much sense,
+    but for user-provided API servers written in Go (see [Chapter 8](ch08.html#ch_custom-api-servers))
+    those resources can exist, and they do in practice.
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此标签上方写的类型将仅用于创建，并不会返回 API 类型本身，而是 `metav1.Status`。对于 CR 来说，这并没有太多意义，但对于用 Go
+    编写的用户提供的 API 服务器（参见 [第 8 章](ch08.html#ch_custom-api-servers)），这些资源可能存在，并且实际中确实存在。
+- en: 'One common case for the `// +genclient:method=` tag is the addition of a method
+    to scale a resource. In [“Scale subresource”](ch04.html#scale-subresource) we
+    describe how the */scale* subresource can be enabled for CRs. The following tags
+    create the corresponding client methods:'
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`// +genclient:method=` 标签的一个常见用例是添加一个用于缩放资源的方法。在 [“Scale subresource”](ch04.html#scale-subresource)
+    中，我们描述了如何为 CR 启用 */scale* 子资源。以下标签创建相应的客户端方法：'
+- en: '[PRE17]'
+  id: totrans-98
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: The first tag creates the getter `GetScale`. The second creates the setter `UpdateScale`.
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 第一个标签创建了 getter `GetScale`。第二个创建了 setter `UpdateScale`。
+- en: Note
+  id: totrans-100
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: All CR */scale* subresources receive and output the `Scale` type from the *autoscaling/v1*
+    group. In the Kubernetes API there are resources that use other types for historic
+    reasons.
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有 CR */scale* 子资源都接收并输出来自 *autoscaling/v1* 组的 `Scale` 类型。在 Kubernetes API 中，出于历史原因，有些资源使用其他类型。
+- en: informer-gen and lister-gen
+  id: totrans-102
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: informer-gen 和 lister-gen
+- en: Both `informer-gen` and `lister-gen` process the `// +genclient` tag of `client-gen`.
+    There is nothing else to configure. Each type that opted in to client generation
+    gets informers and listers automatically that match the client (if the whole suite
+    of generators is called via the *k8s.io/code-generator/generate-group.sh* script).
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`informer-gen` 和 `lister-gen` 处理 `client-gen` 的 `// +genclient` 标签。没有其他配置可做。每个选择客户端生成的类型都会自动匹配客户端的
+    Informers 和 Listers（如果通过 *k8s.io/code-generator/generate-group.sh* 脚本调用整个生成器套件）。'
+- en: The documentation of the Kubernetes generators has a lot of room for improvement
+    and will certainly be refined slowly over time. For more information about the
+    different generators, it is often helpful to look at examples inside Kubernetes
+    itself—for example, [k8s.io/api](http://bit.ly/2ZA6dWH) and [OpenShift API types](http://bit.ly/2KxpKnc).
+    Both repositories have many advanced use cases.
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 生成器的文档有很大的改进空间，并且肯定会随着时间的推移逐步完善。有关不同生成器的更多信息，通常最好查看 Kubernetes 本身的示例，例如，[k8s.io/api](http://bit.ly/2ZA6dWH)
+    和 [OpenShift API types](http://bit.ly/2KxpKnc)。这两个存储库都有许多高级用例。
+- en: Moreover, don’t hesitate to look into the generators themselves. `deepcopy-gen`
+    has some documentation available inside its [*main.go*](http://bit.ly/2x9HmN4)
+    file. `client-gen` has some documentation available in the [Kubernetes contributor
+    documentation](http://bit.ly/2WYNlns). `informer-gen` and `lister-gen` currently
+    don’t have further documentation, but *generate-groups.sh* shows [how each is
+    invoked](http://bit.ly/31MeSHp).
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此外，不要犹豫地查看生成器本身。`deepcopy-gen` 在其 [*main.go*](http://bit.ly/2x9HmN4) 文件中有一些可用的文档。`client-gen`
+    在 [Kubernetes 贡献者文档](http://bit.ly/2WYNlns) 中有一些可用的文档。`informer-gen` 和 `lister-gen`
+    目前没有进一步的文档，但 *generate-groups.sh* 显示了每个生成器如何被调用的方法。
+- en: Summary
+  id: totrans-106
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 总结
+- en: In this chapter we showed you how to use the Kubernetes code generators for
+    CRs. With that out of the way, we now move on to higher-level abstraction tooling—that
+    is, solutions for writing custom controllers and operators that enable you to
+    focus on the business logic.
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们向您展示了如何为 CR 使用 Kubernetes 代码生成器。现在，我们转向更高级别的抽象工具——即编写自定义控制器和操作员的解决方案，这使您能够专注于业务逻辑。
+- en: ^([1](ch05.html#idm46336860111320-marker)) The Go tools do not run the generation
+    automatically when needed and lack a way to define dependencies between source
+    and generated files.
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([1](ch05.html#idm46336860111320-marker)) Go 工具不会在需要时自动运行生成，也缺乏定义源文件和生成文件之间依赖关系的方法。

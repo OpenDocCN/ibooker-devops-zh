@@ -1,0 +1,1591 @@
+- en: Chapter 8\. Admission Control
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第 8 章 准入控制
+- en: 'We have written many times in this book about the flexible, modular design
+    of Kubernetes being one of its great strengths. Sensible defaults can be replaced,
+    augmented, or built upon to provide alternative or more fully featured experiences
+    for platform consumers. Admission control is one area that particularly benefits
+    from this flexible design goal. Admission control is concerned with validating
+    and mutating requests to the Kubernetes API server *before* they are persisted
+    in etcd. This ability to intercept objects with fine granularity and control opens
+    up a number of interesting use cases. For example:'
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本书中我们已多次提到 Kubernetes 灵活、模块化的设计是其伟大优势之一。合理的默认设置可以被替换、增强或基于其上构建，为平台消费者提供替代或更完整的体验。准入控制是特别受益于这一灵活设计目标的领域之一。准入控制关注的是在对象被持久化到
+    etcd 之前 *验证和修改* Kubernetes API 服务器的请求。这种能力以细粒度和控制拦截对象打开了许多有趣的用例。例如：
+- en: Ensuring that new objects cannot be created in a Namespace that is currently
+    being deleted (in terminating state)
+  id: totrans-2
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 确保正在被删除（处于终止状态）的命名空间中不能创建新对象。
+- en: Enforcing that new Pods are not going to run as the root user
+  id: totrans-3
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 强制新 Pod 不以 root 用户身份运行
+- en: Making sure that the total sum of memory used by all the Pods in a Namespace
+    does not exceed a user-defined limit
+  id: totrans-4
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 确保一个命名空间中所有 Pod 使用的内存总和不超过用户定义的限制。
+- en: Ensuring that Ingress rules cannot be overwritten accidentally
+  id: totrans-5
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 确保 Ingress 规则不能被意外覆盖。
+- en: Adding a sidecar container to every Pod (e.g., Istio)
+  id: totrans-6
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 向每个 Pod 添加一个 Sidecar 容器（例如 Istio）
+- en: First we’ll take a high-level look at the admission chain, which is the process
+    all requests to the API server go through. Then we’ll move on to cover the in-tree
+    controllers. These are built-in admission controllers that can be enabled and
+    disabled via flags to the API server and enable some of the preceding use cases.
+    Other use cases require more custom implementation and are integrated via a flexible
+    webhook model. We’ll dedicate a lot of time to diving into the webhook model as
+    it provides the most powerful and flexible options for integrating admission control
+    into a cluster. Lastly, we’ll finish by covering Gatekeeper, which is an opinionated
+    open source project that implements the webhook model and provides additional
+    user-friendly functionality.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，我们将高层次地查看准入控制链，这是所有发送到 API 服务器的请求都要经过的过程。然后我们将继续介绍内置的控制器。这些内置的准入控制器可以通过 API
+    服务器的标志启用和禁用，并支持前面提到的一些用例。其他用例则需要更加定制的实现，并通过灵活的 Webhook 模型集成。我们将花大量时间深入探讨 Webhook
+    模型，因为它为将准入控制集成到集群中提供了最强大和灵活的选项。最后，我们将介绍 Gatekeeper，这是一个倾向于的开源项目，实现了 Webhook 模型，并提供额外的用户友好功能。
+- en: Note
+  id: totrans-8
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Further into this chapter we’ll dive into some code written in the Go programming
+    language. Kubernetes and many other cloud native tools are implemented in Go due
+    to its rapid speed of development, strong concurrency primitives, and clean design.
+    It’s not necessary to know Go to understand most of this chapter (but we’d advise
+    you to look into it if you’re interested in Kubernetes tooling), and we will discuss
+    the trade-off of needing development skills when weighing custom versus off-the-shelf
+    tooling choices.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章的更深部分，我们将深入了解用 Go 编程语言编写的一些代码。Kubernetes 和许多其他云原生工具之所以选择 Go 语言实现，是因为它快速的开发速度、强大的并发原语和清晰的设计。虽然了解
+    Go 并不是理解本章大部分内容的必要条件（但如果你对 Kubernetes 工具感兴趣，我们建议你去了解它），我们将讨论定制与现成工具选择时需要开发技能的权衡。
+- en: The Kubernetes Admission Chain
+  id: totrans-10
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Kubernetes 准入链
+- en: Before we look closer at the functionality and mechanics of individual controllers,
+    let’s first understand the flow of requests to and from the Kubernetes API server
+    as shown in [Figure 8-1](#admission_chain).
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在我们更详细地了解各个控制器的功能和机制之前，让我们首先了解 Kubernetes API 服务器的请求和响应流程，如图 [8-1](#admission_chain)
+    所示。
+- en: '![prku 0801](assets/prku_0801.png)'
+  id: totrans-12
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 0801](assets/prku_0801.png)'
+- en: Figure 8-1\. Admission chain.
+  id: totrans-13
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 8-1 准入链。
+- en: Initially when requests arrive at the API server they are authenticated and
+    authorized to ensure that the client is valid and able to perform the requested
+    action (e.g., create a Pod in a specific Namespace) according to any configured
+    RBAC rules.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最初，当请求到达 API 服务器时，它们会经过身份验证和授权，以确保客户端是有效的，并能根据配置的 RBAC 规则执行请求的操作（例如，在特定命名空间创建一个
+    Pod）。
+- en: In the next stage, requests pass through mutating admission controllers represented
+    by the leftmost blue box in [Figure 8-1](#admission_chain). These can be built-in
+    controllers or calls to external (out-of-tree) mutating webhooks (we’ll discuss
+    these later in the chapter). These controllers are able to modify the resource
+    attributes before they pass onto future phases. As an example of why this might
+    be useful, let’s consider the Service Account controller (which is built in and
+    enabled by default). When a Pod is submitted, the Service Account controller inspects
+    the Pod’s spec to ensure that it has the `serviceAccount` (SA) field set. If not,
+    then it adds the field and sets it to the `default` SA for the Namespace. It also
+    adds `ImagePullSecrets` and a Volume to allow the Pod to [access its Service Account
+    token](https://oreil.ly/K6e5E).
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在下一阶段，请求通过突变接入控制器，由[图 8-1](#admission_chain)中最左边的蓝色框表示。这些可以是内置控制器或对外部（外部树）突变Webhook的调用（我们稍后将讨论这些内容）。这些控制器能够在传递到后续阶段之前修改资源属性。作为为什么这可能有用的示例，让我们考虑Service
+    Account控制器（默认情况下内置并启用）。当提交Pod时，Service Account控制器会检查Pod的规范，以确保它已设置了`serviceAccount`（SA）字段。如果没有，它会添加该字段，并将其设置为Namespace的`default`
+    SA。它还添加`ImagePullSecrets`和一个Volume，以允许Pod访问其[Service Account令牌](https://oreil.ly/K6e5E)。
+- en: Requests then undergo schema validation to ensure that the object being submmitted
+    is valid according to the defined schema. Here it ensures things like mandatory
+    fields are set. This ordering is important as it means we can set fields in mutating
+    admission controllers before the object is validated.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后，请求将经过模式验证，以确保所提交的对象根据定义的模式是有效的。这里确保像强制字段这样的内容已设置。这种顺序很重要，因为它意味着我们可以在验证对象之前设置突变接入控制器中的字段。
+- en: The final stage before the object is persisted to etcd is for it to pass through
+    validating admission controllers, represented by the rightmost blue box in [Figure 8-1](#admission_chain).
+    These can be built-in controllers or calls to external (out-of-tree) validating
+    webhooks (we’ll briefly cover these later in the chapter). These validating controllers
+    differ from mutating controllers in the sense that they are only able to admit
+    or reject the request, *not* modify the payload. They differ from the prior *schema
+    validation* step in that they are concerned with validating against operational
+    logic, not a standardized schema.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在对象持久化到etcd之前的最后阶段，它必须通过验证接入控制器，由[图 8-1](#admission_chain)中最右边的蓝色框表示。这些可以是内置控制器或对外部（外部树）验证Webhook的调用（我们稍后将简要介绍这些内容）。这些验证控制器与突变控制器不同，因为它们只能批准或拒绝请求，*不能*修改负载。它们与之前的*模式验证*步骤不同，因为它们关注的是操作逻辑验证，而不是标准化模式。
+- en: 'An example validating admission controller is the `NamespaceLifecycle` controller.
+    It has several jobs related to Namespaces, but the one we’ll take a look at is
+    its responsibility to reject requests for new objects to be created in a Namespace
+    that is currently being deleted. We can see the behavior in this code snippet:'
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个示例验证接入控制器是`NamespaceLifecycle`控制器。它有几个与命名空间相关的工作，但我们将查看的是它拒绝在当前正在删除的命名空间中创建新对象的请求。我们可以在此代码片段中看到这种行为：
+- en: '[PRE0]'
+  id: totrans-19
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: '[![1](assets/1.png)](#co_admission_control_CO1-1)'
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_admission_control_CO1-1)'
+- en: If the operation is a Create but the Namespace is currently *not* terminating,
+    return no error. The request would pass this controller.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果操作是创建，但命名空间当前*未*终止，请不要返回错误。请求将通过此控制器。
+- en: '[![2](assets/2.png)](#co_admission_control_CO1-2)'
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_admission_control_CO1-2)'
+- en: Else, return an API error stating that the Namespace is being terminated. If
+    an error is returned, the request is denied.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 否则，返回一个API错误，说明命名空间正在终止。如果返回错误，则请求被拒绝。
+- en: Note
+  id: totrans-24
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: For a request to pass and the object to be persisted into etcd it must be admitted
+    by *all* validating admission controllers. For it to be denied, only *one* controller
+    needs to reject it.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要使请求通过并将对象持久化到etcd中，它必须由*所有*验证接入控制器批准。要拒绝它，只需一个控制器拒绝即可。
+- en: In-Tree Admission Controllers
+  id: totrans-26
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 内置接入控制器
+- en: When Kubernetes was first released there was only a minimal number of interfaces
+    for users to *plug in* or extend external functionality, such as the Container
+    Network Interface (CNI). Other integrations with cloud providers, storage providers,
+    and the implementation of admission controllers were all baked into the core Kubernetes
+    code base and often described as being *in-tree*. Over time the project has sought
+    to increase the number of pluggable interfaces, and we have seen the creation
+    of the Container Storage Interface (CSI) and the movement toward external cloud
+    providers.
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当 Kubernetes 初次发布时，用户只能使用少量接口来*插入*或扩展外部功能，例如容器网络接口（CNI）。其他与云提供商、存储提供商的集成，以及准入控制器的实现，都是嵌入到核心
+    Kubernetes 代码中的，通常被描述为*内置*。随着时间推移，项目试图增加可插拔接口的数量，我们看到了容器存储接口（CSI）的创建，以及向外部云提供商的转移。
+- en: Admission controllers are one area where many core features are still in-tree.
+    Kubernetes ships with many different admission controllers that can be enabled
+    or disabled by configuring API server flags. This model has proved problematic
+    for those users of cloud-managed Kubernetes platforms who historically did not
+    have access to configure those flags. PodSecurityPolicy (PSP) is an example of
+    a controller that enables advanced and robust security capabilities across the
+    cluster but is *not* enabled by default, therefore excluding users from benefitting
+    from it.
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 准入控制器是仍然有许多核心功能内置的一个领域。Kubernetes附带许多不同的准入控制器，可以通过配置API服务器标志来启用或禁用。对于那些历史上没有权限配置这些标志的云托管Kubernetes平台的用户，这种模型已经证明是有问题的。PodSecurityPolicy（PSP）是一个示例，它可以在整个集群中启用高级和强大的安全功能，但*不*默认启用，因此排除了用户从中获益的可能性。
+- en: However, admission control is slowly following the trend of shifting code out
+    of the API server and moving toward increased pluggability. The start of this
+    process came with the addition of mutating and validating webhooks. These are
+    two flexible admission controllers that allow us to specify that the API server
+    should forward requests (that match specific criteria) and delegate admission
+    decisions to external webhooks. We will discuss these in greater detail in the
+    next section.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，准入控制正在缓慢地遵循将代码从API服务器移出并向增加可插拔性的趋势发展。这一过程的开始是通过添加变异和验证Webhook来实现的。这两个灵活的准入控制器允许我们指定API服务器应该转发请求（符合特定条件的请求），并将准入决策委托给外部Webhook。我们将在下一节详细讨论这些内容。
+- en: Another step in this process is the [announced deprecation](https://github.com/kubernetes/enhancements/issues/5)
+    of the current PodSecurityPolicy built-in controller. Although there are multiple
+    approaches to replace it, we think the implementation of PSPs will be delegated
+    to an external admission controller, as the community continues to move code out
+    of tree. In fact, we believe that more of the built-in admission controllers will
+    be eventually moved out of tree. These would be replaced either by recommendations
+    to utilize third-party tooling or standardized components that live in the Kubernetes
+    upstream organization but not the core code base, thereby allowing users a sane
+    default choice with the ability to replace if necessary.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这个过程中的另一步是[宣布废弃](https://github.com/kubernetes/enhancements/issues/5)当前的PodSecurityPolicy内置控制器。虽然有多种方法来替代它，我们认为PSP的实现将委托给外部准入控制器，因为社区继续将代码移出内置。事实上，我们相信更多内置准入控制器最终会被移出内置。这些将被推荐使用第三方工具或标准化组件来替换，这些组件存在于Kubernetes上游组织中，但不在核心代码库中，从而允许用户在需要时选择合理的默认选项。
+- en: Note
+  id: totrans-31
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: A subset of the built-in admission controllers is enabled by default. These
+    are intended as a set of *sane defaults* that should work well for most clusters.
+    We won’t replicate the list here, but you should take care to ensure the controllers
+    you need are enabled. Also note that the UX for this feature can be a little confusing.
+    To enable additional (nondefault) controllers you must use the `--enable-admission-plugins`
+    flag to the API server, and to *disable* default controllers you must specify
+    the `--disable-admission-plugins` list parameter.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一些内置准入控制器的子集默认启用。这些被设计为大多数集群中运行良好的*合理默认值*。我们不会在此重复列表，但您应注意确保启用您需要的控制器。此外，请注意此功能的用户体验可能有点令人困惑。要启用额外的（非默认）控制器，您必须使用`--enable-admission-plugins`标志向API服务器添加，要*禁用*默认控制器，您必须指定`--disable-admission-plugins`列表参数。
+- en: There is a lot of good information on the in-tree controllers available in the
+    official Kubernetes documentation, so we’re not going to cover much more on them
+    here. The real power of admission controllers is enabled by the two special validating
+    and mutating webhooks, which is where we’re headed next!
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 官方 Kubernetes 文档中有大量关于内部控制器的信息，因此我们不会在这里详细介绍它们。准入控制器的真正威力是通过两个特殊的验证和变异 Webhook
+    启用的，这是我们接下来要讨论的地方！
+- en: Webhooks
+  id: totrans-34
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Webhook
+- en: Caution
+  id: totrans-35
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: All admission controllers sit in the *critical path* for requests going to the
+    Kubernetes API server. They have varying scopes, so not all requests may be intercepted,
+    but you should definitely be aware of this when enabling and/or injecting them.
+    This is especially relevant when discussing webhook admission controllers for
+    two reasons. First, they have added latency as they reside out of tree and must
+    be called via HTTPS. Second, they have a broad potential scope of functionality,
+    maybe even calling out to third-party systems. Great care should be taken to make
+    admission controllers perform as efficiently as possible, returning at the earliest
+    opportunity.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有的准入控制器都位于请求发送到 Kubernetes API 服务器的**关键路径**上。它们的作用范围各不相同，因此并非所有请求都会被拦截，但在启用和/或注入它们时，您一定要注意这一点。在讨论
+    Webhook 准入控制器时尤为重要，原因有二。首先，由于它们位于外部且必须通过 HTTPS 调用，因此会增加延迟。其次，它们具有广泛的功能潜力，甚至可能调用第三方系统。必须极为小心地确保准入控制器尽可能高效地执行，并在最早的机会返回。
+- en: 'Webhooks are a special type of admission controller. We can configure the Kubernetes
+    API server to send an API request to external webhook endpoints and receive a
+    decision (whether the original request should be allowed, denied, or altered/mutated)
+    response. This is incredibly powerful for a number of reasons:'
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Webhook 是一种特殊类型的准入控制器。我们可以配置 Kubernetes API 服务器，向外部 Webhook 终端点发送 API 请求，并接收一个决策（原始请求是否应允许、拒绝或更改/变异）的响应。出于多种原因，这非常强大：
+- en: The receiving web server can be written in any language that can expose an HTTPS
+    listener. We can take advantage of web frameworks, libraries, and expertise that
+    may be available to us to implement any logic we need to make admission decisions.
+  id: totrans-38
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 接收 Web 服务器可以用任何能够暴露 HTTPS 监听器的语言编写。我们可以利用可能可用的 Web 框架、库和专业知识来实现我们需要进行准入决策的任何逻辑。
+- en: They can be run in or out of cluster. We can take advantage of the discovery
+    and operator primitives that are available to us if we want to run them in-cluster,
+    or we can implement reusable functionality in a serverless function, for example.
+  id: totrans-39
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 它们可以在集群内或集群外运行。如果要在集群内运行它们，我们可以利用可用的发现和操作者原语，或者例如实现可重用功能的无服务器函数。
+- en: We are able to make callouts to systems and datastores external to Kubernetes
+    to make policy decisions. For instance, we could query a centralized security
+    system to check if specific images were approved for use in Kubernetes manifests.
+  id: totrans-40
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 我们能够调用 Kubernetes 外部的系统和数据存储来进行策略决策。例如，我们可以查询集中的安全系统，检查 Kubernetes 清单中是否批准使用特定镜像。
+- en: Note
+  id: totrans-41
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注释
+- en: The API server will call webhooks over TLS, so webhooks must present certificates
+    trusted by the Kubernetes API. This is often achieved by deploying Cert Manager
+    into the cluster and automatically generating certificates. If running out of
+    cluster, you will need to provision certificates that are trusted by the Kubernetes
+    API server, either from a public root CA or some internal CA that Kubernetes is
+    aware of.
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: API 服务器将通过 TLS 调用 Webhook，因此 Webhook 必须提供 Kubernetes API 所信任的证书。通常通过在集群中部署 Cert
+    Manager 并自动生成证书来实现这一点。如果在集群外运行，则需要提供 Kubernetes API 服务器信任的证书，可以来自公共根 CA 或 Kubernetes
+    知道的某个内部 CA。
+- en: 'For the webhook model to work, there must be a defined schema for the request
+    and response messages exchanged between the API server and the webhook server.
+    In Kubernetes this is defined as an AdmissionReview object and is a JSON payload
+    that contains information about the request, including:'
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要使 Webhook 模型正常工作，必须为 API 服务器和 Webhook 服务器之间交换的请求和响应消息定义一个明确定义的模式。在 Kubernetes
+    中，这被定义为 AdmissionReview 对象，是一个包含有关请求信息的 JSON 负载，包括：
+- en: API version, group, and kind
+  id: totrans-44
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: API 版本、组和类型
+- en: Metadata such as the name and Namespace, and a unique ID to correlate it with
+    the response decision
+  id: totrans-45
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 元数据，如名称和命名空间，以及用于与响应决策进行关联的唯一 ID
+- en: The operation attempted (e.g., CREATE)
+  id: totrans-46
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 尝试的操作（例如，CREATE）
+- en: Information about the user initiating the request including their group membership
+  id: totrans-47
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 有关发起请求的用户信息，包括他们的组成员身份
+- en: Whether this is a *dry run* request (this is important as we’ll see later when
+    we discuss design considerations)
+  id: totrans-48
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 是否为*干预运行*请求（这一点很重要，因为后面在讨论设计考虑时会看到）
+- en: The actual resource
+  id: totrans-49
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 实际资源
+- en: 'All of this information can be used by the receiving webhook to calculate an
+    admission decision. Once decided, the server needs to respond with an AdmissionReview
+    message of its own (this time with a `response` field). It will contain:'
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有这些信息可以被接收 Webhook 使用以计算接受决策。一旦决定，服务器需要用自己的 AdmissionReview 消息做出响应（这次包括一个`response`字段）。它将包含：
+- en: The unique ID from the request (for correlation)
+  id: totrans-51
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 请求的唯一 ID（用于关联）
+- en: Whether the request should be allowed to proceed
+  id: totrans-52
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 是否应允许请求继续进行
+- en: An optional customized error status and message
+  id: totrans-53
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 可选的自定义错误状态和消息
+- en: Validating webhooks are not able to modify the requests sent to them and can
+    admit or reject only the original object. This restriction makes them fairly limited;
+    however, they are a good fit when ensuring that objects applied to the cluster
+    conform to security standards (specific user IDs, no host mounts, etc.) or contain
+    all required metadata (internal team labels, annotations, etc.).
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 验证 Webhook 无法修改发送到它们的请求，并且只能接受或拒绝原始对象。这一限制使它们相当有限；但是，在确保应用到集群的对象符合安全标准（特定用户
+    ID、无主机挂载等）或包含所有所需的元数据（内部团队标签、注解等）时，它们非常合适。
+- en: In the case of a *mutating* webhook the response structure can also include
+    a patch set (if desired). This is a base64-encoded string containing a valid JSONPatch
+    structure encapsulating the changes that should be made to the request before
+    it is admitted to the API server. If you want a more detailed explanation of all
+    the fields and structure for AdmissionReview objects, then the [official documentation](https://oreil.ly/NWagy)
+    does a great job here.
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在*变异* Webhook 的情况下，响应结构也可以包括一个补丁集（如果需要）。这是一个包含有效 JSONPatch 结构的 base64 编码字符串，封装了请求在提交到
+    API 服务器之前应进行的更改。如果你想详细了解 AdmissionReview 对象的所有字段和结构，那么[官方文档](https://oreil.ly/NWagy)在这里做得非常好。
+- en: A simple example of a mutating controller might be one that adds a set of labels
+    containing team- or workload-specific metadata to Pods or Deployments. Another
+    more complex but common use of mutating controllers you may come across is the
+    injection of a sidecar proxy in many service mesh implementations. The way this
+    works is that the service mesh (Istio in this case) runs an admission controller
+    that mutates Pod specs to add a sidecar container that will participate in the
+    data plane of the mesh. This injection occurs by default but can be overridden
+    by annotations at the Namespace or Pod level to provide additional control.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 变异控制器的一个简单示例可能是向 Pod 或 Deployments 添加一组包含团队或工作负载特定元数据的标签。你可能会遇到的变异控制器的另一个更复杂但常见的用法是在许多服务网格实现中注入
+    sidecar 代理。其工作方式是服务网格（例如 Istio）运行一个 Admission 控制器，该控制器变异 Pod 规范以添加一个将参与网格数据平面的
+    sidecar 容器。此注入默认情况下发生，但可以通过 Namespace 或 Pod 级别的注解进行覆盖，以提供额外的控制。
+- en: This model is an effective way of enriching Deployments with additional functionality
+    but hiding that complexity to improve the end-user experience. However, as with
+    many decisions this can be a double-edged sword. One downside of mutating controllers
+    is that visibility is removed from the end user, with objects being applied to
+    the cluster that are not consistent with those that they originally created, potentially
+    causing confusion if the user is unaware that mutating controllers are in operation
+    on the cluster.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种模型是丰富 Deployments 以增强功能的有效方式，但将这种复杂性隐藏起来以改善最终用户体验。然而，与许多决策一样，这可能是一把双刃剑。变异控制器的一个缺点是，从最终用户的视角来看，对象被应用到集群中，而这些对象与他们最初创建的对象不一致，如果用户不知道集群上正在运行变异控制器，可能会造成混淆。
+- en: Configuring Webhook Admission Controllers
+  id: totrans-58
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 配置 Webhook Admission 控制器
+- en: 'Cluster administrators can use the MutatingWebhookConfiguration and ValidatingWebhookConfiguration
+    kinds to specify the configuration of dynamic webhooks. Following is an annotated
+    example briefly describing the relevant sections. We’ll dig into some of the more
+    advanced considerations for some of these fields in the following section:'
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 集群管理员可以使用 MutatingWebhookConfiguration 和 ValidatingWebhookConfiguration 类型来指定动态
+    Webhook 的配置。下面是一个带注释的示例，简要描述相关部分。在接下来的部分中，我们将深入探讨一些字段的更高级考虑事项。
+- en: '[PRE1]'
+  id: totrans-60
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: '[![1](assets/1.png)](#co_admission_control_CO2-1)'
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_admission_control_CO2-1)'
+- en: Matching rules. What API/kind/version/operations this webhook should be sent.
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 匹配规则。该webhook应发送到哪个API / 类型 / 版本 / 操作。
+- en: '[![2](assets/2.png)](#co_admission_control_CO2-2)'
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_admission_control_CO2-2)'
+- en: The operations that should trigger a call to the webhook.
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应该触发调用webhook的操作。
+- en: '[![3](assets/3.png)](#co_admission_control_CO2-3)'
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_admission_control_CO2-3)'
+- en: Which kind to target.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要针对的类型。
+- en: '[![4](assets/4.png)](#co_admission_control_CO2-4)'
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_admission_control_CO2-4)'
+- en: Whether Namespace-scoped or cluster-scoped resources should be targeted.
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应该针对Namespace范围还是集群范围的资源。
+- en: '[![5](assets/5.png)](#co_admission_control_CO2-5)'
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#co_admission_control_CO2-5)'
+- en: Describes how the API server should connect to the webhook. In this case it’s
+    in cluster at *test-service.test-ns.svc*.
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 描述API服务器如何连接到webhook。在本例中，它位于集群中的*test-service.test-ns.svc*。
+- en: '[![6](assets/6.png)](#co_admission_control_CO2-6)'
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![6](assets/6.png)](#co_admission_control_CO2-6)'
+- en: A PEM encoded CA bundle that will be used to validate the webhook’s server certificate.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个PEM编码的CA bundle，用于验证webhook的服务器证书。
+- en: '[![7](assets/7.png)](#co_admission_control_CO2-7)'
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![7](assets/7.png)](#co_admission_control_CO2-7)'
+- en: Declare the `admissionReviewVersions` that the webhook supports.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 声明该webhook支持的`admissionReviewVersions`。
+- en: '[![8](assets/8.png)](#co_admission_control_CO2-8)'
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![8](assets/8.png)](#co_admission_control_CO2-8)'
+- en: Describes whether the webhook has external side effects (calls/dependencies
+    to external systems).
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 描述webhook是否具有对外部系统的外部副作用（调用/依赖）。
+- en: '[![9](assets/9.png)](#co_admission_control_CO2-9)'
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![9](assets/9.png)](#co_admission_control_CO2-9)'
+- en: How long to wait until triggering the `failurePolicy`.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 等待多长时间才能触发`failurePolicy`。
+- en: '[![10](assets/10.png)](#co_admission_control_CO2-10)'
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![10](assets/10.png)](#co_admission_control_CO2-10)'
+- en: Whether this webhook can be re-invoked (this may happen after other webhooks
+    have been called).
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个webhook是否可以重新调用（这可能发生在其他webhook调用之后）。
+- en: '[![11](assets/11.png)](#co_admission_control_CO2-11)'
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![11](assets/11.png)](#co_admission_control_CO2-11)'
+- en: Whether the webhook should fail *open* or *closed*. This has security implications.
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: webhook是否应该失败“开”还是“关”。这对安全有影响。
+- en: 'As you can see in the preceding configuration, we can be very granular about
+    selecting which requests we want to intercept with our admission webhooks. For
+    example, if we wanted to target only requests that are creating Secrets, we could
+    use the following rule:'
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如您在上述配置中所看到的，我们可以非常精确地选择要拦截的请求，以我们的准入webhook。例如，如果我们只想目标创建Secrets的请求，我们可以使用以下规则：
+- en: '[PRE2]'
+  id: totrans-84
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'We can additionally combine this with Namespace or object selectors, which
+    enable further granularity. These allow us to specify any number of Namespaces
+    to target and/or objects with specific labels; for instance, in the following
+    snippet we are choosing only Secrets that are in Namespaces that have label of
+    `webhook: enabled`:'
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '我们还可以结合Namespace或对象选择器，以进一步细化控制粒度。这些允许我们指定任意数量的Namespace来目标和/或具有特定标签的对象；例如，在以下代码片段中，我们只选择那些在具有标签`webhook:
+    enabled`的Namespace中的Secrets：'
+- en: '[PRE3]'
+  id: totrans-86
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: Webhook Design Considerations
+  id: totrans-87
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: webhook设计考虑因素
+- en: 'There are several factors to be mindful of when writing and implementing admission
+    webhooks. We’ll talk more in detail about how these impact some real-world scenarios
+    in the next section, but at a high level you should be aware of the following
+    concerns:'
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在编写和实施准入webhook时需要注意几个因素。我们将在下一节详细讨论这些因素如何影响一些实际场景，但在高层次上，您应该注意以下几点：
+- en: Failure modes
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 失败模式
+- en: If a webhook is unreachable or sends an unknown response back to the API server,
+    it is treated as failing. Administrators must choose whether to fail *open* or
+    *closed* in this situation by setting the `failurePolicy` field to `Ignore` (allow
+    the request) or `Fail` (reject the request).
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果无法访问webhook或向API服务器发送未知响应，则视为失败。管理员必须选择在此情况下通过将`failurePolicy`字段设置为`Ignore`（允许请求）或`Fail`（拒绝请求）来选择是失败“开”还是“关”。
+- en: Warning
+  id: totrans-91
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: For security-related (or critical functionality) webhooks, `Fail` is the safest
+    option. For noncritical hooks `Ignore` may be safe (potentially in conjunction
+    with a reconciling controller as a backup). Combine these recommendations with
+    those discussed under the performance item in this list.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于安全相关（或关键功能）的webhook，`Fail`是最安全的选项。对于非关键的hook，`Ignore`可能安全（可能与一个协调控制器作为备份一起使用）。结合这些推荐与本列表中讨论的性能项。
+- en: Ordering
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 排序
+- en: The first thing to note with regards to API server request flow is that mutating
+    webhooks will all be called (potentially more than once) *before* validating webhooks
+    are called. This is important because it enables validating webhooks (which may
+    reject a request based on security requirements) always to see the *final* version
+    of a resource before it is applied.
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 关于 API 服务器请求流程的第一要点是，变更 Webhook 将在验证 Webhook 被调用之前（可能超过一次）*之前*被调用。这很重要，因为它使验证
+    Webhook（可能基于安全要求拒绝请求）始终可以在应用资源之前看到*最终*版本。
+- en: Mutating webhooks are not guaranteed to be called in a specific order and may
+    be called multiple times if subsequent hooks modify a request. This can be modified
+    by specifying the `reinvocationPolicy`, but ideally webhooks should be designed
+    for idempotency to ensure ordering does not affect their functionality.
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不能保证按特定顺序调用变更 Webhook，并且如果后续钩子修改请求，可能会多次调用。可以通过指定`reinvocationPolicy`来修改这一点，但理想情况下，Webhook
+    应设计为幂等，以确保顺序不影响其功能。
+- en: Performance
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 性能
+- en: Webhooks are called as part of the critical path of requests flowing to the
+    API server. If a webhook is critical (security-related) and fails closed (if a
+    timeout occurs, the request is denied), then it should be designed with high availability
+    in mind. As one of our [esteemed former colleagues](https://twitter.com/mauilion)
+    often comments, admission control can become *bottleneck-as-a-service* if users
+    are not careful in its application.
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Webhook 作为流向 API 服务器的请求关键路径的一部分被调用。如果一个 Webhook 很关键（与安全相关）并且失败后关闭（如果发生超时，则拒绝请求），则应考虑设计具有高可用性的解决方案。正如我们的一位[尊敬的前同事](https://twitter.com/mauilion)经常评论的那样，如果用户在应用程序中不小心使用，接受控制可能会成为*作为服务的瓶颈*。
+- en: If a webhook is resource-intensive and/or has external dependencies, consideration
+    should be taken for how often the hook will be called, and the performance impact
+    of adding the functionality into the critical path. In these situations a controller
+    that reconciles objects once in-cluster may be preferable. When writing webhook
+    configurations you should try to scope them down as tightly as possible to ensure
+    they are not called unnecessarily or on irrelevant resources.
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果 Webhook 需要大量资源和/或具有外部依赖项，则应考虑 Webhook 被调用的频率以及将功能添加到关键路径中的性能影响。在这些情况下，可能更倾向于编写在集群中仅协调对象一次的控制器。在编写
+    Webhook 配置时，应尽可能缩小作用范围，以确保不会不必要地或在不相关资源上调用它们。
+- en: Side effects
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 副作用
+- en: Some webhooks may be responsible for modifying external resources (e.g., some
+    resource in a cloud provider) based on a request to the Kubernetes API. These
+    webhooks should be aware of and respect the `dryRun` option and skip external
+    state modification when it is enabled. Webhooks are responsible for declaring
+    that they either have no side effects or respect this option by setting the `sideEffects`
+    field. More information on the valid options for this field and the behavior of
+    each option is detailed in the [official documentation](https://oreil.ly/8FGic).
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一些 Webhook 可能负责根据对 Kubernetes API 的请求修改外部资源（例如，云提供商中的某些资源）。这些 Webhook 应意识到并尊重`dryRun`选项，并在启用时跳过对外部状态的修改。
+    Webhook 负责声明它们是否没有副作用，或通过设置`sideEffects`字段来尊重此选项。有关此字段的有效选项以及每个选项的行为的详细信息在[官方文档](https://oreil.ly/8FGic)中有详细说明。
+- en: Writing a Mutating Webhook
+  id: totrans-101
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 编写变更 Webhook
+- en: In this section we’ll take a look at two approaches for writing a mutating admission
+    webhook. First we’ll talk briefly about implementing one with a plain HTTPS handler
+    that is language agnostic. Then we’ll take a deeper dive into a real use case
+    while covering the controller-runtime upstream project, which is designed to help
+    teams develop Kubernetes controller components.
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本节中，我们将探讨两种编写变更接受 Webhook 的方法。首先，我们将简要讨论使用通用 HTTPS 处理程序实现的方法。然后，我们将深入探讨一个真实用例，同时涵盖旨在帮助团队开发
+    Kubernetes 控制器组件的 controller-runtime 上游项目。
+- en: Both of the solutions in this section require expertise in either Go (for controller-runtime)
+    or another programming language. There are cases where this requirement is an
+    impediment to creating and implementing admission controllers. If your teams don’t
+    have the experience or need to write bespoke webhooks, the final section in this
+    chapter offers a solution for configurable admission policies that don’t require
+    programming knowledge.
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本节中的两种解决方案都需要熟练掌握Go语言（用于控制器运行时）或其他编程语言。在某些情况下，这种要求可能妨碍了创建和实现准入控制器。如果您的团队没有经验或需要编写定制的Webhook，本章的最后一节提供了一种不需要编程知识的可配置准入策略解决方案。
+- en: Plain HTTPS Handler
+  id: totrans-104
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 简单的HTTPS处理程序
+- en: One of the advantages of the webhook model for admission controllers is that
+    we’re able to implement them from scratch in any language. The examples we’re
+    using here are written in Go, but any language capable of TLS-enabled HTTP handling
+    and JSON parsing is acceptable.
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 准入控制器的Webhook模型的一个优势是，我们能够使用任何语言从头开始实现它们。我们这里使用的示例是用Go语言编写的，但任何支持TLS启用的HTTP处理和JSON解析的语言都是可以接受的。
+- en: This way of writing a webhook provides the most flexibility to integrate with
+    the current stacks in use but comes at the cost of many high-level abstractions
+    (although languages with mature Kubernetes client libraries can alleviate this).
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种编写Webhook的方式能够最大程度地与当前使用的堆栈集成，但需要付出许多高级抽象的代价（尽管具有成熟的Kubernetes客户端库的语言可以缓解这一点）。
+- en: As described in the introduction to this section, admission control webhooks
+    receive and return requests from and to the API server. The schema of these messages
+    is well known, so it’s possible to receive the request and modify the object (via
+    patches) manually.
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如本节介绍中所述，准入控制Webhook接收并返回API服务器的请求。这些消息的模式是众所周知的，因此可以接收请求并手动修改对象（通过补丁）。
+- en: For a concrete example of this approach let’s take an in-depth look at the [AWS
+    IAM Roles for Service Accounts mutating webhook](https://oreil.ly/rW3ym). This
+    webhook is used to inject a Projected Volume into Pods with a Service Account
+    token that can be used for authentication to AWS services. (See [Chapter 10](ch10.html#chapter10)
+    for more detail on the security aspect of this use case.)
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为这种方法的具体示例，让我们深入了解一下[AWS IAM Roles for Service Accounts mutating webhook](https://oreil.ly/rW3ym)。此Webhook用于将Projected
+    Volume注入具有可用于AWS服务认证的Service Account令牌的Pod中。（有关此用例的安全方面的更多细节，请参阅[第10章](ch10.html#chapter10)。）
+- en: '[PRE4]'
+  id: totrans-109
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: '[![1](assets/1.png)](#co_admission_control_CO3-1)'
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_admission_control_CO3-1)'
+- en: Define a `patchOperation` struct that will be marshaled to JSON for the response
+    back to the Kubernetes API server.
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 定义一个`patchOperation`结构体，该结构体将被编组为JSON以便回应Kubernetes API服务器。
+- en: '[![2](assets/2.png)](#co_admission_control_CO3-2)'
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_admission_control_CO3-2)'
+- en: Construct the `Volume` struct with the relevant ServiceAccountToken content.
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用相关的ServiceAccountToken内容构造`Volume`结构体。
+- en: '[![3](assets/3.png)](#co_admission_control_CO3-3)'
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_admission_control_CO3-3)'
+- en: Create an instance of the `patchOperation` with the Volume content previously
+    constructed.
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用先前构建的Volume内容创建一个`patchOperation`实例。
+- en: '[![4](assets/4.png)](#co_admission_control_CO3-4)'
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_admission_control_CO3-4)'
+- en: If there are currently no Volumes, create that key and add the Volume content
+    previously constructed.
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果当前没有Volume，则创建该键并添加先前构建的Volume内容。
+- en: '[![5](assets/5.png)](#co_admission_control_CO3-9)'
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#co_admission_control_CO3-9)'
+- en: Create the JSON object containing the patch contents.
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建包含补丁内容的JSON对象。
+- en: 'Note that the actual implementation for this admission webhook includes some
+    additional functionality that also adds to the patch set (e.g., adding environment
+    variables), but we’re going to ignore that for the purposes of this example. After
+    the patch set is complete we need to return an AdmissionResponse object that contains
+    our patch set (the `Patch` field in the following snippet):'
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注意，此准入Webhook的实际实现包括一些额外功能，这些功能也增加了补丁集（例如添加环境变量），但出于本示例的目的，我们将忽略这些。完成补丁集后，我们需要返回包含我们的补丁集的AdmissionResponse对象（下面代码段中的`Patch`字段）：
+- en: '[PRE5]'
+  id: totrans-121
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: We can see in this example that there is a lot of manual work to be done generating
+    patch sets and constructing the appropriate response for the API server. This
+    is even present when utilizing some of the Kubernetes libraries available in the
+    Go language. However, there is a large amount of supporting code we’ve omitted
+    that’s required to handle errors, graceful shutdown, HTTP header handling, and
+    so on.
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以在这个例子中看到，需要大量的手工工作来生成补丁集并构造适当的响应给API服务器。 即使在使用Go语言中的一些Kubernetes库时，这种情况也存在。
+    但是，我们省略了一大部分需要处理错误、优雅关闭、HTTP头处理等的支持代码。
+- en: While this approach affords us maximum flexibility, it requires more domain
+    knowledge and is more complex to implement and maintain. This trade-off will be
+    all-too-familiar for most readers. and care needs to be taken when evaluating
+    your specific use cases and internal expertise.
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然这种方法为我们提供了最大的灵活性，但它需要更多的领域知识，并且在实现和维护上更加复杂。 这种权衡对于大多数读者来说将会非常熟悉，因此在评估您特定的用例和内部专业知识时需要谨慎考虑。
+- en: In the next section we’ll see an approach that removes a lot of the boilerplate
+    and bespoke work in favor of implementing an upstream helper framework, controller-runtime.
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在下一节中，我们将看到一种方法，它减少了大量的样板和定制工作，而采用了实现上游辅助框架controller-runtime。
+- en: Controller Runtime
+  id: totrans-125
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 控制器运行时
+- en: In this section we’re going to dive into the upstream project [controller-runtime](https://github.com/kubernetes-sigs/controller-runtime)
+    and see what abstractions it provides on top of the native Kubernetes client libraries
+    to make writing admission controllers more streamlined. To provide more color
+    we’ll use an open source controller we built to satisfy a community requirement
+    as a way of illustrating some of the advantages of controller-runtime and cover
+    some of the techniques and pitfalls previously discussed. While we have simplified
+    the functionality and code of the controller somewhat for brevity, the core underlying
+    ideas remain.
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本节中，我们将深入研究上游项目[controller-runtime](https://github.com/kubernetes-sigs/controller-runtime)，并看看它在原生Kubernetes客户端库之上提供的抽象，以便更加流畅地编写准入控制器。
+    为了提供更多细节，我们将使用一个我们构建的开源控制器来满足社区需求，作为说明controller-runtime的一些优势的方式，并覆盖之前讨论的一些技术和陷阱。
+    虽然为简洁起见，我们在某种程度上简化了控制器的功能和代码，但核心的基本思想仍然存在。
+- en: 'The controller we’ll be walking through is a webhook designed to perform the
+    following actions:'
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将要讨论的控制器是一个webhook，旨在执行以下操作：
+- en: Watch for Cluster API VSphereMachine objects.
+  id: totrans-128
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 观察Cluster API VSphereMachine对象。
+- en: Based on a configurable field, allocate an IP address in an external IPAM system
+    (in this case, Infoblox).
+  id: totrans-129
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 基于可配置字段，在外部IPAM系统（在本例中为Infoblox）中分配一个IP地址。
+- en: Insert the allocated IP into the static IP field in the VSphereMachine.
+  id: totrans-130
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 将分配的IP插入到VSphereMachine的静态IP字段中。
+- en: Allow the mutated requested through to the Kubernetes API server to be actioned
+    (by the Cluster API controller) and persisted into etcd.
+  id: totrans-131
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 允许变异请求通过到Kubernetes API服务器，由Cluster API控制器执行并持久化到etcd中。
+- en: 'This use case is a good candidate for a custom-built (using controller-runtime)
+    mutating webhook for a couple of reasons:'
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于一些原因，这个用例是一个使用controller-runtime构建的自定义（变异webhook）的好选择：
+- en: We need to mutate the request to add an IP address *before* the request hits
+    the API server (otherwise it would error).
+  id: totrans-133
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 我们需要变异请求以在请求到达API服务器之前添加一个IP地址*之前*（否则会出错）。
+- en: We’re calling out to an external system (Infoblox) and can therefore leverage
+    its Go library for interactions.
+  id: totrans-134
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 我们正在调用一个外部系统（Infoblox），因此可以利用其Go库进行交互。
+- en: Small amount of boilerplate allows newer community and/or client developers
+    to understand and extend the functionality.
+  id: totrans-135
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 少量的样板代码允许新的社区和/或客户端开发者理解和扩展功能。
+- en: Note
+  id: totrans-136
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Although out-of-scope for *this* chapter, we did accompany this webhook with
+    a controller that runs in the cluster. This is important when your webhooks interact
+    with and modify or depend on *external* state (Infoblox in this case) because
+    you should be constantly reconciling that state, rather than relying on the state
+    just seen at admission time. This is something to consider when building a mutating
+    admission webhook and may increase the complexity of your solutions if the extra
+    component is required.
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然超出了*本*章节的范围，但我们伴随这个webhook一起编写了一个在集群中运行的控制器。 当您的webhook与并且修改或依赖于*外部*状态（在本例中为Infoblox）进行交互时，这一点非常重要，因为您应该不断地协调那个状态，而不是仅依赖于准入时看到的状态。
+    在构建变异准入webhook时需要考虑这一点，并且如果需要额外的组件，可能会增加解决方案的复杂性。
+- en: 'Controller-runtime webhooks must implement a `Handle` method whose signature
+    is:'
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Controller-runtime webhooks必须实现一个`Handle`方法，其签名为：
+- en: '[PRE6]'
+  id: totrans-139
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: 'The `admission.Request` object is an abstraction over the raw JSON that webhooks
+    receive and provides easy access to the raw applied object, the operation being
+    executed (e.g., `CREATE`), and many other useful pieces of metadata:'
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`admission.Request`对象是对webhook接收的原始JSON的抽象，并提供对原始应用对象、执行的操作（例如`CREATE`）和许多其他有用的元数据的简便访问：'
+- en: '[PRE7]'
+  id: totrans-141
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: '[![1](assets/1.png)](#co_admission_control_CO4-1)'
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_admission_control_CO4-1)'
+- en: Create a new VSphereMachine object.
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建一个新的VSphereMachine对象。
+- en: '[![2](assets/2.png)](#co_admission_control_CO4-2)'
+  id: totrans-144
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_admission_control_CO4-2)'
+- en: Use the built-in decoder to decode the raw object from the request into the
+    Go VSphereMachine object.
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用内置解码器将请求中的原始对象解码为Go VSphereMachine对象。
+- en: '[![3](assets/3.png)](#co_admission_control_CO4-3)'
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_admission_control_CO4-3)'
+- en: Use the convenience method `Errored` to construct and return an error response
+    if the decoding step returns an error.
+  id: totrans-147
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用便捷方法`Errored`来构建并返回错误响应，如果解码步骤返回错误。
+- en: 'The `vm` object from the request can be modified or validated in any way before
+    the response is returned. In the following example we are checking to see if the
+    `infoblox` annotation (denoting that our webhook should take action) is present
+    on the VSphereMachine object. This is an important step to perform early on in
+    the webhook because we can short-circuit out of any further logic if no action
+    should be taken. If the annotation is not present, we utilize the convenience
+    `Allowed` method to return the unmodified object through to the API server as
+    quickly as possible. As we discussed earlier in [“Webhook Design Considerations”](#webhook_design),
+    webhooks are on the critical path for API requests, and any actions we perform
+    inside them should be as fast as possible:'
+  id: totrans-148
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在返回响应之前，可以对请求中的`vm`对象进行任何修改或验证。在下面的示例中，我们检查VSphereMachine对象上是否存在`infoblox`注解（表示我们的webhook应采取行动）。这是在webhook早期执行的重要步骤，因为如果不需要采取任何操作，我们可以从任何进一步的逻辑中快速退出。如果注解不存在，则使用方便的`Allowed`方法尽快将未修改的对象返回给API服务器。正如我们在[“Webhook设计考虑”](#webhook_design)中讨论的那样，webhook是API请求的关键路径，我们在其中执行的任何操作都应尽可能快：
+- en: '[PRE8]'
+  id: totrans-149
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: 'Assuming we *should* handle this request and the preceding logic does not trigger,
+    we retrieve an IP address from Infoblox (not shown) and write it directly into
+    the `vm` object:'
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设我们*应该*处理此请求，并且前面的逻辑没有触发，我们从 Infoblox（未显示）中检索一个IP地址，并直接将其写入`vm`对象：
+- en: '[PRE9]'
+  id: totrans-151
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: '[![1](assets/1.png)](#co_admission_control_CO5-1)'
+  id: totrans-152
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_admission_control_CO5-1)'
+- en: Set the IP field on the `vm` object, thereby *mutating* it.
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在`vm`对象上设置IP字段，从而*改变*它。
+- en: '[![2](assets/2.png)](#co_admission_control_CO5-2)'
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_admission_control_CO5-2)'
+- en: Marshal the `vm` object to JSON ready to send back to the API server.
+  id: totrans-155
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将`vm`对象编组为JSON，准备发送回API服务器。
+- en: '[![3](assets/3.png)](#co_admission_control_CO5-3)'
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_admission_control_CO5-3)'
+- en: If the marshaling fails we’ll use the convenience error method we saw earlier.
+  id: totrans-157
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果编排失败，我们将使用我们之前看到的便捷错误处理方法。
+- en: '[![4](assets/4.png)](#co_admission_control_CO5-4)'
+  id: totrans-158
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_admission_control_CO5-4)'
+- en: Another convenience method, `PatchReponseFromRaw`, sends back the response.
+    We’ll discuss this in more detail later.
+  id: totrans-159
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个便捷方法`PatchReponseFromRaw`，将响应发送回去。我们稍后会更详细地讨论这一点。
+- en: Note
+  id: totrans-160
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: There are use cases where you may want and/or need to intercept `DELETE` requests
+    to the API server. An example of this might be to clean up some external state
+    that might be tied to resources in the cluster. While this *can* be done in a
+    webhook, you should consider whether you’re failing open or closed and the risks
+    of having misaligned state in the former case. Ideally, deletion logic should
+    be implemented with a [finalizer](https://oreil.ly/Y1iGD) and a custom controller
+    running in the cluster to guarantee cleanup.
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有些情况下，您可能希望并/或需要拦截对API服务器的`DELETE`请求。其中一个示例可能是清理一些与集群中资源相关的外部状态。虽然这*可以*在webhook中完成，但您应考虑您是“失败开放”还是“失败关闭”，以及在前一种情况下存在不对齐状态的风险。理想情况下，删除逻辑应使用[finalizer](https://oreil.ly/Y1iGD)和在集群中运行的自定义控制器来实现，以保证清理工作。
+- en: In the preceding snippet we see another of controller-runtime’s convenience
+    methods, `PatchResponseFromRaw`. This method will automatically calculate the
+    JSONPatch diffs required between the original raw object and the one we have been
+    modifying before sending the correctly serialized response. Compared to the more
+    manual approach covered in the previous section, this is a great way to remove
+    some boilerplate and make our controller code leaner.
+  id: totrans-162
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在前面的片段中，我们看到了另一个controller-runtime的便利方法`PatchResponseFromRaw`。此方法将在发送正确序列化的响应之前，自动计算所需的JSONPatch差异，这些差异是在原始原始对象和我们修改的对象之间。与前一节中更手动的方法相比，这是一种去除一些样板代码、使我们的控制器代码更精简的好方法。
+- en: In the case of a simple validating hook, we can also leverage convenience functions
+    like `admission.Allowed()` and `admission.Denied()` that can be used after processing
+    the required logic.
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在简单的验证挂钩情况下，我们还可以利用像`admission.Allowed()`和`admission.Denied()`这样的便利函数，这些函数可以在处理所需逻辑后使用。
+- en: Caution
+  id: totrans-164
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: If we’re manipulating external state as part of an admission controller we need
+    to be aware of and check for the `req.DryRun` condition. If this is set, the user
+    is only executing a dry run, no-op request and we should ensure that our controller
+    *does not* mutate external state in this case.
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果我们作为准入控制器的一部分操作外部状态，我们需要注意并检查`req.DryRun`条件。如果设置了这个条件，用户只执行干跑（dry run），不会执行实际请求，我们应确保我们的控制器在这种情况下*不会*改变外部状态。
+- en: Controller-runtime provides a very strong foundation with which to build admission
+    controllers, allowing us to focus on the logic we want to implement with minimal
+    boilerplate. However, it does require programming expertise, and the admission
+    logic is obfuscated inside the controller code, potentially leading to more confusing
+    or unexpected results for end users.
+  id: totrans-166
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Controller-runtime为构建准入控制器提供了非常强大的基础，使我们能够专注于要实现的逻辑，减少样板代码的使用。然而，这需要编程专业知识，并且准入逻辑被混淆在控制器代码内部，可能会给最终用户带来更多困惑或意外的结果。
+- en: In the next section of this chapter, we’ll take a look at an emerging model
+    that centralizes policy logic and introduces a standard language to author decision
+    rules. The tools appearing in this area strive to combine the flexibility of a
+    custom controller with greater usability features for less technical operators
+    and/or end users.
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章的下一节中，我们将介绍一种新兴的模型，该模型集中策略逻辑，并引入一种标准语言来编写决策规则。在这一领域出现的工具力求将自定义控制器的灵活性与更少技术操作员和/或最终用户的更高可用性功能结合起来。
+- en: Centralized Policy Systems
+  id: totrans-168
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 集中化策略系统
+- en: 'So far we’ve looked at a number of different methods for implementing and configuring
+    admission controllers. Each has its own specific trade-offs that have to be considered
+    when choosing to adopt them. In this final section, we’re going to cover an emerging
+    model of centralizing policy logic into one place and using standardized languages
+    to express the allow/deny rules. This model has two main advantages:'
+  id: totrans-169
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，我们已经看过多种不同的方法来实现和配置准入控制器。每种方法都有其特定的权衡考虑因素，在选择采用它们时必须加以考虑。在本节的最后部分，我们将介绍一种新兴的模型，将策略逻辑集中到一个地方，并使用标准化语言来表达允许/拒绝规则。这种模型有两个主要优点：
+- en: Programming knowledge is not required to create admission controllers, as we
+    can express rules in a specific policy language (as opposed to a general-purpose
+    programming language). This also means that changes to logic do not require rebuilding
+    and redeploying the controller each time.
+  id: totrans-170
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 创建准入控制器不需要编程知识，因为我们可以使用特定的策略语言表达规则（而不是通用编程语言）。这也意味着逻辑的更改不需要每次重建和重新部署控制器。
+- en: Policies and rules are stored in a single location (in most cases, the cluster
+    itself) for viewing, editing, and auditing.
+  id: totrans-171
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 策略和规则存储在一个单一位置（在大多数情况下是集群本身），便于查看、编辑和审计。
+- en: 'This model is being built out and implemented by several open source tools
+    and usually comprises two components:'
+  id: totrans-172
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此模型正在通过几个开源工具进行构建和实施，通常由两个组件组成：
+- en: A policy/query language that can express conditions on whether an object should
+    be admitted or rejected.
+  id: totrans-173
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一个能够表达条件的策略/查询语言，判断对象是否应该被接受或拒绝。
+- en: A controller that sits in the cluster serving as an admission controller. The
+    controller’s job is to evaluate the policies/rules against objects coming into
+    the API server and make admit or reject decisions.
+  id: totrans-174
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一个位于集群中作为准入控制器的控制器。该控制器的任务是评估针对进入API服务器的对象的策略/规则，并做出接受或拒绝的决策。
+- en: For the rest of this chapter we’re going to focus on the most popular implementation
+    of this centralized policy model called [Gatekeeper](https://github.com/open-policy-agent/gatekeeper),
+    although other tools such as [Kyverno](https://kyverno.io) are also gaining traction.
+    Gatekeeper is built on a lower-level tool called Open Policy Agent (OPA). OPA
+    is an open source policy engine that applies policies written in the Rego language
+    to ingested JSON documents and returns a result.
+  id: totrans-175
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章的其余部分，我们将专注于称为[Gatekeeper](https://github.com/open-policy-agent/gatekeeper)的这种集中式策略模型的最流行实现，尽管其他工具如[Kyverno](https://kyverno.io)也正在获得关注。Gatekeeper建立在一个名为Open
+    Policy Agent（OPA）的低级工具之上。OPA是一个开源策略引擎，将用Rego语言编写的策略应用于摄取的JSON文档并返回结果。
+- en: A calling application can utilize OPA by receiving the result and deciding how
+    to proceed (making a policy decision). We know from this chapter that Kubernetes
+    has a standard schema for sending requests and receiving admission decision responses,
+    so it immediately seems like this is a promising fit. However, OPA itself is platform/context
+    agnostic and is simply a policy engine that operates on JSON. We need a controller
+    that will act as an interface between the OPA engine and Kubernetes. Gatekeeper
+    is the tool that fulfills that interface role and provides some additional Kubernetes-native
+    functionality around templates and extensibility to make it easier for platform
+    operators to author and apply policies. Gatekeeper is deployed to the cluster
+    as an admission controller that allows users to write rules in Rego to make admission
+    policy decisions about Kubernetes resources being applied to the cluster.
+  id: totrans-176
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个调用应用可以通过接收结果并决定如何继续（做出策略决策）来利用OPA。我们从本章了解到，Kubernetes有一个标准模式用于发送请求和接收准入决策响应，因此这似乎立即是一个很有前景的选择。然而，OPA本身是平台/上下文无关的，只是一个在JSON上操作的策略引擎。我们需要一个控制器作为OPA引擎和Kubernetes之间的接口。Gatekeeper是履行这一接口角色并在模板和可扩展性方面提供一些额外的Kubernetes本地功能的工具，以便平台操作员更轻松地编写和应用策略。Gatekeeper被部署到集群作为准入控制器，允许用户编写规则在Rego中做出有关应用到集群的Kubernetes资源的准入策略决策。
+- en: Gatekeeper enables a model whereby cluster operators can create and expose preset
+    policy templates as `ConstraintTemplate` CRDs. These templates create new CRDs
+    for the specific constraints that can accept custom input parameters (much like
+    a function). This approach is powerful because end users can then create an instance
+    of the constraint with their own values, which will be used by Gatekeeper as part
+    of admission control to the cluster.
+  id: totrans-177
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Gatekeeper使得集群操作员可以创建并公开预设策略模板作为`ConstraintTemplate` CRD。这些模板为可以接受自定义输入参数的特定约束创建新的CRD（类似于函数）。这种方法非常强大，因为最终用户可以使用自己的值创建约束的实例，Gatekeeper将其作为集群准入控制的一部分使用。
+- en: Caution
+  id: totrans-178
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: '**注意**'
+- en: For some of the reasons detailed in the latter part of this section, you should
+    be aware that Gatekeeper currently fails *open* by default. This can have serious
+    security implications, and you should carefully understand the trade-offs (detailed
+    in this chapter and in much of the official documentation) involved in each approach
+    before implementing these solutions in production.
+  id: totrans-179
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 出于本节后部详细列出的一些原因，您应该意识到Gatekeeper目前默认情况下是*开放失败*的。这可能会带来严重的安全影响，因此在将这些解决方案投入生产之前，您应该仔细了解每种方法的权衡（本章及大部分官方文档中详细说明）。
+- en: One common rule we’ve implemented in the field is ensuring that teams cannot
+    overwrite existing Ingress resources. This is a requirement in most Kubernetes
+    clusters, and some Ingress controllers (e.g., Contour) provide mechanisms to protect
+    against this out of the box. However, if this is not the case with your tooling,
+    you can use Gatekeeper to enforce this rule. This scenario is one of several maintained
+    as a library of common policies in the [official Gatekeeper documentation](https://oreil.ly/LINGy).
+  id: totrans-180
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在现场实施的一个常见规则是确保团队无法覆盖现有的Ingress资源。这在大多数Kubernetes集群中是一个要求，一些Ingress控制器（例如Contour）提供了保护机制以防止此类问题。然而，如果您的工具不具备这种机制，您可以使用Gatekeeper来强制执行此规则。这种情况是一系列在[官方Gatekeeper文档](https://oreil.ly/LINGy)中维护的常见策略库之一。
+- en: In this situation it’s necessary to make a policy decision based on data that
+    *exists externally to the object* that’s being applied to the cluster. We need
+    to query Kubernetes directly to know what Ingress resources already exist and
+    to be able to inspect metadata around them to compare against the one being applied.
+  id: totrans-181
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这种情况下，需要基于 *外部存在于被应用到集群的对象* 的数据做出策略决策。我们需要直接查询 Kubernetes，以了解已存在的 Ingress 资源，并能够检查它们周围的元数据，以与正在应用的对象进行比较。
+- en: 'Let’s take an even more complex example that builds on these ideas, and we’ll
+    walk through the implementation of each resource. In this case, we’re going to
+    annotate a Namespace with a regex pattern and ensure any Ingress applied in that
+    Namespace conforms to the regex. We mentioned earlier that we need information
+    about the cluster to be available to Gatekeeper to make policy decisions. This
+    is achieved by defining a sync config to specify which resources in Kubernetes
+    should be synchronized to Gatekeeper’s cache (in order to provide that queryable
+    data source):'
+  id: totrans-182
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们举一个更复杂的例子来建立在这些想法之上，并且我们将逐步实施每个资源的实现。在这种情况下，我们将用正则表达式模式注释一个 Namespace，并确保在该
+    Namespace 中应用的任何 Ingress 符合该正则表达式。我们之前提到过，Gatekeeper 需要集群信息可用于制定策略决策。这是通过定义同步配置来实现的，以指定应同步到
+    Gatekeeper 缓存的 Kubernetes 中的哪些资源（以提供可查询的数据源）：
+- en: '[PRE10]'
+  id: totrans-183
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: '[![1](assets/1.png)](#co_admission_control_CO6-1)'
+  id: totrans-184
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_admission_control_CO6-1)'
+- en: The `sync` section specifies all the Kubernetes resources that Gatekeeper should
+    cache to assist with policy decisions.
+  id: totrans-185
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`sync` 部分指定 Gatekeeper 应缓存的所有 Kubernetes 资源，以协助进行策略决策。'
+- en: Caution
+  id: totrans-186
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The cache exists to remove the need for Gatekeeper to keep querying the Kubernetes
+    API server for the required resources. However, there is potential for Gatekeeper
+    to make decisions based on *stale* data. To mitigate this, there is an audit capability
+    that intermittently runs policies against existing resources and records violations
+    in the `status` field of each constraint. These should be monitored to ensure
+    that violations that pass through (maybe as a result of a stale cache read) are
+    not left unchecked.
+  id: totrans-187
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 缓存存在的目的是消除 Gatekeeper 不断查询 Kubernetes API 服务器以获取所需资源的需要。然而，Gatekeeper 基于 *过时*
+    数据做出决策的潜力是存在的。为了减轻这一点，存在一种审核功能，定期针对现有资源运行策略，并在每个约束的 `status` 字段中记录违规。应监控这些以确保通过的违规（可能是由于过时的缓存读取）不被忽略。
+- en: 'Once the config is applied, then an administrator can create the `ConstraintTemplate`.
+    This resource defines the main content of the policy and any input parameters
+    that are available for administrators or other operators to provide/override:'
+  id: totrans-188
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦配置应用完成，管理员就可以创建 `ConstraintTemplate`。此资源定义了策略的主要内容以及管理员或其他运营商可以提供/覆盖的任何输入参数：
+- en: '[PRE11]'
+  id: totrans-189
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: '[![1](assets/1.png)](#co_admission_control_CO7-1)'
+  id: totrans-190
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_admission_control_CO7-1)'
+- en: The `properties` section defines the input parameters that will be available
+    to inject into the Rego policy for each instantiation of the rule.
+  id: totrans-191
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`properties` 部分定义了将可用于每个规则实例化中注入 Rego 策略的输入参数。'
+- en: '[![2](assets/2.png)](#co_admission_control_CO7-2)'
+  id: totrans-192
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_admission_control_CO7-2)'
+- en: The `targets` section contains the Rego code for our policy rules. We won’t
+    dig into Rego syntax here, but notice that the input parameter is being referenced
+    via `input.parameters.<parameter_name>` (in this case, `annotation`).
+  id: totrans-193
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`targets` 部分包含我们策略规则的 Rego 代码。我们不会在这里深入讨论 Rego 语法，但请注意，输入参数通过 `input.parameters.<parameter_name>`（在本例中为
+    `annotation`）被引用。'
+- en: The `annotation` in the custom input parameters allows the user to specify the
+    specific annotation name that Gatekeeper should pull the regex pattern from. Rego
+    won’t trigger a violation if any statement returns `False`. In this case, we’re
+    checking that the hosts *do* match the regex, so to ensure that doesn’t trigger
+    a violation we need to invert the `re_match()` with `not` to ensure that a positive
+    match doesn’t trigger a violation and instead *allows* the request through admission
+    control.
+  id: totrans-194
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 自定义输入参数中的 `annotation` 允许用户指定 Gatekeeper 应从中提取正则表达式模式的特定注释名称。如果任何语句返回 `False`，Rego
+    将不会触发违规。在这种情况下，我们正在检查主机是否与正则表达式匹配，因此为了确保不触发违规，我们需要使用 `not` 来反转 `re_match()`，以确保正向匹配不触发违规，而是
+    *允许* 请求通过准入控制。
+- en: 'Lastly, we create an instance of the preceding policy to configure Gatekeeper
+    to apply it against specific resources as part of admission control. The `LimitNamespaceIngress`
+    object specifies that the rule should apply to Ingress objects for both `apiGroups`
+    and designates `allowed-ingress-pattern` as the annotation that should be inspected
+    for the regex pattern (this was the customizable input parameter):'
+  id: totrans-195
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，我们创建了上述策略的一个实例，以配置 Gatekeeper 在准入控制的一部分针对特定资源应用它。`LimitNamespaceIngress`
+    对象指定规则应适用于 `apiGroups` 的 Ingress 对象，并指定 `allowed-ingress-pattern` 作为应检查正则表达式模式的注解（这是可自定义的输入参数）：
+- en: '[PRE12]'
+  id: totrans-196
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: 'Finally, the Namespace object itself is applied with the custom annotation
+    and pattern. Here we are specifying the regex `\w\.my-namespace\.com` in the `allowed-ingress-pattern`
+    field:'
+  id: totrans-197
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，Namespace 对象本身应用了自定义注解和模式。这里我们在 `allowed-ingress-pattern` 字段中指定了正则表达式 `\w\.my-namespace\.com`：
+- en: '[PRE13]'
+  id: totrans-198
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: 'The setup steps are all now complete. We can begin adding Ingress objects,
+    and the rules we have configured will evaluate against them and either allow or
+    deny the persistence/creation of the Ingress:'
+  id: totrans-199
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 设置步骤现在已经全部完成。我们可以开始添加 Ingress 对象，并且我们配置的规则将针对它们进行评估，然后允许或拒绝持久性/创建 Ingress：
+- en: '[PRE14]'
+  id: totrans-200
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: 'The second Ingress will succeed as the `spec.rules.host` matches the regex
+    pattern specified in the `allowed-ingress-pattern` annotation on the `ingress-test`
+    Namespace. However, the first Ingress does not match and results in an error:'
+  id: totrans-201
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 第二个 Ingress 将成功，因为 `spec.rules.host` 符合 `ingress-test` Namespace 上 `allowed-ingress-pattern`
+    注解中指定的正则表达式模式。然而，第一个 Ingress 不匹配，导致错误：
+- en: '[PRE15]'
+  id: totrans-202
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: 'Gatekeeper has a number of strengths:'
+  id: totrans-203
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Gatekeeper 有许多优点：
+- en: The extensible `ConstraintTemplate` model allows admins to define common policies
+    and share/reuse them as libraries across the organization.
+  id: totrans-204
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 可扩展的 `ConstraintTemplate` 模型允许管理员定义常见策略，并在整个组织中共享/重用它们作为库。
+- en: While it does require Rego knowledge, there is no additional programming language
+    experience required, lowering the barrier to entry for policy design and creation.
+  id: totrans-205
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 虽然它确实需要 Rego 知识，但不需要额外的编程语言经验，降低了政策设计和创建的准入门槛。
+- en: The underlying technology (OPA) is fairly mature and well-supported in the community.
+    Gatekeeper is a newer layer but has experienced strong early support.
+  id: totrans-206
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 底层技术（OPA）在社区中已经相当成熟并得到良好支持。Gatekeeper 是一个较新的层，但在早期得到了强有力的支持。
+- en: Consolidating all policy enforcement into one admission controller allows us
+    to access a centralized audit log, which is often important in regulated environments.
+  id: totrans-207
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 将所有策略强制执行到一个准入控制器中使我们能够访问集中的审计日志，这在受监管的环境中通常很重要。
+- en: The main weakness of Gatekeeper is that it is currently unable to *mutate* requests.
+    And while it does support external data sources (through a variety of methods),
+    they can be cumbersome to implement. These issues will inevitably be addressed
+    in the future, but should you have strong requirements in those areas, it’s likely
+    you will need to implement one of the custom admission control solutions described
+    in previous sections.
+  id: totrans-208
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Gatekeeper 的主要弱点是它目前无法对请求进行 *变异*。虽然它支持外部数据源（通过各种方法），但实施起来可能会很麻烦。这些问题将来势必会得到解决，但如果您在这些领域有强烈的要求，很可能需要实施前面章节中描述的一种自定义准入控制解决方案。
+- en: 'One last consideration when utilizing Gatekeeper (and any general-purpose admission
+    controller) is that the scope of requests captured by these tools is likely to
+    be very broad. This is required for them to be useful because rules covering many
+    different objects can be written and the controller itself needs to contain a
+    superset of permissions to be able to capture them. However, this has several
+    ramifications:'
+  id: totrans-209
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在使用 Gatekeeper（以及任何通用准入控制器）时的最后一点考虑是，这些工具捕获的请求范围可能非常广泛。这是它们能够发挥作用的必要条件，因为可以编写涵盖许多不同对象的规则，并且控制器本身需要包含一个权限的超集以能够捕获它们。然而，这有几个重要影响：
+- en: As mentioned previously, these tools are in the critical path. If there is a
+    bug or other issue with the controller and/or your configuration, there is the
+    potential for widespread outage.
+  id: totrans-210
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如前所述，这些工具位于关键路径上。如果控制器或您的配置存在错误或其他问题，则可能会导致广泛的停机。
+- en: As a continuation of the previous point, because the controllers intercept requests
+    *to the control plane*, it’s possible that you as administrators may also be temporarily
+    *locked out* from performing remediation steps. This is pertinent especially in
+    the case of resources that are important and/or integral to the *operation* of
+    the cluster (e.g., networking resources and so on).
+  id: totrans-211
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 作为前一点的延续，因为控制器拦截了对控制平面的请求，管理员在执行补救步骤时可能也会暂时被排除在外。这在资源对集群操作（例如网络资源等）重要和/或必不可少的情况下尤为重要。
+- en: The broad scope necessarily requires that a broad RBAC policy is attached to
+    the admission controller/policy server. If there is a vulnerability in this software,
+    then the potential for destructive actions is significant.
+  id: totrans-212
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 广泛的范围要求必须将广泛的 RBAC 策略附加到准入控制器/策略服务器上。如果这个软件存在漏洞，那么潜在的破坏行为可能是显著的。
+- en: Caution
+  id: totrans-213
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: You should avoid configuring admission webhooks to intercept resources targeting
+    the `kube-system` Namespace. Objects in this Namespace are often integral to the
+    operation of the cluster and accidental mutations or rejections of these objects
+    could cause serious issues in the cluster.
+  id: totrans-214
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您应避免配置准入 Webhook 来拦截针对 `kube-system` 命名空间的资源。该命名空间中的对象通常对集群的操作非常重要，意外的变异或拒绝这些对象可能会在集群中造成严重问题。
+- en: Summary
+  id: totrans-215
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 摘要
+- en: In this chapter we covered the many ways that we can control which objects are
+    admitted to a Kubernetes cluster. Much like many of the concerns that we cover
+    in this book, each way has its own specific trade-offs and decisions to make with
+    regards to your individual requirements. Admission control is an area where even
+    more careful examination and deeper knowledge is essential, given its heavy application
+    in the area of cluster and workload security.
+  id: totrans-216
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们涵盖了许多控制哪些对象被允许进入 Kubernetes 集群的方式。就像本书涵盖的许多关注点一样，每种方式都有其特定的权衡和决策，需要考虑到您的个人需求。准入控制是一个领域，需要更加仔细的检查和更深入的知识，因为它在集群和工作负载安全领域的应用非常广泛。
+- en: Built-in controllers expose a solid set of functionality but are unlikely to
+    be all that you need. We expect more and more of these actions to move to external
+    (out-of-tree) controllers that leverage the mutating and validating webhook capabilities.
+    In the near term you may find that building your own webhooks is required (either
+    from scratch or using a framework) for more complex functionality. However, as
+    we see broad admission policy tools like Gatekeeper become more mature, we think
+    this is where a lot of value can be added.
+  id: totrans-217
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 内置控制器提供了一组可靠的功能，但可能并不完全满足您的所有需求。我们预计越来越多的操作会转移到外部（out-of-tree）控制器，利用变异和验证 Webhook
+    的能力。在短期内，您可能会发现需要构建自己的 Webhook（无论是从头开始还是使用框架）来实现更复杂的功能。然而，随着类似 Gatekeeper 这样的广泛准入策略工具变得更加成熟，我们认为这是增加价值的关键点。

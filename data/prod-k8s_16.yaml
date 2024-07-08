@@ -1,0 +1,1457 @@
+- en: Chapter 15\. Software Supply Chain
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第15章。软件供应链
+- en: Implementing a Kubernetes platform should never be the goal of your team or
+    company (assuming you are not a vendor or consultant!). This might seem a strange
+    claim for a book exclusively devoted to Kubernetes to make, but let’s step back
+    a moment. All companies are in the business of delivering their *core-competency*.
+    This might be an ecommerce platform, a SaaS monitoring system, or an insurance
+    website. Platforms like Kubernetes (and almost any other tooling) exist to *enable*
+    the delivery of core business value, a truth that is often forgotten by teams
+    when designing and implementing IT solutions.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 实施 Kubernetes 平台绝不应该是你团队或公司的目标（假设你不是供应商或顾问！）。对于一个完全致力于 Kubernetes 的书籍来说，这可能听起来是一个奇怪的说法，但让我们稍作停顿。所有公司都是为了提供他们的*核心竞争力*而存在。这可能是电子商务平台、SaaS
+    监控系统，或者是一个保险网站。像 Kubernetes 这样的平台（以及几乎任何其他工具）存在的目的是*促进*核心业务价值的交付，这一点在设计和实施 IT
+    解决方案时经常被团队忽视。
+- en: With that sentiment in mind, this chapter will focus on the actual process of
+    getting code from developers to production on Kubernetes. To best cover each stage
+    that we think is relevant, we’ll follow the model of a pipeline that many are
+    familiar with.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 怀着这样的情感，本章将专注于在 Kubernetes 上将代码从开发者手中推送到生产环境的实际过程。为了最好地覆盖我们认为相关的每个阶段，我们将遵循许多人熟悉的管道模型。
+- en: First we’ll look at some of the considerations when building container images
+    (our deployed assets) from source code. If you’re already utilizing Kubernetes
+    or other container platforms you’ll probably be familiar with some of the concepts
+    in this section, but hopefully we’ll cover some questions that you may not have
+    considered. If you’re *new* to containers this will be a paradigm shift from the
+    way that you currently build software (WAR files, Go binaries, etc.) to thinking
+    about the container image and the nuances involved with building and maintaining
+    them.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，我们将讨论构建容器镜像（我们部署的资产）时的一些考虑因素。如果您已经在使用 Kubernetes 或其他容器平台，您可能已经熟悉本节中的一些概念，但希望我们能涵盖一些您可能尚未考虑的问题。如果您*对容器是新手*，那么这将是一个从您当前构建软件的方式（WAR
+    文件、Go 二进制文件等）到考虑容器镜像及其构建和维护细微差别的范式转变。
+- en: Once we have built our assets we need somewhere to store them. We’ll discuss
+    container registries (e.g., DockerHub, Harbor, Quay) and the functionality that
+    we think is important when choosing one. Many of the attributes of container registries
+    are related to security, and we’ll discuss options like image scanning, updates,
+    and signing.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦我们构建好我们的资产，我们就需要一个地方来存储它们。我们将讨论容器注册表（例如 DockerHub、Harbor、Quay）及其在选择时认为重要的功能。容器注册表的许多属性与安全性相关，我们将讨论像图像扫描、更新和签名等选项。
+- en: Finally, we’ll dedicate some time to reviewing continuous delivery and how those
+    practices and associated tooling intersect with Kubernetes. We’ll look at emerging
+    ideas like GitOps (deployments through syncing cluster state from git repositories)
+    and more traditional imperative pipeline approaches.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，我们将花一些时间来审查持续交付，并了解这些实践及其相关工具如何与 Kubernetes 交集。我们将探讨一些新兴的想法，如 GitOps（通过同步集群状态从
+    git 仓库进行部署），以及更传统的命令式流水线方法。
+- en: Even if you are not yet running Kubernetes, you will likely have considered
+    and/or solved for all of the high-level areas just mentioned (build, asset storage,
+    deployment). It’s reasonable that everyone has investments and expertise in existing
+    tooling and approaches, and we very rarely encounter a situation where an organization
+    wants to start afresh with its entire software supply chain. One of the things
+    we’ll try to emphasize in this chapter is that there are clean handoff points
+    in the pipeline and we can pick and choose the most effective approaches for each
+    phase. As with many of the topics covered in this book, it is entirely possible
+    (and recommended) to enact *incremental* positive change while remaining focused
+    on delivering business value.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 即使您尚未运行 Kubernetes，您可能已经考虑过并/或解决了所有上述高层次领域（构建、资产存储、部署）。每个人都有现有工具和方法的投资和专业知识，我们很少遇到组织希望从头开始全新构建其整个软件供应链的情况。本章我们将尝试强调的一点是，在管道中存在清晰的交接点，我们可以为每个阶段选择最有效的方法。就像本书涵盖的许多主题一样，完全有可能（也是建议）在保持专注于提供业务价值的同时，实施*渐进的*正向变革。
+- en: Building Container Images
+  id: totrans-7
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 构建容器镜像
+- en: Before containers we would package applications as a binary, compressed asset,
+    or raw source code for it to be deployed onto a server. This would either run
+    standalone or inside of an application server. Alongside the application itself
+    we’d need to ensure the environment contained the correct dependencies and configuration
+    available for it to run successfully in the environment we were deploying to.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在容器之前，我们会将应用程序打包为二进制、压缩资产或原始源代码，以便部署到服务器上。这些应用程序可以独立运行或嵌入到应用服务器中。除了应用程序本身外，我们还需要确保环境包含了正确的依赖项和配置，以便在目标环境中成功运行。
+- en: In a container-based environment, the container image is the deployable asset.
+    It contains not only the application binary itself but also the execution environment
+    and any associated dependencies. The image itself is a compressed set of *filesystem
+    layers* alongside some metadata, which together conform to the Open Container
+    Initiative (OCI) Image Specification. This is an agreed standard within the cloud
+    native community to ensure that image building can be implemented in many different
+    ways (we’ll see some of these in the following sections) while still producing
+    an artifact that is runnable by all the different container runtimes (more information
+    on this can be found in [Chapter 3](ch03.html#container_runtime_chapter)).
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在基于容器的环境中，容器镜像是可部署的资产。它不仅包含应用程序二进制本身，还包括执行环境和所有相关的依赖项。镜像本身是一组压缩的“文件系统层”，以及一些元数据，这些层共同遵循开放容器倡议（OCI）镜像规范。这是云原生社区内的一种约定标准，旨在确保可以以多种不同方式实现镜像构建（我们将在接下来的章节中看到一些方式），同时生成的构件可以被所有不同的容器运行时运行（更多关于此的信息可以在[第三章](ch03.html#container_runtime_chapter)找到）。
+- en: Typically, building a container image involves creating a Dockerfile that describes
+    the image and using Docker Engine to execute the Dockerfile. With that said, there
+    is an ecosystem of tools (each with their own approaches) that you can use to
+    create container images in different scenarios. To borrow a concept from BuildKit
+    (one such tool, built by Docker) we can think about building in terms of *frontend*
+    and *backend*. The *frontend* is the method for defining the high-level process
+    that should be used to build the image, e.g., a Dockerfile or Buildpack (more
+    on these later in this chapter). The *backend* is the actual build engine that
+    takes the definition generated by the *frontend* and executes commands on the
+    filesystem to construct the image.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 典型情况下，构建容器镜像涉及创建描述镜像的 Dockerfile，并使用 Docker 引擎执行 Dockerfile。话虽如此，在不同场景下，有一系列工具生态系统（每个都有其独特的方法），可以用来创建容器镜像。借用
+    BuildKit（Docker 构建的一个工具）的一个概念，我们可以从“前端”和“后端”角度来思考构建。其中，“前端”是定义应该用来构建镜像的高层过程的方法，例如
+    Dockerfile 或 Buildpack（本章后面会详细介绍）。而“后端”则是实际的构建引擎，它接受由“前端”生成的定义，并在文件系统上执行命令以构建镜像。
+- en: 'In many cases the *backend* is the Docker daemon, which may not be suitable
+    for all cases. For example, if we want to run builds in Kubernetes we need either
+    to run a Docker daemon inside a container (Docker in Docker) or mount the Docker
+    Unix socket from the host machine into the build container. Both of these approaches
+    have drawbacks, and in the latter case exposes potential security issues. In response
+    to these issues, other build backends like Kaniko have emerged. Kaniko uses the
+    same *frontend* (a Dockerfile) but utilizes different techniques to create the
+    image under the hood, making it a solid choice for running in a Kubernetes Pod.
+    When deciding how you want to build images, you should answer the following questions:'
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在许多情况下，“后端”是 Docker 守护程序，但这并非所有情况都适用。例如，如果我们想要在 Kubernetes 中运行构建，我们需要在容器内部运行
+    Docker 守护程序（Docker in Docker），或者将 Docker Unix 套接字从主机机器挂载到构建容器中。这两种方法都有缺点，尤其是后者可能会存在安全问题。为了应对这些问题，出现了其他构建后端，如
+    Kaniko。Kaniko 使用相同的“前端”（Dockerfile），但在内部使用不同的技术来创建镜像，使其成为在 Kubernetes Pod 中运行的可靠选择。在决定如何构建镜像时，您应该回答以下问题：
+- en: Can we run our builder as root?
+  id: totrans-12
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 我们能否以 root 用户身份运行构建器？
+- en: Are we OK mounting the Docker socket?
+  id: totrans-13
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 我们是否可以接受挂载 Docker 套接字？
+- en: Do we care about running a daemon?
+  id: totrans-14
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 我们是否关心运行守护程序？
+- en: Do we want to containerize builds?
+  id: totrans-15
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 我们是否希望将构建容器化？
+- en: Do we want to run them among workloads in Kubernetes?
+  id: totrans-16
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 我们是否希望在 Kubernetes 的工作负载中运行它们？
+- en: How much do we intend to leverage layer caching?
+  id: totrans-17
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 我们打算如何充分利用层缓存？
+- en: How will our tooling choice affect distributing builds?
+  id: totrans-18
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 我们的工具选择将如何影响分发构建？
+- en: What *frontends* or image definition mechanisms do we want to use? What is supported?
+  id: totrans-19
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 我们想要使用什么*前端*或镜像定义机制？支持什么？
+- en: In this section, we will first cover some of the patterns and antipatterns we’ve
+    seen when building container images (Cloud Native Buildpacks) that will hopefully
+    help you on your journey to build better container images. Then, we will review
+    an alternative method for building container images, and how all of these techniques
+    can be integrated into a pipeline.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本节中，我们首先会涵盖构建容器镜像（云原生构建包）时遇到的一些模式和反模式，希望这些内容能帮助您在构建更好的容器镜像的道路上更进一步。然后，我们将审查另一种构建容器镜像的替代方法，以及如何将所有这些技术集成到流水线中。
+- en: One question that often comes up early on within organizations is, Who should
+    be responsible for building images? Early on as Docker was becoming popular it
+    was largely embraced as a developer-focused tool. In our experience, smaller organizations
+    still have developers responsible for writing Dockerfiles and defining the build
+    process for their application images. However, as organizations look to adopt
+    containers (and Kubernetes) at scale, having individual developers or development
+    teams all creating their own Dockerfiles becomes unsustainable. Firstly it creates
+    extra work for developers, which pulls them away from their core responsibility,
+    and secondly, it results in a huge variance in produced images with little to
+    no standardization.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 组织早期经常遇到的一个问题是，谁应该负责构建镜像？在 Docker 变得流行之初，它主要被作为一个面向开发者的工具。根据我们的经验，规模较小的组织仍然让开发人员负责编写
+    Dockerfile 并定义其应用镜像的构建过程。然而，随着组织试图大规模采用容器（和 Kubernetes），让个别开发者或开发团队各自创建自己的 Dockerfile
+    变得不可持续。首先，这给开发者带来额外的工作，使他们远离其核心责任；其次，导致生成的镜像差异巨大，几乎没有标准化。
+- en: As a result, we are seeing a move toward abstracting the build process from
+    development teams and instead moving the responsibility toward operations and
+    platform teams to implement *source to image* patterns and tooling that receive
+    a code repository as an input and are capable of producing a container image ready
+    to move through the pipeline. We’ll discuss this pattern more in [“Cloud Native
+    Buildpacks”](#cloud_native_buildpacks). In the interim we have also commonly seen
+    a pattern of platform teams running workshops and/or assisting development teams
+    with Dockerfile and image creation. As organizations scale this can be an effective
+    first step but is usually not sustainable given the ratio of development teams
+    to platform personnel.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，我们看到一种趋势是将构建过程从开发团队中抽象出来，转移责任给运维和平台团队来实现*源到镜像*的模式和工具化，这些工具接收代码仓库作为输入，并能够生成准备通过流水线的容器镜像。我们将在[“云原生构建包”](#cloud_native_buildpacks)中更详细地讨论这种模式。与此同时，我们通常看到平台团队开展研讨会或协助开发团队使用
+    Dockerfile 和镜像创建。随着组织规模的扩展，这可能是一个有效的第一步，但通常不可持续，因为开发团队与平台人员的比例不匹配。
+- en: The Golden Base Images Antipattern
+  id: totrans-23
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 金基础镜像反模式
+- en: In the field we have encountered several antipatterns that are usually the result
+    of teams not adjusting their thinking to embrace patterns that have emerged in
+    the container and cloud native landscape. Maybe the most common of these is the
+    concept of pre-ordained, *gold* images. The scenario is that in a pre-container
+    environment specific base images (for example, a preconfigured CentOS base) would
+    be approved for use within an organization, and all applications going into production
+    would have to be based on that image. This approach is usually adopted for *security*
+    reasons, as the tools and libraries in the image have been well vetted. However,
+    when moving to containers, teams found themselves consigned to reinventing the
+    wheel by pulling useful upstream images from third parties and vendors and rebasing
+    their applications and configurations onto them.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在现场工作中，我们遇到了几种反模式，这些反模式通常是团队没有调整思维方式，不能接纳在容器和云原生领域中出现的模式所导致的。其中可能最常见的是预定的*金*镜像的概念。场景是，在预容器环境中，特定的基础镜像（例如预配置的
+    CentOS 基础镜像）会被批准在组织内使用，并且所有进入生产的应用程序都必须基于该镜像。这种方法通常是出于*安全*原因，因为镜像中的工具和库已经经过了充分的审查。然而，当转向容器时，团队发现自己被限制在重新发明轮子中，从第三方和供应商那里拉取有用的上游镜像，并将其重新基于自己的应用程序和配置。
+- en: This introduces a few related issues. Firstly, there is the additional work
+    involved with the initial conversion from the upstream image to an internal customized
+    version. Secondly, there is now an onus of maintenance placed on the internal
+    platform team to store and maintain these internal images. Because this situation
+    can sprawl (given how many images are in use in a typical environment), this approach
+    usually ends up resulting in a *worse* security posture as updates are performed
+    infrequently (if at all) given the extra work involved.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这引入了一些相关问题。首先，需要额外的工作将上游镜像转换为内部定制版本。其次，现在内部平台团队有责任存储和维护这些内部镜像。由于这种情况可能会扩展（考虑到在典型环境中使用的镜像数量），这种方法通常会导致*更糟糕*的安全姿态，因为更新频率较低（如果有的话），这是由于额外的工作所致。
+- en: 'Our recommendation in this area is usually to partner with security teams and
+    identify what specific requirements the gold images are serving. Usually several
+    of the following will apply:'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在这一领域的建议通常是与安全团队合作，并确定金镜像服务的具体要求。通常会适用以下几点：
+- en: Ensure specific agents/software is installed
+  id: totrans-27
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 确保特定的代理程序/软件已安装
+- en: Ensure no vulnerable libraries are present
+  id: totrans-28
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 确保不存在可疑的库
+- en: Ensure user accounts have the correct permissions
+  id: totrans-29
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 确保用户帐户具有正确的权限
+- en: By understanding the reasoning behind the restrictions, we can instead codify
+    these requirements into tooling that will sit in the pipeline and reject and/or
+    alert on non-compliant images and maintain the desired security posture, while
+    still broadly allowing teams to reuse images (and the work that has gone into
+    crafting them) from the upstream community. We’ll take a deeper look at one example
+    workflow in [“Image Registries”](#image_registries).
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过理解限制背后的原因，我们可以将这些要求编码为工具，这些工具将在流水线中运行，拒绝或警报非符合的镜像，并保持期望的安全姿态，同时广泛允许团队重复使用来自上游社区的镜像（及其背后的工作）。我们将更深入地研究一个示例工作流程，详见[“镜像注册表”](#image_registries)。
+- en: One of the more compelling reasons to specify a base OS is to ensure that operational
+    knowledge exists in the organization should troubleshooting be required. However,
+    when digging a little deeper this is not as useful as it may seem. Very rarely
+    should it be necessary to `exec` into containers to troubleshoot specific issues,
+    and even then the differences between Linux-based operating systems are fairly
+    trivial for the kinds of support required. Additionally, more and more applications
+    are being packaged in ultra-lightweight scratch or distroless images to reduce
+    the overhead inside the container.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 指定基础操作系统的一个更有说服力的原因之一是确保组织中存在操作知识以便在需要时进行故障排除。然而，深入挖掘后，这并不像看起来那么有用。很少需要`exec`到容器中以排查特定问题，即使需要，Linux-based操作系统之间的差异对所需的支持类型来说也是相当微不足道的。此外，越来越多的应用程序被打包成超轻量级的scratch或distroless镜像，以减少容器内的开销。
+- en: Attempting to refactor all *upstream*/vendor images onto your own base(s) should
+    be avoided for the reasons described in this section. However, we’re not asserting
+    that maintaining an internal set of curated base images is a bad idea. These can
+    be great to use as a foundation for your own applications, and we talk about some
+    of the considerations when building these internal bases in the next section.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应避免尝试将所有*上游*/供应商镜像重构为自己的基础镜像，原因见本节描述。但我们并不断言维护一组内部精选的基础镜像是一个坏主意。这些镜像可以作为构建自己应用的基础，并且我们将在下一节讨论构建这些内部基础时的一些考虑因素。
+- en: Choosing a Base Image
+  id: totrans-33
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 选择基础镜像
+- en: The base image of the container determines the bottom layers on which the application’s
+    container image is to be built. The base image is critical as it usually contains
+    operating system libraries and tools that will be part of your application container
+    image. If you are not mindful when choosing a base image, it can be the source
+    of unnecessary libraries and tools that not only bloat your container image but
+    also can become security vulnerabilities.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器的基础镜像决定了应用容器镜像要构建在哪些底层。基础镜像至关重要，因为它通常包含操作系统的库和工具，这些将成为你的应用容器镜像的一部分。如果在选择基础镜像时不慎，它可能会包含不必要的库和工具，这不仅会使容器镜像变得臃肿，还可能成为安全漏洞的来源。
+- en: 'Depending on your organization’s maturity and security posture, you might not
+    have a choice when it comes to base images. We have worked with many organizations
+    that have a dedicated team responsible for curating and maintaining a set of approved
+    base images that must be used across the organization. With that said, if you
+    do have a choice or you are part of the team that is vetting base images, consider
+    the following guidelines when evaluating base images:'
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 根据您的组织成熟度和安全态势，可能在选择基础镜像时无法自由选择。我们与许多有责任策划和维护一组批准的基础镜像的专门团队合作过。话虽如此，如果您有选择权或是审核基础镜像团队的一部分，考虑以下指导原则会很有帮助：
+- en: Ensure the images are published by a reputable vendor. You don’t want to use
+    a base image from a random DockerHub user. After all, these images will be the
+    foundation for most, if not all, your applications.
+  id: totrans-36
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 确保镜像由信誉良好的供应商发布。您不希望使用来自随机 DockerHub 用户的基础镜像。毕竟，这些镜像将是大多数甚至所有应用程序的基础。
+- en: Understand the update cycle and prefer images that are updated continuously.
+    As mentioned earlier, the base image typically contains libraries and tools that
+    must be patched whenever new vulnerabilities are discovered.
+  id: totrans-37
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 了解更新周期，优先选择持续更新的镜像。如前所述，基础镜像通常包含需要在发现新漏洞时进行修补的库和工具。
+- en: Prefer images that have an open source build process or specification. This
+    is typically a Dockerfile that you can inspect to understand how the image is
+    built.
+  id: totrans-38
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 优先选择具有开源构建过程或规范的镜像。通常这是一个 Dockerfile，您可以检查以了解镜像的构建方式。
+- en: Avoid images that have unnecessary tools or libraries. Prefer minimal images
+    that provide a small footprint that your developers can build upon, when necessary.
+  id: totrans-39
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 避免使用带有不必要工具或库的镜像。优先选择提供小型基础的最小镜像，以便开发者在需要时进行构建。
+- en: Most of the time if you are building your own images we’ve seen scratch or distroless
+    to be a solid choice as both embody the preceding principles. The scratch image
+    contains absolutely nothing, so with a simpler static binary scratch can be the
+    leanest possible image. However, you may encounter issues if you need root CA
+    certificates or some other assets. These can be copied in, but are something to
+    think about. The distroless base is what we’d recommend in most cases as they
+    contain some sensible users precreated (`nonroot`, `nobody`, etc.) and a set of
+    minimal required libraries that vary depending on the flavor of the base image
+    chosen. Distroless has several language-specific base variants for you to choose
+    from.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大多数情况下，如果您正在构建自己的镜像，我们建议使用 scratch 或 distroless 作为一个坚实的选择，因为它们体现了前述原则。scratch
+    镜像绝对不包含任何内容，因此对于简单的静态二进制来说，scratch 可能是最精简的镜像。但是，如果您需要根 CA 证书或其他资产，则需要将其复制进去，这是需要考虑的问题。distroless
+    基础镜像在大多数情况下是我们推荐的，因为它们预先创建了一些合理的用户（如 `nonroot`、`nobody` 等）和一组基础库，具体取决于所选的基础镜像的类型。distroless
+    还有几种特定语言的基础变体供您选择。
+- en: In the next few sections we’ll continue to talk about best-practice patterns,
+    starting with the importance of specifying an appropriate user for your application
+    to run under.
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在接下来的几节中，我们将继续讨论最佳实践模式，首先要重视为应用程序指定适当的用户身份。
+- en: Runtime User
+  id: totrans-42
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 运行时用户
+- en: Because of the container isolation model (mainly the fact that containers share
+    the underlying Linux kernel), the runtime user of a container has important implications
+    that some developers don’t think about. In most cases, when the container’s runtime
+    user is left unspecified, the process runs as the root user. This is problematic
+    because it increases the attack surface of the container. For example, if an attacker
+    were to compromise the application and escape the container, they could gain root
+    access on the underlying host.
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于容器隔离模型（主要是容器共享底层 Linux 内核），容器的运行时用户具有一些开发者未考虑到的重要影响。在大多数情况下，如果未指定容器的运行时用户，进程将以
+    root 用户身份运行。这是有问题的，因为它增加了容器的攻击面。例如，如果攻击者成功攻击应用程序并逃离容器，他们可能会在底层主机上获得 root 访问权限。
+- en: 'When building your container image, it is critical for you to consider the
+    runtime user of the container. Does the application need to run as root? Does
+    the application depend on the contents of */etc/passwd*? Do you need to add a
+    nonroot user to the container image? As you answer these questions, ensure that
+    you specify the runtime user in the container image’s configuration. If you are
+    using a Dockerfile to build your image, you can use the `USER` directive to specify
+    the runtime user, as in the following example, which runs the `my-app` binary
+    with the user and group ID `nonroot` (which is configured by default as part of
+    the distroless set of images):'
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在构建容器映像时，考虑容器的运行时用户非常关键。应用程序是否需要以root用户身份运行？应用程序是否依赖于*/etc/passwd*文件的内容？您是否需要向容器映像添加非root用户？在回答这些问题时，请确保在容器映像的配置中指定运行时用户。如果您使用Dockerfile来构建映像，您可以使用`USER`指令来指定运行时用户，例如下面的示例，该示例使用`nonroot`用户和组ID（默认作为distroless镜像集的一部分配置）来运行`my-app`二进制文件：
+- en: '[PRE0]'
+  id: totrans-45
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: Even though you can specify the runtime user in your Kubernetes deployment manifests,
+    defining it as part of the container image specification is valuable as it results
+    in a self-documenting container image. It also ensures that developers use the
+    same user and group ID as they work with the container in their local or development
+    environments.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管您可以在Kubernetes部署清单中指定运行时用户，但将其定义为容器映像规范的一部分非常有价值，因为这会导致生成自我记录的容器映像。这还确保开发人员在其本地或开发环境中与容器一起工作时使用相同的用户和组ID。
+- en: Pinning Package Versions
+  id: totrans-47
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 固定包版本
+- en: 'If your application leverages external packages you will most likely install
+    them using a package manager such as `apt`, `yum`, or `apk`. As you build your
+    container image, it is important that you pin or specify the version of these
+    packages. For example, the following example shows an application that depends
+    on imagemagick. The `apk` instruction in the Dockerfile pins imagemagick to the
+    version that is compatible with the application:'
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您的应用程序利用外部包，您很可能会使用`apt`、`yum`或`apk`等包管理器安装它们。在构建容器映像时，重要的是要固定或指定这些包的版本。例如，以下示例显示了一个依赖于imagemagick的应用程序。Dockerfile中的`apk`指令将imagemagick固定为与应用程序兼容的版本：
+- en: '[PRE1]'
+  id: totrans-49
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: If you leave package versions unspecified, you risk getting different packages
+    that might break your application. Thus, always specify the versions of the packages
+    you install in your container image. By doing so, you ensure that your container
+    image builds are repeatable and produce container images with compatible package
+    versions.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您未指定包版本，可能会获取不同的包，这可能会破坏您的应用程序。因此，在容器映像中安装包时，请始终指定包的版本。这样做可以确保您的容器映像生成是可重复的，并且生成具有兼容包版本的容器映像。
+- en: Build Versus Runtime Image
+  id: totrans-51
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 构建映像与运行时映像
+- en: In addition to packaging applications for deployment, development teams can
+    also leverage containers to build their applications. Containers can provide a
+    well-defined build environment that can be codified into a Dockerfile, for example.
+    This is useful as developers are not required to install the build tooling in
+    their systems. More importantly, containers can provide a standardized build environment
+    across the entire development team and their continuous integration (CI) systems.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了打包应用程序以供部署外，开发团队还可以利用容器来构建其应用程序。容器可以提供一个明确定义的构建环境，可以编码到Dockerfile中，例如。这对开发人员很有用，因为他们不需要在其系统中安装构建工具。更重要的是，容器可以在整个开发团队及其持续集成（CI）系统中提供标准化的构建环境。
+- en: While using containers to build applications can be useful, it is important
+    to distinguish between the build container image and the runtime image. The build
+    image contains all the tooling and libraries that are necessary to compile the
+    application, whereas the runtime image contains the application to be deployed.
+    For example in a Java application we might have a build image that contains the
+    JDK, Gradle/Maven, and all of our compilation and testing tooling. Then our runtime
+    image can contain only the Java runtime and our application.
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用容器构建应用程序虽然很有用，但重要的是要区分构建容器映像和运行时映像。构建映像包含编译应用程序所需的所有工具和库，而运行时映像包含要部署的应用程序。例如，在Java应用程序中，我们可能有一个构建映像，其中包含JDK、Gradle/Maven以及所有的编译和测试工具。然后我们的运行时映像可以仅包含Java运行时和我们的应用程序。
+- en: 'Given that the application typically does not need the build tooling at runtime,
+    the runtime image should not contain these tools. This results in a leaner container
+    image that is faster to distribute and has a tighter attack surface. If you are
+    using docker to build images, you can leverage its multistage build feature to
+    separate the build from the runtime image. The following snippet shows a Dockerfile
+    for a Go application. The build stage uses the `golang` image, which includes
+    the Go toolchain, while the runtime stage uses the scratch base image and contains
+    nothing more than the application binary:'
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 鉴于应用程序通常在运行时不需要构建工具，运行时镜像不应包含这些工具。这将导致更轻量的容器镜像，分发更快，并具有更紧凑的攻击面。如果您使用docker构建镜像，可以利用其多阶段构建功能将构建与运行时镜像分开。以下代码段显示了一个用于Go应用程序的Dockerfile。构建阶段使用`golang`镜像，其中包含Go工具链，而运行时阶段使用scratch基础镜像，并且只包含应用程序二进制文件：
+- en: '[PRE2]'
+  id: totrans-55
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: '[![1](assets/1.png)](#co_software_supply_chain_CO1-1)'
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_software_supply_chain_CO1-1)'
+- en: The main `golang` image contains all the Go build tools, which are not required
+    at runtime.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 主要的`golang`镜像包含所有的Go构建工具，在运行时不需要。
+- en: '[![2](assets/2.png)](#co_software_supply_chain_CO1-2)'
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_software_supply_chain_CO1-2)'
+- en: We copy the *go.mod* file first and download so that we can cache this step
+    if the code changes but the dependencies don’t.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们首先复制*go.mod*文件并下载，以便在代码更改但依赖项不变时可以缓存此步骤。
+- en: '[![3](assets/3.png)](#co_software_supply_chain_CO1-3)'
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_software_supply_chain_CO1-3)'
+- en: We can use `distroless` as a runtime image to take advantage of a minimal base
+    but with no unnecessary extra dependencies.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以使用`distroless`作为运行时镜像，以便利用最小化的基础镜像，但不包含不必要的额外依赖。
+- en: '[![4](assets/4.png)](#co_software_supply_chain_CO1-4)'
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_software_supply_chain_CO1-4)'
+- en: We want to run our apps as a nonroot user if possible.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果可能，我们希望以非root用户身份运行我们的应用程序。
+- en: '[![5](assets/5.png)](#co_software_supply_chain_CO1-5)'
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#co_software_supply_chain_CO1-5)'
+- en: Only the compiled file (*my-app*) is being copied from the build stage to the
+    deploy stage.
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 只有编译后的文件（*my-app*）从构建阶段复制到部署阶段。
+- en: Note
+  id: totrans-66
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注
+- en: Containers run a single process and usually have no supervisor or init system.
+    For this reason you need to ensure that signals are handled correctly and orphaned
+    processes are correctly reparented and reaped. There are several minimal init
+    scripts capable of fulfilling these requirements and acting as a bootstrap for
+    your application instance.
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器运行单个进程，通常没有监控程序或初始化系统。因此，您需要确保信号被正确处理，并且孤立的进程被正确重新父化和收回。有几个最小化的初始化脚本可以满足这些要求，并作为应用程序实例的引导程序。
+- en: Cloud Native Buildpacks
+  id: totrans-68
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 云原生构建包
+- en: An additional method of building container images involves tooling that analyze
+    the application’s source code and automatically produce a container image. Similar
+    to application-specific build tools, this approach greatly simplifies the developer
+    experience as developers don’t have to create and maintain Dockerfiles. Cloud
+    Native Buildpacks is an implementation of such an approach, and the high-level
+    flow is shown in [Figure 15-1](#buildpack_flow).
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一种构建容器镜像的方法涉及分析应用程序源代码的工具，并自动生成容器镜像。与特定于应用程序的构建工具类似，这种方法极大简化了开发者的体验，因为开发者不必创建和维护Dockerfile。云原生构建包是这种方法的一个实现，其高级流程如图[15-1](#buildpack_flow)所示。
+- en: '![prku 1501](assets/prku_1501.png)'
+  id: totrans-70
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1501](assets/prku_1501.png)'
+- en: Figure 15-1\. Buildpack flow.
+  id: totrans-71
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图15-1\. 构建包流程。
+- en: Cloud Native Buildpacks (CNB) is a container-focused implementation of Buildpacks,
+    a technology that Heroku and Cloud Foundry have used for years to package applications
+    for those platforms. In the case of CNB, it packages applications into OCI container
+    images, ready to run on Kubernetes. To build the image, CNB analyzes the application
+    source code and executes the buildpacks accordingly. For example, the Go buildpack
+    is executed if there are Go files present in your source code. Similarly, the
+    Maven (Java) buildpack is executed if CNB finds a *pom.xml* file. This all happens
+    behind the scenes, and developers can initiate this process using a CLI tool called
+    `pack`. The great thing about this approach is that the buildpacks are tightly
+    scoped, which enables building high-quality images that follow best practices.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Cloud Native Buildpacks（CNB）是 Buildpacks 的一种面向容器的实现，这是 Heroku 和 Cloud Foundry
+    多年来用来为这些平台打包应用程序的技术。在 CNB 的情况下，它将应用程序打包成 OCI 容器镜像，准备在 Kubernetes 上运行。为了构建镜像，CNB
+    分析应用程序源代码并相应地执行 buildpacks。例如，如果你的源代码中存在 Go 文件，则会执行 Go buildpack。类似地，如果 CNB 发现了
+    *pom.xml* 文件，则会执行 Maven（Java）buildpack。所有这些都是在幕后进行的，开发人员可以使用名为 `pack` 的 CLI 工具启动这个过程。这种方法的优点在于
+    buildpacks 的范围严格限定，这样可以构建遵循最佳实践的高质量镜像。
+- en: In addition to improving the developer experience and lowering the barrier to
+    platform adoption, platform teams can leverage custom buildpacks to enforce policy,
+    ensure compliance, and standardize the container images running in their platform.
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了改善开发人员的体验和降低平台采用门槛外，平台团队还可以利用自定义 buildpacks 来强制执行政策、确保合规性，并标准化在其平台上运行的容器镜像。
+- en: Overall, providing a solution that builds container images from source code
+    can be a worthy endeavor. Furthermore, we find that the value of such a solution
+    increases with the size of the organization. At the end of the day, development
+    teams want to focus on building value in the application and not on how to containerize
+    it.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 总的来说，提供一个从源代码构建容器镜像的解决方案可能是一个值得尝试的努力。此外，我们发现，这种解决方案的价值随着组织规模的增长而增加。归根结底，开发团队希望专注于在应用程序中构建价值，而不是如何将其容器化。
+- en: Image Registries
+  id: totrans-75
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 镜像注册表
+- en: 'If you are already using containers, then you’ll likely have a registry you
+    prefer. It’s one of the core requirements for utilizing Docker and Kubernetes
+    because we need somewhere to store the images we build on one machine and want
+    to run on many others (either standalone or in a cluster). As is the case for
+    images, the OCI also defines a standard spec for registry operations (to ensure
+    interoperability), and there are many proprietary and open source solutions available,
+    most of which share a common set of core features. Most image registries are comprised
+    of three major components: a server (for the user interface and API logic), a
+    blob store (for the images themselves), and a database (for user and image metadata).
+    Usually, the storage backends are configurable, and this can impact how you design
+    your registry architecture. We’ll talk more about this in a minute.'
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您已经在使用容器，那么您可能有一个偏好的注册表。这是利用 Docker 和 Kubernetes 的核心要求之一，因为我们需要一个地方来存储在一台机器上构建的镜像，并希望在许多其他机器上运行（无论是独立还是在集群中）。与镜像类似，OCI
+    也定义了注册表操作的标准规范（以确保互操作性），并且有许多专有和开源的解决方案可用，其中大多数共享一组共同的核心功能。大多数镜像注册表由三个主要组件组成：服务器（用于用户界面和
+    API 逻辑）、blob 存储（用于镜像本身）和数据库（用于用户和镜像元数据）。通常情况下，存储后端是可配置的，这可能会影响您设计注册表架构的方式。我们稍后会详细讨论这一点。
+- en: In this section we’ll look at some of the most important features offered by
+    registries and some of the patterns for integrating them into your pipeline. We’re
+    not going to look deeply at any *specific* registry implementations, as functionality
+    is generally similar; however, there are scenarios where you may want to lean
+    in a certain direction based on your existing setup or requirements.
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本节中，我们将看看注册表提供的一些最重要的特性以及将它们集成到您的流水线中的一些模式。我们不会深入研究任何*特定*的注册表实现，因为功能通常是相似的；然而，根据您现有的设置或要求，可能有些场景您可能希望朝某个方向倾斜。
+- en: If you are already leveraging an artifact store like Artifactory or Nexus you
+    may want to take advantage of their image hosting capabilities for ease of management.
+    Similarly, if your environments are heavily cloud-based there may be cost benefits
+    to utilizing cloud provider registries like AWS Elastic Container Registry (ECR),
+    Google Container Registry (GCR), or Azure Container Registry (ACR).
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您已经利用像Artifactory或Nexus这样的构件存储库，您可能希望利用它们的镜像托管能力来方便管理。同样，如果您的环境大量依赖云服务，使用像AWS
+    Elastic Container Registry（ECR）、Google Container Registry（GCR）或Azure Container
+    Registry（ACR）这样的云提供商注册表可能会带来成本效益。
+- en: Another key factor to consider when choosing a registry is the topology, architecture,
+    and failure domains of your environments and clusters. You may choose to place
+    registries in each failure domain to ensure high availability. When doing this
+    you’ll need to decide whether you want a centralized blob store or whether you
+    want blob stores in each region and set up image replication between the registries.
+    Replication is a feature of most registries that allows you to push an image to
+    one of a set of registries and have that image automatically pushed to the others
+    in the set. Even if this is not directly supported in your registry of choice,
+    it is fairly trivial to set up basic replication by using a pipeline tool (e.g.,
+    Jenkins) and webhooks that trigger on each image push.
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在选择注册表时另一个关键因素是您的环境和集群的拓扑结构、架构和故障域。您可以选择在每个故障域放置注册表以确保高可用性。在这样做时，您需要决定是否希望使用集中的
+    blob 存储，还是希望在每个区域设置 blob 存储并在注册表之间设置镜像复制。镜像复制是大多数注册表的功能之一，允许您将镜像推送到一组注册表中的一个并自动将该镜像推送到该组中的其他注册表。即使您选择的注册表不直接支持此功能，使用流水线工具（例如Jenkins）和在每次镜像推送时触发的Webhook，设置基本的复制也是相当简单的。
+- en: The decision of one versus many registries is also impacted by how much throughput
+    you need to support. In organizations with many thousands of developers triggering
+    code and image builds on every code commit, the number of concurrent operations
+    (pulls and pushes) can be significant. It is important to therefore understand
+    that an image registry, while playing only a limited role in the pipeline, is
+    in the critical path for not only production deployments but also development
+    activities. It is a core component that must be monitored and maintained in the
+    same way as other critical components to achieve a high level of service availability.
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在选择单个注册表与多个注册表时，也受到您需要支持多少吞吐量的影响。在每次代码提交时触发代码和镜像构建的数千名开发人员组织中，同时进行的操作（拉取和推送）数量可能相当可观。因此，重要的是要理解，尽管镜像注册表在管道中只起到有限作用，但它不仅在生产部署中，而且在开发活动中都是关键路径的一部分。它是必须像其他关键组件一样进行监控和维护，以实现高水平的服务可用性。
+- en: Many registries are built with the intention of being easily run *inside* a
+    cluster or containerized environment. This approach (which we’ll cover again in
+    [“Continuous Delivery”](#continuous_delivery)) has many advantages. Primarily,
+    we are able to leverage all of the primitives and conventions inside Kubernetes
+    to keep the services running, discoverable, and easily configurable. The obvious
+    downside here is that we now have a reliance on a service *inside* the cluster
+    to provide images to start new services inside that cluster. It’s more common
+    to see registries run on a shared services cluster and have a failover system
+    to a backup cluster to ensure that *some* instance of the registry will always
+    be able to service requests.
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 许多注册表的构建旨在轻松在集群或容器化环境中运行。这种方法（我们将在[“持续交付”](#continuous_delivery)中再次讨论）具有许多优点。主要优势在于，我们能够利用Kubernetes内的所有基元和约定来保持服务运行、可发现和易配置。这里的明显缺点是，现在我们依赖集群内部的一个服务来提供镜像以启动该集群内的新服务。更常见的是看到注册表在共享服务集群上运行，并具有故障转移系统以备份集群，以确保始终有一个注册表实例能够提供服务请求。
+- en: We’ve also commonly seen registries run *outside* of Kubernetes and treated
+    as more of a standalone *bootstrap* component that is required by all clusters.
+    This is usually the case where an organization is already using an existing instance
+    of Artifactory or another registry and repurposes it for image hosting. Utilizing
+    cloud registries is also a common pattern here, although you also need to be aware
+    of their availability guarantees (as the same topology questions apply) and potential
+    extra latency.
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们通常也会看到在Kubernetes之外运行的*注册表*，作为一个更独立的*引导*组件，所有集群都需要它。这通常是组织已经在使用现有的Artifactory或另一个注册表实例，并重新用于镜像托管的情况。在这里，使用云注册表也是一种常见模式，尽管您还需要注意它们的可用性保证（因为同样的拓扑问题也适用）和可能的额外延迟。
+- en: In the following subsections we’ll look at some of the most common concerns
+    when choosing and working with a registry. These concerns are all security related
+    as securing our software supply chain revolves around our deployed artifacts (images).
+    First we’ll look at vulnerability scanning and how to ensure that our images don’t
+    contain known security flaws. Then we’ll describe a commonly used quarantine flow
+    that can be effective at bringing external/vendor images into our environments.
+    Finally, we’ll discuss image trust and signing. This is an area that many organizations
+    are interested in but where the upstream tooling and approaches are still maturing.
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在接下来的小节中，我们将讨论选择和使用注册表时的一些最常见关注点。这些关注点都与安全有关，因为保护我们的软件供应链围绕着我们部署的构件（镜像）展开。首先，我们将讨论漏洞扫描以及如何确保我们的镜像不包含已知的安全缺陷。然后，我们将描述一种常用的隔离流程，可以有效地将外部/供应商镜像引入我们的环境。最后，我们将讨论镜像的信任和签名。这是许多组织感兴趣的一个领域，但上游的工具和方法仍在成熟中。
+- en: Vulnerability Scanning
+  id: totrans-84
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 漏洞扫描
+- en: Scanning images for known vulnerabilities is a key competency of most image
+    registries. Usually the scanning itself along with the database of common vulnerabilities
+    and exposures (CVEs) are delegated to a third-party component. Clair is a popular
+    open source choice and, in many cases, is pluggable should you have specific requirements.
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 扫描已知漏洞是大多数镜像注册表的一个关键能力。通常，扫描本身以及常见漏洞和曝光（CVE）数据库被委托给第三方组件。Clair是一个流行的开源选择，在许多情况下，它是可插拔的，如果您有特定的需求的话。
+- en: Every organization will have its own requirements about what constitutes an
+    acceptable risk when considering CVE scores. Registries will commonly expose controls
+    that allow you to disable the pulling of images that contain CVEs over a defined
+    score threshold. Additionally, the ability to add CVEs to an allowlist can be
+    useful to bypass issues that are flagged but not relevant in your environment,
+    or for those CVEs that are deemed acceptable risk and/or have no fixes released
+    and available.
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个组织对于在考虑CVE评分时什么构成可接受风险都有自己的要求。注册表通常会公开控制功能，允许您禁用拉取包含超过定义分数阈值的CVE的镜像。此外，将CVE添加到允许列表的能力对于绕过在您的环境中标记但不相关的问题，或者对于被视为可接受风险和/或没有发布和可用修复的CVE非常有用。
+- en: This static scanning at initial pull time can be useful to begin with, but what
+    happens if vulnerabilities are discovered over time in the images we’re already
+    using in the environment? Scans can be scheduled to detect these changes, but
+    then we need to have a plan for updating and replacing the images. It can be tempting
+    to automatically remediate (patch) and push out updated images, and there are
+    solutions that will always try to keep images up-to-date. However, this can be
+    problematic as image updates can introduce changes that may be incompatible and/or
+    break the running application. These automated image update systems may also work
+    outside of your designated deployment change process and could be hard to audit
+    in the environment. Even the blocking of image pulls (described previously) can
+    cause issues. If a core application’s image has a new CVE discovered and pulls
+    are suddenly prohibited, this could cause availability issues in the application
+    if those workloads are scheduled to new nodes and images are unavailable for pulling.
+    As we’ve discussed many times in this book, it’s imperative to understand the
+    trade-offs that you encounter when implementing each solution (in this case, security
+    versus availability) and make informed, well-documented decisions.
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 初始拉取时的静态扫描可以作为起点，但是如果在已经使用的环境中随着时间的推移发现了漏洞，会发生什么？可以定期安排扫描以检测这些变化，但接下来我们需要制定更新和替换镜像的计划。自动进行修复（修补）并推送更新镜像可能是诱人的选择，也有解决方案始终尝试保持镜像更新。然而，这可能会带来问题，因为镜像更新可能会引入不兼容的更改，甚至破坏正在运行的应用程序。这些自动化镜像更新系统可能也会超出您指定的部署变更流程，并且在环境中可能难以审计。即使是阻塞镜像拉取（前面描述过的）也可能会引起问题。如果核心应用程序的镜像发现了新的
+    CVE 并且突然禁止拉取，这可能会导致应用程序的可用性问题，特别是如果这些工作负载被调度到新节点并且镜像无法拉取。正如我们在本书中多次讨论过的那样，在实施每种解决方案时（在本例中是安全性与可用性之间），理解遇到的权衡是至关重要的，并做出经过深思熟虑和充分记录的决策。
+- en: A more common model than the automatic remediation described briefly is to alert
+    and/or monitor on image vulnerability scans and bubble these up to operations
+    and security teams. The implementation of this alerting may differ depending on
+    the capabilities offered by your choice of registry. Some registries can be configured
+    to trigger a webhook call on completion of a scan with the payload including details
+    of the vulnerable images and discovered CVEs. Others may expose a scrapeable set
+    of metrics with image and CVE details that can be alerted on using standard tooling
+    (take a look at [Chapter 9](ch09.html#observability_chapter) for more details
+    on metrics and alerting tools). While this method requires more manual intervention,
+    it allows good visibility into the security state of images in your environment
+    while also affording more control over how and when they are patched.
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 比起简短描述的自动修复模型，更常见的模型是对镜像漏洞扫描进行警报和/或监控，并将其提升给运维和安全团队。根据您选择的注册表提供的功能，警报实施方式可能会有所不同。某些注册表可以配置在扫描完成时触发
+    Webhook 调用，载荷包括受影响镜像和发现的 CVE 的详细信息。其他可能会公开一组可抓取的指标，其中包含镜像和 CVE 的详细信息，可以使用标准工具进行警报（详见[第9章](ch09.html#observability_chapter)有关指标和警报工具的更多详细信息）。虽然这种方法需要更多的手动干预，但它允许您在环境中查看镜像的安全状态，并在何时以及如何进行修补方面具有更多控制权。
+- en: Once we have CVE information for an image, then decisions about whether or not
+    to patch the image (and when) can be made based on the impact of the vulnerability.
+    If we need to patch and update the image we can trigger the update, testing, and
+    deployment via our regular deployment pipelines. This ensures that we have full
+    transparency and auditability and that those changes all go through our regular
+    processes. We will discuss CI/CD and deployment models in more detail later in
+    this chapter.
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦我们获得了镜像的 CVE 信息，就可以根据漏洞的影响程度决定是否以及何时修补镜像。如果需要修补并更新镜像，我们可以通过常规部署流水线触发更新、测试和部署。这确保了我们具有完全的透明性和审计能力，并且所有这些变更都通过我们的常规流程进行。稍后在本章中我们将详细讨论
+    CI/CD 和部署模型。
+- en: While the static image vulnerability scanning covered in this subsection is
+    a commonly implemented part of an organization’s software supply chain, it is
+    only one layer of what should be a *defense in depth* strategy to container security.
+    Images may download malicious content post-deployment or containerized applications
+    may be compromised/hijacked at runtime. It’s essential therefore to implement
+    some type of runtime scanning. In a more naive form, this could take the form
+    of periodic filesystem scanning on running containers to ensure that no vulnerable
+    binaries and/or libraries are introduced post-deployment. However, for more robust
+    protection it’s necessary to limit the *actions* and *behaviors* that a container
+    is capable of performing. This eliminates the inevitable game of whack-a-mole
+    that can occur with CVEs being discovered and patched and instead focuses on the
+    capabilities a containerized application should possess. Runtime scanning is a
+    larger topic that we don’t have the space to fully cover here, but you should
+    look into tools like [Falco](https://falco.org) and the [Aqua Security suite](https://github.com/aquasecurity).
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然本小节介绍的静态镜像漏洞扫描是组织软件供应链中常见的一部分，但它只是容器安全策略中应该是*深层防御*战略的一层。镜像可能在部署后下载恶意内容，或者容器化应用程序可能在运行时被篡改/劫持。因此，实施某种形式的运行时扫描至关重要。在更简单的形式中，这可以采用对运行容器进行周期性文件系统扫描的形式，以确保不会在部署后引入易受攻击的二进制文件和/或库。然而，为了更强大的保护，有必要限制容器能够执行的*操作*和*行为*。这消除了CVE被发现和修补时可能发生的游戏，而是集中于容器化应用程序应具备的能力。运行时扫描是一个更大的主题，我们在这里没有足够的空间来全面覆盖，但您应该查看像[Falco](https://falco.org)和[Aqua
+    Security 套件](https://github.com/aquasecurity)这样的工具。
+- en: Quarantine Workflow
+  id: totrans-91
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 隔离工作流程
+- en: As mentioned, most registries provide a mechanism to scan images for known vulnerabilities
+    and restrict image pulls. However, there may be additional requirements that images
+    must satisfy before they can be used. We have also encountered the scenario where
+    developers are unable to directly pull images from the public internet and must
+    use an internal registry. Both of these use cases can be solved by using a multiregistry
+    setup with a quarantine workflow pipeline described next.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如提到的，大多数注册表提供了扫描已知漏洞并限制镜像拉取的机制。但是，在使用镜像之前可能还有其他要求必须满足。我们也遇到过开发人员无法直接从公共互联网拉取镜像，必须使用内部注册表的情况。这两种情况都可以通过使用具有隔离工作流管道的多注册表设置来解决，接下来我们会描述这一流程。
+- en: First, we can provide developers with a self-service portal to request images.
+    Something like ServiceNow or a Jenkins job works fine here, and we’ve seen this
+    many times. Chatbots can also offer a more seamless integration for developers
+    and are gaining popularity. Once an image is requested, it is automatically pulled
+    to a *quarantine* registry where checks can be run on the image and the pipeline
+    can spin up environments to pull and verify the image meets specific criteria.
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，我们可以为开发人员提供一个自助门户来请求镜像。像 ServiceNow 或 Jenkins 任务在这里都很合适，我们已经见过很多次了。聊天机器人也可以为开发人员提供更无缝的集成，并且越来越受欢迎。一旦请求镜像，它将自动拉取到一个*隔离*注册表，可以在镜像上运行检查，并且管道可以启动环境来拉取和验证镜像是否符合特定标准。
+- en: Once the checks pass, the image can be signed (this is optional, see [“Image
+    Signing”](#image_signing) for more information) and pushed to an approved registry.
+    The developer can also be notified (either via the chatbot, or an updated ticket/job,
+    etc.) that the image has been approved (or rejected, and the reasoning). The whole
+    flow can be seen in [Figure 15-2](#quarantine_flow).
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦检查通过，镜像可以被签名（这是可选的，请参阅[“镜像签名”](#image_signing)获取更多信息），并推送到已批准的注册表。开发人员也可以被通知（通过聊天机器人、或者更新的工单/任务等）镜像已被批准（或拒绝，并说明理由）。整个流程可以在[图
+    15-2](#quarantine_flow)中查看。
+- en: '![prku 1502](assets/prku_1502.png)'
+  id: totrans-95
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1502](assets/prku_1502.png)'
+- en: Figure 15-2\. Quarantine flow.
+  id: totrans-96
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 15-2\. 隔离流程。
+- en: This flow can be combined with admission controllers to ensure that only images
+    that are signed, or those that come from a specific registry, are allowed to be
+    run on a cluster.
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以将此流程与准入控制器结合使用，以确保只允许签名的镜像或来自特定注册表的镜像在集群上运行。
+- en: Image Signing
+  id: totrans-98
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 镜像签名
+- en: The issue of supply chain security is becoming more prevalent as applications
+    come to rely on an increasing number of external dependencies, be those code libraries
+    or container images.
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 随着应用程序越来越依赖于越来越多的外部依赖项（无论是代码库还是容器镜像），供应链安全问题变得更加普遍。
+- en: One of the security features often mentioned when discussing images is the notion
+    of signing. Very simply, the concept with signing is that an image publisher can
+    cryptographically sign an image by generating a hash of the image and associating
+    their identity with it before pushing it to a registry. Users are then able to
+    verify the authenticity of an image by validating the signed hash against the
+    publisher’s public key.
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当讨论图像时经常提到的安全功能之一是签名的概念。简单来说，签名的概念是，图像发布者可以在将其推送到注册表之前，通过生成图像的哈希并将其与其身份关联起来进行加密签名。然后用户可以通过验证签名的哈希与发布者的公钥进行验证来验证图像的真实性。
+- en: This workflow is attractive because it means we can create an image at the start
+    of our software supply chain and sign it after each stage of the pipeline. Perhaps
+    we can sign it after testing has been completed, and again after it has been approved
+    for deployment by a release management team. Then at deploy time we are able to
+    gate the deployment of the image into production based on whether it has been
+    signed by the various parties that we specify. Not only do we ensure that it has
+    passed those approvals, but we ensure that it is exactly the same image that is
+    now being promoted to a production environment. This high-level flow is shown
+    in [Figure 15-3](#signing_flow).
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个工作流程很吸引人，因为它意味着我们可以在软件供应链的开始创建一个图像，并在每个管道阶段之后进行签名。也许我们可以在测试完成后签名，然后在通过发布管理团队批准部署后再次签名。然后在部署时，我们可以根据是否由我们指定的各方签名来控制将图像部署到生产环境中。我们不仅确保它已通过这些批准，而且确保它与现在推广到生产环境的相同图像。这个高级流程如图
+    [Figure 15-3](#signing_flow) 所示。
+- en: '![prku 1503](assets/prku_1503.png)'
+  id: totrans-102
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1503](assets/prku_1503.png)'
+- en: Figure 15-3\. Signing flow.
+  id: totrans-103
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 15-3\. 签名流程。
+- en: The primary project in this area is Notary, which was originally developed by
+    Docker and is built upon The Update Framework (TUF), a system designed to facilitate
+    the secure distribution of software updates.
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 该领域的主要项目是 Notary，最初由 Docker 开发，建立在安全分发软件更新的框架 The Update Framework（TUF）之上。
+- en: Despite its benefits, we have not encountered much adoption of image signing
+    in the field for a couple of reasons. First, Notary has several components including
+    a server and multiple databases. These are additional components that need to
+    be installed, configured, and maintained. Not only that, but because the ability
+    to sign and verify images is usually in the critical path for software deployment,
+    the Notary system must be configured for high availability and resilience.
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管有其好处，由于几个原因，我们在现场并未看到图像签名的广泛采用。首先，Notary 包括服务器和多个数据库等多个组件。这些都是需要安装、配置和维护的额外组件。不仅如此，由于签名和验证图像通常是软件部署中的关键路径，因此
+    Notary 系统必须配置为高可用性和韧性。
+- en: Secondly, Notary requires each image be identified with a Globally Unique Name
+    (GUN), which includes the registry URL as part of the name. This makes signing
+    more problematic if you have multiple registries (e.g., caches, edge locations)
+    as the signatures are tied to the registry and cannot be moved/copied.
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 其次，Notary 要求每个图像都使用全局唯一名称（GUN）进行标识，该名称包含注册表 URL 作为名称的一部分。如果您有多个注册表（例如缓存、边缘位置），这会使签名变得更加棘手，因为签名与注册表绑定，不能移动/复制。
+- en: Finally, Notary and TUF require different sets of key pairs to be used across
+    the signing process. Each of the keys have different security requirements and
+    can be challenging to rotate in the case of a security breach. While it provides
+    an academically well-designed solution, the current Notary/TUF implementation
+    posed too high of a barrier to entry for many organizations that were only just
+    getting comfortable with some of the base technologies they were using. Thus,
+    many weren’t ready to trade more convenience and knowledge for the additional
+    security benefits that the signing workflow provided.
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，Notary 和 TUF 要求在签名过程中使用不同的密钥对。每个密钥具有不同的安全要求，并且在安全漏洞发生时更换密钥对可能具有挑战性。虽然它提供了学术上设计良好的解决方案，但当前的
+    Notary/TUF 实现对许多刚刚开始适应某些基础技术的组织来说是门槛太高了。因此，许多组织并未准备好为了签名工作流提供的额外安全性益处而交换更多的便利和知识。
+- en: At the time of writing, there are efforts underway to develop and release a
+    second version of Notary. This updated version should improve the user experience
+    by solving many of the issues just discussed, like reducing the complexity of
+    key management and eliminating the constraint that signatures are not transferable
+    by bundling them with the OCI images themselves.
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在撰写本文时，正在进行开发和发布第二版Notary的工作。这个更新版本应该通过解决刚讨论的许多问题来改善用户体验，例如通过将OCI映像与签名捆绑在一起，从而减少密钥管理的复杂性和消除签名不可转移的约束。
+- en: There are already several existing projects that implement an admission webhook
+    that will check images to ensure they have been signed before allowing them to
+    be run in a Kubernetes cluster. Once the issues are addressed, we anticipate signing
+    becoming a more oft-implemented property of the software supply chain and these
+    signing admission webhooks to mature even further.
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 已经有几个现有项目实施了准入Webhook，将检查映像以确保它们在允许在Kubernetes集群中运行之前已经签名。一旦问题得到解决，我们预计签名将成为软件供应链中更经常实施的属性，而这些签名准入Webhook也将进一步成熟。
+- en: Continuous Delivery
+  id: totrans-110
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 持续交付
+- en: In the previous sections we’ve discussed in detail the process of converting
+    source code into a container image. We also looked at where images are stored
+    and the architectural and procedural decisions we need to make around choosing
+    and deploying image registries. In this final section we’ll turn to examining
+    the entire pipeline that ties these early steps up with the actual deployment
+    of the image to potentially multiple Kubernetes clusters across many environments
+    (test, staging, production).
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在前面的章节中，我们详细讨论了将源代码转换为容器映像的过程。我们还研究了映像存储的位置以及在选择和部署映像注册表时需要做出的架构和过程决策。在最后这一节中，我们将转向检查将这些早期步骤与实际将映像部署到可能的多个Kubernetes集群（测试、预发布、生产）联系起来的整个流水线的审查。
+- en: We’ll cover how to integrate the build process into the automated pipeline before
+    looking at imperative, push-driven pipelines that many folks will already be familiar
+    with. Lastly, we’ll take a look at some of the principles and tooling emerging
+    in the field of GitOps, a relatively new approach to deployments that leverages
+    version control repositories as the source of truth for the assets that should
+    be deployed to our environments.
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在查看那些已经熟悉的命令驱动的管道之前，我们将覆盖如何将构建过程集成到自动化管道中。最后，我们将研究GitOps领域出现的一些原则和工具，这是一种相对较新的部署方法，利用版本控制存储库作为应部署到我们环境的资产的真实来源。
+- en: It’s worth noting that continuous delivery is a huge area and is the sole subject
+    of many books. In this section we’re assuming some knowledge of CD principles,
+    and we’ll focus on how to implement those principles within Kubernetes and associated
+    tooling.
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 值得注意的是，持续交付是一个非常广阔的领域，也是许多书籍的唯一主题。在本节中，我们假设读者已经了解CD原则的一些知识，并且我们将专注于如何在Kubernetes和相关工具中实现这些原则。
+- en: Integrating Builds into a Pipeline
+  id: totrans-114
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 将构建集成到管道中
+- en: For local development and testing phases, developers may build images with Docker
+    locally. However, anything beyond those early phases and organizations will want
+    to have builds performed as part of an automated pipeline triggered by the committing
+    of code into a central version control repository. We’ll talk later in this chapter
+    about more advanced patterns around the actual *deployment* of images into an
+    environment, but in this section want to focus purely on how the build phases
+    can also be run in cluster using cloud native pipeline automated tooling.
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于本地开发和测试阶段，开发人员可以在本地使用Docker构建映像。然而，超出这些早期阶段之外，组织将希望在由提交代码到中央版本控制存储库触发的自动化管道的一部分中执行构建。我们将在本章后面讨论更多关于实际映像*部署*的高级模式，但在本节中，我们希望纯粹关注如何使用云原生流水线自动化工具在集群中运行构建阶段。
+- en: 'We typically want new image builds to be triggered with a code commit. Some
+    pipeline tools will intermittently poll a set of configured repositories and trigger
+    a task run when changes are detected. In other cases it might be possible to trigger
+    a process to begin by firing a webhook from the version control system. We’ll
+    use a few examples from Tekton, a popular open source pipeline tool that is designed
+    to run on Kubernetes to illustrate some concepts in this section. Tekton (and
+    many other Kubernetes native tools) utilize CRDs to describe components in the
+    pipeline. In the following code, we can see a (heavily edited) instance of a `Task`
+    CRD that can be reused across multiple pipelines. Tekton maintains a catalog of
+    common actions (such as cloning a git repository, as shown in the following snippet)
+    that can be utilized in your own pipelines:'
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们通常希望通过代码提交触发新的镜像构建。一些管道工具会间歇性地轮询一组配置的存储库，并在检测到更改时触发任务运行。在其他情况下，可能通过从版本控制系统中的webhook触发一个进程来启动。我们将使用Tekton的几个示例来说明本节中的一些概念，Tekton是一个流行的开源管道工具，专为在Kubernetes上运行而设计。Tekton（以及许多其他本地于Kubernetes的工具）利用CRD来描述管道中的组件。在以下代码中，我们可以看到（经过大量编辑的）`Task`
+    CRD实例，可以在多个管道中重复使用。Tekton维护一个常见操作的目录（例如在以下代码片段中显示的克隆git存储库），可以在您自己的管道中使用：
+- en: '[PRE3]'
+  id: totrans-117
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'As mentioned in previous sections, there are many different ways of building
+    OCI images. Some of these require a Dockerfile, and some do not. You may also
+    need to perform additional actions as part of a build. Almost all pipeline tools
+    expose the notion of stages, steps, or tasks that allow users to configure discrete
+    pieces of functionality that can be chained together. The following code snippet
+    shows an example `Task` definition that uses Cloud Native Buildpacks to build
+    an image:'
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如在前面的部分中提到的，有许多不同的构建OCI镜像的方法。其中一些需要Dockerfile，而另一些则不需要。您可能还需要执行构建的其他操作。几乎所有管道工具都公开了阶段、步骤或任务的概念，允许用户配置可以链接在一起的离散功能块。以下代码片段显示了一个使用Cloud
+    Native Buildpacks构建镜像的示例`Task`定义：
+- en: '[PRE4]'
+  id: totrans-119
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: We can then tie together this task (and others) with our input repository as
+    part of a `Pipeline` (not shown here). This involves mapping the workspace we
+    cloned our git repository into earlier with the workspace that our buildpack builder
+    will use as a source. We can also specify that the image be pushed to a registry
+    at the end of the process.
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后，我们可以将这个任务（及其他任务）与我们的输入存储库一起作为`Pipeline`的一部分进行绑定（此处未显示）。这涉及将我们之前克隆的git存储库的工作空间与我们的构建包构建器将用作源的工作空间进行映射。我们还可以指定在过程结束时将图像推送到注册表。
+- en: The flexibility of this approach (configurable task blocks) means that pipelines
+    become very powerful tools for defining a build flow on Kubernetes. We could add
+    testing and/or linting stages to the build, or some kind of static code analysis.
+    We could also easily add a signing step to our image (as described in [“Image
+    Signing”](#image_signing)) if desired. We can also define our own tasks to run
+    other build tools such as Kaniko or BuildKit (if not utilizing buildpacks as in
+    this example).
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种方法的灵活性（可配置的任务块）意味着管道成为在Kubernetes上定义构建流程的强大工具。我们可以向构建添加测试和/或检查阶段，或者某种静态代码分析。如果需要的话，我们还可以轻松地向我们的镜像添加签名步骤（如["镜像签名"](＃image_signing)中所述）。我们还可以定义自己的任务来运行其他构建工具，例如Kaniko或BuildKit（如果不像本例中那样使用构建包）。
+- en: Push-Based Deployments
+  id: totrans-122
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 基于推送的部署
+- en: In the previous section we saw how to automate builds in a pipeline. In this
+    section we’ll see how this can be extended to actually perform the deployment
+    to a cluster and some of the patterns you’ll want to implement to make these types
+    of automated delivery pipelines easier.
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在前一节中，我们看到了如何在管道中自动化构建。在本节中，我们将看到如何将其扩展到实际执行部署到集群以及您希望实现的这些类型的自动交付管道中的一些模式。
+- en: Because of the flexibility of the task/step-based approach that we saw previously
+    (which is present in almost every tool), it is trivial to create a step at the
+    end of the pipeline that reads the tag of the newly created (and pushed) image
+    and updates the image for the Deployment. This *could* be achieved by updating
+    the Deployment directly in the cluster using `kubectl set image`, and several
+    articles/tutorials still demonstrate this approach. A better alternative is to
+    have our pipeline write the image tag change back into the YAML file describing
+    the Deployment and then committing this change *back into version control*. We
+    can then trigger a `kubectl apply` over the new version of the repository to enact
+    the change. The latter approach is preferred as we can keep our YAML as the approximate
+    source of truth for our cluster in that case (we’ll discuss more on this in [“GitOps”](#gitops))
+    but the former is an acceptable iterative step when migrating to this type of
+    Kubernetes-native automated pipeline.
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于我们之前看到的任务/步骤驱动方法的灵活性（几乎每个工具都有），在流水线末端创建一个步骤来读取新创建（并推送）图像的标签并更新部署变得微不足道。可以通过直接在集群中使用`kubectl
+    set image`命令更新部署来实现这一点，并且一些文章/教程仍然展示了这种方法。一个更好的选择是让我们的流水线将图像标签的变化写回描述部署的 YAML
+    文件中，然后将此更改*提交到版本控制*中。然后我们可以触发`kubectl apply`命令来执行这一更改。后一种方法更可取，因为在这种情况下我们可以将我们的
+    YAML 文件视为集群的近似真实源（我们将在[“GitOps”](#gitops)中进一步讨论这一点），但前者在迁移到这种基于 Kubernetes 的自动化流水线类型时是一个可以接受的迭代步骤。
+- en: 'When deploying applications to Kubernetes we have two distinct types of artifacts
+    to consider: the code and configuration required for the application and how to
+    *build* it, and the configuration for how to *deploy* it. We are often asked to
+    weigh in on how best to organize these artifacts, with some folks preferring to
+    keep *everything* related to an application together in a single tree, and others
+    preferring to keep them separate.'
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在将应用程序部署到 Kubernetes 时，我们有两种不同类型的工件需要考虑：用于应用程序及其构建和部署的代码和配置，以及用于*构建*它的配置和*部署*它的配置。我们经常被要求权衡如何最好地组织这些工件，有些人喜欢将与应用程序相关的*所有东西*放在单个树中，而另一些人则喜欢将它们分开。
+- en: 'Our advice is usually to choose the latter route for the following reasons:'
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们的建议通常是选择后者的路径，原因如下：
+- en: Each concern is usually the responsibility of a separate domain or team in the
+    organization. While developers should be aware of how their applications will
+    be deployed and will have input into the process, the configuration around sizing,
+    environments, the injection of secrets, etc. mostly sit as responsibilities of
+    the platform or operations team.
+  id: totrans-127
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 每个问题通常是组织中不同领域或团队的责任。开发人员应该了解其应用程序将如何部署，并对过程有所贡献，但围绕大小、环境、机密注入等的配置主要是平台或运维团队的责任。
+- en: Security permissions and audit requirements are likely different for code repositories
+    versus those containing deployment pipeline artifacts, secrets, and environment
+    configurations.
+  id: totrans-128
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 代码存储库与包含部署流水线工件、机密和环境配置的存储库在安全权限和审计要求上可能有所不同。
+- en: Once we have our deployment configurations in a separate repository, it’s easy
+    to follow how the deployment pipeline might first checkout this repository, then
+    run an update of the image tag (using `sed` or something similar), and finally
+    *check the change back in to git* to ensure that is our source of truth. We can
+    then run `kubectl apply -f` over the changed manifests. This imperative (or *push-based*)
+    model provides great auditability as we can leverage the built-in reporting and
+    logging capabilities provided by our version control system and easily see the
+    changes flow through our pipeline, as shown in [Figure 15-4](#push_based_deployments).
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦我们将部署配置放在一个单独的存储库中，就很容易理解部署流水线可能首先检出此存储库，然后运行图像标签的更新（使用`sed`或类似的工具），最后*将更改提交回
+    git*，以确保这是我们的真实源。然后我们可以在更改的清单上运行`kubectl apply -f`命令。这种命令式（或*推送驱动*）模型提供了很好的可审计性，因为我们可以利用版本控制系统提供的内置报告和日志记录功能，轻松查看更改如何通过我们的流水线流动，如图[15-4](#push_based_deployments)所示。
+- en: '![prku 1504](assets/prku_1504.png)'
+  id: totrans-130
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1504](assets/prku_1504.png)'
+- en: Figure 15-4\. Push-based deployments.
+  id: totrans-131
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 15-4\. 推送驱动的部署。
+- en: Depending on the level of automation within your organization, you may want
+    to have promotions between environments handled by your pipelines, and even deployments
+    executed against different Kubernetes clusters. There are certainly ways to achieve
+    this with most tools, and some will have better native support for this than others.
+    However, this is an area where the imperative pipeline model described in this
+    subsection can be more challenging to implement because we have to keep an inventory
+    (and credentials) for each of the clusters we want to use as a target.
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 根据组织内部的自动化程度，您可能希望通过流水线处理环境之间的推广，甚至在不同的 Kubernetes 集群中执行部署。大多数工具都有实现这一目标的方法，有些工具对此的本地支持可能更好。然而，这是一个领域，其中命令式流水线模型在实施上可能更具挑战性，因为我们必须为每个希望用作目标的集群保持库存（和凭据）。
+- en: Another challenge of this imperative (where we have a centralized tool pushing
+    changes out to our environments) is that if the pipeline is interrupted for some
+    reason, we need to ensure that it is restarted or reconciled back to a healthy
+    state. We also need to maintain monitoring and alerting on our deployment pipelines
+    (however they are implemented) to make sure that we’re aware of deployment issues
+    if they arise.
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种命令式方法的另一个挑战是，如果由于某种原因中断了流水线，我们需要确保重新启动或调解回健康状态。我们还需要在部署流水线上保持监控和警报（无论它们是如何实现的），以确保我们在出现部署问题时能够意识到。
+- en: Rollout Patterns
+  id: totrans-134
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 部署模式
+- en: We mentioned briefly at the end of the previous section the need to monitor
+    pipelines to ensure that they successfully complete. However, when deploying new
+    versions of applications we also need a way to monitor their health and decide
+    whether we need to resolve issues or roll back to a previous working state.
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在上一节的结尾简要提到了监控流水线以确保其成功完成的需要。然而，在部署新版本的应用程序时，我们还需要一种方法来监控它们的健康状态，并决定是否需要解决问题或回滚到之前的工作状态。
+- en: 'There are several patterns that organizations may want to implement. There
+    are entire books dedicated to these patterns, but we’ll cover them briefly here
+    to show how you might implement them in Kubernetes:'
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 组织可能希望实施的几种模式。有一些书籍专门讨论这些模式，但我们将在这里简要介绍它们，以展示如何在 Kubernetes 中实现它们：
+- en: Canary
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 金丝雀部署
+- en: Canary releases are where a new version of an application is deployed to the
+    cluster and a small subset of traffic (based on metadata, users, or some other
+    attribute) is directed to the new version. This can be monitored closely to ensure
+    that the new version (Canary) behaves the same way as the previous version, or
+    at least does not result in an error scenario. The percentage of traffic can slowly
+    be increased over time as confidence increases.
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 金丝雀发布是指将应用程序的新版本部署到集群，并将小部分流量（基于元数据、用户或其他属性）指向新版本。可以密切监控此过程，以确保新版本（金丝雀）行为与先前版本相同，或至少不会导致错误场景。随着信心的增加，可以逐步增加流量的百分比。
+- en: Blue/green
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 蓝绿部署
+- en: This approach is similar to the Canary but involves more of a big bang cutover
+    of traffic. This could be achieved over multiple clusters (one on the old version,
+    *blue*, and one of the new version, *green*) or could be achieved in the same
+    cluster. The idea here is that we can test that deployment of the service works
+    as intended and perform some tests on the environment which is not user facing
+    before cutting traffic across to the new version. If we see elevated errors, we
+    can cut the traffic back. There is additional nuance in this approach, of course,
+    as your applications may need to gracefully handle state, sessions, and other
+    concerns.
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种方法类似于金丝雀部署，但涉及更大规模的流量切换。可以通过多个集群来实现（一个是旧版本，*蓝色*，另一个是新版本，*绿色*），也可以在同一个集群中实现。这里的想法是我们可以测试服务部署是否按预期工作，并在切换流量到新版本之前在非用户面向的环境中进行一些测试。如果我们看到错误率升高，我们可以减少流量。当然，这种方法还有一些微妙之处，因为你的应用程序可能需要优雅地处理状态、会话和其他问题。
+- en: A/B testing
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: A/B 测试
+- en: Again similar to the Canary, we can roll out a version of the application that
+    may contain some different behavior that targets a subset of consumers. We can
+    gather metrics and analysis on the usage patterns of the new version to make decisions
+    about whether to roll back or forward, or expand the experiment.
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 类似于金丝雀部署，我们可以推出一个应用程序的版本，该版本可能包含一些针对一部分消费者的不同行为。我们可以收集新版本的使用模式的指标和分析，以决定是回滚还是继续前进，或扩展实验。
+- en: These patterns move us toward the desired state of being able to decouple the
+    *deployment* of our applications from their *release* to consumers by giving us
+    control about when features and/or new versions are enabled. These practices are
+    great at de-risking the deployment of changes into our environments.
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些模式使我们朝着能够将应用程序的*部署*与向消费者的*发布*解耦的期望状态前进，通过控制何时启用功能和/或新版本来减少在我们的环境中部署更改的风险。这些实践在减少部署变更风险方面非常有效。
+- en: Most of these patterns are implemented via some kind of network traffic shifting.
+    In Kubernetes, we have some very rich networking primitives and capabilities that
+    make the implementation of these patterns possible. One open source tool that
+    enables these patterns (on top of various service mesh solutions) is Flagger.
+    Flagger runs as a controller within the Kubernetes cluster and watches for changes
+    to the image field of Deployment resources. It exposes many tweakable options
+    to enable the preceding patterns by programmatically configuring an underlying
+    service mesh to appropriately shift traffic. It also adds the ability to monitor
+    the health of newly rolled-out versions and either continue or halt and revert
+    the rollout process.
+  id: totrans-144
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大多数这些模式通过某种网络流量转移实现。在 Kubernetes 中，我们拥有一些非常丰富的网络原语和功能，使得这些模式的实现成为可能。一个开源工具，它在各种服务网格解决方案之上启用这些模式的是
+    Flagger。Flagger 作为 Kubernetes 集群中的一个控制器运行，并监视 Deployment 资源的 image 字段的更改。它通过以编程方式配置底层服务网格来适当地转移流量，公开了许多可调整的选项来启用前述模式。它还增加了监视新版本发布健康状况的能力，并在需要时继续或停止并回滚部署过程。
+- en: We definitely see the value of looking into Flagger and other solutions in this
+    space. However, we see these approaches more typically broached as part of a second
+    or third phase of an organization’s Kubernetes journey, given the additional complexity
+    they both depend on (service mesh is required to enable most patterns) and introduce.
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们确实看到了深入研究 Flagger 和该领域其他解决方案的价值。然而，考虑到它们依赖的额外复杂性（大多数模式需要服务网格）和引入的复杂性，我们更常见地将这些方法作为组织
+    Kubernetes 旅程的第二或第三阶段来考虑。
+- en: GitOps
+  id: totrans-146
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: GitOps
+- en: So far we have looked at adding a push-based deployment stage into your delivery
+    pipelines for Kubernetes. An emerging alternative model in the deployment space
+    is GitOps. Rather than imperatively push out changes to the cluster, the GitOps
+    model features a controller that constantly reconciles the contents of a git repository
+    with resources running in the cluster, as shown in [Figure 15-5](#gitops_flow).
+    This model brings it closely in line with the control-loop reonciliation experience
+    that we get with Kubernetes itself. The two primary tools in the GitOps space
+    are ArgoCD and Flux, and both teams are working together on a common engine to
+    underpin their respective tools.
+  id: totrans-147
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，我们已经看过如何将一个基于推送的部署阶段加入到您的 Kubernetes 交付流水线中。在部署领域出现的一个新兴替代模型是 GitOps。与向集群推出变更的命令式模型不同，GitOps
+    模型包括一个控制器，不断地将 git 仓库的内容与运行在集群中的资源进行协调，如[图 15-5](#gitops_flow)所示。这个模型使其与 Kubernetes
+    本身提供的控制循环协调体验密切相关。GitOps 空间的两个主要工具是 ArgoCD 和 Flux，两个团队正在共同开发一个共同的引擎来支持他们各自的工具。
+- en: '![prku 1505](assets/prku_1505.png)'
+  id: totrans-148
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1505](assets/prku_1505.png)'
+- en: Figure 15-5\. GitOps flow.
+  id: totrans-149
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 15-5\. GitOps 流程。
+- en: 'There are a couple of major benefits to this model:'
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种模型有几个主要优点：
+- en: It is declarative in nature, so that any issues with the deployment itself (tooling
+    going down, etc.) or deployments being deleted ad hoc will result in (attempted)
+    reconciliation to a good state.
+  id: totrans-151
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 它是声明性的，因此部署本身的任何问题（例如工具崩溃等）或者随意删除部署将导致（尝试）协调到一个良好状态。
+- en: Git becomes our single source of truth, and we can leverage existing expertise
+    and familiarity with the tooling, in addition to getting a strong audit log of
+    changes by default. We can use a pull request workflow as a gate for changes to
+    our clusters and integrate with external tooling as required through the extension
+    points that most version control systems expose (webhooks, workflows, actions,
+    etc.).
+  id: totrans-152
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Git 成为我们的唯一真理源，我们可以利用现有的工具专业知识和熟悉度，除了默认获取更改的强大审计日志。我们可以使用拉取请求工作流作为我们集群更改的门控，并通过大多数版本控制系统提供的扩展点（Webhooks、工作流、Actions
+    等）根据需要集成外部工具。
+- en: However, this model is not without downsides. For those organizations that truly
+    want to use git as their *single* source of truth, this means keeping secret data
+    in version control. Several projects have emerged over recent years to solve this
+    problem, with the most well-known of these being Bitnami’s Sealed Secrets. That
+    project allows encrypted versions of Secrets to be committed to a repository and
+    then decrypted once applied to the cluster (so as to be available to applications).
+    We discuss this approach more in [Chapter 5](ch05.html#chapter5).
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，这种模型并非没有缺点。对于那些真正希望将 git 作为他们*唯一*的真相来源的组织来说，这意味着将秘密数据保存在版本控制中。在过去几年中，出现了几个项目来解决这个问题，其中最著名的是
+    Bitnami 的 Sealed Secrets。该项目允许将加密版本的 Secrets 提交到仓库，然后在应用到集群时解密（以便应用程序可以访问）。我们在[第五章](ch05.html#chapter5)中详细讨论了这种方法。
+- en: We also need to ensure that we are monitoring the current health of state synchronization.
+    If the pipeline was push-based and fails, we’ll see a failure in the pipeline.
+    However, because the GitOps approach is declarative, we need to make sure we get
+    alerted if the observed state (in cluster) and the declared state (in git) remain
+    diverged for an extended period of time.
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们还需要确保监控当前状态同步的健康情况。如果流水线是基于推送的并且失败了，我们将在流水线中看到一个失败。然而，由于 GitOps 方法是声明性的，我们需要确保如果观察到的状态（在集群中）和声明的状态（在
+    git 中）长时间保持分歧，我们会收到警报。
+- en: Increased embracing of GitOps is a trend we see in the field, although it’s
+    definitely a paradigm shift from more traditional push-based models. Not all applications
+    deploy cleanly as-is with a flat application of YAML resources, and it may be
+    necessary to build in ordering and some scripting initially as organizations transition
+    to this approach.
+  id: totrans-155
+  prefs: []
+  type: TYPE_NORMAL
+  zh: GitOps 的广泛采纳是我们在这个领域看到的一个趋势，尽管它显然是从传统的推送模型转变而来的范式转变。并非所有的应用程序都能直接以平面应用 YAML
+    资源的方式部署，可能需要在组织转向这种方法时最初构建一些顺序和一些脚本。
+- en: It’s also important to be cognizant of tools that may create, modify, or delete
+    resources as part of their life cycle as these sometimes require some massaging
+    to fit into the GitOps model. An example of this would be a controller that runs
+    in the cluster and watches for a specific CRD and then creates multiple other
+    resources directly via the Kubernetes API. If running in *strict* mode, GitOps
+    tooling may delete those dynamically created resources as they are not in the
+    single source of truth (the git repo). This deletion of *unknown* resources may,
+    of course, be desirable in most cases and is one of the *positive* attributes
+    of GitOps. However, you should absolutely be mindful of situations where changes
+    may intentionally occur out of band from the git repository that may break the
+    model and need to be worked around.
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 还要注意可能会创建、修改或删除资源的工具，在它们的生命周期中，有时需要进行一些调整以符合 GitOps 模型。一个例子是在集群中运行并监视特定 CRD，然后通过
+    Kubernetes API 直接创建多个其他资源的控制器。如果以*严格*模式运行，GitOps 工具可能会删除这些动态创建的资源，因为它们不在单一真实来源（git
+    仓库）中。当然，在大多数情况下，删除*未知*资源可能是可取的，并且这是 GitOps 的*积极*特性之一。然而，您绝对要注意可能会故意从 git 仓库之外引起变化的情况，这可能会破坏模型并需要解决。
+- en: Summary
+  id: totrans-157
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 总结
+- en: In this chapter we looked at the process of getting source code into a container
+    and deployed onto a Kubernetes cluster. Many of the stages and principles that
+    you will already be familiar with (build/test, CI, CD, etc.) still apply in a
+    container/Kubernetes environment but with different tooling. At the same time
+    some concepts (like GitOps) will likely be new, building on concepts that are
+    present in Kubernetes itself to enhance reliability and security within existing
+    deployment patterns.
+  id: totrans-158
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们讨论了将源代码放入容器并部署到 Kubernetes 集群的过程。您可能已经熟悉的许多阶段和原则（构建/测试、CI、CD 等）在容器/Kubernetes
+    环境中仍然适用，但使用的工具不同。同时，一些概念（如 GitOps）可能是新的，这些概念建立在 Kubernetes 自身的概念基础之上，以增强现有部署模式中的可靠性和安全性。
+- en: There are many tools in this space that can enable many different flows and
+    patterns. However, one of the key takeaways from this chapter should be the importance
+    of deciding how much (or little) to expose each part of this pipeline to different
+    groups in the organization. Maybe development teams are engaged with Kubernetes
+    and confident enough to write build and deployment artifacts (or at least have
+    significant input). Or maybe the desire is toward abstracting all the underlying
+    details away from development teams to ease scaling and standardization concerns,
+    at the expense of additional burden on the platform teams to put relevant foundations
+    and automation in place.
+  id: totrans-159
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这个领域有许多工具可以实现多种不同的流程和模式。然而，本章的关键要点之一应该是决定在组织中不同群体之间暴露这个流水线的各个部分的程度的重要性。也许开发团队已经参与了
+    Kubernetes，并且足够自信地编写构建和部署工件（或者至少有重要的输入）。或者可能希望将所有底层细节抽象化，以减轻开发团队的扩展和标准化问题，但这可能会增加平台团队在建立相关基础和自动化方面的负担。

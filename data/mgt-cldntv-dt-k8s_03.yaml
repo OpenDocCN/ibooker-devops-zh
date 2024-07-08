@@ -1,0 +1,1871 @@
+- en: Chapter 2\. Managing Data Storage on Kubernetes
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第2章 管理Kubernetes上的数据存储
+- en: There is no such thing as a stateless architecture. All applications store state
+    somewhere.
+  id: totrans-1
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 没有无状态架构这种事。所有应用程序都在某处存储状态。
+- en: ''
+  id: totrans-2
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+- en: Alex Chircop, CEO, StorageOS
+  id: totrans-3
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: Alex Chircop，CEO，StorageOS
+- en: 'In the previous chapter, we painted a picture of a possible near future with
+    powerful, stateful, data-intensive applications running on Kubernetes. To get
+    there, we’re going to need data infrastructure for persistence, streaming, and
+    analytics. To build out this infrastructure, we’ll need to leverage the primitives
+    that Kubernetes provides to help manage the three commodities of cloud computing:
+    compute, network, and storage. In the next several chapters, we’ll begin to look
+    at these primitives, starting with storage, in order to see how they can be combined
+    to create the data infrastructure we need.'
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在前一章中，我们描绘了一个可能的不远未来场景，强大的、有状态的、数据密集型应用程序在Kubernetes上运行。为了达到这一目标，我们需要持久性、流处理和分析的数据基础设施。为了构建这个基础设施，我们需要利用Kubernetes提供的原语来帮助管理云计算的三种商品：计算、网络和存储。在接下来的几章中，我们将开始研究这些原语，从存储开始，以看看它们如何结合起来创建我们需要的数据基础设施。
+- en: To echo the point raised by Alex Chircop, all applications must store their
+    state somewhere, which is why we’ll focus in this chapter on the basic abstractions
+    Kubernetes provides for interacting with storage. We’ll also look at the emerging
+    innovations being offered by storage vendors and open source projects creating
+    storage infrastructure for Kubernetes that itself embodies cloud native principles.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了响应Alex Chircop提出的观点，所有应用程序都必须将它们的状态存储在某处，这也是为什么我们将在本章节专注于Kubernetes提供的基本抽象，用于与存储互动。我们还将探讨由存储供应商和开源项目提供的新兴创新，这些项目为Kubernetes创建存储基础设施，体现了云原生的原则。
+- en: Let’s start our exploration with a look at managing persistence in containerized
+    applications in general and use that as a jumping-off point for our investigation
+    into data storage on Kubernetes.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们从一般容器化应用程序中管理持久性开始探索，并将其作为我们研究Kubernetes上数据存储的起点。
+- en: Docker, Containers, and State
+  id: totrans-7
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Docker、容器和状态
+- en: The problem of managing state in distributed, cloud native applications is not
+    unique to Kubernetes. A quick search will show that stateful workloads have been
+    an area of concern on other container orchestration platforms such as Mesos and
+    Docker Swarm. Part of this has to do with the nature of container orchestration,
+    and part is driven by the nature of containers themselves.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在分布式云原生应用程序中管理状态的问题并不局限于Kubernetes。快速搜索将显示，有状态工作负载在其他容器编排平台（如Mesos和Docker Swarm）上也是一个关注的领域。这部分原因与容器编排的性质有关，也与容器本身的性质有关。
+- en: First, let’s consider containers. One of the key value propositions of containers
+    is their ephemeral nature. Containers are designed to be disposable and replaceable,
+    so they need to start quickly and use as few resources for overhead processing
+    as possible. For this reason, most container images are built from base images
+    containing streamlined, Linux-based, open source operating systems such as Ubuntu,
+    that boot quickly and incorporate only essential libraries for the contained application
+    or microservice. As the name implies, containers are designed to be self-contained,
+    incorporating all their dependencies in immutable images, while their configuration
+    and data are externalized. These properties make containers portable so that we
+    can run them anywhere a compatible container runtime is available.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，让我们考虑容器。容器的关键价值主张之一是它们的短暂性质。容器被设计为可丢弃和可替换的，因此它们需要快速启动，并尽可能少地使用资源进行开销处理。因此，大多数容器镜像都是从包含精简、基于Linux的开源操作系统（如Ubuntu）的基础镜像构建而来，这些镜像能够快速引导，并且仅包含容器化应用程序或微服务的必要库。顾名思义，容器被设计为自包含的，将所有依赖项包含在不可变的镜像中，而其配置和数据则是外部化的。这些特性使得容器具有可移植性，可以在任何兼容的容器运行时环境中运行。
+- en: As shown in [Figure 2-1](#comparing_containerization_to_virtualiz), containers
+    require less overhead than traditional VMs, which run a guest operating system
+    per VM, with a [hypervisor layer](https://oreil.ly/5gE1u) to implement system
+    calls onto the underlying host operating system.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如图[2-1](#comparing_containerization_to_virtualiz)，容器的资源开销比传统的虚拟机少，传统虚拟机每个都有一个客户操作系统，使用[hypervisor
+    layer](https://oreil.ly/5gE1u)将系统调用映射到底层宿主操作系统。
+- en: '![Comparing containerization to virtualization](assets/mcdk_0201.png)'
+  id: totrans-11
+  prefs: []
+  type: TYPE_IMG
+  zh: '![比较容器化与虚拟化](assets/mcdk_0201.png)'
+- en: Figure 2-1\. Comparing containerization to virtualization
+  id: totrans-12
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-1\. 将容器化与虚拟化进行比较
+- en: Although containers have made applications more portable, it’s proven a bigger
+    challenge to make their data portable. Since a container itself is ephemeral,
+    any data that is to survive beyond the life of the container must by definition
+    reside externally. The key feature for a container technology is to provide mechanisms
+    to link to persistent storage, and the key feature for a container orchestration
+    technology is the ability to schedule containers in such a way that they can access
+    persistent storage efficiently.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管容器使应用程序更加可移植，但使它们的数据可移植却是一个更大的挑战。因为容器本身是临时的，任何要在容器生命周期之外持久存在的数据必然需要外部存储。对于容器技术来说，关键特性是提供链接到持久存储的机制；对于容器编排技术来说，关键特性是能够有效地安排容器访问持久存储。
+- en: Managing State in Docker
+  id: totrans-14
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 在 Docker 中管理状态
+- en: Let’s take a look at the most popular container technology, Docker, to see how
+    containers can store data. The key storage concept in Docker is the volume. From
+    the perspective of a Docker container, a *volume* is a directory that can support
+    read-only or read/write access. Docker supports the mounting of multiple data
+    stores as volumes. We’ll introduce several options so we can later note their
+    equivalents in Kubernetes.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们来看看最流行的容器技术 Docker，看看容器如何存储数据。在 Docker 容器的视角下，*卷* 是一个可以支持读写或只读访问的目录。Docker
+    支持将多个数据存储挂载为卷。我们将介绍几个选项，以便稍后在 Kubernetes 中寻找它们的等效项。
+- en: Bind Mounts
+  id: totrans-16
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 绑定挂载
+- en: The simplest approach for creating a volume is to bind a directory in the container
+    to a directory on the host system. This is called a *bind mount*, as shown in
+    [Figure 2-2](#using_docker_bind_mounts_to_access_the).
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建卷的最简单方法是将容器中的目录绑定到主机系统上的目录。这被称为*绑定挂载*，如图[Figure 2-2](#using_docker_bind_mounts_to_access_the)所示。
+- en: '![Using Docker bind mounts to access the host filesystem](assets/mcdk_0202.png)'
+  id: totrans-18
+  prefs: []
+  type: TYPE_IMG
+  zh: '![使用 Docker 绑定挂载访问主机文件系统](assets/mcdk_0202.png)'
+- en: Figure 2-2\. Using Docker bind mounts to access the host filesystem
+  id: totrans-19
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-2\. 使用 Docker 绑定挂载访问主机文件系统
+- en: 'When starting a container within Docker, you specify a bind mount with the
+    `--volume` or `-v` option and the local filesystem path and container path to
+    use. For example, you could start an instance of the Nginx web server and map
+    a local project folder from your development machine into the container. This
+    is a command you can test out in your own environment if you have Docker installed:'
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Docker 中启动容器时，你可以使用 `--volume` 或 `-v` 选项指定绑定挂载，并指定本地文件系统路径和容器路径。例如，你可以启动一个
+    Nginx Web 服务器实例，并将本地开发机器上的项目文件夹映射到容器中。如果你安装了 Docker，可以在自己的环境中测试这个命令：
+- en: '[PRE0]'
+  id: totrans-21
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: This exposes the web server on port 8080 on your local host. If the local path
+    directory does not already exist, the Docker runtime will create it. Docker allows
+    you to create bind mounts with read-only or read/write permissions. Because the
+    volume is represented as a directory, the application running in the container
+    can put anything that can be represented as a file into the volume—even a database.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这会将本地主机上 8080 端口的 Web 服务器暴露出来。如果本地路径目录不存在，Docker 运行时将会创建它。Docker 允许你创建读写或只读权限的绑定挂载。因为卷被表示为一个目录，运行在容器中的应用程序可以将任何可以表示为文件的内容放入卷中，甚至是数据库。
+- en: Bind mounts are quite useful for development work. However, using bind mounts
+    is not suitable for a production environment since this leads to a container being
+    dependent on a file being present in a specific host. This might be fine for a
+    single-machine deployment, but production deployments tend to be spread across
+    multiple hosts. Another concern is the potential security hole that is presented
+    by opening up access from the container to the host filesystem. For these reasons,
+    we need another approach for production deployments.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 绑定挂载对开发工作非常有用。然而，由于这样会导致容器依赖于主机上特定文件的存在，所以在生产环境中使用绑定挂载并不合适。这对单机部署可能还行，但是生产部署往往需要跨多个主机。另一个问题是，容器打开到主机文件系统的访问可能会带来安全隐患。因此，出于这些原因，我们需要另一种用于生产部署的方法。
+- en: Volumes
+  id: totrans-24
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 卷
+- en: 'The preferred option within Docker is to use volumes. Docker volumes are created
+    and managed by Docker under a specific directory on the host filesystem. The Docker
+    `volume create` command is used to create a volume. For example, you might create
+    a volume called `site-content` to store files for a website:'
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Docker 中，推荐使用卷。Docker 卷由 Docker 在主机文件系统的特定目录下创建和管理。使用 `docker volume create`
+    命令创建卷。例如，你可以创建一个名为 `site-content` 的卷来存储网站的文件：
+- en: '[PRE1]'
+  id: totrans-26
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: 'If no name is specified, Docker assigns a random name. After creation, the
+    resulting volume is available to mount in a container using the form `-v VOLUME-NAME:CONTAINER-PATH`.
+    For example, you might use a volume like the one just created to allow an Nginx
+    container to read the content, while allowing another container to edit the content,
+    using the `ro` option:'
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果没有指定名称，Docker 会分配一个随机名称。创建后，生成的卷可以使用 `-v VOLUME-NAME:CONTAINER-PATH` 的形式挂载到容器中。例如，你可以使用刚创建的卷来让一个
+    Nginx 容器读取内容，同时允许另一个容器使用 `ro` 选项编辑内容：
+- en: '[PRE2]'
+  id: totrans-28
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: Docker Volume Mount Syntax
+  id: totrans-29
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Docker 卷挂载语法
+- en: Docker also supports a `--mount` syntax that allows you to specify the source
+    and target folders more explicitly. This notation is considered more modern, but
+    it is also more verbose. The syntax shown in the preceding example is still valid
+    and is the more commonly used syntax.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Docker 还支持 `--mount` 语法，允许更明确地指定源和目标文件夹。这种记法被认为更现代化，但也更冗长。前面例子中显示的语法仍然有效且更常用。
+- en: As we’ve implied, a Docker volume can be mounted in more than one container
+    at once, as shown in [Figure 2-3](#creating_docker_volumes_to_share_data_b).
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如我们所示，一个 Docker 卷可以同时挂载到多个容器中，如[图 2-3](#creating_docker_volumes_to_share_data_b)所示。
+- en: The advantage of using Docker volumes is that Docker manages the filesystem
+    access for containers, which makes it much simpler to enforce capacity and security
+    restrictions on containers.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 Docker 卷的优势在于 Docker 管理容器的文件系统访问，这使得在容器上更简单地强制执行容量和安全限制成为可能。
+- en: '![Creating Docker volumes to share data between containers on the host](assets/mcdk_0203.png)'
+  id: totrans-33
+  prefs: []
+  type: TYPE_IMG
+  zh: '![在主机上创建 Docker 卷以在容器之间共享数据](assets/mcdk_0203.png)'
+- en: Figure 2-3\. Creating Docker volumes to share data between containers on the
+    host
+  id: totrans-34
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-3\. 在主机上创建 Docker 卷以在容器之间共享数据
+- en: Tmpfs Mounts
+  id: totrans-35
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: tmpfs 挂载
+- en: 'Docker supports two types of mounts that are specific to the operating system
+    used by the host system: *tmpfs* (or *temporary filesystem*) and *named pipes*.
+    Named pipes are available on Docker for Windows, but since they are typically
+    not used in Kubernetes, we won’t give much consideration to them here.'
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Docker 支持两种特定于主机操作系统的挂载类型：*tmpfs*（或*临时文件系统*）和*命名管道*。命名管道在 Docker for Windows
+    上可用，但由于它们通常不在 Kubernetes 中使用，我们在此不会过多考虑它们。
+- en: Tmpfs mounts are available when running Docker on Linux. A tmpfs mount exists
+    only in memory for the lifespan of the container, so the contents are never present
+    on disk, as shown in [Figure 2-4](#creating_a_temporary_volume_using_docke). Tmpfs
+    mounts are useful for applications that are written to persist a relatively small
+    amount of data, especially sensitive data that you don’t want written to the host
+    filesystem. Because the data is stored in memory, faster access is a side benefit.
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运行 Docker 在 Linux 上时，可以使用 tmpfs 挂载。tmpfs 挂载仅存在于容器的内存中，因此其内容不会存在于磁盘上，如[图 2-4](#creating_a_temporary_volume_using_docke)所示。tmpfs
+    挂载适用于需要持久保存相对少量数据的应用程序，尤其是那些你不希望写入到主机文件系统的敏感数据。由于数据存储在内存中，访问速度更快也是一个附加好处。
+- en: '![Creating a temporary volume using Docker tmpfs](assets/mcdk_0204.png)'
+  id: totrans-38
+  prefs: []
+  type: TYPE_IMG
+  zh: '![使用 Docker tmpfs 创建临时卷](assets/mcdk_0204.png)'
+- en: Figure 2-4\. Creating a temporary volume using Docker tmpfs
+  id: totrans-39
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-4\. 使用 Docker tmpfs 创建临时卷
+- en: 'To create a tmpfs mount, use the `docker run --tmpfs` option. For example,
+    you could use a command like this to specify a tmpfs volume to store Nginx logs
+    for a web server processing sensitive data:'
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要创建 tmpfs 挂载，可以使用 `docker run --tmpfs` 选项。例如，你可以使用以下命令指定一个 tmpfs 卷来存储处理敏感数据的
+    Web 服务器的 Nginx 日志：
+- en: '[PRE3]'
+  id: totrans-41
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: The `--mount` option may also be used for more control over configurable options.
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`--mount` 选项也可以用于更多控制可配置选项。'
+- en: Volume Drivers
+  id: totrans-43
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 卷驱动程序
+- en: Docker Engine has an extensible architecture that allows you to add customized
+    behavior via plug-ins for capabilities including networking, storage, and authorization.
+    Third-party [storage plug-ins](https://oreil.ly/b9P9X) are available for multiple
+    open source and commercial providers, including the public clouds and various
+    networked filesystems. Taking advantage of these involves installing the plug-in
+    with Docker Engine and then specifying the associated volume driver when starting
+    Docker containers using that storage, as shown in [Figure 2-5](#using_docker_volume_drivers_to_access_n).
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Docker 引擎具有可扩展的架构，允许您通过插件添加自定义行为，包括网络、存储和授权等功能。第三方[存储插件](https://oreil.ly/b9P9X)可用于多个开源和商业提供者，包括公共云和各种网络文件系统。利用这些插件涉及在
+    Docker 引擎上安装插件，然后在使用该存储启动 Docker 容器时指定相关卷驱动程序，如 [图 2-5](#using_docker_volume_drivers_to_access_n)
+    所示。
+- en: '![Using Docker volume drivers to access networked storage](assets/mcdk_0205.png)'
+  id: totrans-45
+  prefs: []
+  type: TYPE_IMG
+  zh: '![使用 Docker 卷驱动程序访问网络存储](assets/mcdk_0205.png)'
+- en: Figure 2-5\. Using Docker volume drivers to access networked storage
+  id: totrans-46
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-5\. 使用 Docker 卷驱动程序访问网络存储
+- en: For more information on working with the various types of volumes supported
+    in Docker, see the [Docker storage documentation](https://oreil.ly/vVPb4), as
+    well as the documentation for the [`docker run` command](https://oreil.ly/Tj3NT).
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 关于使用 Docker 支持的各种类型卷的更多信息，请参阅[Docker 存储文档](https://oreil.ly/vVPb4)，以及[`docker
+    run` 命令](https://oreil.ly/Tj3NT)的文档。
+- en: Kubernetes Resources for Data Storage
+  id: totrans-48
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Kubernetes 数据存储资源
+- en: Now that you understand basic concepts of container and cloud storage, let’s
+    see what Kubernetes brings to the table. In this section, we’ll introduce some
+    of the key Kubernetes concepts, or *resources* in the API for attaching storage
+    to containerized applications. Even if you are already somewhat familiar with
+    these resources, you’ll want to stay tuned, as we’ll focus particularly on how
+    each one relates to stateful data.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在您已经了解了容器和云存储的基本概念，让我们看看 Kubernetes 带来了什么。在本节中，我们将介绍一些关键的 Kubernetes 概念，即 API
+    中用于将存储附加到容器化应用程序的*资源*。即使您对这些资源已有一定了解，也请继续关注，因为我们将特别关注每个资源如何与有状态数据相关联。
+- en: Pods and Volumes
+  id: totrans-50
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Pod 和卷
+- en: One of the first Kubernetes resources new users encounter is the *Pod*. This
+    is the basic unit of deployment of a Kubernetes workload. A Pod provides an environment
+    for running containers, and the Kubernetes control plane is responsible for deploying
+    Pods to Kubernetes Worker Nodes.
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 新用户遇到的第一个 Kubernetes 资源之一是*Pod*。这是 Kubernetes 工作负载的基本部署单元。Pod 提供了运行容器的环境，Kubernetes
+    控制平面负责将 Pod 部署到 Kubernetes Worker 节点上。
+- en: The *Kubelet* is a component of the [Kubernetes control plane](https://oreil.ly/1ITFv)
+    that runs on each Worker Node. It is responsible for running Pods on a node, as
+    well as monitoring the health of these Pods and the containers inside them. These
+    elements are summarized in [Figure 2-6](#using_volumes_in_kubernetes_pods).
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*Kubelet* 是[Kubernetes 控制平面](https://oreil.ly/1ITFv)的一个组件，运行在每个 Worker 节点上。它负责在节点上运行
+    Pod，监视这些 Pod 及其内部容器的健康状态。这些元素在 [图 2-6](#using_volumes_in_kubernetes_pods) 中进行了总结。'
+- en: '![Using volumes in Kubernetes Pods](assets/mcdk_0206.png)'
+  id: totrans-53
+  prefs: []
+  type: TYPE_IMG
+  zh: '![在 Kubernetes Pod 中使用卷](assets/mcdk_0206.png)'
+- en: Figure 2-6\. Using volumes in Kubernetes Pods
+  id: totrans-54
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-6\. 在 Kubernetes Pod 中使用卷
+- en: While a Pod can contain multiple containers, the best practice is for a Pod
+    to contain a single application container, along with optional additional helper
+    containers, as shown in [Figure 2-6](#using_volumes_in_kubernetes_pods). These
+    helper containers might include *init containers* that run prior to the main application
+    container in order to perform configuration tasks, or *sidecar containers* that
+    run alongside the main application container to provide helper services such as
+    observability or management. In later chapters, you’ll see how data infrastructure
+    deployments can take advantage of these architectural patterns.
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然一个 Pod 可以包含多个容器，但最佳实践是一个 Pod 包含一个单独的应用程序容器，以及可选的额外辅助容器，如 [图 2-6](#using_volumes_in_kubernetes_pods)
+    所示。这些辅助容器可能包括在主应用程序容器之前运行以执行配置任务的*init 容器*，或者与主应用程序容器并行运行以提供辅助服务（如可观察性或管理）的*sidecar
+    容器*。在后续章节中，您将看到如何利用这些架构模式部署数据基础设施。
+- en: Now let’s see how persistence is supported within this Pod architecture. As
+    with Docker, the “on disk” data in a container is lost when a container crashes.
+    The Kubelet is responsible for restarting the container, but this new container
+    is a *replacement* for the original container—it will have a distinct identity
+    and start with a completely new state.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在让我们看看持久性如何在这个 Pod 架构中得到支持。与 Docker 类似，容器中的“磁盘上”数据在容器崩溃时会丢失。Kubelet 负责重新启动容器，但这个新容器是原始容器的*替代*
+    —— 它将具有独特的身份并以完全新的状态启动。
+- en: In Kubernetes, the term *volume* is used to represent access to storage within
+    a Pod. By using a volume, the container has the ability to persist data that will
+    outlive the container (and potentially the Pod as well, as we’ll see shortly).
+    A volume may be accessed by multiple containers in a Pod. Each container has its
+    own *volumeMount* within the Pod that specifies the directory to which it should
+    be mounted, allowing the mount point to differ among containers.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 中，术语*卷*用于表示 Pod 内部存储的访问。通过使用卷，容器具有持久化数据的能力，这些数据将超出容器的生命周期（可能还包括
+    Pod 的生命周期，我们很快会看到）。一个卷可以被 Pod 中的多个容器访问。每个容器在 Pod 内有自己的*volumeMount*，指定它应该被挂载到的目录，从而允许挂载点在容器之间有所不同。
+- en: 'In multiple cases, you might want to share data between containers in a Pod:'
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在多种情况下，你可能希望在 Pod 中的容器之间共享数据：
+- en: An init container creates a custom configuration file for the particular environment
+    that the application container mounts to obtain configuration values.
+  id: totrans-59
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一个 init 容器创建一个定制的配置文件，该文件由应用容器挂载以获取配置值。
+- en: The application Pod writes logs, and a sidecar Pod reads those logs to identify
+    alert conditions that are reported to an external monitoring tool.
+  id: totrans-60
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 应用 Pod 写入日志，而 sidecar Pod 读取这些日志以识别报告给外部监控工具的警报条件。
+- en: However, you’ll likely want to avoid situations in which multiple containers
+    are writing to the same volume, because you’ll have to ensure that the multiple
+    writers don’t conflict—Kubernetes does not do that for you.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，你可能希望避免多个容器向同一个卷写入数据，因为你需要确保多个写入者不会发生冲突——Kubernetes 不会为你解决这个问题。
+- en: Preparing to Run Sample Code
+  id: totrans-62
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 准备运行示例代码
+- en: The examples in this book assume you have access to a running Kubernetes cluster.
+    For the examples in this chapter, a development cluster on your local machine
+    such as kind, K3s, or Docker Desktop should be sufficient. The source code used
+    in this section is located at [the book’s repository](https://oreil.ly/VjIq1).
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本书的示例假设您可以访问一个运行中的 Kubernetes 集群。对于本章的示例，像 kind、K3s 或 Docker Desktop 这样的本地开发集群应该足够了。本节使用的源代码位于[本书的代码库](https://oreil.ly/VjIq1)中。
+- en: 'Using a volume in a Pod requires two steps: defining the volume and mounting
+    the volume in each container that needs access. Let’s look at a sample YAML configuration
+    that defines a Pod with a single application container, the Nginx web server,
+    and a single volume. The [source code](https://oreil.ly/nlBJA) is in this book’s
+    repository:'
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Pod 中使用卷需要两个步骤：定义卷并将卷挂载到每个需要访问的容器中。让我们看一个样例 YAML 配置，定义了一个具有单个应用容器（Nginx Web
+    服务器）和单个卷的 Pod。[源代码](https://oreil.ly/nlBJA) 存放在本书的代码库中：
+- en: '[PRE4]'
+  id: totrans-65
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: 'Notice the two parts of the configuration: the volume is defined under `spec.volumes`,
+    and the usage of the volumes is defined under `spec.containers.volumeMounts`.
+    First, the `name` of the volume is referenced under `volumeMounts`, and the directory
+    where it is to be mounted is specified by `mountPath`. When declaring a Pod specification,
+    volumes and volume mounts go together. For your configuration to be valid, a volume
+    must be declared before being referenced, and a volume must be used by at least
+    one container in the Pod.'
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注意配置的两个部分：卷在 `spec.volumes` 下定义，卷的使用在 `spec.containers.volumeMounts` 下定义。首先，在
+    `volumeMounts` 下引用卷的 `name`，并且通过 `mountPath` 指定它将被挂载的目录。在声明 Pod 规范时，卷和挂载是一起的。为了使你的配置有效，必须在引用前声明卷，并且
+    Pod 中至少一个容器必须使用该卷。
+- en: 'You may have also noticed that the volume has only a `name`. You haven’t specified
+    any additional information. What do you think this will do? You could try this
+    out for yourself by using the example source code file *nginx-pod.yaml* or cutting
+    and pasting the preceding configuration to a file with that name, and executing
+    the `kubectl` command against a configured Kubernetes cluster:'
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可能还注意到卷只有一个`name`。您并未指定任何其他信息。您认为这会有什么影响？您可以尝试使用示例源代码文件 *nginx-pod.yaml*，或将上述配置剪切并粘贴到以该名称命名的文件中，并针对已配置的
+    Kubernetes 集群执行`kubectl`命令来验证这一点：
+- en: '[PRE5]'
+  id: totrans-68
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'You can get more information about the Pod that was created by using the `kubectl
+    get pod` command, for example:'
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以通过使用`kubectl get pod`命令获取创建的 Pod 的更多信息，例如：
+- en: '[PRE6]'
+  id: totrans-70
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: 'And the results might look something like this:'
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 结果可能如下所示：
+- en: '[PRE7]'
+  id: totrans-72
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: As you can see, Kubernetes supplied additional information when creating the
+    requested volume, defaulting it to a type of `emptyDir`. Other default attributes
+    may differ depending on what Kubernetes engine you are using, but we won’t discuss
+    them further here.
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如您所见，当创建请求的卷时，Kubernetes 提供了额外的信息，默认将其设置为`emptyDir`类型。其他默认属性可能因您使用的 Kubernetes
+    引擎而异，但我们在这里不会进一步讨论。
+- en: Several types of volumes can be mounted in a container; let’s have a look.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以在容器中挂载几种类型的卷；我们来看一下。
+- en: Ephemeral volumes
+  id: totrans-75
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 临时卷
+- en: You’ll remember tmpfs volumes from our previous discussion of Docker volumes,
+    which provide temporary storage for the lifespan of a single container. Kubernetes
+    provides the concept of an [*ephemeral volume*](https://oreil.ly/zaiKG), which
+    is similar, but at the scope of a Pod. The `emptyDir` introduced in the preceding
+    example is a type of ephemeral volume.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可能还记得我们在 Docker 卷的先前讨论中提到的 tmpfs 卷，它为单个容器的生命周期提供临时存储。Kubernetes 提供了一个 [*临时卷*](https://oreil.ly/zaiKG)
+    的概念，与之类似，但范围限定在 Pod 级别。在前面的示例中介绍的`emptyDir`就是一种临时卷类型。
+- en: Ephemeral volumes can be useful for data infrastructure or other applications
+    that want to create a cache for fast access. Although they do not persist beyond
+    the lifespan of a Pod, they can still exhibit some of the typical properties of
+    other volumes for longer-term persistence, such as the ability to snapshot. Ephemeral
+    volumes are slightly easier to set up than PersistentVolumes because they are
+    declared entirely inline in the Pod definition without reference to other Kubernetes
+    resources. As you will see next, creating and using PersistentVolumes is a bit
+    more involved.
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 临时卷可用于数据基础设施或其他希望创建快速访问缓存的应用程序。虽然它们不会持续超出 Pod 的生命周期，但它们仍然可以展示长期持久性的其他卷的一些典型属性，比如快照能力。临时卷的设置略微比
+    PersistentVolumes 更简单，因为它们完全在 Pod 定义中内联声明，无需引用其他 Kubernetes 资源。接下来将会看到，创建和使用 PersistentVolumes
+    会更复杂一些。
+- en: Other Ephemeral Storage Providers
+  id: totrans-78
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 其他临时存储提供者
+- en: Some of the in-tree and CSI storage drivers we’ll discuss next that provide
+    PersistentVolumes also provide an ephemeral volume option. You’ll want to check
+    the documentation of the specific provider to see what options are available.
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们接下来将讨论一些提供 PersistentVolumes 的 in-tree 和 CSI 存储驱动程序，它们还提供了临时卷选项。您应查看特定提供者的文档，以了解可用的选项。
+- en: Configuration volumes
+  id: totrans-80
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 配置卷
+- en: Kubernetes provides several constructs for injecting configuration data into
+    a Pod as a volume. These volume types are also considered ephemeral in the sense
+    that they do not provide a mechanism for allowing applications to persist their
+    own data.
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 提供了几种将配置数据注入到 Pod 中作为卷的构造方法。从应用程序持久化其自身数据的角度来看，这些卷类型也被视为临时的。
+- en: 'The following volume types are relevant to our exploration in this book since
+    they provide a useful means of configuring applications and data infrastructure
+    running on Kubernetes. We’ll describe each of them briefly:'
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下卷类型与我们在本书中的探索相关，因为它们为在 Kubernetes 上运行的应用程序和数据基础设施提供了一种有用的配置手段。我们将简要描述每种卷：
+- en: ConfigMap volumes
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ConfigMap 卷
+- en: A ConfigMap is a Kubernetes resource that is used to store configuration values
+    external to an application as a set of name-value pairs. For example, an application
+    might require connection details for an underlying database such as an IP address
+    and port number. Defining these in a ConfigMap is a good way to externalize this
+    information from the application. The resulting configuration data can be mounted
+    into the application as a volume, where it will appear as a directory. Each configuration
+    value is represented as a file wherein the filename is the key and the contents
+    of the file contain the value. See the Kubernetes documentation for more information
+    on [mounting ConfigMaps as volumes](https://oreil.ly/zaiKG).
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 配置映射（ConfigMap）是 Kubernetes 资源，用于将应用程序外部的配置值存储为一组名称-值对。例如，应用程序可能需要底层数据库的连接详情，如
+    IP 地址和端口号。将这些配置定义在 ConfigMap 中是从应用程序中外部化这些信息的好方法。生成的配置数据可以作为卷（volume）挂载到应用程序中，其中将显示为一个目录。每个配置值都表示为一个文件，其中文件名是键，文件的内容包含值。有关如何将
+    ConfigMap 挂载为卷的更多信息，请参阅 Kubernetes 文档 [mounting ConfigMaps as volumes](https://oreil.ly/zaiKG)。
+- en: Secret volumes
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Secret volumes
+- en: A Secret is similar to a ConfigMap, only it is intended for securing access
+    to sensitive data that requires protection. For example, you might want to create
+    a Secret containing database access credentials such as a username and password.
+    Configuring and accessing Secrets is similar to using ConfigMap, with the additional
+    benefit that Kubernetes helps decrypt the Secret upon access within the Pod. See
+    the Kubernetes documentation for more information on [mounting Secrets as volumes](https://oreil.ly/mPkMB).
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 秘密（Secret）与 ConfigMap 类似，但用于安全访问需要保护的敏感数据。例如，您可能希望创建一个包含数据库访问凭据（如用户名和密码）的 Secret。配置和访问
+    Secret 与使用 ConfigMap 类似，额外的好处是 Kubernetes 在 Pod 内访问时帮助解密 Secret。有关如何将 Secret 挂载为卷的更多信息，请参阅
+    Kubernetes 文档 [mounting Secrets as volumes](https://oreil.ly/mPkMB)。
+- en: Downward API volumes
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Downward API volumes
+- en: The Kubernetes downward API exposes metadata about Pods and containers either
+    as environment variables or as volumes. This is the same metadata that is used
+    by `kubectl` and other clients.
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 下行 API 公开有关 Pod 和容器的元数据，可以作为环境变量或卷使用。这些元数据也是 `kubectl` 和其他客户端使用的相同元数据。
+- en: The available Pod metadata includes the Pod’s name, ID, Namespace, labels, and
+    annotations. The containerized application might aim to use the Pod information
+    for logging and metrics reporting, or to determine database or table names.
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可用的 Pod 元数据包括 Pod 的名称、ID、命名空间、标签和注释。容器化应用程序可能希望使用 Pod 信息进行日志记录和指标报告，或者确定数据库或表名。
+- en: The available container metadata includes the requested and maximum amounts
+    of resources such as CPU, memory, and ephemeral storage. The containerized application
+    might seek to use this information in order to throttle its own resource usage.
+    See the Kubernetes documentation for an example of [injecting Pod information
+    as a volume](https://oreil.ly/LrOn2).
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可用的容器元数据包括请求的资源量（如 CPU、内存和临时存储）和最大资源量。容器化应用程序可能希望使用这些信息来限制其资源使用。有关如何作为卷注入 Pod
+    信息的示例，请参阅 Kubernetes 文档 [injecting Pod information as a volume](https://oreil.ly/LrOn2)。
+- en: hostPath volumes
+  id: totrans-91
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 主机路径（hostPath）卷
+- en: 'A [`hostPath`](https://oreil.ly/kjr8P) volume mounts a file or directory into
+    a Pod from the Kubernetes Worker Node where it is running. This is analogous to
+    the bind mount concept in Docker, discussed in [“Bind Mounts”](#bind_mounts).
+    Using a `hostPath` volume has one advantage over an `emptyDir` volume: the data
+    will survive the restart of a Pod.'
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个 [`hostPath`](https://oreil.ly/kjr8P) 卷将文件或目录挂载到运行它的 Kubernetes 工作节点上的 Pod
+    中。这类似于 Docker 中的绑定挂载（bind mount）概念，可以参考 [“Bind Mounts”](#bind_mounts)。使用 `hostPath`
+    卷相比于 `emptyDir` 卷有一个优势：数据将在 Pod 重启后仍然存在。
+- en: However, using `hostPath` volumes has some disadvantages. First, in order for
+    a replacement Pod to access the data of the original Pod, it will need to be restarted
+    on the same Worker Node. While Kubernetes does give you the ability to control
+    which node a Pod is placed on using affinity, this tends to constrain the Kubernetes
+    scheduler from optimal placement of Pods, and if the node goes down for some reason,
+    the data in the `hostPath` volume is lost. Second, as with Docker bind mounts,
+    there is a security concern with `hostPath` volumes in terms of allowing access
+    to the local filesystem. For these reasons, `hostPath` volumes are recommended
+    only for development deployments.
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，使用 `hostPath` 卷存在一些缺点。首先，为了让替换的 Pod 访问原始 Pod 的数据，它需要在相同的工作节点上重新启动。虽然 Kubernetes
+    允许您使用亲和性控制 Pod 放置在哪个节点上，但这往往会限制 Kubernetes 调度程序的最佳放置 Pod 的能力，如果节点因某些原因宕机，则 `hostPath`
+    卷中的数据将丢失。其次，与 Docker 绑定挂载一样，使用 `hostPath` 卷存在安全风险，涉及允许访问本地文件系统。因此，建议仅将 `hostPath`
+    卷用于开发部署。
+- en: Cloud volumes
+  id: totrans-94
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 云卷
+- en: It is possible to create Kubernetes volumes that reference storage locations
+    beyond just the Worker Node where a Pod is running, as shown in [Figure 2-7](#kubernetes_pods_directly_mounting_cloud).
+    These can be grouped into volume types that are provided by named cloud providers,
+    and those that attempt to provide a more generic interface.
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以创建 Kubernetes 卷，引用的存储位置不仅限于 Pod 运行的工作节点，如 [图 2-7](#kubernetes_pods_directly_mounting_cloud)
+    所示。这些可以分为由命名云提供商提供的卷类型以及试图提供更通用接口的卷类型。
+- en: 'These include the following:'
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些包括以下内容：
+- en: The [`awsElasticBlockStore`](https://oreil.ly/CmTCt) volume type is used to
+    mount volumes on Amazon Web Services (AWS) Elastic Block Store (EBS). Many databases
+    use block storage as their underlying storage layer.
+  id: totrans-97
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[`awsElasticBlockStore`](https://oreil.ly/CmTCt) 卷类型用于挂载亚马逊网络服务 (AWS) 弹性块存储
+    (EBS) 上的卷。许多数据库使用块存储作为其底层存储层。'
+- en: The [`gcePersistentDisk`](https://oreil.ly/01JEm) volume type is used to mount
+    Google Compute Engine (GCE) persistent disks (PD), another example of block storage.
+  id: totrans-98
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[`gcePersistentDisk`](https://oreil.ly/01JEm) 卷类型用于挂载 Google 计算引擎 (GCE) 持久磁盘
+    (PD)，这是块存储的另一个示例。'
+- en: 'Two types of volumes are supported for Microsoft Azure: [`azureDisk`](https://oreil.ly/pIann)
+    for Azure Data Disk volumes, and [`azureFile`](https://oreil.ly/kInGC) for Azure
+    File volumes.'
+  id: totrans-99
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Microsoft Azure 支持两种类型的卷：[`azureDisk`](https://oreil.ly/pIann) 用于 Azure 数据磁盘卷，以及
+    [`azureFile`](https://oreil.ly/kInGC) 用于 Azure 文件卷。
+- en: The [`cinder`](https://oreil.ly/VVLrx) volume type can be used to access OpenStack
+    Cinder volumes for OpenStack deployments.
+  id: totrans-100
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[`cinder`](https://oreil.ly/VVLrx) 卷类型可用于访问 OpenStack 部署中的 OpenStack Cinder
+    卷。'
+- en: '![Kubernetes pods directly mounting cloud provider storage](assets/mcdk_0207.png)'
+  id: totrans-101
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Kubernetes Pods 直接挂载云提供商存储](assets/mcdk_0207.png)'
+- en: Figure 2-7\. Kubernetes Pods directly mounting cloud provider storage
+  id: totrans-102
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-7\. Kubernetes Pods 直接挂载云提供商存储
+- en: Usage of these types typically requires configuration on the cloud provider,
+    and access from Kubernetes clusters is typically confined to storage in the same
+    cloud region and account. Check your cloud provider’s documentation for more details.
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用这些类型通常需要在云提供商上进行配置，并且从 Kubernetes 集群访问通常限于相同云区域和帐户中的存储。查阅您的云提供商文档以获取更多详细信息。
+- en: Additional volume providers
+  id: totrans-104
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 其他附加卷提供程序
+- en: 'Numerous additional volume providers vary in the types of storage provided.
+    Here are a few examples:'
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 还有许多其他类型的卷提供程序，提供的存储类型各不相同。以下是一些示例：
+- en: The `fibreChannel` volume type can be used for SAN solutions implementing the
+    Fibre Channel protocol.
+  id: totrans-106
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`fibreChannel` 卷类型可用于实施光纤通道协议的 SAN 解决方案。'
+- en: The `gluster` volume type is used to access file storage using the [Gluster](https://www.gluster.org)
+    distributed filesystem referenced previously.
+  id: totrans-107
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`gluster` 卷类型用于访问使用之前引用的 [Gluster](https://www.gluster.org) 分布式文件系统的文件存储。'
+- en: An `iscsi` volume mounts an existing Internet Small Computer Systems Interface
+    (iSCSI) volume into your Pod.
+  id: totrans-108
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`iscsi` 卷将现有的 Internet Small Computer Systems Interface (iSCSI) 卷挂载到您的 Pod
+    中。'
+- en: An `nfs` volume allows an existing NFS share to be mounted into a Pod.
+  id: totrans-109
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`nfs` 卷允许将现有的 NFS 共享挂载到 Pod 中。'
+- en: We’ll examine more volume providers that implement the Container Attached Storage
+    pattern in [“Container Attached Storage”](#container_attached_storage). [Table 2-1](#comparing_docker_and_kubernetes_storage)
+    compares Docker and Kubernetes storage concepts we’ve covered so far.
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将检查更多实现“容器附加存储”模式的卷提供程序，在 [“容器附加存储”](#container_attached_storage) 中有详细说明。[表
+    2-1](#comparing_docker_and_kubernetes_storage) 比较了我们迄今所涵盖的 Docker 和 Kubernetes
+    存储概念。
+- en: Table 2-1\. Comparing Docker and Kubernetes storage options
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 2-1\. 比较 Docker 和 Kubernetes 存储选项
+- en: '| Type of storage | Docker | Kubernetes |'
+  id: totrans-112
+  prefs: []
+  type: TYPE_TB
+  zh: '| 存储类型 | Docker | Kubernetes |'
+- en: '| --- | --- | --- |'
+  id: totrans-113
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- |'
+- en: '| Access to persistent storage from various providers | Volume (accessed via
+    volume drivers) | Volume (accessed via in-tree or CSI drivers) |'
+  id: totrans-114
+  prefs: []
+  type: TYPE_TB
+  zh: '| 从各种提供者访问持久存储 | 卷（通过卷驱动程序访问） | 卷（通过 in-tree 或 CSI 驱动程序访问） |'
+- en: '| Access to host filesystem (not recommended for production) | Bind mount |
+    `hostPath` volume |'
+  id: totrans-115
+  prefs: []
+  type: TYPE_TB
+  zh: '| 访问主机文件系统（不建议用于生产） | Bind 挂载 | `hostPath` 卷 |'
+- en: '| Temporary storage available while container (or Pod) is running | Tmpfs |
+    `emptyDir` and other ephemeral volumes |'
+  id: totrans-116
+  prefs: []
+  type: TYPE_TB
+  zh: '| 在容器（或 Pod）运行时可用的临时存储 | Tmpfs | `emptyDir` 和其他临时卷 |'
+- en: '| Configuration and environment data (read-only) | (No direct equivalent) |
+    ConfigMap, Secret, downward API |'
+  id: totrans-117
+  prefs: []
+  type: TYPE_TB
+  zh: '| 配置和环境数据（只读） | （无直接等价） | ConfigMap、Secret、downward API |'
+- en: In this section, we’ve discussed how to use volumes to provide storage that
+    can be shared by multiple containers within the same Pod. While using volumes
+    is sufficient for some use cases, it doesn’t address all needs. A volume doesn’t
+    provide the ability to share storage resources among Pods. The definition of a
+    particular storage location is tied to the definition of the Pod. Managing storage
+    for individual Pods doesn’t scale well as the number of Pods deployed in your
+    Kubernetes cluster increases.
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这一节中，我们讨论了如何使用卷来提供可以由同一 Pod 内的多个容器共享的存储。虽然对于一些用例来说使用卷已经足够，但它并不能满足所有需求。卷不能提供在
+    Pod 之间共享存储资源的能力。特定存储位置的定义与 Pod 的定义紧密相关。随着在您的 Kubernetes 集群中部署的 Pod 数量增加，为单个 Pod
+    管理存储并不会很好地扩展。
+- en: Thankfully, Kubernetes provides additional primitives that help simplify the
+    process of provisioning and mounting storage volumes for both individual Pods
+    and groups of related Pods. We’ll investigate these concepts in the next several
+    sections.
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 幸运的是，Kubernetes 提供了额外的基元，有助于简化为单个 Pod 和相关 Pod 组提供存储卷的过程。我们将在接下来的几节中探讨这些概念。
+- en: PersistentVolumes
+  id: totrans-120
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 持久卷
+- en: 'The key innovation the Kubernetes developers introduced for managing storage
+    is the [PersistentVolume subsystem](https://oreil.ly/ec8BB). This subsystem consists
+    of three additional Kubernetes resources that work together: PersistentVolumes,
+    PersistentVolumeClaims, and StorageClasses. These allow you to separate the definition
+    and lifecycle of storage from the way it is used by Pods, as shown in [Figure 2-8](#persistentvolumescomma_persistentvolume):'
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 开发人员为管理存储引入的关键创新是[持久卷子系统](https://oreil.ly/ec8BB)。该子系统由三个额外的 Kubernetes
+    资源组成，它们共同工作：持久卷、持久卷声明和存储类。这些资源允许您将存储的定义和生命周期与 Pod 使用存储的方式分开，如[图 2-8](#persistentvolumescomma_persistentvolume)所示：
+- en: Cluster administrators define PersistentVolumes, either explicitly or by creating
+    a StorageClass that can dynamically provision new PersistentVolumes.
+  id: totrans-122
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 集群管理员定义持久卷，可以通过显式定义或创建可以动态配置新持久卷的存储类来定义持久卷。
+- en: Application developers create PersistentVolumeClaims that describe the storage
+    resource needs of their applications, and these PersistentVolumeClaims can be
+    referenced as part of volume definitions in Pods.
+  id: totrans-123
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 应用程序开发人员创建描述其应用程序存储资源需求的持久卷声明，并且这些持久卷声明可以作为卷定义的一部分在 Pod 中引用。
+- en: The Kubernetes control plane manages the binding of PersistentVolumeClaims to
+    PersistentVolumes.
+  id: totrans-124
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Kubernetes 控制平面管理将持久卷声明与持久卷绑定的过程。
+- en: '![PersistentVolumes, PersistentVolumeClaims, and StorageClasses](assets/mcdk_0208.png)'
+  id: totrans-125
+  prefs: []
+  type: TYPE_IMG
+  zh: '![PersistentVolumes, PersistentVolumeClaims, 和 StorageClasses](assets/mcdk_0208.png)'
+- en: Figure 2-8\. PersistentVolumes, PersistentVolumeClaims, and StorageClasses
+  id: totrans-126
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-8\. PersistentVolumes, PersistentVolumeClaims, 和 StorageClasses
+- en: Let’s look first at the *PersistentVolume* resource (often abbreviated *PV*),
+    which defines access to storage at a specific location. PersistentVolumes are
+    typically defined by cluster administrators for use by application developers.
+    Each PV can represent storage of the same types discussed in the previous section,
+    such as storage offered by cloud providers, networked storage, or storage directly
+    on the Worker Node, as shown in [Figure 2-9](#types_of_kubernetes_persistentvolumes).
+    Since they are tied to specific storage locations, PersistentVolumes are not portable
+    between Kubernetes clusters.
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先让我们看一下 *PersistentVolume* 资源（通常缩写为 *PV*），它定义了访问特定位置存储的方式。PersistentVolumes
+    通常由集群管理员定义，供应用开发者使用。每个 PV 可以代表前面部分讨论的相同类型的存储，例如云提供商提供的存储、网络存储或直接在工作节点上的存储，如[图 2-9](#types_of_kubernetes_persistentvolumes)中所示。由于它们与特定的存储位置绑定，因此
+    PersistentVolumes 在 Kubernetes 集群之间不可移植。
+- en: '![Types of Kubernetes PersistentVolumes](assets/mcdk_0209.png)'
+  id: totrans-128
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Kubernetes 持久卷的类型](assets/mcdk_0209.png)'
+- en: Figure 2-9\. Types of Kubernetes PersistentVolumes
+  id: totrans-129
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-9\. Kubernetes 持久卷的类型
+- en: Local PersistentVolumes
+  id: totrans-130
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 本地 PersistentVolumes
+- en: '[Figure 2-9](#types_of_kubernetes_persistentvolumes) also introduces a PersistentVolume
+    type called `local`, which represents storage mounted directly on a Kubernetes
+    Worker Node such as a disk or partition. Like `hostPath` volumes, a `local` volume
+    may also represent a directory. A key difference between `local` and `hostPath`
+    volumes is that when a Pod using a `local` volume is restarted, the Kubernetes
+    scheduler ensures that the Pod is rescheduled on the same node so it can be attached
+    to the same persistent state. For this reason, `local` volumes are frequently
+    used as the backing store for data infrastructure that manages its own replication,
+    as we’ll see in [Chapter 4](ch04.html#automating_database_deployment_on_kuber).'
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 2-9](#types_of_kubernetes_persistentvolumes) 还介绍了一种名为 `local` 的 PersistentVolume
+    类型，它表示直接挂载在 Kubernetes 工作节点（如磁盘或分区）上的存储。与 `hostPath` 卷类似，`local` 卷也可以表示一个目录。`local`
+    卷与 `hostPath` 卷的一个关键区别在于，当使用 `local` 卷的 Pod 重新启动时，Kubernetes 调度程序确保 Pod 被重新调度到同一节点，以便可以重新附加到相同的持久状态。因此，`local`
+    卷经常用作管理自身复制的数据基础设施的后备存储，正如我们将在[第 4 章](ch04.html#automating_database_deployment_on_kuber)中看到的那样。'
+- en: 'The syntax for defining a PersistentVolume will look familiar, as it is similar
+    to defining a volume within a Pod. For example, here is a YAML configuration file
+    that defines a local PersistentVolume. The [source code](https://oreil.ly/b1zHe)
+    is in this book’s repository:'
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 定义 PersistentVolume 的语法将看起来很熟悉，因为它类似于在 Pod 内定义卷。例如，这是一个定义本地 PersistentVolume
+    的 YAML 配置文件。[源代码](https://oreil.ly/b1zHe)位于本书的存储库中。
+- en: '[PRE8]'
+  id: totrans-133
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: 'As you can see, this code defines a `local` volume named `my-volume` on the
+    Worker Node `node1`, 3 GB in size, with an access mode of `ReadWriteOnce`. The
+    following [access modes](https://oreil.ly/mm5HT) are supported for PersistentVolumes:'
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如您所见，此代码在工作节点 `node1` 上定义了一个名为 `my-volume` 的 `local` 卷，大小为 3 GB，访问模式为 `ReadWriteOnce`。支持以下[访问模式](https://oreil.ly/mm5HT)用于
+    PersistentVolumes：
+- en: '`ReadWriteOnce`'
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`ReadWriteOnce`'
+- en: The volume can be mounted for both reading and writing by a single node at a
+    time, although multiple Pods running on that node may access the volume.
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 该卷可以由单个节点一次性挂载进行读写，尽管在该节点上运行的多个 Pod 可以访问该卷。
+- en: '`ReadOnlyMany`'
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`ReadOnlyMany`'
+- en: The volume can be mounted by multiple nodes simultaneously, for reading only.
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以同时由多个节点挂载该卷，仅供读取。
+- en: '`ReadWriteMany`'
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`ReadWriteMany`'
+- en: The volume can be mounted for both reading and writing by many nodes at the
+    same time.
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 该卷可以同时由多个节点挂载，用于读写。
+- en: Choosing a Volume Access Mode
+  id: totrans-141
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 选择卷访问模式
+- en: The right access mode for a given volume will be driven by the type of workload.
+    For example, many distributed databases will be configured with dedicated storage
+    per Pod, making `ReadWriteOnce` a good choice.
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 给定卷的正确访问模式将受到工作负载类型的驱动。例如，许多分布式数据库将配置为每个 Pod 专用的存储，使 `ReadWriteOnce` 成为一个不错的选择。
+- en: 'Besides [capacity](https://oreil.ly/TSKOD) and access mode, other attributes
+    for PersistentVolumes include the following:'
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了[容量](https://oreil.ly/TSKOD)和访问模式外，PersistentVolumes 的其他属性包括以下内容：
+- en: The `volumeMode`, which defaults to `Filesystem` but may be overridden to `Block`.
+  id: totrans-144
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`volumeMode` 默认为 `Filesystem`，但可以覆盖为 `Block`。'
+- en: The `reclaimPolicy` defines what happens when a Pod releases its claim on this
+    PersistentVolume. The legal values are `Retain`, `Recycle`, and `Delete`.
+  id: totrans-145
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 当一个 Pod 释放对 PersistentVolume 的声明时，`reclaimPolicy` 定义了发生的事情。合法的值包括 `Retain`、`Recycle`
+    和 `Delete`。
+- en: A PersistentVolume can have a `nodeAffinity` that designates which Worker Node
+    or nodes can access this volume. This is optional for most types but required
+    for the `local` volume type.
+  id: totrans-146
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: PersistentVolume 可以具有 `nodeAffinity`，指定可以访问该卷的 Worker Node 或节点。这对大多数类型来说是可选的，但对于
+    `local` 卷类型来说是必需的。
+- en: The `class` attribute binds this PV to a particular StorageClass, which is a
+    concept we’ll introduce later in this chapter.
+  id: totrans-147
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`class` 属性将此 PV 绑定到特定的 StorageClass，这是我们稍后在本章中介绍的概念。'
+- en: Some PersistentVolume types expose `mountOptions` that are specific to that
+    type.
+  id: totrans-148
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一些 PersistentVolume 类型公开特定于该类型的 `mountOptions`。
+- en: Differences in Volume Options
+  id: totrans-149
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 卷选项的差异
+- en: Options differ among volume types. For example, not every access mode or reclaim
+    policy is accessible for every PersistentVolume type, so consult the documentation
+    on your chosen type for more details.
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不同的卷类型有不同的选项。例如，并非每种 PersistentVolume 类型都可以访问每种访问模式或回收策略，因此请参阅您选择类型的文档以获取更多详细信息。
+- en: 'You use the `kubectl describe persistentvolume` command (or `kubectl describe
+    pv` for short) to see the status of the PersistentVolume:'
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 `kubectl describe persistentvolume` 命令（或简写为 `kubectl describe pv`）查看 PersistentVolume
+    的状态：
+- en: '[PRE9]'
+  id: totrans-152
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: 'The PersistentVolume has a status of `Available` when first created. A PersistentVolume
+    can have multiple status values:'
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当首次创建时，PersistentVolume 的状态为 `可用`。PersistentVolume 可以具有多个状态值：
+- en: '`Available`'
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`可用`'
+- en: The PersistentVolume is free and not yet bound to a claim.
+  id: totrans-155
+  prefs: []
+  type: TYPE_NORMAL
+  zh: PersistentVolume 是空闲的，尚未绑定到声明。
+- en: '`Bound`'
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`已绑定`'
+- en: The PersistentVolume is bound to a PersistentVolumeClaim, which is listed elsewhere
+    in the `describe` output.
+  id: totrans-157
+  prefs: []
+  type: TYPE_NORMAL
+  zh: PersistentVolume 已绑定到 PersistentVolumeClaim，这在 `describe` 输出中有列出。
+- en: '`Released`'
+  id: totrans-158
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`已释放`'
+- en: An existing claim on the PersistentVolume has been deleted, but the resource
+    has not yet been reclaimed, so the resource is not yet `Available`.
+  id: totrans-159
+  prefs: []
+  type: TYPE_NORMAL
+  zh: PersistentVolume 上的现有声明已被删除，但资源尚未被回收，因此资源尚未 `可用`。
+- en: '`Failed`'
+  id: totrans-160
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`失败`'
+- en: The volume has failed its automatic reclamation.
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 该卷已经失败了其自动回收。
+- en: Now that you’ve learned how storage resources are defined in Kubernetes, the
+    next step is to learn how to use that storage in your applications.
+  id: totrans-162
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在您已经了解了如何在 Kubernetes 中定义存储资源，下一步是学习如何在应用程序中使用该存储。
+- en: PersistentVolumeClaims
+  id: totrans-163
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: PersistentVolumeClaims
+- en: 'As we’ve discussed, Kubernetes separates the definition of storage from its
+    usage. Often these tasks are performed by different roles: cluster administrators
+    define the storage, while application developers use the storage. PersistentVolumes
+    are typically defined by the administrators and reference storage locations that
+    are specific to that cluster. Developers can then specify the storage needs of
+    their applications using *PersistentVolumeClaims (PVCs)*, which Kubernetes uses
+    to associate Pods with a PersistentVolume meeting the specified criteria. As shown
+    in [Figure 2-10](#accessing_persistentvolumes_using_persi), a PersistentVolumeClaim
+    is used to reference the various volume types we introduced previously, including
+    local PersistentVolumes, or external storage provided by cloud or networked storage
+    vendors.'
+  id: totrans-164
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如我们所讨论的，Kubernetes 将存储的定义与其使用分开。通常由不同角色执行这些任务：集群管理员定义存储，而应用开发者使用存储。PersistentVolumes
+    通常由管理员定义，并引用特定于该集群的存储位置。然后，开发者可以使用 *PersistentVolumeClaims (PVCs)* 指定其应用程序的存储需求，Kubernetes
+    使用这些 PVCs 将 Pod 与符合指定条件的 PersistentVolume 关联起来。如 [图 2-10](#accessing_persistentvolumes_using_persi)
+    所示，PersistentVolumeClaim 用于引用我们之前介绍的各种卷类型，包括本地 PersistentVolumes 或由云或网络存储供应商提供的外部存储。
+- en: '![Accessing PersistentVolumes using PersistentVolumeClaims](assets/mcdk_0210.png)'
+  id: totrans-165
+  prefs: []
+  type: TYPE_IMG
+  zh: '![使用 PersistentVolumeClaims 访问 PersistentVolumes](assets/mcdk_0210.png)'
+- en: Figure 2-10\. Accessing PersistentVolumes using PersistentVolumeClaims
+  id: totrans-166
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-10\. 使用 PersistentVolumeClaims 访问 PersistentVolumes
+- en: 'Here’s what the process looks like from an application developer perspective.
+    First, you’ll create a PVC representing your desired storage criteria. For example,
+    here’s a claim that requests 1 GB of storage with exclusive read/write access.
+    The [source code](https://oreil.ly/njKPH) is in this book’s repository:'
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下是从应用开发者角度来看这个过程的步骤。首先，您将创建一个 PVC，表示您的期望存储条件。例如，这里有一个请求 1 GB 存储空间并具有独占读写访问权限的声明。[源代码](https://oreil.ly/njKPH)
+    可在本书的存储库中找到：
+- en: '[PRE10]'
+  id: totrans-168
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: 'One interesting thing you may have noticed about this claim is that the `storageClassName`
+    is set to an empty string. We’ll explain the significance of this when we discuss
+    StorageClasses in the next section. You can reference the claim in the definition
+    of a Pod like this. The [source code](https://oreil.ly/VnJN4) is in this book’s
+    repository:'
+  id: totrans-169
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可能已经注意到关于此声明的一个有趣事实是，`storageClassName` 设置为空字符串。在下一节讨论 StorageClasses 时，我们将解释这一点的重要性。您可以像这样在
+    Pod 的定义中引用声明。这本书的 [源代码](https://oreil.ly/VnJN4) 存储在此书的存储库中：
+- en: '[PRE11]'
+  id: totrans-170
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: As you can see, the PersistentVolume is represented within the Pod as a volume.
+    The volume is given a name and a reference to the claim. This is considered to
+    be a volume of the `persistentVolumeClaim` type. As with other volumes, the volume
+    is mounted into a container at a specific mount point—in this case, into the main
+    application Nginx container at the path */app/data*.
+  id: totrans-171
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如您所见，PersistentVolume 在 Pod 中表示为一个卷。该卷被赋予一个名称和对声明的引用。这被认为是一种 `persistentVolumeClaim`
+    类型的卷。与其他卷一样，该卷被挂载到容器中的特定挂载点上 —— 在这种情况下，挂载到主应用程序 Nginx 容器的路径为 */app/data*。
+- en: 'A PVC also has a state, which you can see if you retrieve the status:'
+  id: totrans-172
+  prefs: []
+  type: TYPE_NORMAL
+  zh: PVC 还有一个状态，您可以通过检索状态来查看：
+- en: '[PRE12]'
+  id: totrans-173
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: 'A PVC has one of two status values: `Bound`, meaning it is bound to a volume
+    (as in this example), or `Pending`, meaning that it has not yet been bound to
+    a volume. Typically, a status of `Pending` means that no PV matching the claim
+    exists.'
+  id: totrans-174
+  prefs: []
+  type: TYPE_NORMAL
+  zh: PVC 有两种状态值之一：`Bound` 表示它已绑定到一个卷（就像这个例子中一样），或者 `Pending` 表示它尚未绑定到卷。通常，`Pending`
+    状态表示没有与声明匹配的 PV 存在。
+- en: Here’s what’s happening behind the scenes. Kubernetes uses the PVCs referenced
+    as volumes in a Pod and takes those into account when scheduling the Pod. Kubernetes
+    identifies PersistentVolumes that match properties associated with the claim and
+    binds the smallest available module to the claim. The properties might include
+    a label, or node affinity, as we saw previously for `local` volumes.
+  id: totrans-175
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里是背后发生的事情。Kubernetes 使用 Pod 中引用的 PVC 作为卷，并在调度 Pod 时考虑这些卷。Kubernetes 标识与声明相关属性匹配的
+    PersistentVolumes，并将最小可用模块绑定到声明。这些属性可能包括标签或节点亲和性，就像我们之前为 `local` 卷所见。
+- en: When starting up a Pod, the Kubernetes control plane makes sure the PersistentVolumes
+    are mounted to the Worker Node. Then, each requested storage volume is mounted
+    into the Pod at the specified mount point.
+  id: totrans-176
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 启动 Pod 时，Kubernetes 控制平面确保将 PersistentVolumes 挂载到 Worker Node。然后，每个请求的存储卷被挂载到指定的挂载点上。
+- en: StorageClasses
+  id: totrans-177
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: StorageClasses
+- en: The previous example demonstrates how Kubernetes can bind PVCs to PersistentVolumes
+    that already exist. This model in which PersistentVolumes are explicitly created
+    in the Kubernetes cluster is known as *static provisioning*. The Kubernetes PersistentVolume
+    subsystem also supports *dynamic provisioning* of volumes using *StorageClasses*
+    (often abbreviated *SC*). The StorageClass is responsible for provisioning (and
+    deprovisioning) PersistentVolumes according to the needs of applications running
+    in the cluster, as shown in [Figure 2-11](#storageclasses_support_dynamic_provisio).
+  id: totrans-178
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 前面的例子展示了 Kubernetes 如何将 PVC 绑定到已经存在的 PersistentVolumes。这种模型，即在 Kubernetes 集群中显式创建
+    PersistentVolumes，被称为 *静态提供*。Kubernetes PersistentVolume 子系统还支持使用 *StorageClasses*（通常缩写为
+    *SC*）进行卷的 *动态提供*。StorageClass 负责根据集群中运行应用程序的需求提供（和取消提供）PersistentVolumes，如 [图
+    2-11](#storageclasses_support_dynamic_provisio) 所示。
+- en: '![StorageClasses support dynamic provisioning of volumes](assets/mcdk_0211.png)'
+  id: totrans-179
+  prefs: []
+  type: TYPE_IMG
+  zh: '![StorageClasses 支持动态提供卷](assets/mcdk_0211.png)'
+- en: Figure 2-11\. StorageClasses support dynamic provisioning of volumes
+  id: totrans-180
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-11\. StorageClasses 支持动态提供卷
+- en: 'Depending on the Kubernetes cluster you are using, at least one StorageClass
+    is likely already available. You can verify this using the command `kubectl get
+    sc`. If you’re running a simple Kubernetes distribution on your local machine
+    and don’t see any StorageClasses, you can install an open source local storage
+    provider from Rancher with the following command:'
+  id: totrans-181
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 根据您使用的 Kubernetes 集群，可能已经有至少一个 StorageClass 可用。您可以使用命令 `kubectl get sc` 来验证这一点。如果在本地运行一个简单的
+    Kubernetes 分发版本并且看不到任何 StorageClasses，则可以使用以下命令安装 Rancher 的开源本地存储提供程序：
+- en: '[PRE13]'
+  id: totrans-182
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: 'This storage provider comes preinstalled in K3s, a desktop distribution also
+    provided by Rancher. If you take a look at the YAML configuration referenced in
+    that statement, you’ll see the following definition of a StorageClass. The [source
+    code](https://oreil.ly/nTocI) is in this book’s repository:'
+  id: totrans-183
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此存储提供程序预先安装在K3s中，这也是Rancher提供的桌面发行版。如果您查看该语句中引用的YAML配置，请看看以下StorageClass的定义。该[source
+    code](https://oreil.ly/nTocI)位于本书的存储库中：
+- en: '[PRE14]'
+  id: totrans-184
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: 'As you can see from the definition, a StorageClass is defined by a few key
+    attributes:'
+  id: totrans-185
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如您从定义中可以看到的那样，一个StorageClass由几个关键属性定义：
+- en: The `provisioner` interfaces with an underlying storage provider such as a public
+    cloud or storage system in order to allocate the actual storage. The provisioner
+    can be either one of the Kubernetes built-in provisioners (referred to as *in-tree*
+    because they are part of the Kubernetes source code), or a provisioner that conforms
+    to the Container Storage Interface (CSI), which we’ll examine later in this chapter.
+  id: totrans-186
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`provisioner`与底层存储提供程序接口，如公共云或存储系统，以便分配实际存储。提供程序可以是Kubernetes内置的提供程序之一（称为*in-tree*，因为它们是Kubernetes源代码的一部分），也可以是符合容器存储接口（CSI）的提供程序，我们稍后将在本章中进行详细讨论。'
+- en: The `reclaimPolicy` describes whether storage is reclaimed when the PersistentVolume
+    is deleted. The default, `Delete`, can be overridden to `Retain`, in which case
+    the storage administrator would be responsible for managing the future state of
+    that storage with the storage provider.
+  id: totrans-187
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`reclaimPolicy`描述了在删除PersistentVolume时是否回收存储。默认值`Delete`可以被覆盖为`Retain`，在这种情况下，存储管理员将负责管理该存储的未来状态。'
+- en: The [`volumeBindingMode`](https://oreil.ly/iFvrm) controls when the storage
+    is provisioned and bound. If the value is `Immediate`, a PersistentVolume is immediately
+    provisioned as soon as a PersistentVolumeClaim referencing the StorageClass is
+    created, and the claim is bound to the PersistentVolume, regardless of whether
+    the claim is referenced in a Pod. Many storage plug-ins also support a second
+    mode known as `WaitForFirstConsumer`, in which case no PersistentVolume is provisioned
+    until a Pod is created that references the claim. This behavior is considered
+    preferable since it gives the Kubernetes scheduler more flexibility.
+  id: totrans-188
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[`volumeBindingMode`](https://oreil.ly/iFvrm)控制存储何时被配置和绑定。如果值是`Immediate`，则当创建引用StorageClass的PersistentVolumeClaim时立即配置PersistentVolume，并且该声明绑定到PersistentVolume，而不管该声明是否在Pod中引用。许多存储插件还支持第二种模式，称为`WaitForFirstConsumer`，在这种情况下，直到创建引用声明的Pod后，才会配置PersistentVolume。考虑到这种行为更为可取，因为它给了Kubernetes调度程序更大的灵活性。'
+- en: Although not shown in this example, there is also an optional `allowVolumeExpansion`
+    flag. This indicates whether the StorageClass supports the ability for volumes
+    to be expanded. If `true`, the volume can be expanded by increasing the size of
+    the `storage.request` field of the PersistentVolumeClaim. This value defaults
+    to `false`.
+  id: totrans-189
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 尽管在此示例中未显示，还有一个可选的`allowVolumeExpansion`标志。这表示StorageClass是否支持对卷进行扩展的能力。如果是`true`，则可以通过增加PersistentVolumeClaim的`storage.request`字段的大小来扩展卷。此值默认为`false`。
+- en: Some StorageClasses also define `parameters`, specific configuration options
+    for the storage provider that are passed to the provisioner. Common options include
+    filesystem type, encryption settings, and throughput in terms of I/O operations
+    per second (IOPS). Check the documentation for the storage provider for more details.
+  id: totrans-190
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一些StorageClasses还定义了`parameters`，这些是传递给提供程序的存储提供程序的特定配置选项。常见选项包括文件系统类型、加密设置以及每秒I/O操作（IOPS）的吞吐量。请查阅存储提供程序的文档以获取更多详细信息。
+- en: Limits on Dynamic Provisioning
+  id: totrans-191
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 动态配置的限制
+- en: Local PVs cannot be dynamically provisioned by a StorageClass, so you must create
+    them manually yourself.
+  id: totrans-192
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本地PV不能通过StorageClass动态配置，因此您必须自行手动创建它们。
+- en: 'Application developers can reference a specific StorageClass when creating
+    a PVC by adding a `storageClass` property to the definition. For example, here
+    is a YAML configuration for a PVC referencing the `local-path` StorageClass. The
+    [source code](https://oreil.ly/Ixwv7) is in this book’s repository:'
+  id: totrans-193
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用程序开发人员可以在定义中添加`storageClass`属性来引用特定的StorageClass，从而创建PVC。例如，以下是引用`local-path`
+    StorageClass的PVC的YAML配置。该[source code](https://oreil.ly/Ixwv7)位于本书的存储库中：
+- en: '[PRE15]'
+  id: totrans-194
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: If no `storageClass` is specified in the claim, the default StorageClass is
+    used. The default StorageClass can be set by the cluster administrator. As we
+    showed in [“PersistentVolumes”](#persistentvolumes), you can opt out of using
+    StorageClasses by using the empty string, which indicates that you are using statically
+    provisioned storage.
+  id: totrans-195
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果声明中未指定`storageClass`，则使用默认的 StorageClass。集群管理员可以设置默认的 StorageClass。正如我们在[“持久卷”](#persistentvolumes)中所展示的，您可以通过使用空字符串来选择不使用
+    StorageClasses，这表示您正在使用静态配置的存储。
+- en: 'StorageClasses provide a useful abstraction that cluster administrators and
+    application developers can use as a contract: administrators define the StorageClasses,
+    and developers reference the StorageClasses by name. The details of the underlying
+    StorageClass implementation can differ across Kubernetes platform providers, promoting
+    portability of applications.'
+  id: totrans-196
+  prefs: []
+  type: TYPE_NORMAL
+  zh: StorageClasses 提供了一个有用的抽象，集群管理员和应用程序开发人员可以作为合同使用：管理员定义 StorageClasses，开发人员按名称引用
+    StorageClasses。底层 StorageClass 实现的细节可以因 Kubernetes 平台提供商而异，促进应用程序的可移植性。
+- en: This flexibility allows administrators to create StorageClasses representing
+    a variety of storage options—for example, to distinguish between different quality-of-service
+    guarantees in terms of throughput or latency. This concept is known as *profiles*
+    in other storage systems. See [“How Developers Are Driving the Future of Kubernetes
+    Storage”](#how_developers_are_driving_the_future_o) for more ideas on how StorageClasses
+    can be leveraged in innovative ways.
+  id: totrans-197
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此灵活性允许管理员创建代表各种存储选项的 StorageClasses — 例如，根据吞吐量或延迟区分不同的服务质量保证。这个概念在其他存储系统中被称为*配置文件*。请参阅[“开发者如何推动
+    Kubernetes 存储的未来”](#how_developers_are_driving_the_future_o)获取有关如何创新地利用 StorageClasses
+    的更多想法。
+- en: Kubernetes Storage Architecture
+  id: totrans-198
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Kubernetes 存储架构
+- en: In the preceding sections, we discussed the various storage resources that Kubernetes
+    supports via its [API](https://oreil.ly/k1Ttm). In the remainder of the chapter,
+    we’ll look at how these solutions are constructed, as they can give us valuable
+    insights into constructing cloud native data solutions.
+  id: totrans-199
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在前面的部分中，我们讨论了 Kubernetes 通过其[API](https://oreil.ly/k1Ttm)支持的各种存储资源。在本章的其余部分，我们将探讨这些解决方案的构建方式，因为它们可以为我们提供构建云原生数据解决方案的宝贵见解。
+- en: Defining Cloud Native Storage
+  id: totrans-200
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 定义云原生存储
+- en: Most of the storage technologies we discuss in this chapter are captured as
+    part of the “cloud native storage” solutions listed in the [CNCF landscape](https://oreil.ly/vY3wF).
+    The [CNCF Storage Whitepaper](https://oreil.ly/bKRi9) is a helpful resource that
+    defines key terms and concepts for cloud native storage. Both of these resources
+    are updated regularly.
+  id: totrans-201
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本章讨论的大多数存储技术都作为“云原生存储”解决方案的一部分，列在[CNCF景观](https://oreil.ly/vY3wF)中。[CNCF存储白皮书](https://oreil.ly/bKRi9)是一个有用的资源，定义了云原生存储的关键术语和概念。这两个资源定期更新。
+- en: Flexvolume
+  id: totrans-202
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Flexvolume
+- en: Originally, the Kubernetes codebase contained multiple in-tree storage plug-ins
+    (that is, included in the same GitHub repo as the rest of the Kubernetes code).
+    This helped standardize the code for connecting to different storage platforms,
+    but there were a couple of disadvantages. First, many Kubernetes developers had
+    limited expertise across the broad set of included storage providers. More significantly,
+    the ability to upgrade storage plug-ins was tied to the Kubernetes release cycle,
+    meaning that if you needed a fix or enhancement for a storage plug-in, you’d have
+    to wait until it was accepted into a Kubernetes release. This slowed the maturation
+    of storage technology for Kubernetes and as a result, adoption slowed as well.
+  id: totrans-203
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最初，Kubernetes 代码库包含多个内置存储插件（即与 Kubernetes 代码库的其他部分包含在同一个 GitHub 仓库中）。这有助于标准化与不同存储平台连接的代码，但也存在一些缺点。首先，许多
+    Kubernetes 开发人员对包含的广泛存储提供商的专业知识有限。更重要的是，升级存储插件的能力与 Kubernetes 发布周期捆绑在一起，这意味着如果您需要为存储插件进行修复或增强，您必须等待它被接受并发布到
+    Kubernetes 的周期中。这减缓了 Kubernetes 存储技术的成熟速度，结果也减缓了其采纳速度。
+- en: The Kubernetes community created the *Flexvolume specification* to allow development
+    of plug-ins independently—that is, out of the Kubernetes source code tree and
+    thus not tied to the Kubernetes release cycle. Around the same time, storage plug-in
+    standards were emerging for other container orchestration systems, and developers
+    from these communities began to question the wisdom of developing multiple standards
+    to solve the same basic problem.
+  id: totrans-204
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 社区创建了 *Flexvolume 规范*，以允许独立开发插件，即不依赖于 Kubernetes 源代码树，因此不受 Kubernetes
+    发布周期的限制。与此同时，其他容器编排系统的存储插件标准也在出现，这些社区的开发者开始质疑为解决同一个基本问题开发多个标准的智慧。
+- en: Future Flexvolume Support
+  id: totrans-205
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 未来的 Flexvolume 支持
+- en: The Flexvolume feature has been deprecated in Kubernetes 1.23 in favor of the
+    Container Storage Interface.
+  id: totrans-206
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 1.23 中，Flexvolume 功能已被弃用，以支持容器存储接口。
+- en: Container Storage Interface
+  id: totrans-207
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 容器存储接口
+- en: The *Container Storage Interface (CSI)* initiative was established as an industry
+    standard for storage for containerized applications. CSI is an open standard used
+    to define plug-ins that will work across container orchestration systems including
+    Kubernetes, Mesos, and Cloud Foundry. As Saad Ali, Google engineer and chair of
+    the Kubernetes [Storage Special Interest Group (SIG)](https://oreil.ly/JDsVv),
+    noted in [“The State of State in Kubernetes”](https://oreil.ly/sUzfM) in *The
+    New Stack*, “The Container Storage Interface allows Kubernetes to interact directly
+    with an arbitrary storage system.”
+  id: totrans-208
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*容器存储接口（CSI）*倡议被确立为容器化应用程序存储的行业标准。CSI 是一个开放标准，用于定义能够跨容器编排系统（包括 Kubernetes、Mesos
+    和 Cloud Foundry）工作的插件。正如谷歌工程师兼 Kubernetes [存储特别兴趣小组（SIG）](https://oreil.ly/JDsVv)
+    主席 Saad Ali 在《The New Stack》中指出的那样，“容器存储接口允许 Kubernetes 与任意存储系统直接交互”。'
+- en: The CSI specification is available on [GitHub](https://oreil.ly/kCOhg). Support
+    for the CSI in Kubernetes began with the 1.*x* release, and it [went general availability
+    (GA)](https://oreil.ly/AbUpe) in the 1.13 release. Kubernetes continues to track
+    updates to the CSI specification.
+  id: totrans-209
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CSI 规范可以在 [GitHub](https://oreil.ly/kCOhg) 上找到。Kubernetes 对 CSI 的支持始于 1.*x*
+    版本，并在 1.13 版本中 [正式推广（GA）](https://oreil.ly/AbUpe)。Kubernetes 仍在跟踪 CSI 规范的更新。
+- en: Additional CSI Resources
+  id: totrans-210
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 额外的 CSI 资源
+- en: The [CSI documentation site](https://oreil.ly/KFIXI) provides guidance for developers
+    and storage providers who are interested in developing CSI-compliant drivers.
+    The site also provides a very useful [list of CSI-compliant drivers](https://oreil.ly/wHkva).
+    This list is generally more up-to-date than one provided on the Kubernetes documentation
+    site.
+  id: totrans-211
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[CSI 文档站点](https://oreil.ly/KFIXI) 提供了对希望开发符合 CSI 标准驱动程序的开发者和存储提供者的指导。该站点还提供了一个非常有用的[符合
+    CSI 标准的驱动程序列表](https://oreil.ly/wHkva)。这个列表通常比 Kubernetes 文档站点上提供的更新。'
+- en: 'Once a CSI implementation is deployed on a Kubernetes cluster, its capabilities
+    are accessed through the standard Kubernetes storage resources such as PVCs, PVs,
+    and SCs. On the backend, each CSI implementation must provide two plug-ins: a
+    node plug-in and a controller plug-in, as depicted in [Figure 2-12](#csi_mapped_to_kubernetes).'
+  id: totrans-212
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦在 Kubernetes 集群上部署了 CSI 实现，其功能可以通过标准 Kubernetes 存储资源（如 PVC、PV 和 SC）访问。在后端，每个
+    CSI 实现必须提供两个插件：一个节点插件和一个控制器插件，如 [图 2-12](#csi_mapped_to_kubernetes) 所示。
+- en: 'The CSI specification defines required interfaces for these plug-ins using
+    gRPC but does not specify exactly how the plug-ins are to be deployed. Let’s briefly
+    look at the role of each of these services:'
+  id: totrans-213
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CSI 规范使用 gRPC 定义了这些插件的必需接口，但并未具体指定如何部署这些插件。让我们简要看一下每个服务的角色：
+- en: The controller plug-in
+  id: totrans-214
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 控制器插件
+- en: This plug-in supports operations on volumes such as create, delete, listing,
+    publishing/unpublishing, tracking, and expanding volume capacity. It also tracks
+    volume status including what nodes each volume is attached to. The controller
+    plug-in is also responsible for taking and managing snapshots, and using snapshots
+    to clone a volume. The controller plug-in can run on any node—it is a standard
+    Kubernetes controller.
+  id: totrans-215
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 该插件支持对卷进行的操作，例如创建、删除、列出、发布/取消发布、跟踪和扩展卷容量。它还跟踪卷状态，包括每个卷附加到哪些节点。控制器插件还负责获取和管理快照，并使用快照来克隆卷。控制器插件可以在任何节点上运行，它是一个标准的
+    Kubernetes 控制器。
+- en: The node plug-in
+  id: totrans-216
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 节点插件
+- en: This plug-in runs on each Kubernetes Worker Node where provisioned volumes will
+    be attached. The node plug-in is responsible for local storage, as well as mounting
+    and unmounting volumes onto the node. The Kubernetes control plane directs the
+    plug-in to mount a volume prior to any Pods being scheduled on the node that require
+    the volume.
+  id: totrans-217
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此插件在每个Kubernetes工作节点上运行，其中配置的卷将被附加。节点插件负责本地存储以及在节点上挂载和卸载卷。Kubernetes控制平面指示插件在调度任何需要该卷的Pod之前挂载卷。
+- en: '![CSI mapped to Kubernetes](assets/mcdk_0212.png)'
+  id: totrans-218
+  prefs: []
+  type: TYPE_IMG
+  zh: '![CSI映射到Kubernetes](assets/mcdk_0212.png)'
+- en: Figure 2-12\. CSI mapped to Kubernetes
+  id: totrans-219
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图2-12\. CSI映射到Kubernetes
+- en: Container Attached Storage
+  id: totrans-220
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 容器附加存储
+- en: While the CSI is an important step forward in standardizing storage management
+    across container orchestrators, it does not provide implementation guidance on
+    how or where the storage software runs. Some CSI implementations are basically
+    thin wrappers around legacy storage management software running outside of the
+    Kubernetes cluster. While this reuse of existing storage assets certainly has
+    its benefits, many developers have expressed a desire for storage management solutions
+    that run entirely in Kubernetes alongside their applications.
+  id: totrans-221
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然CSI在标准化容器编排器上的存储管理方面是重要的一步，但它并没有提供关于存储软件如何或在哪里运行的实现指导。一些CSI实现基本上是围绕在Kubernetes集群外运行的传统存储管理软件的薄包装。虽然重用现有的存储资产确实有其好处，但许多开发人员表达了希望在Kubernetes中完全运行其应用程序旁边的存储管理解决方案的愿望。
+- en: '*Container Attached Storage* is a design pattern that provides a more cloud
+    native approach to managing storage. The logic to manage storage operations such
+    as attaching volumes to applications is itself composed of microservices running
+    in containers. This allows the storage layer to have the same properties as other
+    applications deployed on Kubernetes and reduces the number of different management
+    interfaces administrators have to keep track of. The storage layer becomes just
+    another Kubernetes application.'
+  id: totrans-222
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*Container Attached Storage* 是一种设计模式，提供更云原生的存储管理方法。管理附加卷到应用程序的逻辑本身由运行在容器中的微服务组成。这使得存储层具有与在Kubernetes上部署的其他应用程序相同的特性，并减少了管理员需要跟踪的不同管理界面数量。存储层只是另一个Kubernetes应用程序。'
+- en: 'As Evan Powell noted in [“Container Attached Storage: A Primer”](https://oreil.ly/zplhD)
+    on the *CNCF Blog*:'
+  id: totrans-223
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '正如Evan Powell在[“Container Attached Storage: A Primer”](https://oreil.ly/zplhD)中指出：'
+- en: Container Attached Storage reflects a broader trend of solutions that reinvent
+    particular categories or create new ones—by being built on Kubernetes and microservices
+    and that deliver capabilities to Kubernetes-based microservice environments. For
+    example, new projects for security, DNS, networking, network policy management,
+    messaging, tracing, logging and more have emerged in the cloud-native ecosystem.
+  id: totrans-224
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 容器附加存储反映了重新发明特定类别或创建新类别的解决方案的更广泛趋势——通过建立在Kubernetes和微服务之上，并为基于Kubernetes的微服务环境提供功能。例如，云原生生态系统中出现了新的安全性、DNS、网络、网络策略管理、消息传递、跟踪、日志记录等项目。
+- en: Several examples of projects and products embody the CAS approach to storage.
+    Let’s examine a few of the open source options.
+  id: totrans-225
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 几个项目和产品的例子体现了CAS存储方法。让我们来看一些开源选项。
+- en: OpenEBS
+  id: totrans-226
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: OpenEBS
+- en: '*OpenEBS* is a project created by MayaData and donated to the CNCF, where it
+    became a Sandbox project in 2019\. The name is a play on Amazon’s Elastic Block
+    Store, and OpenEBS is an attempt to provide an open source equivalent to this
+    popular managed service. OpenEBS provides storage engines for managing both local
+    and NVMe PersistentVolumes.'
+  id: totrans-227
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*OpenEBS* 是由MayaData创建并捐赠给CNCF的项目，在2019年成为沙盒项目。该名称是对亚马逊弹性块存储的一种戏仿，OpenEBS试图提供这种流行托管服务的开源替代。OpenEBS提供用于管理本地和NVMe持久卷的存储引擎。'
+- en: OpenEBS provides a great example of a CSI-compliant implementation deployed
+    onto Kubernetes, as shown in [Figure 2-13](#openebs_architecture). The control
+    plane includes the OpenEBS provisioner, which implements the CSI controller interface,
+    and the OpenEBS API server, which provides a configuration interface for clients
+    and interacts with the rest of the Kubernetes control plane.
+  id: totrans-228
+  prefs: []
+  type: TYPE_NORMAL
+  zh: OpenEBS为在Kubernetes上部署的符合CSI的实现提供了一个很好的例子，如[图2-13](#openebs_architecture)所示。控制平面包括OpenEBS提供程序，该提供程序实现了CSI控制器接口，以及OpenEBS
+    API服务器，为客户端提供配置界面，并与其他Kubernetes控制平面交互。
+- en: The OpenEBS data plane consists of the Node Disk Manager (NDM) as well as dedicated
+    pods for each PersistentVolume. The NDM runs on each Kubernetes worker where storage
+    will be accessed. It implements the CSI node interface and provides the helpful
+    functionality of automatically detecting block storage devices attached to a Worker
+    Node.
+  id: totrans-229
+  prefs: []
+  type: TYPE_NORMAL
+  zh: OpenEBS 数据平面包括节点磁盘管理器（NDM）以及每个持久卷的专用 Pod。NDM 在将要访问存储的每个 Kubernetes 工作节点上运行。它实现了
+    CSI 节点接口，并提供了自动检测连接到工作节点的块存储设备的有用功能。
+- en: '![OpenEBS architecture](assets/mcdk_0213.png)'
+  id: totrans-230
+  prefs: []
+  type: TYPE_IMG
+  zh: '![OpenEBS 架构](assets/mcdk_0213.png)'
+- en: Figure 2-13\. OpenEBS architecture
+  id: totrans-231
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-13\. OpenEBS 架构
+- en: OpenEBS creates multiple Pods for each volume. A controller Pod is created as
+    the primary replica, and additional replica Pods are created on other Kubernetes
+    Worker Nodes for high availability. Each Pod includes sidecars that expose interfaces
+    for metrics collection and management, which allows the control plane to monitor
+    and manage the data plane.
+  id: totrans-232
+  prefs: []
+  type: TYPE_NORMAL
+  zh: OpenEBS 为每个卷创建多个 Pod。一个控制器 Pod 被创建为主要副本，并在其他 Kubernetes 工作节点上为高可用性创建额外的副本 Pod。每个
+    Pod 包括用于指标收集和管理的 sidecars，这允许控制平面监视和管理数据平面。
+- en: Longhorn
+  id: totrans-233
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: Longhorn
+- en: '[Longhorn](https://longhorn.io) is an open source, distributed block storage
+    system for Kubernetes. It was originally developed by Rancher and became a CNCF
+    Sandbox project in 2019\. Longhorn focuses on providing an alternative to cloud-vendor
+    storage and expensive external storage arrays. Longhorn supports providing incremental
+    backups to NFS or S3-compatible storage, and live replication to a separate Kubernetes
+    cluster for disaster recovery.'
+  id: totrans-234
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Longhorn](https://longhorn.io) 是一个面向 Kubernetes 的开源分布式块存储系统。它最初由 Rancher 开发，并于
+    2019 年成为 CNCF 沙盒项目。Longhorn 专注于提供替代云供应商存储和昂贵外部存储阵列的解决方案。Longhorn 支持向 NFS 或兼容 S3
+    存储提供增量备份，并向另一个 Kubernetes 集群进行实时复制以进行灾难恢复。'
+- en: Longhorn uses a similar architecture to that shown for OpenEBS; according to
+    the [documentation](https://oreil.ly/TXTjG), “Longhorn creates a dedicated storage
+    controller for each block device volume and synchronously replicates the volume
+    across multiple replicas stored on multiple nodes. The storage controller and
+    replicas are themselves orchestrated using Kubernetes.” Longhorn also provides
+    an integrated user interface to simplify operations.
+  id: totrans-235
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Longhorn 使用与 OpenEBS 显示的类似架构；根据[文档](https://oreil.ly/TXTjG)，“Longhorn 为每个块设备卷创建一个专用存储控制器，并在多个节点上同步复制卷。存储控制器和副本本身使用
+    Kubernetes 进行编排。” Longhorn 还提供集成用户界面以简化操作。
+- en: Rook and Ceph
+  id: totrans-236
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: Rook 和 Ceph
+- en: According to its website, “Rook is an open source cloud-native storage orchestrator,
+    providing the platform, framework, and support for a diverse set of storage solutions
+    to natively integrate with cloud-native environments.” Rook was originally created
+    as a containerized version of Ceph that could be deployed in Kubernetes. [Ceph](https://ceph.io/en)
+    is an open source distributed storage framework that provides block, file, and
+    object storage. Rook was the first storage project accepted by the CNCF and is
+    now considered a [CNCF graduated project](https://oreil.ly/xmc1i).
+  id: totrans-237
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 根据其网站，“Rook 是一个开源的云原生存储编排器，为多样化的存储解决方案提供平台、框架和支持，以与云原生环境本地集成。” Rook 最初是作为可在
+    Kubernetes 中部署的 Ceph 的容器化版本创建的。[Ceph](https://ceph.io/en) 是一个提供块、文件和对象存储的开源分布式存储框架。Rook
+    是 CNCF 接受的第一个存储项目，现在被认为是[CNCF 毕业项目](https://oreil.ly/xmc1i)。
+- en: Rook is a truly Kubernetes native implementation in the sense that it makes
+    use of Kubernetes custom resources (CRDs) and custom controllers called operators.
+    Rook provides operators for Ceph, Cassandra, and NFS. We’ll learn more about custom
+    resources and operators in [Chapter 4](ch04.html#automating_database_deployment_on_kuber).
+  id: totrans-238
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Rook 是一个真正的 Kubernetes 本地实现，因为它利用了 Kubernetes 自定义资源（CRDs）和自定义控制器称为操作员。Rook 为
+    Ceph、Cassandra 和 NFS 提供操作员。我们将在[第 4 章](ch04.html#automating_database_deployment_on_kuber)中更多地了解自定义资源和操作员。
+- en: Some commercial solutions for Kubernetes also embody the CAS pattern. These
+    include [MayaData](https://mayadata.io) (creators of OpenEBS), [Portworx](https://portworx.com)
+    by [Pure Storage](https://oreil.ly/3rJuQ), [Robin.io](https://robin.io), and [StorageOS](https://storageos.com).
+    These companies provide both raw storage in block and file formats, as well as
+    integrations for simplified deployments of additional data infrastructure such
+    as databases and streaming solutions.
+  id: totrans-239
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一些适用于 Kubernetes 的商业解决方案也体现了 CAS 模式。这些包括[MayaData](https://mayadata.io)（OpenEBS
+    的创建者）、由[Pure Storage](https://oreil.ly/3rJuQ)提供的[Portworx](https://portworx.com)、[Robin.io](https://robin.io)
+    和[StorageOS](https://storageos.com)。 这些公司不仅提供块和文件格式的原始存储，还提供了用于简化部署额外数据基础设施（如数据库和流解决方案）的集成。
+- en: Container Object Storage Interface
+  id: totrans-240
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 容器对象存储接口
+- en: 'The CSI provides support for file and block storage, but object storage APIs
+    require different semantics and don’t quite fit the CSI paradigm of mounting volumes.
+    In Fall 2020, a group of companies led by [MinIO](https://min.io) began work on
+    a new API for object storage in container orchestration platforms: the *Container
+    Object Storage Interface (COSI)*. COSI provides a Kubernetes [API](https://oreil.ly/BwcKA)
+    more suited to provisioning and accessing object storage, defining a `bucket`
+    custom resource, and including operations to create buckets and manage access
+    to buckets. The design of the COSI control plane and data plane is modeled after
+    the CSI. COSI is an emerging standard with a great start and potential for wide
+    adoption in the Kubernetes community and potentially beyond.'
+  id: totrans-241
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CSI 提供了对文件和块存储的支持，但对象存储 API 需要不同的语义，不太适合挂载卷的 CSI 范例。2020 年秋季，由[MinIO](https://min.io)领导的一组公司开始开发了容器编排平台中对象存储的新
+    API：*Container Object Storage Interface (COSI)*。 COSI 提供了一个更适合于在 Kubernetes 中进行对象存储配置和访问的
+    API，定义了`bucket`自定义资源，并包括创建桶和管理对桶的访问的操作。 COSI 控制平面和数据平面的设计是以 CSI 为模型的。 COSI 是一个具有广泛采纳潜力的新兴标准，可能在
+    Kubernetes 社区甚至更广泛的范围内得到广泛应用。
+- en: '*As you can see, storage on Kubernetes is an area comprising a lot of innovation,
+    including multiple open source projects and commercial vendors competing to provide
+    the most usable, cost-effective, and performant solutions. The [cloud native storage
+    section](https://oreil.ly/cm4Ms) of the CNCF landscape provides a helpful listing
+    of storage providers and related tools, including the technologies referenced
+    in this chapter and many more.*  *# Summary'
+  id: totrans-242
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*正如您所见，Kubernetes 上的存储是一个涵盖了许多创新的领域，包括多个开源项目和商业供应商竞争提供最易用、成本效益高和性能卓越的解决方案。[云原生存储部分](https://oreil.ly/cm4Ms)
+    CNCF 景观提供了一个有用的存储提供商及相关工具的列表，包括本章中提到的技术及其他许多技术。*  *# 总结'
+- en: In this chapter, we’ve explored how persistence is managed in container systems
+    like Docker, and container orchestration systems like Kubernetes. You’ve learned
+    about the various Kubernetes resources that can be used to manage stateful workloads,
+    including Volumes, PersistentVolumes, PersistentVolumeClaims, and StorageClasses.
+    We’ve seen how the Container Storage Interface and Container Attached Storage
+    pattern point the way toward more cloud native approaches to managing storage.
+    Now you’re ready to learn how to use these building blocks and design principles
+    to manage stateful workloads including databases, streaming data, and more.*
+  id: totrans-243
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这一章中，我们探讨了像 Docker 这样的容器系统以及像 Kubernetes 这样的容器编排系统中如何管理持久性。您已经了解了各种 Kubernetes
+    资源，可以用来管理有状态的工作负载，包括 Volumes、PersistentVolumes、PersistentVolumeClaims 和 StorageClasses。我们看到了容器存储接口和容器附加存储模式如何指引我们朝着更加云原生的存储管理方法迈进。现在，您已经准备好学习如何使用这些构建块和设计原则来管理包括数据库、流数据等在内的有状态工作负载了。

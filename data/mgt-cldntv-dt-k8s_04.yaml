@@ -1,0 +1,1628 @@
+- en: Chapter 3\. Databases on Kubernetes the Hard Way
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第3章 Kubernetes上的数据库困难之路
+- en: 'As we discussed in [Chapter 1](ch01.html#introduction_to_cloud_native_data_infra),
+    Kubernetes was designed for stateless workloads. A corollary to this is that stateless
+    workloads are what Kubernetes does best. Because of this, some have argued that
+    you shouldn’t try to run stateful workloads on Kubernetes, and you may hear various
+    recommendations about what you should do instead: “Use a managed service,” or
+    “Leave data in legacy databases in your on-premises datacenter,” or perhaps even
+    “Run your databases in the cloud, but in traditional VMs instead of containers.”'
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如我们在[第1章](ch01.html#introduction_to_cloud_native_data_infra)中讨论的，Kubernetes是为无状态工作负载而设计的。与此相关的是，无状态工作负载是Kubernetes做得最好的。因此，有人认为你不应该试图在Kubernetes上运行有状态工作负载，你可能会听到各种建议，比如“使用托管服务”，或者“将数据留在你的传统数据中心的传统数据库中”，或者甚至“在云中运行你的数据库，但使用传统虚拟机而不是容器”。
+- en: While these recommendations are still viable options, one of our main goals
+    in this book is to demonstrate that running data infrastructure in Kubernetes
+    has become not only a viable option, but a preferred option. In his article [“A
+    Case for Databases on Kubernetes from a Former Skeptic”](https://oreil.ly/SjQV0),
+    Christopher Bradford describes his journey from being skeptical of running any
+    stateful workload in Kubernetes, to grudging acceptance of running data infrastructure
+    on Kubernetes for development and test workloads, to enthusiastic evangelism around
+    deploying databases on Kubernetes in production. This journey is typical of many
+    in the Data on Kubernetes Community (DoKC). By the middle of 2020, Boris Kurktchiev
+    was able to cite a growing consensus that managing stateful workloads on Kubernetes
+    had reached a point of viability, and even maturity, in his article [“3 Reasons
+    to Bring Stateful Applications to Kubernetes”](https://oreil.ly/xtm89).
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然这些建议仍然是可行的选择之一，但本书的主要目标之一是展示，在Kubernetes中运行数据基础设施不仅是一个可行的选择，而且是一个首选的选择。在他的文章[《从一个前怀疑论者的角度看Kubernetes上的数据库》](https://oreil.ly/SjQV0)，克里斯托弗·布拉德福德描述了他从怀疑在Kubernetes中运行任何有状态工作负载，到勉强接受在开发和测试工作负载中在Kubernetes上运行数据基础设施，再到热情地宣扬在生产环境中部署数据库在Kubernetes上的旅程。这一旅程是数据在Kubernetes社区中很多人的典型代表（DoKC）。到2020年中期，鲍里斯·库尔克切夫能够引用一个日益增长的共识，即在Kubernetes上管理有状态工作负载已经达到了可行性，甚至成熟性的点，他在文章[《将有状态应用引入Kubernetes的3个理由》](https://oreil.ly/xtm89)中提到了这一点。
+- en: 'How did this change come about? Over the past several years, the Kubernetes
+    community has shifted focus toward adding features that support the ability to
+    manage state in a cloud native way on Kubernetes. The storage elements represent
+    a big part of this shift we introduced in the previous chapter, including the
+    Kubernetes PersistentVolume subsystem and the adoption of the CSI. In this chapter,
+    we’ll complete this part of the story by looking at Kubernetes resources for building
+    stateful applications on top of this storage foundation. We’ll focus in particular
+    on a specific type of stateful application: data infrastructure.'
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种变化是如何发生的？在过去的几年中，Kubernetes社区的重点已经转向增加支持以云原生方式在Kubernetes上管理状态的功能。存储元素代表了这种转变的重要部分，我们在上一章中介绍了这些，包括Kubernetes持久卷子系统和CSI的采用。在本章中，我们将通过查看用于在这种存储基础上构建有状态应用的Kubernetes资源来完成这部分故事。我们将特别关注一种特定类型的有状态应用程序：数据基础设施。
+- en: The Hard Way
+  id: totrans-4
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 困难的道路
+- en: The phrase “doing it the hard way” has come to be associated with avoiding the
+    easy option in favor of putting in the detailed work required to accomplish a
+    result that will have lasting significance. Throughout history, pioneers of all
+    persuasions are well known for taking pride in having made the sacrifice of blood,
+    sweat, and tears that made life just that little bit more bearable for the generations
+    that follow. These elders are often heard to lament when their protégés fail to
+    comprehend the depth of what they had to go through.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: “走弯路”这个短语现在常常与避免简单选择，而选择投入详细工作以完成具有持久意义结果的方式联系在一起。在整个历史上，各种开拓者都以为后代能够过上更美好生活而自豪，因为他们为此做出了牺牲，包括鲜血、汗水和眼泪。这些前辈们经常会听到后辈们未能理解他们所经历深度的感叹。
+- en: In the tech world, it’s no different. While new innovations such as APIs and
+    “no code” environments have massive potential to grow a new crop of developers
+    worldwide, a deeper understanding of the underlying technology is still required
+    in order to manage highly available and secure systems at worldwide scale. It’s
+    when things go wrong that this detailed knowledge proves its worth. This is why
+    many of us who are software developers and never touch a physical server in our
+    day jobs gain so much from building our own PC by wiring chips and boards by hand.
+    It’s also one of the hidden benefits of serving as informal IT consultants for
+    our friends and family.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在技术世界中，情况也毫无不同。虽然像 API 和“无代码”环境这样的新创新有着巨大的潜力培养全球新一代开发人员，但深入理解底层技术仍然是管理全球规模高可用性和安全系统所必需的。当事情出错时，这种详细的知识证明了其价值。这就是为什么我们许多只在日常工作中作为软件开发人员，从未接触过物理服务器的人，却从通过手工布线芯片和电路板来建造自己的
+    PC 中获益良多。这也是为什么作为我们朋友和家人的非正式 IT 顾问带来的隐藏好处之一。
+- en: For the Kubernetes community, of course, “the hard way” has an even more specific
+    connotation. Google engineer Kelsey Hightower’s [“Kubernetes the Hard Way”](https://oreil.ly/xd6ne)
+    has become a sort of rite of passage for those who want a deeper understanding
+    of the elements that make up a Kubernetes cluster. This popular tutorial walks
+    you through downloading, installing, and configuring each of the components that
+    make up the Kubernetes control plane. The result is a working Kubernetes cluster
+    that, although not suitable for deploying a production workload, is certainly
+    functional enough for development and learning. The appeal of the approach is
+    that all of the instructions are typed by hand. Rather than downloading a bunch
+    of scripts that do everything for you, you must understand what is happening at
+    each step.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于 Kubernetes 社区来说，“the hard way”（“艰难的方式”）自然有着更具体的涵义。谷歌工程师 Kelsey Hightower
+    的 [“Kubernetes the Hard Way”](https://oreil.ly/xd6ne) 已经成为想要深入理解 Kubernetes 集群组成元素的人们的一种入门仪式。这个受欢迎的教程引导你逐步下载、安装和配置组成
+    Kubernetes 控制平面的每个组件。其结果是一个可工作的 Kubernetes 集群，虽然不适合部署生产工作负载，但绝对足够进行开发和学习使用。这种方法的吸引力在于所有指令都是手工输入的。与其下载一堆为你做所有事情的脚本不同，你必须理解每一步发生了什么。
+- en: In this chapter, we’ll emulate this approach and walk you through deploying
+    some example data infrastructure the hard way ourselves. Along the way, you’ll
+    get more hands-on experience with the storage resources you learned about in [Chapter 2](ch02.html#managing_data_storage_on_kubernetes),
+    and we’ll introduce additional Kubernetes resource types for managing compute
+    and network to complete the compute, network, storage triad we introduced in [Chapter 1](ch01.html#introduction_to_cloud_native_data_infra).
+    Are you ready to get your hands dirty? Let’s go!
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们将模仿这种方法，手把手地教你如何通过“the hard way”部署一些示例数据基础设施。在这个过程中，你将更多地实践你在[第二章](ch02.html#managing_data_storage_on_kubernetes)学到的存储资源，并且我们会介绍额外的
+    Kubernetes 资源类型，来完善我们在[第一章](ch01.html#introduction_to_cloud_native_data_infra)中介绍的计算、网络、存储三位一体。你准备好动手了吗？让我们开始吧！
+- en: Examples Are Not Production-Grade
+  id: totrans-9
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 示例不适合生产环境使用
+- en: The examples we present in this chapter are primarily for introducing new elements
+    of the Kubernetes API and are not intended to represent deployments we’d recommend
+    running in production. We’ll make sure to highlight any gaps so that we can demonstrate
+    how to fill them in upcoming chapters.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在本章中呈现的示例主要是为了介绍 Kubernetes API 的新元素，并不打算代表我们建议在生产环境中运行的部署。我们会确保突出任何差距，以便在即将到来的章节中展示如何填补它们。
+- en: Prerequisites for Running Data Infrastructure on Kubernetes
+  id: totrans-11
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 上运行数据基础设施的先决条件
+- en: 'To follow along with the examples in this chapter, you’ll want to have a Kubernetes
+    cluster to work on. If you’ve never tried it before, perhaps you’ll want to build
+    a cluster using the [“Kubernetes the Hard Way”](https://oreil.ly/sLopS) instructions,
+    and then use that same cluster to add data infrastructure the hard way as well.
+    You could also use a simple desktop Kubernetes, since we won’t be using a large
+    amount of resources. If you’re using a shared cluster, you might want to install
+    these examples in their own Namespace to isolate them from the work of others:'
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要跟随本章的示例，您需要一个 Kubernetes 集群来工作。如果您以前从未尝试过，也许您会想按照 [“Kubernetes the Hard Way”](https://oreil.ly/sLopS)
+    的说明构建一个集群，然后再使用同一个集群以同样的方式添加数据基础设施。您也可以使用简单的桌面 Kubernetes，因为我们不会使用大量资源。如果您使用的是共享集群，您可能希望将这些示例安装在自己的命名空间中，以便将它们与其他人的工作隔离开来：
+- en: '[PRE0]'
+  id: totrans-13
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'You’ll also need to make sure you have a StorageClass in your cluster. If you’re
+    starting from a cluster built the hard way, you won’t have one. You may want to
+    follow the instructions in [“StorageClasses”](ch02.html#storageclasses) for installing
+    a simple StorageClass and provisioner that expose local storage. The [source code](https://oreil.ly/iV1Tg)
+    is in this book’s repository:'
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您还需要确保集群中有一个 StorageClass。如果您是从零开始构建集群，您可能没有这个。您可能想按照 [“StorageClasses”](ch02.html#storageclasses)
+    中的说明安装一个简单的 StorageClass 和提供程序，以公开本地存储。本书的仓库中有 [源代码](https://oreil.ly/iV1Tg)：
+- en: '[PRE1]'
+  id: totrans-15
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: You’ll want to use a StorageClass that supports a [`volumeBindingMode`](https://oreil.ly/rpNyc)
+    of `WaitForFirstConsumer`. This gives Kubernetes the flexibility to defer provisioning
+    storage until we need it. This behavior is generally preferred for production
+    deployments, so you might as well start getting in the habit.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您将需要使用支持 `WaitForFirstConsumer` 的 [`volumeBindingMode`](https://oreil.ly/rpNyc)
+    的 StorageClass。这使 Kubernetes 能够延迟到需要时再进行存储的预配。这种行为通常更适合生产部署，因此您最好养成这种习惯。
+- en: Running MySQL on Kubernetes
+  id: totrans-17
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 上运行 MySQL
+- en: 'First, let’s start with a super simple example. MySQL is one of the most widely
+    used relational databases because of its reliability and usability. For this example,
+    we’ll build on the [MySQL tutorial](https://oreil.ly/cY6cv) in the official Kubernetes
+    documentation, with a couple of twists. You can find the source code used in this
+    section at [“Deploying MySQL Example—Data on Kubernetes the Hard Way”](https://oreil.ly/YfjiG).
+    The tutorial includes two Kubernetes deployments: one to run a MySQL Pod, and
+    another to run a sample client—in this case, WordPress. This configuration is
+    shown in [Figure 3-1](#sample_kubernetes_deployment_of_mysql).'
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，让我们从一个超级简单的例子开始。MySQL 是最广泛使用的关系数据库之一，因为它的可靠性和易用性。对于本例，我们将在官方 Kubernetes 文档中的
+    [MySQL 教程](https://oreil.ly/cY6cv) 的基础上进行构建，并进行一些调整。您可以在 [“Deploying MySQL Example—Data
+    on Kubernetes the Hard Way”](https://oreil.ly/YfjiG) 找到本节中使用的源代码。该教程包括两个 Kubernetes
+    部署：一个用于运行 MySQL Pod，另一个用于运行一个示例客户端——在这种情况下是 WordPress。这个配置显示在 [图 3-1](#sample_kubernetes_deployment_of_mysql)
+    中。
+- en: '![Sample Kubernetes deployment of MySQL](assets/mcdk_0301.png)'
+  id: totrans-19
+  prefs: []
+  type: TYPE_IMG
+  zh: '![MySQL 的示例 Kubernetes 部署](assets/mcdk_0301.png)'
+- en: Figure 3-1\. Sample Kubernetes deployment of MySQL
+  id: totrans-20
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-1\. MySQL 的示例 Kubernetes 部署
+- en: In this example, we see that there is a PersistentVolumeClaim for each Pod.
+    For the purposes of this example, we’ll assume these claims are satisfied by a
+    single volume provided by the default StorageClass. You’ll also notice that each
+    Pod is shown as part of a ReplicaSet and that there is a service exposed for the
+    MySQL database. Let’s take a pause and introduce these concepts.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这个例子中，我们看到每个 Pod 都有一个 PersistentVolumeClaim。为了这个例子，我们假设这些声明都由默认的 StorageClass
+    提供的单个卷来满足。你还会注意到每个 Pod 都显示为 ReplicaSet 的一部分，并且为 MySQL 数据库暴露了一个服务。让我们暂停一下，介绍一下这些概念。
+- en: ReplicaSets
+  id: totrans-22
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: ReplicaSets
+- en: Production application deployments on Kubernetes do not typically deploy individual
+    Pods, because an individual Pod could easily be lost when the node disappears.
+    Instead, Pods are typically deployed in the context of a Kubernetes resource that
+    manages their lifecycle. ReplicaSet is one of these resources, and the other is
+    StatefulSet, which we’ll look at later in the chapter.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 上，生产应用程序部署通常不会部署单独的 Pods，因为当节点消失时，单个 Pod 可能会轻易丢失。相反，Pods 通常在管理其生命周期的
+    Kubernetes 资源的上下文中部署。ReplicaSet 就是这些资源之一，另一个是稍后将在本章中查看的 StatefulSet。
+- en: The purpose of a *ReplicaSet* is to ensure that a specified number of replicas
+    of a given Pod are kept running at any given time. As Pods are destroyed, others
+    are created to replace them in order to satisfy the desired number of replicas.
+    A ReplicaSet is defined by a Pod template, a number of replicas, and a selector.
+    The Pod template defines a specification for Pods that will be managed by the
+    ReplicaSet, similar to what we saw for individual Pods created in the examples
+    in [Chapter 2](ch02.html#managing_data_storage_on_kubernetes). The number of replicas
+    can be zero or more. The selector identifies Pods that are part of the ReplicaSet.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ReplicaSet 的目的是确保在任何给定时间内保持给定 Pod 的指定数量的副本正在运行。当 Pod 被销毁时，将创建其他 Pod 来替换它们，以满足所需的副本数量。ReplicaSet
+    由 Pod 模板、副本数和选择器定义。Pod 模板定义了由 ReplicaSet 管理的 Pod 的规范，类似于我们在[第 2 章](ch02.html#managing_data_storage_on_kubernetes)中创建的个别
+    Pod 的示例。副本数可以是零个或更多个。选择器标识属于 ReplicaSet 的 Pod。
+- en: 'Let’s look at a portion of an example definition of a ReplicaSet for the WordPress
+    application shown in [Figure 3-1](#sample_kubernetes_deployment_of_mysql):'
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们看一下 WordPress 应用程序的 ReplicaSet 示例定义的部分，如[图 3-1](#sample_kubernetes_deployment_of_mysql)所示：
+- en: '[PRE2]'
+  id: totrans-26
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: A ReplicaSet is responsible for creating or deleting Pods in order to meet the
+    specified number of replicas. You can scale the size of a ReplicaSet up or down
+    by changing this value. The Pod template is used when creating new Pods. Pods
+    that are managed by a ReplicaSet contain a reference to the ReplicaSet in their
+    `metadata.ownerReferences` field. A ReplicaSet can actually take responsibility
+    for managing a Pod that it did not create if the selector matches and the Pod
+    does not reference another owner. This behavior of a ReplicaSet is known as *acquiring*
+    a Pod.
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ReplicaSet 负责创建或删除 Pod，以满足指定数量的副本。您可以通过更改此值来调整 ReplicaSet 的大小。创建新 Pod 时会使用 Pod
+    模板。由 ReplicaSet 管理的 Pod 在其 `metadata.ownerReferences` 字段中包含对 ReplicaSet 的引用。如果选择器匹配且
+    Pod 没有引用其他所有者，则 ReplicaSet 实际上可以负责管理其未创建的 Pod。这种 ReplicaSet 的行为称为*获取* Pod。
+- en: Define ReplicaSet Selectors Carefully
+  id: totrans-28
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 仔细定义 ReplicaSet 的选择器
+- en: If you do create ReplicaSets directly, make sure that the selector you use is
+    unique and does not match any bare Pods that you do not intend to be acquired.
+    Pods that do not match the Pod template could be acquired if the selectors match.
+    For more information about managing the lifecycle of ReplicaSets and the Pods
+    they manage, see the [Kubernetes documentation](https://oreil.ly/8Bc9D).
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果确实直接创建 ReplicaSets，请确保您使用的选择器是唯一的，并且不匹配您不打算获取的任何裸 Pod。如果选择器匹配，可能会获取不匹配 Pod
+    模板的 Pod。有关管理 ReplicaSet 生命周期及其管理的 Pod 的更多信息，请参阅[Kubernetes 文档](https://oreil.ly/8Bc9D)。
+- en: 'You might be wondering why we didn’t provide a full definition of a ReplicaSet.
+    As it turns out, most application developers do not end up using ReplicaSets directly,
+    because Kubernetes provides another resource type that manages ReplicaSets declaratively:
+    Deployments.'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可能想知道为什么我们没有提供 ReplicaSet 的完整定义。事实证明，大多数应用程序开发人员最终不会直接使用 ReplicaSets，因为 Kubernetes
+    提供了另一种管理 ReplicaSets 的资源类型：部署。
+- en: Deployments
+  id: totrans-31
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 部署
+- en: A Kubernetes *Deployment* is a resource that builds on top of ReplicaSets with
+    additional features for lifecycle management, including the ability to roll out
+    new versions and roll back to previous versions. As shown in [Figure 3-2](#deployments_and_replicasets),
+    creating a Deployment results in the creation of a ReplicaSet as well.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes *部署* 是建立在 ReplicaSets 基础上的资源，具有用于生命周期管理的附加功能，包括部署新版本和回滚到先前版本的能力。如[图 3-2](#deployments_and_replicasets)所示，创建部署也会创建
+    ReplicaSet。
+- en: '![Deployments and ReplicaSets](assets/mcdk_0302.png)'
+  id: totrans-33
+  prefs: []
+  type: TYPE_IMG
+  zh: '![部署和 ReplicaSets](assets/mcdk_0302.png)'
+- en: Figure 3-2\. Deployments and ReplicaSets
+  id: totrans-34
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-2\. 部署和 ReplicaSets
+- en: This figure highlights that ReplicaSets (and therefore the Deployments that
+    manage them) operate on cloned replicas of Pods, meaning that the definitions
+    of the Pods are the same, even down to the level of PersistentVolumeClaims. The
+    definition of a ReplicaSet references a single PVC that is provided to it, and
+    there is no mechanism provided to clone the PVC definition for additional Pods.
+    For this reason, Deployments and ReplicaSets are not a good choice if your intent
+    is for each Pod to have access to its own dedicated storage.
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这张图突显了ReplicaSet（因此管理它们的Deployments）在克隆Pod的副本上运行，这意味着Pod的定义是相同的，即使是到PersistentVolumeClaims的级别也是如此。ReplicaSet的定义引用了一个单独提供给它的PVC，并且没有提供机制来克隆用于其他Pod的PVC定义。因此，如果您希望每个Pod都能访问其专用存储，Deployments和ReplicaSets并不是一个好选择。
+- en: Deployments are a good choice if your application Pods do not need access to
+    storage, or if your intent is that they access the same piece of storage. However,
+    the cases where this would be desirable are pretty rare, since you likely don’t
+    want a situation in which you could have multiple simultaneous writers to the
+    same storage.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你的应用Pod不需要访问存储，或者你希望它们访问相同的存储，那么Deployments是一个很好的选择。但是，这种情况很少见，因为你可能不希望出现多个同时写入相同存储的情况。
+- en: 'Let’s create an example Deployment. First, create a Secret that will represent
+    the database password (substitute in whatever string you want for the password):'
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们创建一个示例部署。首先，创建一个Secret来代表数据库的密码（用任何字符串替换密码）：
+- en: '[PRE3]'
+  id: totrans-38
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'Next, create a PVC that represents the storage that the database can use. The
+    [source code](https://oreil.ly/CHccy) is in this book’s repository. A single PVC
+    is sufficient in this case since you are creating a single node. This should work
+    as long as you have an appropriate StorageClass, as referenced earlier:'
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，创建一个PVC来表示数据库可以使用的存储。[源代码](https://oreil.ly/CHccy)存放在本书的代码库中。在这种情况下，一个PVC就足够了，因为你正在创建一个单节点。只要你有一个合适的StorageClass，就应该可以正常工作，正如前面提到的：
+- en: '[PRE4]'
+  id: totrans-40
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: 'Next, create a Deployment with a Pod template spec that runs MySQL. The [source
+    code](https://oreil.ly/v9TEt) is in this book’s repository. Note that it includes
+    a reference to the PVC you just created as well as the Secret containing the root
+    password for the database:'
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，创建一个部署，使用一个运行MySQL的Pod模板规范。[源代码](https://oreil.ly/v9TEt)存放在本书的代码库中。请注意，它包含对你刚刚创建的PVC的引用，以及包含数据库根密码的Secret：
+- en: '[PRE5]'
+  id: totrans-42
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'We have a few interesting things to note about this Deployment’s specification:'
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 关于这个部署规范，我们有几点有趣的事情需要注意：
+- en: The Deployment has a `Recreate` strategy. This refers to the way the Deployment
+    handles the replacement of Pods when the Pod template is updated; we’ll discuss
+    this shortly.
+  id: totrans-44
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 部署使用了`Recreate`策略。这是指部署在更新Pod模板时如何处理Pod替换的方式；我们稍后会讨论这个问题。
+- en: Under the Pod template, the password is passed to the Pod as an environment
+    variable extracted from the Secret you created in this example. Overriding the
+    default password is an important aspect of securing any database deployment.
+  id: totrans-45
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在Pod模板中，密码作为一个环境变量传递给Pod，这个密码是从你在这个示例中创建的Secret中提取的。覆盖默认密码是保障任何数据库部署的重要方面。
+- en: A single port is exposed on the MySQL image for database access, since this
+    is a relatively simple example. In other samples in this book, we’ll see cases
+    of Pods that expose additional ports for administrative operations, metrics collection,
+    and more. The fact that access is disabled by default is a great feature of Kubernetes.
+  id: totrans-46
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: MySQL镜像只暴露了一个端口用于数据库访问，因为这只是一个相对简单的示例。在本书的其他示例中，我们会看到一些Pod需要额外暴露端口用于管理操作、指标收集等情况。默认禁用访问是Kubernetes的一个很好的特性。
+- en: The MySQL image mounts a volume for its persistent storage using the PVC defined
+    in this example.
+  id: totrans-47
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: MySQL镜像使用在这个示例中定义的PVC挂载其持久化存储。
+- en: The number of replicas was not provided in the specification. This means that
+    the default value of 1 will be used.
+  id: totrans-48
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 规范中没有提供副本数。这意味着将使用默认值1。
+- en: After applying the configuration, try using a command like `kubectl get deployments,rs,pods`
+    to see the items that Kubernetes created for you. You’ll notice a single ReplicaSet
+    named after the Deployment that includes a random string (for example, `wordpress-mysql-655c8d9c54`).
+    The Pod’s name references the name of the ReplicaSet, adding some additional random
+    characters (for example, `wordpress-mysql-655c8d9c54-tgswd`). These names provide
+    a quick way to identify the relationships between these resources.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用配置后，尝试使用像`kubectl get deployments,rs,pods`这样的命令查看 Kubernetes 为您创建的项目。您会注意到一个以
+    Deployment 命名的 ReplicaSet，包括一个随机字符串（例如`wordpress-mysql-655c8d9c54`）。Pod 的名称引用
+    ReplicaSet 的名称，添加一些额外的随机字符（例如`wordpress-mysql-655c8d9c54-tgswd`）。这些名称为识别这些资源之间的关系提供了一种快速方法。
+- en: 'Here are a few of the actions that a Deployment takes to manage the lifecycle
+    of ReplicaSets. In keeping with the Kubernetes emphasis on declarative operations,
+    most of these are triggered by updating the specification of the Deployment:'
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下面是 Deployment 执行以管理 ReplicaSet 生命周期的几种操作。保持 Kubernetes 对声明性操作的重视，这些操作大多数由更新
+    Deployment 规范触发：
+- en: Initial rollout
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 初始部署
+- en: When you create a Deployment, Kubernetes uses the specification you provide
+    to create a ReplicaSet. The process of creating this ReplicaSet and its Pods is
+    known as a *rollout*. A rollout is also performed as part of a rolling update.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建 Deployment 时，Kubernetes 使用您提供的规范创建 ReplicaSet。创建此 ReplicaSet 及其 Pods 的过程称为*部署*。作为滚动更新的一部分也执行部署。
+- en: Scaling up or down
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 扩展或缩减
+- en: When you update a Deployment to change the number of replicas, the underlying
+    ReplicaSet is scaled up or down accordingly.
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 更新 Deployment 以更改副本数量时，相应的 ReplicaSet 会相应地扩展或缩减。
+- en: Rolling update
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 滚动更新
+- en: When you update the Deployment’s Pod template (for example, by specifying a
+    different container image for the Pod), Kubernetes creates a new ReplicaSet based
+    on the new Pod template. The way that Kubernetes manages the transition between
+    the old and new ReplicaSets is described by the Deployment’s `spec.strategy` property,
+    which defaults to a value called `RollingUpdate`. In a rolling update, the new
+    ReplicaSet is slowly scaled up by creating Pods conforming to the new template,
+    as the number of Pods in the existing ReplicaSet is scaled down. During this transition,
+    the Deployment enforces a maximum and minimum number of Pods, expressed as percentages,
+    as set by the `spec.strategy.rollingupdate.maxSurge` and `maxUnavailable` properties.
+    Each of these values defaults to 25%.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当更新 Deployment 的 Pod 模板（例如，通过为 Pod 指定不同的容器镜像）时，Kubernetes 基于新的 Pod 模板创建一个新的
+    ReplicaSet。Kubernetes 管理旧 ReplicaSet 到新 ReplicaSet 之间的过渡方式由 Deployment 的`spec.strategy`属性描述，默认为`RollingUpdate`。在滚动更新过程中，新
+    ReplicaSet 通过创建符合新模板的 Pods 逐步扩展，同时缩减现有 ReplicaSet 中的 Pods 数量。在此过渡期间，Deployment
+    强制执行一组最大和最小 Pods 数量的百分比限制，由`spec.strategy.rollingupdate.maxSurge`和`maxUnavailable`属性设置。这些值默认为
+    25%。
+- en: Recreate update
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 重建更新
+- en: The other option for use when you update the Pod template is `Recreate`. This
+    is the option that was set in the preceding Deployment. With this option, the
+    existing ReplicaSet is terminated immediately before the new ReplicaSet is created.
+    This strategy is useful for development environments since it completes the update
+    more quickly, whereas `RollingUpdate` is more suitable for production environments
+    since it emphasizes high availability. This is also useful for data migration.
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 更新 Pod 模板的另一选项是`Recreate`。这是前面 Deployment 中设置的选项。使用此选项，在创建新 ReplicaSet 之前立即终止现有的
+    ReplicaSet。这种策略对于开发环境很有用，因为它可以更快地完成更新，而`RollingUpdate`更适合生产环境，因为它强调高可用性。这也适用于数据迁移。
+- en: Rollback update
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 回滚更新
+- en: 'When creating or updating a Deployment, you could introduce an error—for example,
+    by updating a container image in a Pod with a version that contains a bug. In
+    this case, the Pods managed by the Deployment might not even initialize fully.
+    You can detect these types of errors using commands such as `kubectl` `rollout`
+    `status`. Kubernetes provides a series of operations for managing the history
+    of rollouts of a Deployment. You can access these via `kubectl` commands such
+    as `kubectl rollout history`, which provides a numbered history of rollouts for
+    a Deployment, and `kubectl rollout undo`, which reverts a Deployment to the previous
+    rollout. You can also `undo` to a specific rollout version with the `--to-version`
+    option. Because `kubectl` supports rollouts for other resource types we’ll cover
+    later in this chapter (StatefulSets and DaemonSets), you’ll need to include the
+    resource type and name when using these commands—for example:'
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在创建或更新 Deployment 时，可能会引入错误——例如，通过更新一个包含错误的版本的容器镜像来更新 Pod 中的错误。在这种情况下，由 Deployment
+    管理的 Pods 可能甚至无法完全初始化。你可以使用诸如 `kubectl` `rollout` `status` 等命令来检测这些类型的错误。Kubernetes
+    提供了一系列操作来管理 Deployment 的回滚历史。你可以通过诸如 `kubectl rollout history` 这样的命令访问这些操作，它提供了
+    Deployment 的回滚历史编号，以及 `kubectl rollout undo`，它可以将 Deployment 恢复到上一个回滚状态。你还可以使用
+    `--to-version` 选项将 `undo` 到特定的回滚版本。因为 `kubectl` 支持本章后面将介绍的其他资源类型的回滚（StatefulSets
+    和 DaemonSets），在使用这些命令时，你需要包括资源类型和名称——例如：
+- en: '[PRE6]'
+  id: totrans-61
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: 'This produces output such as the following:'
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这将产生如下输出：
+- en: '[PRE7]'
+  id: totrans-63
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: As you can see, Kubernetes Deployments provide some sophisticated behaviors
+    for managing the lifecycle of a set of cloned Pods. You can test out these lifecycle
+    operations (other than rollback) by changing the Deployment’s YAML specification
+    and reapplying it. Try scaling the number of replicas to 2 and back again, or
+    using a different MySQL image. After updating the Deployment, you can use a command
+    like `kubectl describe deployment` `wordpress-mysql` to observe the events that
+    Kubernetes initiates to bring your Deployment to your desired state.
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如你所见，Kubernetes 的 Deployments 提供了一些复杂的行为来管理一组克隆 Pods 的生命周期。你可以通过更改 Deployment
+    的 YAML 规范并重新应用它来测试这些生命周期操作（除了回滚）。尝试将副本数量扩展到 2 再缩小，或者使用不同的 MySQL 镜像。在更新 Deployment
+    后，你可以使用像 `kubectl describe deployment` `wordpress-mysql` 这样的命令来观察 Kubernetes 启动的事件，将你的
+    Deployment 带到期望的状态。
+- en: Other options are available for Deployments that we don’t have space to go into
+    here—for example, how to specify what Kubernetes does if you attempt an update
+    that fails. For a more in-depth explanation of the behavior of Deployments, see
+    the [Kubernetes documentation](https://oreil.ly/ibjpA).
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 其他选项可用于 Deployments，这里我们没有空间详细讨论——例如，如果尝试更新失败时 Kubernetes 应该如何处理。有关 Deployments
+    行为的更深入解释，请参阅 [Kubernetes 文档](https://oreil.ly/ibjpA)。
+- en: Services
+  id: totrans-66
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Services
+- en: In the preceding steps, you’ve created a PVC to specify the storage needs of
+    the database, a Secret to provide administrator credentials, and a Deployment
+    to manage the lifecycle of a single MySQL Pod. Now that you have a running database,
+    you’ll want to make it accessible to applications. In our scheme of compute, network,
+    and storage that we introduced in [Chapter 1](ch01.html#introduction_to_cloud_native_data_infra),
+    this is the networking part.
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在前面的步骤中，你已经创建了一个 PVC 来指定数据库的存储需求，一个 Secret 来提供管理员凭据，并创建了一个 Deployment 来管理单个
+    MySQL Pod 的生命周期。现在你已经拥有一个运行中的数据库，你将希望让应用程序可以访问它。在我们介绍的计算、网络和存储方案中（详见 [第1章](ch01.html#introduction_to_cloud_native_data_infra)），这是网络部分。
+- en: 'Kubernetes *Services* are the primitive that we need to use to expose access
+    to our database as a network service. A Service provides an abstraction for a
+    group of Pods running behind it. In the case of a single MySQL node as in this
+    example, you might wonder why we’d bother creating this abstraction. One key feature
+    that a Service supports is to provide a consistently named endpoint that doesn’t
+    change. You don’t want to be in a situation of having to update your clients whenever
+    the database Pod is restarted and gets a new IP address. You can create a Service
+    for accessing MySQL by using a YAML configuration like this. The [source code](https://oreil.ly/FyR9E)
+    is in this book’s repository:'
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes *Services* 是我们需要使用的原始方法，用来将我们的数据库作为网络服务暴露出来。一个 Service 提供了一个抽象，后面跟着一组运行的
+    Pods。在这个例子中，就像一个单独的 MySQL 节点一样，你可能会想知道为什么我们要费心创建这种抽象。一个 Service 支持的一个关键特性是提供一个始终不变的命名端点。当数据库
+    Pod 重新启动并获得新的 IP 地址时，你不希望处于必须更新客户端的情况。你可以通过使用像这样的 YAML 配置来创建访问 MySQL 的 Service。[源代码](https://oreil.ly/FyR9E)
+    存储在本书的代码库中：
+- en: '[PRE8]'
+  id: totrans-69
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: 'Here are a couple of things to note about this configuration:'
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 关于这个配置，有几点需要注意：
+- en: 'This configuration specifies a `port` that is exposed on the Service: 3306\.
+    In defining a Service, two ports are actually involved: the `port` exposed to
+    clients of the Service, and the `targetPort` exposed by the underlying Pods that
+    the Service is fronting. Since you haven’t specified a `targetPort`, it defaults
+    to the `port` value.'
+  id: totrans-71
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 这个配置指定了服务暴露的 `port` 是 3306\. 在定义服务时，实际上涉及两个端口：服务对客户端暴露的 `port` 和由服务面向的底层 Pod
+    暴露的 `targetPort`。由于你没有指定 `targetPort`，它默认为 `port` 的值。
+- en: The `selector` defines what Pods the Service will direct traffic to. In this
+    configuration, there will be only a single MySQL Pod managed by the Deployment,
+    and that’s just fine.
+  id: totrans-72
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`selector` 定义了服务将流量转发到哪些 Pod。在这个配置中，Deployment 管理的只有一个 MySQL Pod，这就够了。'
+- en: If you have worked with Kubernetes Services before, you may note that there
+    is no `serviceType` defined for this Service, which means that it is of the default
+    type, known as `ClusterIP`. Furthermore, since the `clusterIP` property is set
+    to `None`, this is what is known as a *headless Service*—that is, the Service’s
+    DNS name is mapped directly to the IP addresses of the selected Pods.
+  id: totrans-73
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如果您之前使用过 Kubernetes 服务，您可能会注意到此服务没有定义 `serviceType`，这意味着它是默认类型，称为 `ClusterIP`。此外，由于
+    `clusterIP` 属性设置为 `None`，这就是所谓的 *headless Service*，即服务的 DNS 名称直接映射到所选 Pod 的 IP
+    地址。
+- en: 'Kubernetes supports several types of Services to address different use cases,
+    which are shown in [Figure 3-3](#kubernetes_service_types). We’ll introduce them
+    briefly here in order to highlight their applicability to data infrastructure:'
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 支持多种服务类型来满足不同的使用场景，在 [图 3-3](#kubernetes_service_types) 中展示。我们将在此简要介绍它们，以突出它们在数据基础设施中的适用性：
+- en: ClusterIP Service
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ClusterIP 服务
+- en: This type of Service is exposed on a cluster-internal IP address. ClusterIP
+    Services are the type used most often for data infrastructure such as databases
+    in Kubernetes, especially headless services, since this infrastructure is typically
+    deployed in Kubernetes alongside the application that uses it.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种类型的服务暴露在集群内部 IP 地址上。ClusterIP 服务通常用于 Kubernetes 中的数据基础设施，特别是无头服务，因为这些基础设施通常与使用它的应用程序一起部署在
+    Kubernetes 中。
+- en: NodePort Service
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: NodePort 服务
+- en: A NodePort Service is exposed externally to the cluster on the IP address of
+    each Worker Node. A ClusterIP service is also created internally, to which the
+    NodePort routes traffic. You can allow Kubernetes to select what external port
+    is used from a range of ports (30000–32767 by default), or specify the one you
+    desire by using the `NodePort` property. NodePort services are most suitable for
+    development environments, when you need to debug what is happening on a specific
+    instance of a data infrastructure application.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: NodePort 服务在每个 Worker Node 的 IP 地址上对集群外部暴露。还在内部创建了一个 ClusterIP 服务，NodePort 将流量路由到该服务。您可以允许
+    Kubernetes 从一组端口（默认为 30000–32767）中选择外部使用的端口，或者通过使用 `NodePort` 属性指定您想要的端口。NodePort
+    服务最适合开发环境，在这种环境中，您需要调试特定实例的数据基础设施应用程序正在发生的情况。
+- en: LoadBalancer
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: LoadBalancer
+- en: LoadBalancer Services represent a request from the Kubernetes runtime to set
+    up an external load balancer provided by the underlying cloud provider. For example,
+    on Amazon’s Elastic Kubernetes Service (EKS), requesting a LoadBalancer Service
+    causes an instance of an Elastic Load Balancer (ELB) to be created. Usage of LoadBalancers
+    in front of multinode data infrastructure deployments is typically not required,
+    as these data technologies often have their own approaches for distributing load.
+    For example, Apache Cassandra drivers are aware of the topology of a Cassandra
+    cluster and provide load-balancing features to client applications, eliminating
+    the need for a load balancer.
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: LoadBalancer 服务代表 Kubernetes 运行时请求设置的外部负载均衡器，由底层云提供商提供。例如，在亚马逊的弹性 Kubernetes
+    服务 (EKS) 上，请求一个 LoadBalancer 服务会创建一个弹性负载均衡器 (ELB) 的实例。在多节点数据基础设施部署前面使用负载均衡器通常是不必要的，因为这些数据技术通常有自己的方法来分发负载。例如，Apache
+    Cassandra 驱动程序了解 Cassandra 集群的拓扑，并为客户应用程序提供负载均衡功能，从而消除了负载均衡器的需要。
+- en: ExternalName Service
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ExternalName 服务
+- en: An ExternalName Service is typically used to represent access to a Service that
+    is outside your cluster—for example, a database that is running externally to
+    Kubernetes. An ExternalName Service does not have a selector, as it is not mapping
+    to any Pods. Instead, it maps the Service name to a CNAME record. For example,
+    if you create a `my-external-database` Service with an `externalName` of `database.mydomain.com`,
+    references in your application Pods to `my-external-database` will be mapped to
+    `database.mydomain.com`.
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ExternalName服务通常用于表示访问集群外部的服务 - 例如，在Kubernetes外部运行的数据库。ExternalName服务没有选择器，因为它不映射到任何Pod。相反，它将服务名称映射到CNAME记录。例如，如果你创建一个
+    `my-external-database` 服务，并将 `externalName` 设置为 `database.mydomain.com`，那么应用程序Pod中对
+    `my-external-database` 的引用将映射到 `database.mydomain.com`。
+- en: '![Kubernetes Service types](assets/mcdk_0303.png)'
+  id: totrans-83
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Kubernetes服务类型](assets/mcdk_0303.png)'
+- en: Figure 3-3\. Kubernetes Service types
+  id: totrans-84
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图3-3\. Kubernetes服务类型
+- en: Note also the inclusion of *Ingress* in the figure. While Kubernetes Ingress
+    is not a type of Service, it is related. An Ingress is used to provide access
+    to Kubernetes services from outside the cluster, typically via HTTP. Multiple
+    Ingress implementations are available, including Nginx, Traefik, Ambassador (based
+    on Envoy) and others. Ingress implementations typically provide features including
+    Secure Sockets Layer (SSL) termination and load balancing, even across multiple
+    Kubernetes Services. As with LoadBalancer Services, Ingresses are more typically
+    used at the application tier.
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 还要注意图中包含 *Ingress* 的部分。虽然Kubernetes Ingress不是服务类型，但它与服务相关。Ingress用于从集群外部通过HTTP提供对Kubernetes服务的访问。有多种Ingress实现可用，包括Nginx、Traefik、Ambassador（基于Envoy）等。Ingress实现通常提供SSL终结和跨多个Kubernetes服务的负载平衡等功能。与LoadBalancer服务类似，Ingress更通常用于应用程序层次。
+- en: Accessing MySQL
+  id: totrans-86
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 访问MySQL
+- en: 'Now that you have deployed the database, you’re ready to deploy an application
+    that uses it—the WordPress server. First, the server will need its own PVC. This
+    helps illustrate that some applications leverage storage directly—perhaps for
+    storing files, applications that use data infrastructure, and applications that
+    do both. You can make a small request since this is just for demonstration purposes.
+    The [source code](https://oreil.ly/smKtM) is in this book’s repository:'
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在你已经部署了数据库，可以准备部署一个使用它的应用程序 - WordPress服务器。首先，服务器将需要自己的PVC。这有助于说明一些应用程序直接利用存储
+    - 也许是用于存储文件的应用程序、使用数据基础设施的应用程序，以及两者兼而有之。由于这仅用于演示目的，因此可以进行小规模请求。该[源代码](https://oreil.ly/smKtM)
+    存储在本书的代码库中：
+- en: '[PRE9]'
+  id: totrans-88
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: 'Next, create a Deployment for a single WordPress node. The [source code](https://oreil.ly/hLPdW)
+    is in this book’s repository:'
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，为单个WordPress节点创建一个部署。该[源代码](https://oreil.ly/hLPdW)存储在本书的代码库中：
+- en: '[PRE10]'
+  id: totrans-90
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: Notice that the database host and password for accessing MySQL are passed to
+    WordPress as environment variables. The value of the host is the name of the Service
+    you created for MySQL above. This is all that is needed for the database connection
+    to be routed to your MySQL instance. The value for the password is extracted from
+    the Secret, as with the preceding configuration of the MySQL Deployment.
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注意，数据库主机和访问MySQL的密码作为环境变量传递给WordPress。主机的值是你为上面的MySQL创建的服务的名称。这是将数据库连接路由到你的MySQL实例所需的所有信息。密码的值从Secret中提取，与前面配置MySQL部署的方式相同。
+- en: 'You’ll also notice that WordPress exposes an HTTP interface at port 80, so
+    let’s create a service to expose the WordPress server. The [source code](https://oreil.ly/tEigE)
+    is in this book’s repository:'
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你还会注意到，WordPress在端口80上暴露了HTTP接口，因此让我们创建一个服务来暴露WordPress服务器。该[源代码](https://oreil.ly/tEigE)
+    存储在本书的代码库中：
+- en: '[PRE11]'
+  id: totrans-93
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: Note that the service is of type LoadBalancer, which should make it fairly simple
+    to access from your local machine. Execute the command `kubectl get services`
+    to get the LoadBalancer’s IP address; then you can open the WordPress instance
+    in your browser with the URL `http://*<ip>*`. Try logging in and creating some
+    pages.
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注意，该服务的类型是LoadBalancer，这样从本地机器访问它应该相当简单。执行命令 `kubectl get services` 来获取LoadBalancer的IP地址；然后你可以通过URL
+    `http://*<ip>*` 在浏览器中打开WordPress实例。尝试登录并创建一些页面。
+- en: Accessing Services from Kubernetes Distributions
+  id: totrans-95
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 从Kubernetes发行版访问服务
+- en: The exact details of accessing Services will depend on the Kubernetes distribution
+    you’re using and whether you’re deploying apps in production, or just testing
+    something quickly as we’re doing here. If you’re using a desktop Kubernetes distribution,
+    you may wish to use a NodePort Service instead of LoadBalancer for simplicity.
+    You can also consult the documentation for instructions on accessing services,
+    such as those provided for [minikube](https://oreil.ly/euQLB) or [k3d](https://k3d.io).
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 访问服务的确切细节将取决于您使用的 Kubernetes 发行版，以及您是在生产环境中部署应用程序，还是像我们在此处快速测试某些内容。如果您使用的是桌面
+    Kubernetes 发行版，您可能希望使用 NodePort 服务而不是 LoadBalancer，以简化操作。您还可以查阅文档以获取有关访问服务的指导，例如为[minikube](https://oreil.ly/euQLB)或[k3d](https://k3d.io)提供的指导。
+- en: 'When you’re done experimenting with your WordPress instance, clean up the resources
+    specified in the configuration files you’ve used in the local directory using
+    the following command, including the data stored in your PersistentVolumeClaim:'
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您完成对 WordPress 实例的实验后，请使用以下命令清理本地目录中使用的配置文件中指定的资源，包括您的 PersistentVolumeClaim
+    中存储的数据：
+- en: '[PRE12]'
+  id: totrans-98
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: At this point, you might be feeling like this was relatively easy, despite our
+    claim to be doing things “the hard way.” And in a sense, you’d be right. So far,
+    we’ve deployed a single Node of a simple database with sane defaults that we didn’t
+    have to spend much time configuring. Creating a single Node is, of course, fine
+    if your application is going to store only a small amount of data. Is that all
+    there is to deploying databases on Kubernetes? Of course not! Now that we’ve introduced
+    a few of the basic Kubernetes resources via this simple database deployment, it’s
+    time to step up the complexity a bit. Let’s get down to business!
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此时，您可能会觉得这相对容易，尽管我们声称在“困难的方式”下进行操作。从某种意义上说，您是对的。到目前为止，我们部署了一个简单数据库的单个节点，使用了合理的默认设置，因此我们不需要花费太多时间进行配置。当然，如果您的应用程序只需要存储少量数据，创建单个节点是可以接受的。但是，这就是在
+    Kubernetes 上部署数据库的全部内容吗？当然不是！现在我们通过这个简单的数据库部署介绍了一些基本的 Kubernetes 资源之后，是时候稍微增加一些复杂性了。让我们认真做起来！
+- en: Running Apache Cassandra on Kubernetes
+  id: totrans-100
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 上运行 Apache Cassandra
+- en: In this section, we’ll look at running a multinode database on Kubernetes using
+    Apache Cassandra. Cassandra is a NoSQL database first developed at Facebook that
+    became a top-level project of the Apache Software Foundation (ASF) in 2010\. Cassandra
+    is an operational database that provides a tabular data model, and its Cassandra
+    Query Language (CQL) is similar to SQL.
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这一节中，我们将看看如何在 Kubernetes 上使用 Apache Cassandra 运行多节点数据库。Cassandra 是一个 NoSQL
+    数据库，最初由 Facebook 开发，在 2010 年成为 Apache 软件基金会（ASF）的顶级项目。Cassandra 是一个操作性数据库，提供表格数据模型，其
+    Cassandra 查询语言（CQL）类似于 SQL。
+- en: Cassandra is a database designed for the cloud, as it scales horizontally by
+    adding nodes, where each node is a peer. This decentralized design has been proven
+    to have near-linear scalability. Cassandra supports high availability by storing
+    multiple copies of data or *replicas*, including logic to distribute those replicas
+    across multiple Datacenters and cloud regions. Cassandra is built on similar principles
+    to Kubernetes in that it is designed to detect failures and continue operating
+    while the system can recover to its intended state in the background. All of these
+    features make Cassandra an excellent fit for deploying on Kubernetes.
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Cassandra 是为云设计的数据库，通过添加节点（每个节点都是对等的）来实现水平扩展。这种去中心化设计已被证明具有接近线性的可伸缩性。Cassandra
+    支持高可用性，通过存储数据的多个副本或*副本*来实现，包括分发这些副本到多个数据中心和云区域的逻辑。Cassandra 的设计原则与 Kubernetes
+    类似，它被设计用于检测故障并在系统可以在后台恢复到预期状态时继续运行。所有这些特性使得 Cassandra 非常适合在 Kubernetes 上部署。
+- en: 'To discuss how this deployment works, it’s helpful to understand Cassandra’s
+    approach to distributing data from two perspectives: physical and logical. Borrowing
+    some of the visuals from [*Cassandra: The Definitive Guide*](https://learning.oreilly.com/library/view/cassandra-the-definitive/9781492097136)
+    by Jeff Carpenter and Eben Hewitt (O’Reilly), you can see these perspectives in
+    [Figure 3-4](#physical_and_logical_views_of_cassandra). From a physical perspective,
+    Cassandra nodes (not to be confused with Kubernetes Worker Nodes) are organized
+    using *racks* and *Datacenters*. While the terms betray Cassandra’s origin during
+    a time when on-premise datacenters were the dominant way software was deployed
+    in the mid-2000s, they can be flexibly applied. In cloud deployments, racks often
+    represent an availability zone, while Datacenters represent a cloud region. However
+    these are represented, the important part is that they represent physically separate
+    failure domains. Cassandra uses awareness of this topology to make sure that it
+    stores replicas in multiple physical locations to maximize the availability of
+    data in the event of failures, whether those failures are a single machine, a
+    rack of servers, an availability zone, or an entire region.'
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '要讨论此部署如何工作，了解 Cassandra 分布数据的方法从两个角度看很有帮助：物理和逻辑。借用 Jeff Carpenter 和 Eben Hewitt（O''Reilly）的
+    [*Cassandra: The Definitive Guide*](https://learning.oreilly.com/library/view/cassandra-the-definitive/9781492097136)
+    中的一些视觉效果，您可以在 [图 3-4](#physical_and_logical_views_of_cassandra) 中看到这些视角。从物理视角看，Cassandra
+    节点（不要与 Kubernetes 工作节点混淆）使用 *机架* 和 *数据中心* 进行组织。尽管这些术语显示了 Cassandra 在2000年代中期部署在本地数据中心时的起源，但它们可以灵活应用。在云部署中，机架通常代表一个可用区，而数据中心代表云区域。无论如何表示，重要的是它们代表物理上分离的故障域。Cassandra
+    利用对这种拓扑的认识来确保在多个物理位置存储副本，以在发生故障时最大程度地提高数据的可用性，无论是单台机器、一整个机架、一个可用区还是整个区域。'
+- en: '![Physical and logical views of Cassandra’s distributed architecture](assets/mcdk_0304.png)'
+  id: totrans-104
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Cassandra 分布式架构的物理和逻辑视图](assets/mcdk_0304.png)'
+- en: Figure 3-4\. Physical and logical views of Cassandra’s distributed architecture
+  id: totrans-105
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-4\. Cassandra 分布式架构的物理和逻辑视图
+- en: The logical view helps us understand how Cassandra determines what data will
+    be placed on each node. Each row of data in Cassandra is identified by a primary
+    key, which consists of one or more partition-key columns used to allocate data
+    across nodes, as well as optional clustering columns, which can be used to organize
+    multiple rows of data within a partition for efficient access. Each write in Cassandra
+    (and most reads) references a specific partition by providing the partition-key
+    values, which Cassandra hashes together to produce a *token*, which is a value
+    between −2^(63) and 2^(63)^(−1). Cassandra assigns each of its nodes responsibility
+    for one or more token ranges (shown as a single range per node labeled with letters
+    A–H in [Figure 3-4](#physical_and_logical_views_of_cassandra) for simplicity).
+    The physical topology is taken into account in the assignment of token ranges
+    in order to ensure that copies of your data are distributed across racks and datacenters.
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 逻辑视图帮助我们理解 Cassandra 如何确定将数据放置在每个节点上。Cassandra 中的每一行数据都由主键标识，主键由一个或多个分区键列组成，用于跨节点分配数据，还包括可选的聚集列，用于在分区内组织多行数据以实现高效访问。在
+    Cassandra 中，每次写入（以及大多数读取）都引用特定分区，提供分区键值，Cassandra 将这些值哈希在一起生成一个*令牌*，其值介于−2^(63)和2^(63)^(−1)之间。Cassandra
+    为其每个节点分配一个或多个令牌范围的责任（在 [图 3-4](#physical_and_logical_views_of_cassandra) 中显示为每个节点的单一范围，标有字母
+    A 到 H，以简化说明）。物理拓扑在分配令牌范围时被考虑进去，以确保数据的副本分布在机架和数据中心之间。
+- en: 'Now we’re ready to consider how Cassandra maps onto Kubernetes. It’s important
+    to consider two implications of Cassandra’s architecture:'
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们准备探讨 Cassandra 如何映射到 Kubernetes。考虑 Cassandra 的架构有两个重要影响点是很重要的：
+- en: Statefulness
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有状态性
+- en: Each Cassandra node has state that it is responsible for maintaining. Cassandra
+    has mechanisms for replacing a node by streaming data from other replicas to a
+    new node, which means that a configuration in which nodes use local ephemeral
+    storage is possible, at the cost of longer startup time. However, it’s more common
+    to configure each Cassandra node to use persistent storage. In either case, each
+    Cassandra node needs to have its own unique PersistentVolumeClaim.
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个 Cassandra 节点都有其负责维护的状态。Cassandra 有机制通过从其他副本流式传输数据到新节点来替换节点，这意味着可以配置节点使用本地临时存储，但启动时间会更长。然而，更常见的是配置每个
+    Cassandra 节点使用持久存储。无论哪种情况，每个 Cassandra 节点都需要有自己独特的 PersistentVolumeClaim。
+- en: Identity
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 身份
+- en: Although each Cassandra node is the same in terms of its code, configuration,
+    and functionality in a fully peer-to-peer architecture, the nodes are different
+    in terms of their actual role. Each node has an identity in terms of where it
+    fits in the topology of Datacenters and racks, and its assigned token ranges.
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管每个 Cassandra 节点在其代码、配置和完全对等的体系结构中是相同的，但节点在其实际角色上是不同的。每个节点在数据中心和机架拓扑中的位置以及其分配的令牌范围都有一个身份标识。
+- en: These requirements for identity and an association with a specific PersistentVolumeClaim
+    present some challenges for Deployments and ReplicaSets that they weren’t designed
+    to handle. Starting early in Kubernetes’ existence, there was an awareness that
+    another mechanism was needed to manage stateful workloads like Cassandra.
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些身份要求和与特定 PersistentVolumeClaim 的关联为部署和 ReplicaSets 提供了一些它们未设计处理的挑战。早在 Kubernetes
+    存在的早期阶段，就意识到需要另一种机制来管理像 Cassandra 这样的有状态工作负载。
+- en: StatefulSets
+  id: totrans-113
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: StatefulSets
+- en: 'Kubernetes began providing a resource to manage stateful workloads with the
+    alpha release of PetSets in the 1.3 release. This capability has matured over
+    time and is now known as *StatefulSets* (see [“Are Your Stateful Workloads Pets
+    or Cattle?”](#are_your_stateful_workloads_pets_or_cat)). A StatefulSet has some
+    similarities to a ReplicaSet in that it is responsible for managing the lifecycle
+    of a set of Pods, but the way in which it goes about this management has some
+    significant differences. To address the needs of stateful applications, like those
+    of Cassandra that we’ve listed, StatefulSets demonstrate the following key properties:'
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 在 1.3 版本的 PetSets alpha 发布时开始提供管理有状态工作负载的资源。这一能力随着时间的推移而成熟，并且现在被称为*StatefulSets*（见
+    [“您的有状态工作负载是宠物还是牛？”](#are_your_stateful_workloads_pets_or_cat)）。StatefulSet 与
+    ReplicaSet 类似，负责管理一组 Pod 的生命周期，但它管理方式上有一些显著区别。为了满足我们列出的 Cassandra 等有状态应用程序的需求，StatefulSets
+    展示了以下关键特性：
+- en: Stable identity for Pods
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod 的稳定标识
+- en: 'First, StatefulSets provide a stable name and network identity for Pods. Each
+    Pod is assigned a name based on the name of the StatefulSet, plus an ordinal number.
+    For example, a StatefulSet called `cassandra` would have Pods named `cassandra-0`,
+    `cassandra-1`, `cassandra-2`, and so on, as shown in [Figure 3-5](#sample_deployment_of_cassandra_on_kuber).
+    These are stable names, so if a Pod is lost and needs replacing, the replacement
+    will have the same name, even if it’s started on a different Worker Node. A Pod’s
+    name is set as its hostname, so if you create a headless service, you can actually
+    address individual Pods as needed—for example: `cassandra-1.cqlservice.default.svc.cluster.local`.
+    The figure also includes a seed service, which we’ll discuss in [“Accessing Cassandra”](#accessing_cassandra).'
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，StatefulSets 为 Pod 提供了稳定的名称和网络标识。每个 Pod 根据 StatefulSet 的名称和序数编号分配一个名称。例如，一个名为
+    `cassandra` 的 StatefulSet 将拥有如 `cassandra-0`、`cassandra-1`、`cassandra-2` 等的 Pod，如
+    [图 3-5](#sample_deployment_of_cassandra_on_kuber) 所示。这些是稳定的名称，因此如果一个 Pod 丢失并需要替换，新的
+    Pod 将具有相同的名称，即使它启动在不同的工作节点上也是如此。Pod 的名称设置为其主机名，因此如果创建一个无头服务，您实际上可以根据需要直接访问各个 Pod，例如：`cassandra-1.cqlservice.default.svc.cluster.local`。图中还包括一个种子服务，我们将在
+    [“访问 Cassandra”](#accessing_cassandra) 中讨论它。
+- en: '![Sample Deployment of Cassandra on Kubernetes with StatefulSets](assets/mcdk_0305.png)'
+  id: totrans-117
+  prefs: []
+  type: TYPE_IMG
+  zh: '![在 Kubernetes 上使用 StatefulSets 部署 Cassandra 的示例](assets/mcdk_0305.png)'
+- en: Figure 3-5\. Sample Deployment of Cassandra on Kubernetes with StatefulSets
+  id: totrans-118
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图3-5\. 在 Kubernetes 上使用 StatefulSets 部署 Cassandra 的示例
+- en: Ordered lifecycle management
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有序的生命周期管理
+- en: StatefulSets provide predictable behaviors for managing the lifecycle of Pods.
+    When scaling up the number of Pods in a StatefulSet, new Pods are added according
+    to the next available number, unlike ReplicaSets, where Pod name suffixes are
+    based on universally unique identifiers (UUIDs). For example, expanding the StatefulSet
+    in [Figure 3-5](#sample_deployment_of_cassandra_on_kuber) would cause the creation
+    of Pods such as `cassandra-4` and `cassandra-5`. Scaling down has the reverse
+    behavior, as the Pods with the highest ordinal numbers are deleted first. This
+    predictability simplifies management—for example, by making it obvious which Nodes
+    should be backed up before reducing cluster size.
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: StatefulSets为管理Pod的生命周期提供可预测的行为。当扩展StatefulSet中的Pod数量时，新的Pod将根据下一个可用编号添加，与ReplicaSets不同，后者的Pod名称后缀基于通用唯一标识符（UUID）。例如，在[图3-5](#sample_deployment_of_cassandra_on_kuber)中扩展StatefulSet将导致创建诸如`cassandra-4`和`cassandra-5`的Pod。缩减的行为相反，因为首先删除具有最高序数编号的Pod。这种可预测性简化了管理，例如在减少集群大小之前明确应备份哪些节点。
+- en: Persistent disks
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 持久磁盘
+- en: Unlike ReplicaSets, which create a single PersistentVolumeClaim shared across
+    all their Pods, StatefulSets create a PVC associated with each Pod. If a Pod in
+    a StatefulSet is replaced, the replacement is bound to the PVC that has the state
+    it is replacing. Replacement could occur because of a Pod failing or the scheduler
+    choosing to run a Pod on another node in order to balance the load. For a database
+    like Cassandra, this enables quick recovery when a Cassandra node is lost, as
+    the replacement node can recover its state immediately from the associated PersistentVolume
+    rather than needing data streamed from other replicas.
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与创建单个PersistentVolumeClaim共享给所有Pod的ReplicaSets不同，StatefulSets为每个Pod创建一个关联的PVC。如果StatefulSet中的Pod被替换，替换的Pod将绑定到具有它要替换状态的PVC上。Pod失败或调度程序选择在其他节点上运行Pod以平衡负载可能导致替换。对于像Cassandra这样的数据库，当Cassandra节点丢失时，这使得替换节点可以立即从关联的PersistentVolume恢复其状态，而不需要从其他副本流式传输数据。
+- en: Managing Data Replication
+  id: totrans-123
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 数据复制管理
+- en: When planning your application deployment, make sure you consider whether data
+    is being replicated at the data tier or the storage tier. A distributed database
+    like Cassandra manages replication itself, storing copies of your data on multiple
+    nodes according to the replication factor you request, typically three per Cassandra
+    Datacenter. The storage provider you select may also offer replication. If the
+    Kubernetes volume for each Cassandra Pod has three replicas, you could end up
+    storing nine copies of your data. While this certainly promotes high data survivability,
+    this might cost more than you intend.
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在规划应用程序部署时，请确保考虑数据是在数据层还是存储层进行复制。像Cassandra这样的分布式数据库自行管理复制，根据您请求的复制因子，在多个节点上存储数据的副本，通常每个Cassandra数据中心为三个。您选择的存储提供程序也可能提供复制功能。如果每个Cassandra
+    Pod的Kubernetes卷有三个副本，您可能最终存储九个数据副本。虽然这无疑提高了数据的生存能力，但这可能超出您的预算。
+- en: Defining StatefulSets
+  id: totrans-125
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 定义StatefulSets
+- en: Now that you’ve learned a bit about StatefulSets, let’s examine how they can
+    be used to run Cassandra. You’ll configure a simple three-node cluster the “hard
+    way” using a Kubernetes StatefulSet to represent a single Cassandra datacenter
+    containing a single rack. The source code used in this section is located in [the
+    book’s repository](https://oreil.ly/yhg3w). This approximates the configuration
+    shown in [Figure 3-5](#sample_deployment_of_cassandra_on_kuber).
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在您已经了解了一些关于StatefulSets的知识，让我们来看看它们如何用于运行Cassandra。您将使用Kubernetes StatefulSet配置一个简单的三节点集群，以“硬方式”表示单个包含单个机架的Cassandra数据中心。本节使用的源代码位于[本书的存储库](https://oreil.ly/yhg3w)中。这近似于[图3-5](#sample_deployment_of_cassandra_on_kuber)中显示的配置。
+- en: 'To set up a Cassandra cluster in Kubernetes, you’ll first need a headless service.
+    This service represents the CQL Service shown in [Figure 3-5](#sample_deployment_of_cassandra_on_kuber),
+    providing an endpoint that clients can use to obtain addresses of all the Cassandra
+    nodes in the StatefulSet. The [source code](https://oreil.ly/7nXxZ) is in this
+    book’s repository:'
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要在Kubernetes中设置Cassandra集群，首先需要一个无头服务。此服务表示在[图3-5](#sample_deployment_of_cassandra_on_kuber)中显示的CQL服务，提供一个终端，客户端可以使用该终端获取StatefulSet中所有Cassandra节点的地址。[源代码](https://oreil.ly/7nXxZ)位于本书的存储库中：
+- en: '[PRE13]'
+  id: totrans-128
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: 'You’ll reference this service in the definition of a StatefulSet which will
+    manage your Cassandra nodes. The [source code](https://oreil.ly/0r6Cr) is located
+    in this book’s repository. Rather than applying this configuration immediately,
+    you may want to wait until after we do some quick explanations. The configuration
+    looks like this:'
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你将在一个 StatefulSet 的定义中引用此服务，该服务将管理你的 Cassandra 节点。[源代码](https://oreil.ly/0r6Cr)
+    存放在本书的代码库中。而不是立即应用此配置，你可能希望等到我们做一些快速解释后再进行。配置如下：
+- en: '[PRE14]'
+  id: totrans-130
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: 'This is the most complex configuration we’ve looked at together so far, so
+    let’s simplify it by looking at one portion at a time:'
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是我们迄今为止一起讨论的最复杂的配置，让我们通过逐部分查看来简化它：
+- en: StatefulSet metadata
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: StatefulSet 元数据
+- en: We’ve named and labeled this StatefulSet `cassandra`, and that same string will
+    be used as the selector for Pods belonging to the StatefulSet.
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们已经命名和标记了这个名为 `cassandra` 的 StatefulSet，并且同样的字符串将作为属于该 StatefulSet 的 Pod 的选择器。
+- en: Exposing StatefulSet Pods via a Service
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过服务暴露 StatefulSet Pods
+- en: The `spec` of the StatefulSet starts with a reference to the headless service
+    you created. While `serviceName` is not a required field according to the Kubernetes
+    specification, some Kubernetes distributions and tools such as Helm expect it
+    to be populated and will generate warnings or errors if you fail to provide a
+    value.
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: StatefulSet 的 `spec` 以对你创建的无头服务的引用开头。虽然根据 Kubernetes 规范，`serviceName` 不是必需的字段，但某些
+    Kubernetes 发行版和工具（如 Helm）期望它被填充，如果未提供值将生成警告或错误。
+- en: Number of replicas
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 副本数量
+- en: The `replicas` field identifies the number of Pods that should be available
+    in this StatefulSet. The value provided (`3`) reflects the smallest Cassandra
+    cluster that one might see in an actual production deployment, and most deployments
+    are significantly larger, which is when Cassandra’s ability to deliver high performance
+    and availability at scale really begin to shine through.
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`replicas` 字段标识了应该在此 StatefulSet 中可用的 Pod 数量。提供的值（`3`）反映了在实际生产部署中可能看到的最小 Cassandra
+    集群规模，而大多数部署要大得多，这是 Cassandra 在大规模环境中提供高性能和可用性的时候。'
+- en: Lifecycle management options
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 生命周期管理选项
+- en: The `podManagementPolicy` and `updateStrategy` describe how Kubernetes should
+    manage the rollout of Pods when the cluster is scaling up or down, and how updates
+    to the Pods in the StatefulSet should be managed, respectively. We’ll examine
+    the significance of these values in [“StatefulSet lifecycle management”](#statefulset_life_cycle_management).
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`podManagementPolicy` 和 `updateStrategy` 描述了 Kubernetes 在集群扩展或缩减时如何管理 Pod 的滚动更新，以及如何管理
+    StatefulSet 中 Pod 的更新。我们将分析这些值在 [“StatefulSet 生命周期管理”](#statefulset_life_cycle_management)
+    中的重要性。'
+- en: Pod specification
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod 规范
+- en: The next section of the StatefulSet specification is the `template` used to
+    create each Pod that is managed by the StatefulSet. The template has several subsections.
+    First, under `metadata`, each Pod includes a label `cassandra` that identifies
+    it as being part of the set.
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: StatefulSet 规范的下一部分是用于创建每个由 StatefulSet 管理的 Pod 的 `template`。模板有几个子部分。首先，在 `metadata`
+    下，每个 Pod 包含一个标签 `cassandra`，用于标识它属于该集合。
+- en: This template includes a single item in the `containers` field, a specification
+    for a Cassandra container. The `image` field selects the latest version of the
+    official Cassandra [Docker image](https://oreil.ly/arYaE), which at the time of
+    writing is Cassandra 4.0\. This is where we diverge with the Kubernetes StatefulSet
+    tutorial referenced previously, which uses a custom Cassandra 3.11 image created
+    specifically for that tutorial. Because the image we’ve chosen to use here is
+    an official Docker image, you do not need to include registry or account information
+    to reference it, and the name `cassandra` by itself is sufficient to identify
+    the image that will be used.
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此模板在 `containers` 字段中包含一个条目，用于指定 Cassandra 容器的规范。`image` 字段选择官方 Cassandra [Docker
+    镜像](https://oreil.ly/arYaE) 的最新版本，在撰写本文时是 Cassandra 4.0。这是我们与之前引用的 Kubernetes
+    StatefulSet 教程有所不同的地方，后者使用专门为该教程创建的自定义 Cassandra 3.11 镜像。因为我们选择使用的镜像是官方 Docker
+    镜像，你无需包含注册表或帐户信息来引用它，仅使用 `cassandra` 名称即足以标识将使用的镜像。
+- en: 'Each Pod will expose `ports` for various interfaces: a `cql` port for client
+    use, `intra-node` and `tls-intra-node` ports for communication between nodes in
+    the Cassandra cluster, and a `jmx` port for management via the Java Management
+    Extensions (JMX).'
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个 Pod 将为各种接口暴露 `ports`：`cql` 端口供客户端使用，用于 Cassandra 集群节点间通信的 `intra-node` 和
+    `tls-intra-node` 端口，以及通过 Java 管理扩展（JMX）进行管理的 `jmx` 端口。
+- en: The Pod specification also includes instructions that help Kubernetes manage
+    Pod lifecycles, including a `livenessProbe` and a `preStop` command. You’ll learn
+    how each of these are used next.
+  id: totrans-144
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod规范还包括帮助Kubernetes管理Pod生命周期的指令，包括`livenessProbe`和`preStop`命令。接下来将学习每个指令的使用方法。
+- en: 'According to its [documentation](https://oreil.ly/WuTZo), the image we’re using
+    has been constructed to provide two ways to customize Cassandra’s configuration,
+    which is stored in the *cassandra.yaml* file within the image. One way is to override
+    the entire contents of the *cassandra.yaml* with a file that you provide. The
+    second is to use environment variables that the image exposes to override a subset
+    of Cassandra configuration options that are used most frequently. Setting these
+    values in the `env` field causes the corresponding settings in the *cassandra.yaml*
+    file to be updated:'
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 根据其[文档](https://oreil.ly/WuTZo)，我们使用的镜像已经构建了两种定制Cassandra配置的方式，这些配置存储在*cassandra.yaml*文件中。一种方法是使用您提供的文件覆盖整个*cassandra.yaml*的内容。第二种方法是使用镜像公开的环境变量来覆盖最常用的一部分Cassandra配置选项。在`env`字段中设置这些值会导致*cassandra.yaml*文件中的相应设置被更新：
+- en: '`CASSANDRA_CLUSTER_NAME`'
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`CASSANDRA_CLUSTER_NAME`'
+- en: This setting is used to distinguish which nodes belong to a cluster. Should
+    a Cassandra node come into contact with nodes that don’t match its cluster name,
+    it will ignore them.
+  id: totrans-147
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此设置用于区分属于集群的节点。如果一个Cassandra节点与不匹配其集群名称的节点接触，它将忽略它们。
+- en: '`CASSANDRA_DC` and `CASSANDRA_RACK`'
+  id: totrans-148
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`CASSANDRA_DC`和`CASSANDRA_RACK`'
+- en: These settings identify the Datacenter and rack that each node will be a part
+    of. This serves to highlight one interesting wrinkle in the way that StatefulSets
+    expose a Pod specification. Since the template is applied to each Pod and container,
+    there is no way to vary the configured Datacenter and rack names between Cassandra
+    Pods. For this reason, it is typical to deploy Cassandra on Kubernetes using a
+    StatefulSet per rack.
+  id: totrans-149
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些设置标识了每个节点将属于的数据中心和机架。这突显了StatefulSets在公开Pod规范的方式中的一个有趣的细微差别。由于模板应用于每个Pod和容器，因此无法在Cassandra
+    Pods之间变化配置的数据中心和机架名称。因此，通常使用一个StatefulSet每个机架部署Cassandra。
+- en: '`CASSANDRA_SEEDS`'
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`CASSANDRA_SEEDS`'
+- en: These define well-known locations of nodes in a Cassandra cluster that new nodes
+    can use to bootstrap themselves into the cluster. The best practice is to specify
+    multiple seeds in case one of them happens to be down or offline when a new node
+    is joining. However, for this initial example, it’s enough to specify the initial
+    Cassandra replica as a seed via the DNS name `cassandra-0.cassandra.default.svc.cluster.local`.
+    We’ll look at a more robust way of specifying seeds in [Chapter 4](ch04.html#automating_database_deployment_on_kuber)
+    using a service, as implied by the Seed service shown in [Figure 3-5](#sample_deployment_of_cassandra_on_kuber).
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些定义了Cassandra集群中节点的已知位置，新节点可以使用它们引导自己进入集群。最佳实践是指定多个种子节点，以防其中一个在新节点加入时处于关闭或离线状态。但是，对于这个初始示例，通过DNS名称`cassandra-0.cassandra.default.svc.cluster.local`指定初始Cassandra副本作为种子足够了。我们将在[第四章](ch04.html#automating_database_deployment_on_kuber)中使用服务来查看更强大的指定种子的方法，正如Seed服务在[图3-5](#sample_deployment_of_cassandra_on_kuber)中所示。
+- en: The last item in the container specification is a `volumeMount` which requesting
+    that a PersistentVolume be mounted at the */var/lib/cassandra* directory, which
+    is where the Cassandra image is configured to store its datafiles. Since each
+    Pod will need its own PersistentVolumeClaim, the name `cassandra-data` is a reference
+    to a PersistentVolumeClaim template, which is defined next.
+  id: totrans-152
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器规范中的最后一项是`volumeMount`，请求在*/var/lib/cassandra*目录挂载PersistentVolume，这是Cassandra镜像配置为存储其数据文件的位置。由于每个Pod将需要自己的PersistentVolumeClaim，因此名称`cassandra-data`是对下一个定义的PersistentVolumeClaim模板的引用。
+- en: volumeClaimTemplates
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`volumeClaimTemplates`'
+- en: The final piece of the StatefulSet specification is the volumeClaimTemplates.
+    The specification must include a template definition for each name referenced
+    in one of the preceding container specifications. In this case, the `cassandra-data`
+    template references the `standard` StorageClass we’ve been using in these examples.
+    Kubernetes will use this template to create a PersistentVolumeClaim of the requested
+    size of 1 GB whenever it spins up a new Pod within this StatefulSet.
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: StatefulSet 规范的最后一部分是 `volumeClaimTemplates`。规范必须包括对之前容器规范中引用的每个名称的模板定义。在这种情况下，`cassandra-data`
+    模板引用了我们在这些示例中使用的 `standard` StorageClass。当 Kubernetes 启动 StatefulSet 中的新 Pod 时，它将使用此模板创建请求大小为
+    1 GB 的 PersistentVolumeClaim。
+- en: StatefulSet lifecycle management
+  id: totrans-155
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: StatefulSet 生命周期管理
+- en: 'Now that we’ve had a chance to discuss the components of a StatefulSet specification,
+    you can go ahead and apply the source:'
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们有机会讨论 StatefulSet 规范的组件后，您可以继续应用源码：
+- en: '[PRE15]'
+  id: totrans-157
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: 'As this gets applied, you can execute the following to watch as the StatefulSet
+    spins up Cassandra Pods:'
+  id: totrans-158
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当这个被应用时，您可以执行以下命令观察 StatefulSet 如何启动 Cassandra Pods：
+- en: '[PRE16]'
+  id: totrans-159
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: 'Let’s describe some of the behavior you can observe from the output of this
+    command. First, you’ll see a single Pod, `cassandra-0`. Once that Pod has progressed
+    to `Ready` status, you’ll see the `cassandra-1` Pod, followed by `cassandra-2`
+    after `cassandra-1` is ready. This behavior is specified by the selection of `podManagementPolicy`
+    for the StatefulSet. Let’s explore the available options and some of the other
+    settings that help define how Pods in a StatefulSet are managed:'
+  id: totrans-160
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们描述一些您可以从此命令输出中观察到的行为。首先，您会看到一个单独的 Pod，`cassandra-0`。一旦该 Pod 进入 `Ready` 状态，您会看到
+    `cassandra-1` Pod，随后是 `cassandra-2` 在 `cassandra-1` 就绪后。此行为由 StatefulSet 的 `podManagementPolicy`
+    选择指定。让我们探索可用的选项以及一些帮助定义 StatefulSet 中 Pods 管理方式的其他设置：
+- en: Pod management policies
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod 管理策略
+- en: The `podManagementPolicy` determines the timing for adding or removing Pods
+    from a StatefulSet. The `OrderedReady` policy applied in our Cassandra example
+    is the default. When this policy is in place and Pods are added, whether on initial
+    creation or scaling up, Kubernetes expands the StatefulSet one Pod at a time.
+    As each Pod is added, Kubernetes waits until the Pod reports a status of `Ready`
+    before adding subsequent Pods. If the Pod specification contains a `readinessProbe`,
+    Kubernetes executes the provided command iteratively to determine when the Pod
+    is ready to receive traffic. When the probe completes successfully (i.e., with
+    a zero return code), it moves on to creating the next Pod. For Cassandra, readiness
+    is typically measured by the availability of the CQL port (9042), which means
+    the node is able to respond to CQL queries.
+  id: totrans-162
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`podManagementPolicy` 确定了向 StatefulSet 添加或移除 Pods 的时间。在我们的 Cassandra 示例中应用的
+    `OrderedReady` 策略是默认的。当此策略生效并且 Pods 被添加时，无论是在初始创建还是扩展规模，Kubernetes 逐个扩展 StatefulSet
+    中的 Pod。当每个 Pod 被添加时，Kubernetes 等待直到 Pod 报告为 `Ready` 状态才添加下一个 Pod。如果 Pod 规范包含 `readinessProbe`，Kubernetes
+    将迭代地执行提供的命令以确定 Pod 是否准备好接收流量。对于 Cassandra，可用性通常由 CQL 端口 (9042) 的可用性来衡量，这意味着节点能够响应
+    CQL 查询。'
+- en: Similarly, when a StatefulSet is removed or scaled down, Pods are removed one
+    at a time. As a Pod is being removed, any provided `preStop` commands for its
+    containers are executed to give them a chance to shut down gracefully. In our
+    current example, the `nodetool drain` command is executed to help the Cassandra
+    node exit the cluster cleanly, assigning responsibilities for its token range(s)
+    to other nodes. as Kubernetes waits until a Pod has been completely terminated
+    before removing the next Pod. The command specified in the `livenessProbe` is
+    used to determine when the Pod is alive, and when it no longer completes without
+    error, Kubernetes can proceed to removing the next Pod. See the [Kubernetes documentation](https://oreil.ly/SsIuO)
+    for more information on configuring readiness and liveness probes.
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 类似地，当 StatefulSet 被移除或者缩减规模时，Pods 会逐个被移除。在一个 Pod 被移除时，其容器中提供的 `preStop` 命令会被执行，以便它们有机会优雅地关闭。在我们当前的示例中，执行
+    `nodetool drain` 命令来帮助 Cassandra 节点干净地退出集群，将其 token 范围的责任分配给其他节点。Kubernetes 等待一个
+    Pod 完全终止后再移除下一个 Pod。`livenessProbe` 中指定的命令用于确定 Pod 是否活动，当它不再完成且没有错误时，Kubernetes
+    可以继续移除下一个 Pod。有关配置就绪性和存活探测的更多信息，请参阅 [Kubernetes 文档](https://oreil.ly/SsIuO)。
+- en: The other Pod management policy is `Parallel`. When this policy is in effect,
+    Kubernetes launches or terminates multiple Pods at the same time in order to scale
+    up or down. This has the effect of bringing your StatefulSet to the desired number
+    of replicas more quickly, but it may also result in some stateful workloads taking
+    longer to stabilize. For example, a database like Cassandra shuffles data between
+    nodes when the cluster size changes in order to balance the load, and will tend
+    to stabilize more quickly when nodes are added or removed one at a time.
+  id: totrans-164
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个Pod管理策略是`Parallel`。当此策略生效时，Kubernetes会同时启动或终止多个Pods，以便进行扩展或缩减。这会更快地将您的StatefulSet调整到所需的副本数，但可能会导致某些有状态工作负载需要更长时间来稳定。例如，像Cassandra这样的数据库在集群大小变化时会在节点之间移动数据以平衡负载，并且在逐个添加或移除节点时会更快地稳定。
+- en: With either policy, Kubernetes manages Pods according to the ordinal numbers,
+    always adding Pods with the next unused ordinal numbers when scaling up, and deleting
+    the Pods with the highest ordinal numbers when scaling down.
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 无论是哪种策略，Kubernetes都根据序号管理Pods，始终在扩展时添加下一个未使用的序号的Pods，并在缩减时删除具有最高序号的Pods。
+- en: Update strategies
+  id: totrans-166
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 更新策略
+- en: The `updateStrategy` describes how Pods in the StatefulSet will be updated if
+    a change is made in the Pod template specification, such as changing a container
+    image. The default strategy is `RollingUpdate`, as selected in this example. With
+    the other option, `OnDelete`, you must manually delete Pods in order for the new
+    Pod template to be applied.
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`updateStrategy`描述了在更改Pod模板规范（例如更改容器映像）时，StatefulSet中的Pod将如何更新。默认策略是`RollingUpdate`，就像这个示例中选择的那样。另一选项是`OnDelete`，您必须手动删除Pods才能应用新的Pod模板。'
+- en: In a rolling update, Kubernetes will delete and re-create each Pod in the StatefulSet,
+    starting with the Pod with the largest ordinal number and working toward the smallest.
+    Pods are updated one at a time, and you can specify a number of Pods, called a
+    *partition*, in order to perform a phased rollout or canary. Note that if you
+    discover a bad Pod configuration during a rollout, you’ll need to update the Pod
+    template specification to a known good state and then manually delete any Pods
+    that were created using the bad specification. Since these Pods will not ever
+    reach a `Ready` state, Kubernetes will not decide they are ready to replace with
+    the good configuration.
+  id: totrans-168
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在滚动更新中，Kubernetes将删除并重新创建StatefulSet中的每个Pod，从最大序号的Pod开始向最小序号的Pod逐个更新。Pods逐一更新，并且您可以指定一定数量的Pods，称为*分区*，以执行分阶段发布或金丝雀发布。请注意，如果在发布过程中发现了不良的Pod配置，您需要将Pod模板规范更新为已知的良好状态，然后手动删除使用不良规范创建的任何Pods。由于这些Pods永远不会达到`Ready`状态，Kubernetes将不会决定将其替换为良好的配置。
+- en: Note that Kubernetes offers similar lifecycle management options for Deployments,
+    ReplicaSets, and DaemonSets, including revision history.
+  id: totrans-169
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，Kubernetes为Deployments、ReplicaSets和DaemonSets提供类似的生命周期管理选项，包括修订历史。
+- en: 'We recommend getting more hands-on experience with managing StatefulSets in
+    order to reinforce your knowledge. For example, you can monitor the creation of
+    PersistentVolumeClaims as a StatefulSet scales up. Another thing to try: delete
+    a StatefulSet and re-create it, verifying that the new Pods recover previously
+    stored data from the original StatefulSet. For more ideas, you may find these
+    guided tutorials helpful: [“StatefulSet Basics”](https://oreil.ly/dOovM) from
+    the Kubernetes documentation, and [“StatefulSet: Run and Scale Stateful Applications
+    Easily in Kubernetes”](https://oreil.ly/TyJj2) from the Kubernetes blog.'
+  id: totrans-170
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们建议通过管理StatefulSets来获取更多实践经验，以强化您的知识。例如，您可以监视StatefulSet扩展时PersistentVolumeClaims的创建。另一个尝试的事项是：删除一个StatefulSet并重新创建它，验证新的Pods是否从原始StatefulSet恢复先前存储的数据。有关更多想法，您可能会发现这些指导性教程有帮助：来自Kubernetes文档的[“StatefulSet基础”](https://oreil.ly/dOovM)和来自Kubernetes博客的[“StatefulSet：在Kubernetes中轻松运行和扩展有状态应用程序”](https://oreil.ly/TyJj2)。
+- en: More Sophisticated Lifecycle Management for StatefulSets
+  id: totrans-171
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 更复杂的StatefulSets生命周期管理
+- en: 'One interesting set of opinions on additional lifecycle options for StatefulSets
+    comes from OpenKruise, a CNCF Sandbox project, which provides an [Advanced StatefulSet](https://oreil.ly/xEqYf).
+    The Advanced StatefulSet adds capabilities including these:'
+  id: totrans-172
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 关于StatefulSets的附加生命周期选项的一个有趣的观点集来自OpenKruise，这是一个CNCF Sandbox项目，提供了[高级StatefulSet](https://oreil.ly/xEqYf)。高级StatefulSet增加了以下功能：
+- en: Parallel updates with a maximum number of unavailable Pods
+  id: totrans-173
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 具有最大数量不可用Pods的并行更新
+- en: Rolling updates with an alternate order for replacement, based on a provided
+    prioritization policy
+  id: totrans-174
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 基于提供的优先级策略，使用替代顺序进行滚动更新替换
+- en: Updating Pods “in place” by restarting their containers according to an updated
+    Pod template specification
+  id: totrans-175
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 更新 Pods，通过根据更新的 Pod 模板规范重新启动其容器来“就地”更新
+- en: 'This Kubernetes resource is also named `StatefulSet` to facilitate its use
+    with minimal impact to your existing configurations. You just need to change the
+    `apiVersion`: from `apps/v1` to `apps.kruise.io/v1beta1`.'
+  id: totrans-176
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此 Kubernetes 资源也被命名为`StatefulSet`，以便在最小影响现有配置的情况下使用它。您只需要更改`apiVersion`：从`apps/v1`到`apps.kruise.io/v1beta1`。
+- en: StatefulSets are extremely useful for managing stateful workloads on Kubernetes,
+    and that’s not even counting some capabilities we didn’t address, such as affinity
+    and anti-affinity, managing resource requests for memory and CPU, and availability
+    constraints such as PodDisruptionBudgets (PDBs). On the other hand, you might
+    desire capabilities that StatefulSets don’t provide, such as backup/restore of
+    PersistentVolumes, or secure provisioning of access credentials. We’ll discuss
+    how to leverage or build these capabilities on top of Kubernetes in [Chapter 4](ch04.html#automating_database_deployment_on_kuber)
+    and beyond.
+  id: totrans-177
+  prefs: []
+  type: TYPE_NORMAL
+  zh: StatefulSets 在 Kubernetes 上管理有状态工作负载非常有用，甚至没有考虑到我们未解决的一些功能，如亲和性和反亲和性、管理内存和 CPU
+    的资源请求以及诸如 PodDisruptionBudgets（PDBs）等可用性约束。另一方面，您可能希望 StatefulSets 不能提供的功能，如备份/恢复持久卷或安全配置访问凭据。我们将讨论如何在
+    Kubernetes 上利用或构建这些功能，包括第 4 章及以后的内容。
+- en: Accessing Cassandra
+  id: totrans-178
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 访问 Cassandra
+- en: 'Once you have applied the configurations we’ve listed, you can use Cassandra’s
+    CQL shell `cqlsh` to execute CQL commands. If you happen to be a Cassandra user
+    and have a copy of `cqlsh` installed on your local machine, you could access Cassandra
+    as a client application would, using the CQL Service associated with the StatefulSet.
+    However, since each Cassandra node contains `cqlsh` as well, this gives us a chance
+    to demonstrate a different way to interact with infrastructure in Kubernetes,
+    by connecting directly to an individual Pod in a StatefulSet:'
+  id: totrans-179
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦您应用了我们列出的配置，您可以使用 Cassandra 的 CQL shell `cqlsh` 执行 CQL 命令。如果您是 Cassandra 用户，并在本地机器上安装了`cqlsh`的副本，您可以像客户端应用程序一样访问
+    Cassandra，使用与 StatefulSet 关联的 CQL 服务。然而，由于每个 Cassandra 节点也包含`cqlsh`，这为我们展示了通过直接连接到
+    StatefulSet 中的个体 Pod 与 Kubernetes 基础设施交互的另一种方式：
+- en: '[PRE17]'
+  id: totrans-180
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: This should bring up the `cqlsh` prompt, and you can then explore the contents
+    of Cassandra’s built-in tables using `DESCRIBE KEYSPACES` and then `USE` to select
+    a particular keyspace and run `DESCRIBE TABLES`. Many Cassandra tutorials available
+    online can guide you through more examples of creating your own tables, inserting
+    and querying data, and more. When you’re done experimenting with `cqlsh`, you
+    can type `exit` to exit the shell.
+  id: totrans-181
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这应该会启动`cqlsh`提示符，然后您可以使用`DESCRIBE KEYSPACES`来探索 Cassandra 内置表的内容，然后使用`USE`选择特定的
+    keyspace 并运行`DESCRIBE TABLES`。许多在线 Cassandra 教程可以指导您进行更多关于创建自己的表、插入和查询数据等示例。当您完成使用`cqlsh`进行实验时，可以输入`exit`退出
+    shell。
+- en: 'Removing a StatefulSet is the same as any other Kubernetes resource—you can
+    delete it by name, for example:'
+  id: totrans-182
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 删除 StatefulSet 与删除任何其他 Kubernetes 资源相同 —— 例如，您可以按名称删除它：
+- en: '[PRE18]'
+  id: totrans-183
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: 'You could also delete the StatefulSet referencing the file used to create it:'
+  id: totrans-184
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您还可以删除引用用于创建它的文件的 StatefulSet：
+- en: '[PRE19]'
+  id: totrans-185
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: 'When you delete a StatefulSet with a policy of `Retain` as in this example,
+    the PersistentVolumeClaims it creates are not deleted. If you re-create the StatefulSet,
+    it will bind to the same PVCs and reuse the existing data. When you no longer
+    need the claims, you’ll need to delete them manually. The final cleanup from this
+    exercise you’ll want to perform is to delete the CQL Service:'
+  id: totrans-186
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您像本例中那样删除策略为`Retain`的 StatefulSet 时，它创建的 PersistentVolumeClaims 不会被删除。如果重新创建
+    StatefulSet，则会绑定到相同的 PVC，并重用现有数据。当您不再需要这些声明时，您需要手动删除它们。您需要执行的最后清理是删除 CQL 服务：
+- en: '[PRE20]'
+  id: totrans-187
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: Summary
+  id: totrans-188
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 总结
+- en: 'In this chapter, you’ve learned how to deploy both single-node and multinode
+    distributed databases on Kubernetes with hands-on examples. Along the way, you’ve
+    gained familiarity with Kubernetes resources such as Deployments, ReplicaSets,
+    StatefulSets, and DaemonSets, and learned about the best use cases for each:'
+  id: totrans-189
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，您已经学习了如何在 Kubernetes 上部署单节点和多节点分布式数据库，并进行了实际示例。在这过程中，您已经熟悉了 Kubernetes
+    资源，例如部署（Deployments）、副本集（ReplicaSets）、有状态集（StatefulSets）和守护集（DaemonSets），并了解了每种资源的最佳用例：
+- en: Use Deployments/ReplicaSets to manage stateless workloads or simple stateful
+    workloads like single-node databases or caches that can rely on ephemeral storage.
+  id: totrans-190
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用 Deployments/ReplicaSets 来管理无状态工作负载或简单的有状态工作负载，例如单节点数据库或依赖临时存储的缓存。
+- en: Use StatefulSets to manage stateful workloads that involve multiple nodes and
+    require association with specific storage locations.
+  id: totrans-191
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用 StatefulSets 来管理涉及多个节点并需要与特定存储位置关联的有状态工作负载。
+- en: Use DaemonSets to manage workloads that leverage specific Worker Node functionality.
+  id: totrans-192
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用 DaemonSets 来管理利用特定 Worker Node 功能的工作负载。
+- en: You’ve also learned the limits of what each of these resources can provide.
+    Now that you’ve gained experience in deploying stateful workloads on Kubernetes,
+    the next step is to learn how to automate the so-called “day two” operations involved
+    in keeping this data infrastructure running.
+  id: totrans-193
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你还学会了每个资源可以提供的限制。现在，你已经在 Kubernetes 上部署了有状态工作负载的经验，下一步是学习如何自动化所谓的“第二天”运维操作，以保持这些数据基础设施的运行。

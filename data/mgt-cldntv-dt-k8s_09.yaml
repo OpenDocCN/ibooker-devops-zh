@@ -1,0 +1,1272 @@
+- en: Chapter 8\. Streaming Data on Kubernetes
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第8章。在Kubernetes上流式数据
+- en: When you think about data infrastructure, persistence is the first thing that
+    comes to mind for many—storing the state of running applications. Accordingly,
+    our focus up to this point has been on databases and storage. It’s now time to
+    consider the other aspects of the cloud native data stack.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您考虑数据基础设施时，对于许多人来说，持久性是首先想到的事情——存储运行应用程序的状态。因此，到目前为止，我们的重点一直放在数据库和存储上。现在是时候考虑云原生数据堆栈的其他方面了。
+- en: For those of you managing data pipelines, streaming may be your starting point,
+    with other parts of your data infrastructure being of secondary concern. Regardless
+    of your starting place, data movement is a vitally important part of the overall
+    data stack. In this chapter, we’ll examine how to use streaming technologies in
+    Kubernetes to share data securely and reliably in your cloud native applications.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于那些管理数据管道的人来说，流媒体可能是您的起点，您的数据基础设施的其他部分则是次要关注点。无论起始点在哪里，数据移动都是整体数据堆栈的一个极其重要的部分。在本章中，我们将探讨如何在Kubernetes中使用流媒体技术来在您的云原生应用程序中安全可靠地共享数据。
+- en: Introduction to Streaming
+  id: totrans-3
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 流媒体简介
+- en: In [Chapter 1](ch01.html#introduction_to_cloud_native_data_infra), we defined
+    *streaming* as the function of moving data from one point to another and, in some
+    cases, processing data in transit. The history of streaming is almost as long
+    as that of persistence. As data was pooling in various isolated stores, it became
+    evident that moving data reliably was just as important as storing data reliably.
+    In those days, it was called *messaging*. Data was transferred slowly but deliberately,
+    which resembled something closer to postal mail. Messaging infrastructure put
+    data in a place where it could be read asynchronously, in order, with delivery
+    guarantees. This met a critical need when using more than one computer and is
+    one of the foundations of distributed computing.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[第1章](ch01.html#introduction_to_cloud_native_data_infra)中，我们将*流媒体*定义为从一点移动数据到另一点，并且在某些情况下，在传输过程中处理数据的功能。流媒体的历史几乎与持久性的历史一样悠久。随着数据聚集在各种孤立存储中，显然将数据可靠地移动与可靠地存储数据同样重要。在那些日子里，这被称为*消息传递*。数据被缓慢但有序地传输，类似于邮政信件。消息基础设施将数据放置在一个地方，使其可以异步按顺序读取，并提供交付保证。在使用多台计算机时，这满足了一个关键需求，并成为分布式计算的基础之一。
+- en: Modern application requirements have evolved from what was known as messaging
+    into today’s definition of streaming. Typically, this means managing large volumes
+    of data that require more immediate processing, which we call *near real-time*.
+    Ordering and delivery guarantees become a critically important feature in the
+    distributed applications deployed in Kubernetes and in many cases are a key enabler
+    of the scale required. How can adding more infrastructure complexity help scale?
+    By providing an orderly way to manage the flow from the creation of data to where
+    it can be used and stored. Rarely are streams used as the source of truth, but
+    more importantly, they are used as the *conduit* of truth.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现代应用程序需求已经从过去所谓的消息传递进化为今天的流媒体定义。通常，这意味着管理大量需要更快处理的数据，我们称之为*准实时*。在Kubernetes部署的分布式应用中，顺序和交付保证成为一个至关重要的特性，并且在许多情况下是必需的规模增长的关键推动因素。如何通过增加更多基础架构复杂性来帮助扩展？通过提供一种有序方式来管理数据的流动，从数据的创建到其可以使用和存储的地方。流通常不用作真实性的来源，但更重要的是，它们被用作真实性的*导管*。
+- en: 'There is a lot of software and terminology around streaming that can confuse
+    first-time users. As with any complex topic, decomposing the parts can be helpful
+    as we build understanding. There are three areas to evaluate when choosing a streaming
+    system for your use case:'
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于初次使用者来说，围绕流媒体的软件和术语可能会令人困惑。与任何复杂话题一样，分解各部分有助于我们建立理解。在选择适合您使用情况的流媒体系统时，有三个评估区域：
+- en: Types of delivery
+  id: totrans-7
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 交付类型
+- en: Delivery guarantees
+  id: totrans-8
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 交付保证
+- en: Feature scope for streaming
+  id: totrans-9
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 流媒体的特性范围
+- en: Let’s take a closer look at each of these areas.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们更详细地看看这些领域的每一个。
+- en: Types of Delivery
+  id: totrans-11
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 交付类型
+- en: 'To use streaming in your application, you will need to understand the delivery
+    methods available to you from the long choice list of streaming systems. You will
+    need to understand your application requirements to efficiently plan how data
+    flows from producer to consumer. For example, “Does my consumer need exclusive
+    access?” The answer will drive which system fits the requirements. [Figure 8-1](#delivery_types)
+    shows two of the most common choices in streaming systems: point to point and
+    publish/subscribe:'
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要在您的应用程序中使用流处理，您需要了解从流处理系统的长列表中可用的传递方法。您需要根据应用程序的要求有效地规划从生产者到消费者的数据流动方式。例如，“我的消费者是否需要独占访问？”答案将决定哪种系统符合要求。[图 8-1](#delivery_types)展示了流处理系统中两种最常见的选择：点对点和发布/订阅：
+- en: Point to point
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 点对点
+- en: In this data flow, data created by the producer is passed through the broker
+    and then to a single consumer in a one-to-one relationship. This is primarily
+    used as a way to decouple direct connections from producer to consumer. It serves
+    as an excellent feature for resilience as consumers can be removed and added with
+    no data loss. At the same time, the broker maintains the order and last message
+    read, addressable by the consumer using an offset.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这个数据流中，由生产者创建的数据经过经纪人传递给单个消费者，实现一对一关系。这主要用作解耦直接生产者到消费者的连接的方法。它作为弹性的优秀特性，因为消费者可以随时添加或移除而不会丢失数据。同时，经纪人维护顺序和最后读取的消息，并且消费者可以通过偏移量进行寻址。
+- en: Publish/subscribe (pub/sub)
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 发布/订阅（pub/sub）
+- en: In this delivery method, the broker serves as a distribution hub for a single
+    producer and one or more consumers in a one-to-many relationship. Consumers subscribe
+    to a topic and receive notifications for any new messages created by the producer—a
+    critical component for reactive or event-driven architectures.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这种传递方法中，经纪人充当单个生产者和一个或多个消费者的分发中心，实现一对多关系。消费者订阅主题，并接收生产者创建的任何新消息的通知——这是反应性或事件驱动架构的关键组成部分。
+- en: '![Delivery types](assets/mcdk_0801.png)'
+  id: totrans-17
+  prefs: []
+  type: TYPE_IMG
+  zh: '![传递类型](assets/mcdk_0801.png)'
+- en: Figure 8-1\. Delivery types
+  id: totrans-18
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 8-1\. 传递类型
+- en: Delivery Guarantees
+  id: totrans-19
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 交付保证
+- en: 'In conjunction with the delivery types, the broker maintains delivery guarantees
+    from producer to consumer per message type in an agreement called a *contract*.
+    The typical delivery types are shown in [Figure 8-2](#delivery_guarantees): at-most-once,
+    at-least-once, and exactly once. The diagram shows the important relationship
+    between when the producer sends a message and the expectation of how the consumer
+    receives the message:'
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 结合传递类型，经纪人保证从生产者到消费者每种消息类型的交付保证，这种协议称为*合同*。典型的传递类型如[图 8-2](#delivery_guarantees)所示：至多一次、至少一次和仅一次。该图展示了生产者发送消息和消费者接收消息预期之间的重要关系：
+- en: At-most-once
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 至多一次
+- en: The lowest guarantee is used to avoid any potential data duplication due to
+    transient errors that can happen in distributed systems. For example, the producer
+    could get a timeout on send. However, the message may have just gone through without
+    acknowledgment. In this gray area, the safest choice to avoid duplicate data will
+    be for the producer to not attempt a resend and proceed. The critical downside
+    to understand is that data loss is possible by design.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最低保证用于避免由于分布式系统中可能发生的暂态错误而导致的任何潜在数据重复。例如，生产者可能在发送时超时。然而，消息可能刚刚通过而没有收到确认。在这种灰色区域中，为了避免重复数据，生产者不应尝试重新发送并继续进行是最安全的选择。需要理解的关键缺点是，由于设计原因可能会存在数据丢失的可能性。
+- en: At-least-once
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: At-least-once
+- en: This guarantee is the opposite side of at-most-once. Data created by the producer
+    is guaranteed to be picked up by a consumer. The added aspect allows for redelivery
+    any number of times after the first. For example, this might be used with a unique
+    key such as a date stamp or ID number that is considered idempotent on the consumer
+    side that multiple processing won’t impact. The consumer will always see data
+    delivered by the producer but could see it numerous times. Your application will
+    need to account for this possibility.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种保证是至多一次的反面。生产者创建的数据保证被消费者接收。新增的方面允许在第一次后任意次数重新传递。例如，这可能与唯一键（如日期戳或ID号）一起使用，在消费者端被认为是幂等的，多次处理不会影响它。消费者将始终看到生产者传递的数据，但可能会看到多次。您的应用程序需要考虑到这种可能性。
+- en: Exactly once
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 仅一次
+- en: The strictest of the three guarantees, this means that data created by a producer
+    will be delivered only one time to a producer—for example, in exact transactions
+    such as money movement, which require subtractions or additions to be delivered
+    and processed one time to avoid problems. This guarantee puts a more significant
+    burden on the broker to maintain, so you will need to adjust the resources allocated
+    to the broker and your expected throughput.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这三种保证中最严格的一种意味着生产者创建的数据只会被送达给消费者一次——例如，在需要精确交易的场景下，如货币转移，需要确保减法或加法仅被传递和处理一次，以避免问题。这种保证让代理更难维护，因此您需要调整为代理分配的资源和您预期的吞吐量。
+- en: '![Delivery guarantees](assets/mcdk_0802.png)'
+  id: totrans-27
+  prefs: []
+  type: TYPE_IMG
+  zh: '![交付保证](assets/mcdk_0802.png)'
+- en: Figure 8-2\. Delivery guarantees
+  id: totrans-28
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 8-2\. 交付保证
+- en: Exercise care in selecting delivery guarantees for each type of message. Delivery
+    guarantees are ones to carefully evaluate as they can have unexpected downstream
+    effects on the consumer if not wholly understood. Questions like “Can my application
+    handle duplicate messages?” need a good answer. “Maybe” is not good enough.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在为每种类型的消息选择交付保证时要小心。交付保证是需要仔细评估的，因为如果不完全理解，可能会对消费者造成意想不到的下游影响。诸如“我的应用程序能处理重复消息吗？”这样的问题需要一个好答案。“可能”是不够好的。
+- en: Feature Scope
+  id: totrans-30
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 特性范围
+- en: Many streaming technologies are available, some of which have been around for
+    quite a few years. On the surface, these technologies may appear similar, but
+    each solves a different problem because of new requirements. The majority are
+    open source projects, so each has a community of like-minded individuals who join
+    in and advance the project. Just as many different persistent data stores fit
+    under the large umbrella of “database,” features under the heading of data streaming
+    can vary significantly.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 许多流媒体技术都可以使用，其中一些已经存在了很多年。从表面上看，这些技术可能看起来相似，但每一种技术都因新的需求而解决不同的问题。其中大多数是开源项目，因此每个项目都有一群志同道合的人加入并推动项目的进展。就像许多不同的持久化数据存储适合于“数据库”的大伞下一样，“数据流”标题下的特性也可能有很大的差异。
+- en: 'Feature scope is likely the most important selection criterion when evaluating
+    which streaming technology to use. Still, you should also challenge yourself to
+    add suitability for Kubernetes as a criterion and consider whether more complex
+    features are worth the added resource cost. Fortunately, the price for getting
+    your decision wrong the first time is relatively low. Streaming data systems tend
+    to be some of the easiest to migrate because of their ephemeral nature. The deeper
+    into your feature stack the streaming technology goes, the harder it is to move.
+    The scope of streaming features can be broken into the two large buckets shown
+    in [Figure 8-3](#streaming_types):'
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 特性范围很可能是评估要使用哪种流媒体技术时最重要的选择标准。但是，您还应该挑战自己，将适合 Kubernetes 的适用性作为一个标准，并考虑更复杂的特性是否值得增加的资源成本。幸运的是，第一次做出错误决策的代价相对较低。由于其短暂的特性，流数据系统往往是最容易迁移的。流媒体技术越深入您的功能堆栈，迁移就越困难。流媒体功能范围可以分为
+    [图 8-3](#streaming_types) 中展示的两大类别：
+- en: Message broker
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 消息代理
+- en: This is the simplest form of streaming technology that facilitates the moving
+    of data from one point to another with one or more of the delivery methods and
+    guarantees listed previously. It’s easy to discount this feature’s simplistic
+    appearance, but it’s the backbone of modern cloud native applications. It’s like
+    saying FedEx is just a package delivery company, but imagine what would happen
+    to the world economy if it stopped for even one day? Example OSS message brokers
+    include Apache Kafka, Apache Pulsar, RabbitMQ, and Apache ActiveMQ.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是最简单的流媒体技术形式，可以通过一个或多个之前列出的传送方法和保证，方便地将数据从一个点移动到另一个点。很容易忽视这个功能的简单外观，但它是现代云原生应用的支柱。就像说联邦快递只是一个包裹送货公司一样，但是想象一下，如果它停止了一天，世界经济会发生什么？示例
+    OSS 消息代理包括 Apache Kafka、Apache Pulsar、RabbitMQ 和 Apache ActiveMQ。
+- en: Stream analytics
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 流分析
+- en: In some cases, the best or only time to analyze data is while it is moving.
+    Waiting for data to persist and then begin the analysis could be far too late,
+    and the insight’s value is almost useless. Consider fraud detection. The only
+    opportunity to stop the fraudulent activity is when it’s happening; waiting for
+    a report to run the next day just doesn’t work. Example OSS stream analytics systems
+    include the Apache prooducts Spark, Flink, Storm, Kafka Streams, and Pulsar.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在某些情况下，分析数据的最佳或唯一时机是在数据移动时。等待数据持久化然后开始分析可能太晚了，洞察的价值几乎是无用的。考虑欺诈检测。停止欺诈活动的唯一机会是在其发生时；等待报告第二天运行是行不通的。例如开源流分析系统包括
+    Apache 产品 Spark、Flink、Storm、Kafka Streams 和 Pulsar。
+- en: '![Streaming types](assets/mcdk_0803.png)'
+  id: totrans-37
+  prefs: []
+  type: TYPE_IMG
+  zh: '![流处理类型](assets/mcdk_0803.png)'
+- en: Figure 8-3\. Streaming types
+  id: totrans-38
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 8-3\. 流处理类型
+- en: The Role of Streaming in Kubernetes
+  id: totrans-39
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 流处理在 Kubernetes 中的角色
+- en: Now that we have covered the basic terminology, how does streaming fit into
+    a cloud native application running on Kubernetes? Database applications follow
+    the pattern of create, read, update and delete (CRUD). For a developer, the database
+    provides a single location for data. The addition of streaming assumes some sort
+    of motion in the data from one place to another. Data may be short-lived if used
+    to create new data. Some data may be transformed in transit, and some may eventually
+    be persisted. Streaming assumes a distributed architecture, and the way to scale
+    a streaming system is to manage its resource allocation of compute, network, and
+    storage. This is landing right into the sweet spot of cloud native architecture.
+    In the case of stream-driven applications in Kubernetes, you’re managing the reliable
+    flow of data in an environment that can change over time. Allocate what you need
+    when you need it.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经掌握了基本术语，那么流式处理如何适应运行在 Kubernetes 上的云原生应用程序呢？数据库应用程序遵循创建、读取、更新和删除（CRUD）模式。对于开发人员来说，数据库提供了一个数据的单一位置。添加流处理假设数据从一个地方到另一个地方有某种形式的运动。如果用于创建新数据，数据可能是短暂的。一些数据在传输过程中可能会被转换，有些最终可能会被持久化。流处理假设分布式架构，而扩展流处理系统的方法是管理计算、网络和存储的资源分配。这正好落入云原生架构的甜蜜点。在
+    Kubernetes 中基于流驱动的应用程序中，您需要管理数据在随时间变化的环境中的可靠流动。需要时分配所需资源。
+- en: Streaming and Data Engineering
+  id: totrans-41
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 流处理与数据工程
+- en: 'Data engineering is a relatively new and fast-growing discipline, so we want
+    to be sure to define it. This is especially applicable to the practice of data
+    streaming. Data engineers are concerned with the efficient movement of data in
+    complex environments. The two T’s are important in this case: transport and transformation.
+    The role of the data scientist is to derive meaning and insights from data. In
+    contrast, the data engineer is building the pipeline that collects data from various
+    locations, organizes it, and in most cases, persists to something like a data
+    lake. Data engineers work with application developers and data scientists to make
+    sure application requirements are met in the increasingly distributed nature of
+    data.'
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 数据工程是一个相对新的并且快速增长的学科，因此我们要确保对其进行定义。这特别适用于数据流处理的实践。数据工程师关注于在复杂环境中高效地移动数据。在这种情况下，两个
+    T 很重要：传输和转换。数据科学家的角色是从数据中提取含义和洞察力。相比之下，数据工程师正在构建从各种位置收集数据、组织数据，并且在大多数情况下持久化到类似数据湖的管道。数据工程师与应用程序开发人员和数据科学家合作，以确保在数据日益分布化的环境中满足应用程序要求。
+- en: The most critical aspect of your speed and agility is how well your tools work
+    together. When developers dream up new applications, how fast can that idea turn
+    into a production deployment? Deploying and managing separate infrastructure (streaming,
+    persistence, microservices) for one application is burdensome and prone to error.
+    When asking why you would want to add streaming into your cloud native stack,
+    you should consider the cost of not integrating your entire stack in terms of
+    technical debt. Creating custom ways of moving data puts a huge burden on application
+    and infrastructure teams. Data streaming tools are built for a specific purpose,
+    with large communities of users and vendors to aid in your success.
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你的速度和灵活性的最关键方面是你的工具如何协同工作。当开发人员构想新应用程序时，这个想法能多快转变为生产部署？为一个应用程序部署和管理单独的基础设施（流处理、持久化、微服务）是繁琐且容易出错的。当询问为什么要将流处理集成到您的云原生堆栈中时，您应考虑在技术债务方面未集成整个堆栈的成本。创建自定义的数据移动方式会给应用程序和基础设施团队带来巨大负担。数据流处理工具是为特定目的构建的，具有庞大的用户和供应商社区，有助于您的成功。
+- en: 'For data engineers and site reliability engineers (SREs), your planning and
+    implementation of streaming in Kubernetes can greatly impact your organization.
+    Cloud native data should allow for more agility and speed while squeezing out
+    all the efficiency you can get. As a reader of this book, you are already on your
+    way to thinking differently about your infrastructure. Taking some advice from
+    Jesse Anderson, there are two areas you should be focusing on as you begin your
+    journey into streaming data on Kubernetes:'
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于数据工程师和站点可靠性工程师（SREs），您在 Kubernetes 上的流处理的规划和实施可能会极大地影响您的组织。云原生数据应该能够在提高敏捷性和速度的同时，尽可能地提高效率。作为本书的读者，您已经开始以不同的方式思考您的基础设施。根据杰西·安德森的建议，在您开始学习在
+    Kubernetes 上处理流数据时，有两个领域应该是您关注的重点：
+- en: Resource allocation
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 资源分配
+- en: Are you planning for peaks as well as the valleys? As you’ll recall from [Chapter 1](ch01.html#introduction_to_cloud_native_data_infra),
+    elasticity is one of the more challenging aspects of cloud native data to get
+    right. Scaling up is a commonly solved problem in large-scale systems, but scaling
+    down can potentially result in data loss, especially with streaming systems. Traffic
+    to resources needs to be redirected before they are decommissioned, and any data
+    they are managing locally will need to be accounted for in other parts of the
+    system. The risk involved with elasticity is what keeps it from being widely used,
+    and the result is a lot of unused capacity. Commit yourself to the idea that resources
+    should never be idle and build streaming systems that use what they need and no
+    more.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您是否同时规划了高峰和低谷？正如您在 [第一章](ch01.html#introduction_to_cloud_native_data_infra)
+    中所了解的，弹性是云原生数据中更具挑战性的方面之一。在大规模系统中，扩展是一个常见的解决方案，但缩减可能会导致数据丢失，尤其是对于流处理系统。资源的流量需要在它们被下线之前重定向，而它们在本地管理的任何数据都需要在系统的其他部分进行考虑。弹性所涉及的风险是阻止其广泛使用的原因，其结果是大量未使用的容量。致力于资源永不闲置的理念，并建立使用所需且不过多的流处理系统。
+- en: Disaster recovery planning
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 灾难恢复规划
+- en: Moving data efficiently is an important problem to solve, but just as important
+    is how to manage inevitable failure. Without understanding your data flows and
+    durability requirements, you can’t just rely on Kubernetes to handle recovery.
+    Disaster recovery is about more than backing up data. How are Pods scheduled so
+    that physical server failure has a reduced impact? Can you benefit from geographic
+    redundancy? Are you clear on where data is persisted and understand the durability
+    of those storage systems? And finally, do you have a clear plan to restore systems
+    after a failure? In all cases, writing down the procedure is the first step, but
+    testing those procedures is the difference between success and failure.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 高效地移动数据是一个重要的问题需要解决，但同样重要的是如何管理不可避免的失败。如果不理解您的数据流动和耐久性要求，就不能仅仅依赖 Kubernetes
+    处理恢复。灾难恢复不仅仅是备份数据。如何调度 Pod 以减少物理服务器故障的影响？您可以从地理冗余中受益吗？您清楚数据持久化的位置，并理解这些存储系统的耐久性吗？最后，您有明确的计划在故障后恢复系统吗？在所有情况下，书写流程是第一步，但测试这些流程是成功与失败的分水岭。
+- en: We’ve covered the what and why of streaming data on Kubernetes, and it’s time
+    we start looking at the how with a particular focus on cloud native deployments.
+    We’ll give a quick overview of how to install these technologies on Kubernetes
+    and highlight some important details to aid your planning. You’ve already learned
+    in previous chapters how to use many of the Kubernetes resources we’ll need, so
+    we’ll speed up the pace a bit. Let’s get started on the first cloud native streaming
+    technology.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们已经介绍了在 Kubernetes 上进行流处理数据的什么和为什么，现在是时候着眼于如何进行，特别关注云原生部署。我们将快速概述如何在 Kubernetes
+    上安装这些技术，并强调一些重要的细节来帮助您的规划。您已经在之前的章节中学习了如何使用我们将需要的许多 Kubernetes 资源，因此我们将加快进度。让我们开始第一个云原生流处理技术。
+- en: Streaming on Kubernetes with Apache Pulsar
+  id: totrans-50
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用 Apache Pulsar 在 Kubernetes 上进行流处理
+- en: 'Apache Pulsar is an exciting project to watch for cloud native streaming applications.
+    Streaming software was mostly built in an era before Kubernetes and cloud native
+    architectures. Pulsar was originally developed at Yahoo!, which is no stranger
+    to high-scale cloud native workloads. Donated to the Apache Software Foundation,
+    it was accepted as a top-level project in 2018\. Additional projects, like Apache
+    Kafka or RabbitMQ, may suit your application’s needs, but they will require more
+    planning and well-written operators to function at the level of efficiency of
+    Pulsar. In terms of the streaming definitions we covered previously, Pulsar supports
+    the following characteristics:'
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Apache Pulsar 是一个令人兴奋的项目，适合云原生流媒体应用。在 Kubernetes 和云原生架构之前，流媒体软件大多是在其他时代建立的。Pulsar
+    最初由雅虎开发，该公司在高规模云原生工作负载方面拥有丰富经验。该项目已捐赠给 Apache 软件基金会，并于 2018 年成为顶级项目。其他项目，如 Apache
+    Kafka 或 RabbitMQ，可能适合您的应用需求，但它们需要更多的规划和良好的运维操作才能达到 Pulsar 的高效水平。根据我们之前涵盖的流媒体定义，Pulsar
+    支持以下特性：
+- en: 'Types of delivery: one-to-one and pub/sub'
+  id: totrans-52
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 传输类型：一对一和发布/订阅
+- en: 'Delivery guarantees: at-least-once, at-most-once, exactly once'
+  id: totrans-53
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 传输保证：至少一次、至多一次、仅一次
+- en: 'Feature scope for streaming: message broker, analytics (through functions)'
+  id: totrans-54
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 流媒体功能范围：消息代理、分析（通过函数）
+- en: So what makes Pulsar a good fit for Kubernetes?
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 那么，Pulsar 为什么适合 Kubernetes？
+- en: We use Kubernetes to create virtual datacenters to efficiently use compute,
+    network, and storage. Pulsar was designed from the beginning with a separation
+    of compute and storage resource types linked by the network, similar to a microservices
+    architecture.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们使用 Kubernetes 创建虚拟数据中心，以有效利用计算、网络和存储。Pulsar 从一开始就设计为将计算和存储资源类型分离，通过网络连接，类似于微服务架构。
+- en: These resources can even span multiple Kubernetes clusters or physical datacenters,
+    as shown in [Figure 8-4](#apache_pulsar_architecture). Deployment options give
+    operators the flexibility to install and scale a running Pulsar cluster based
+    on use case and workload. Pulsar was also designed with multitenancy in mind,
+    making a big efficiency difference in large deployments. Instead of installing
+    a separate Pulsar instance per application, many applications (tenants) can use
+    one Pulsar instance with guardrails to prevent resource contention. Finally, built-in
+    storage tiering creates automated alternatives for storage persistence as data
+    ages, and lower-cost storage can be utilized.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些资源甚至可以跨越多个 Kubernetes 集群或物理数据中心，如图 8-4 所示（参见 [Figure 8-4](#apache_pulsar_architecture)）。部署选项为操作员提供了根据用例和工作负载安装和扩展运行中的
+    Pulsar 集群的灵活性。Pulsar 还考虑到了多租户，这在大型部署中能够产生显著的效率差异。与为每个应用程序安装单独的 Pulsar 实例不同，许多应用程序（租户）可以使用一个
+    Pulsar 实例，并设置防止资源争用的保护措施。最后，内置的存储分层创建了随着数据老化而自动选择存储持久性的替代方案，并且可以利用成本较低的存储。
+- en: '![Apache Pulsar architecture](assets/mcdk_0804.png)'
+  id: totrans-58
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Apache Pulsar 架构](assets/mcdk_0804.png)'
+- en: Figure 8-4\. Apache Pulsar architecture
+  id: totrans-59
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 8-4\. Apache Pulsar 架构
+- en: 'Pulsar’s highest level of abstraction is an instance that consists of one or
+    more clusters. We call the local logical administration domain a *cluster* and
+    deploy in a Kubernetes cluster, where we’ll concentrate our attention. Clusters
+    can share metadata and configuration, allowing producers and consumers to see
+    a single system regardless of location. Each cluster is made of several parts
+    acting in concert that primarily consume either compute or storage. They are:'
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pulsar 的最高抽象级别是由一个或多个集群组成的实例。我们称本地逻辑管理域为*集群*，并部署在 Kubernetes 集群中，我们将集中精力关注于此处。各集群可以共享元数据和配置，使生产者和消费者无论位置如何都能看到一个单一的系统。每个集群由几部分共同运作，主要消耗计算或存储资源。
+- en: Broker (compute)
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 代理（计算）
+- en: Producers and consumers pass messages via the broker, a stateless cluster component.
+    This means it is purely a compute scaling unit and can be dynamically allocated
+    based on the number of tenants and connections. Brokers maintain an HTTP endpoint
+    used for client communication, which presents a few options for network traffic
+    in a Kubernetes deployment. When multiple clusters are used, the brokers support
+    replication between clusters in the instance. Brokers can run in a memory-only
+    configuration, or with Apache BookKeeper (labeled as *bookies*) when message durability
+    is required.
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 生产者和消费者通过经纪人传递消息，这是一个无状态的集群组件。这意味着它仅仅是一个计算扩展单元，并且可以根据租户和连接的数量动态分配。经纪人维护一个HTTP端点用于客户端通信，在Kubernetes部署中为网络流量提供了几个选项。当使用多个集群时，经纪人支持在实例之间进行复制。经纪人可以在仅内存配置下运行，或者在需要消息持久性时使用Apache
+    BookKeeper（标记为*bookies*）。
+- en: Apache BookKeeper (storage)
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Apache BookKeeper（存储）
+- en: The BookKeeper project provides infrastructure for managing distributed write-ahead
+    logs. In Pulsar, the individual instances used are called *bookies*. The storage
+    unit is called a *ledger*; each topic can have one or more ledgers. Multiple bookie
+    instances provide load-balancing and failure protection. They also offer storage
+    tiering functionality, allowing operators to offer a mix of fast and long-term
+    storage options based on use case. When brokers interact with bookies, they read
+    and write to a topic ledger, an append-only data structure. Bookies provide a
+    single reference to the ledger but manage the replication and load balancing behind
+    the primary interface. In a Kubernetes environment, knowing where data is stored
+    is critical for maintaining resilience.
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: BookKeeper项目提供了管理分布式预写日志的基础设施。在Pulsar中，使用的各个实例称为*bookies*。存储单元称为*ledger*；每个主题可以有一个或多个ledger。多个bookie实例提供负载均衡和故障保护。它们还提供存储分层功能，允许运营商根据使用情况提供快速和长期存储选项的混合。当经纪人与bookies互动时，它们读取和写入主题ledger，这是一个只追加的数据结构。Bookies提供账本的单一引用，但在主要接口背后管理复制和负载均衡。在Kubernetes环境中，了解数据存储位置对于保持弹性至关重要。
+- en: Apache ZooKeeper (compute)
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Apache ZooKeeper（计算）
+- en: ZooKeeper is a standalone project used in many distributed systems for coordination,
+    leader election, and metadata management. Pulsar uses ZooKeeper for service coordination,
+    similar to the way etcd is used in a Kubernetes cluster, storing important metadata
+    such as tenants, topics, and cluster configuration state so that the brokers can
+    remain stateless. Bookies use ZooKeeper for ledger metadata and coordination between
+    multiple storage nodes.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ZooKeeper是一个独立的项目，在许多分布式系统中用于协调、领导者选举和元数据管理。Pulsar使用ZooKeeper进行服务协调，类似于在Kubernetes集群中使用etcd，存储重要的元数据，如租户、主题和集群配置状态，以便经纪人保持无状态。Bookies使用ZooKeeper进行账本元数据和多个存储节点之间的协调。
+- en: Proxy (network)
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 代理（网络）
+- en: The proxy is a solution for dynamic environments like Kubernetes. Instead of
+    exposing every broker to HTTP traffic, the proxy serves as a gateway and creates
+    an Ingress route to the Pulsar cluster. As brokers are added and removed, the
+    proxy uses service discovery to keep the connections flowing to and from the cluster.
+    When using Pulsar in Kubernetes, the proxy service IP should be the single access
+    for your applications to a running Pulsar cluster.
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 代理是像Kubernetes这样的动态环境的解决方案。代替将每个经纪人暴露给HTTP流量，代理充当网关并创建到Pulsar集群的入口路由。随着经纪人的增加和减少，代理使用服务发现来保持与集群之间的连接流畅。在Kubernetes中使用Pulsar时，代理服务IP应该是应用程序访问运行中Pulsar集群的唯一入口。
+- en: Functions (compute)
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 函数（计算）
+- en: Since Pulsar Functions operate independently and consume their own compute resources,
+    we chose not to include them in [Figure 8-4](#apache_pulsar_architecture). However,
+    they’re worth mentioning in this context because Pulsar Functions work in conjunction
+    with the message broker. When deployed, they take data from a topic, alter it
+    with user code, and return it to a different topic. The component added to a Pulsar
+    cluster is the worker, which accepts function runtimes on an ad hoc basis. Operators
+    can deploy Functions as a part of a larger cluster or standalone for more fine-grained
+    resource management.
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于Pulsar Functions独立运行并消耗自己的计算资源，我们选择不在[图8-4](#apache_pulsar_architecture)中包含它们。然而，在这种情况下值得一提的是，Pulsar
+    Functions与消息经纪人协同工作。当部署时，它们从一个主题获取数据，用用户代码修改后返回到另一个主题。添加到Pulsar集群的组件是工作者，它按需接受函数运行时。运营商可以将函数作为更大集群的一部分或独立部署，以实现更精细的资源管理。
+- en: Preparing Your Environment
+  id: totrans-71
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 准备您的环境
+- en: When preparing to do your first installation, you need to make some choices.
+    Since every user will have unique needs, we recommend you check the [official
+    documentation](https://oreil.ly/KCqT2) for the most complete and up-to-date information
+    on installing Pulsar in Kubernetes before reading this section. The examples within
+    this section will take a closer look at the choices available and how they pertain
+    to different cloud native application use cases to help inform your decision making.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在准备进行首次安装时，您需要做出一些选择。由于每个用户都有独特的需求，我们建议您在阅读本节之前查看[官方文档](https://oreil.ly/KCqT2)，以获取有关在
+    Kubernetes 中安装 Pulsar 的最完整和最新信息。本节中的示例将更详细地查看可用的选择及其与不同云原生应用用例的关系，以帮助您做出决策。
+- en: 'To begin, create a local clone directory of the Pulsar Helm chart repository:'
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，创建 Pulsar Helm chart 仓库的本地克隆目录：
+- en: '[PRE0]'
+  id: totrans-74
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: This subproject of Pulsar is well documented, with several helpful examples
+    to follow. When using Helm to deploy Pulsar, you will need a *values.yaml* file
+    that contains all of the options to customize your deployment. You can include
+    as many parameters as you want to change. The Pulsar Helm chart has a complete
+    set of defaults for a typical cluster that might work for you, but you will want
+    to tune the values for your specific environment. The *examples* directory has
+    various deployment scenarios. If you choose the default installation as described
+    in the *values-local-cluster.yaml* file, you’ll have a set of resources like that
+    shown in [Figure 8-5](#a_simple_pulsar_installation_on_kuberne). As you can see,
+    the installation wraps the proxy and brokers in Deployments and presents a unified
+    service endpoint for applications.
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pulsar 的这个子项目有很好的文档，包含几个有用的示例可供参考。在使用 Helm 部署 Pulsar 时，您将需要一个包含所有定制部署选项的 *values.yaml*
+    文件。您可以包含尽可能多的参数来进行更改。Pulsar Helm chart 具有一组默认值，适用于可能适合您的典型集群，但您需要调整值以适应您的特定环境。*examples*
+    目录包含各种部署场景。如果您选择像 *values-local-cluster.yaml* 文件中描述的默认安装，您将获得一组资源，如 [图 8-5](#a_simple_pulsar_installation_on_kuberne)
+    所示。正如您所见，安装将代理和经纪人封装在 Deployments 中，并为应用程序提供统一的服务端点。
+- en: Affinity is a mechanism built into Kubernetes to create rules for which Pods
+    can and cannot be colocated on the same physical node (if needed, refer to the
+    more in-depth discussion in [Chapter 4](ch04.html#automating_database_deployment_on_kuber)).
+    Pulsar, being a distributed system, has deployment requirements for maximum resilience.
+    An example is brokers. When multiple brokers are deployed, each Pod should run
+    on a different physical node in case of failure. If all broker Pods were grouped
+    on the same node and the node went down, the Pulsar cluster would be unavailable.
+    Kubernetes would still recover the runtime state and restart the Pods. However,
+    there would be downtime as they came back online.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 亲和性是 Kubernetes 中的一种机制，用于创建规则，指定哪些 Pods 可以和不能够共同驻留在同一物理节点上（如有需要，请参考[第四章](ch04.html#automating_database_deployment_on_kuber)中更详细的讨论）。Pulsar
+    作为一个分布式系统，对于最大的弹性部署有要求。例如，经纪人。当部署多个经纪人时，每个 Pod 应在不同的物理节点上运行，以防故障。如果所有经纪人 Pod 都分组在同一个节点上并且该节点崩溃，Pulsar
+    集群将不可用。Kubernetes 仍将恢复运行时状态并重新启动 Pods。但在它们恢复上线时会有停机时间。
+- en: '![A Simple Pulsar installation on Kubernetes](assets/mcdk_0805.png)'
+  id: totrans-77
+  prefs: []
+  type: TYPE_IMG
+  zh: '![在 Kubernetes 上进行简单的 Pulsar 安装](assets/mcdk_0805.png)'
+- en: Figure 8-5\. A Simple Pulsar installation on Kubernetes
+  id: totrans-78
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 8-5\. 在 Kubernetes 上进行简单的 Pulsar 安装
+- en: 'The easiest thing is not allowing Pods of the same type to group together onto
+    the same nodes. When enabled, anti-affinity will keep this from happening. If
+    you are running on a single-node system such as a desktop, disabling it will allow
+    your cluster to start without blocking based on affinity:'
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最简单的方法是不允许相同类型的 Pods 分组到同一节点上。启用反亲和性将阻止这种情况发生。如果您正在运行单节点系统（例如台式机），禁用它将允许您的集群在无关性的基础上启动：
+- en: '[PRE1]'
+  id: totrans-80
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: 'Fine-grained control over Pulsar component replica counts lets you tailor your
+    deployment based on the use case. Each replica Pod consumes resources and should
+    be considered in the application’s lifecycle. For example, starting with a low
+    number of brokers and BookKeeper Pods can manage some level of traffic. Still,
+    more replicas can be added and configuration updated via Helm as traffic increases:'
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 精细控制 Pulsar 组件副本计数允许您根据使用情况定制部署。每个副本 Pod 消耗资源，应在应用程序的生命周期中加以考虑。例如，从较少的经纪人和 BookKeeper
+    Pods 开始可以管理某些级别的流量。但随着流量增加，可以通过 Helm 添加更多副本并更新配置：
+- en: '[PRE2]'
+  id: totrans-82
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: You now have a foundational understanding of how to reliably move data to and
+    from applications and outside of your Kubernetes cluster. Pulsar is a great fit
+    for cloud native application deployments because it can scale compute and storage
+    independently. The declarative nature of deployments makes it easy for data engineers
+    and SREs to deploy easily with consistency. Now that we have the means for data
+    communication, let’s take it a step further with the right kind of network security.
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您现在已经基本了解如何可靠地在应用程序和 Kubernetes 集群内外之间传输数据。Pulsar 非常适合云原生应用程序部署，因为它可以独立扩展计算和存储。部署的声明性质使数据工程师和
+    SRE 能够以一致的方式轻松部署。现在我们已经具备了数据通信的手段，让我们通过正确类型的网络安全措施进一步进行。
+- en: Securing Communications by Default with cert-manager
+  id: totrans-84
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 默认情况下使用 cert-manager 保护通信
+- en: 'An unfortunate reality we face at the end of product development is what gets
+    left to complete: security or documentation. Unfortunately, Kubernetes doesn’t
+    have much in the way of building documentation, but when it comes to security,
+    there has been some great progress on starting earlier without compromise!'
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在产品开发结束时我们面临的一个不幸的现实是剩下来要完成的事情：安全还是文档。不幸的是，Kubernetes 在建立文档方面没有太多的内容，但在安全方面，早期开始并且没有妥协是有很大进展的！
+- en: As you can see, installing Pulsar has created a lot of infrastructure and communication
+    between the elements. High traffic volume is a typical situation. When we build
+    out virtual datacenters in Kubernetes, it will create a lot of [internode](https://oreil.ly/YySn7)
+    and external network traffic. All traffic should be encrypted with Transport Layer
+    Security (TLS) and Secure Socket Layer (SSL) using [X.509 certificates](https://oreil.ly/JG794).
+    The most important part of this system is the certificate authority (CA). In a
+    public key infrastructure (PKI) arrangement acts as a trusted third party that
+    digitally signs certificates used to create a chain of trust between two entities.
+    Going through the procedure to have a certificate issued by a CA historically
+    has been a manual and arduous process, which unfortunately has led to a lack of
+    secure communications in cloud-based applications.
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如您所见，安装 Pulsar 创建了大量基础设施和元素之间的通信。高流量是一个典型的情况。当我们在 Kubernetes 中建立虚拟数据中心时，将产生大量节点内和外部网络流量。所有流量都应使用传输层安全性（TLS）和安全套接字层（SSL）进行加密，使用[X.509
+    证书](https://oreil.ly/JG794)。该系统的最重要部分是证书颁发机构（CA）。在公钥基础设施（PKI）安排中，CA 充当一个受信任的第三方，用于数字签名用于创建两个实体之间信任链的证书。通过由
+    CA 发行证书的过程历史上是一个手动和费时的过程，不幸的是，这导致了云应用程序中安全通信的缺失。
+- en: '*cert-manager* is a tool that uses the Automated Certificate Management Environment
+    (ACME) protocol to add certificate management seamlessly to your Kubernetes infrastructure.
+    We should always use TLS to secure the data moving from one service to another
+    for our streaming application. The cert-manager project is arguably one of the
+    most critical pieces of your Kubernetes infrastructure that you will eventually
+    forget about. That’s the hallmark of a project that fits the moniker of “it just
+    works.”'
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*cert-manager* 是一个工具，使用自动证书管理环境（ACME）协议，无缝地向您的 Kubernetes 基础设施添加证书管理。我们应该始终使用
+    TLS 来保护从一个服务到另一个服务的数据，尤其是对于我们的流应用程序。cert-manager 项目可能是您 Kubernetes 基础设施中最关键的部分之一，最终您会忘记它。这就是符合“它只是工作”的项目特征。'
+- en: 'Adding TLS to your Pulsar deployment has been made incredibly easy with just
+    a few configuration steps. Before installing Pulsar, you’ll need to set up the
+    cert-manager service inside the target Kubernetes cluster. First, add the cert-manager
+    repo to your local Helm installation:'
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 只需几个配置步骤，就能轻松地向您的 Pulsar 部署添加 TLS。在安装 Pulsar 之前，您需要在目标 Kubernetes 集群中设置 cert-manager
+    服务。首先，将 cert-manager 仓库添加到本地 Helm 安装中：
+- en: '[PRE3]'
+  id: totrans-89
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: What Is ACME?
+  id: totrans-90
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 什么是 ACME？
+- en: When working with X.509 certificates, you’ll frequently see references to the
+    Automated Certificate Management Environment (ACME). ACME allows for automated
+    deployment of certificates between user infrastructure and certificate authorities.
+    It was designed by the Internet Security Research Group when it was building its
+    free certificate authority, Let’s Encrypt. It would be putting it lightly to say
+    this fantastic free service has been a game-changer for cloud native infrastructure.
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当使用 X.509 证书时，您经常会看到有关自动证书管理环境（ACME）的引用。ACME 允许在用户基础设施和证书颁发机构之间自动部署证书。它是由互联网安全研究组织设计的，当时他们正在建立其免费证书颁发机构
+    Let’s Encrypt。轻描淡写地说，这个出色的免费服务已经成为云原生基础设施的变革者。
+- en: 'The installation process takes a few parameters, which you should make sure
+    to use. First is declaring a separate Namespace to keep the cert-manager neatly
+    organized in your virtual datacenter. The second is installing the CRD assets.
+    This combination allows you to create services that automate your certificate
+    management:'
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安装过程需要一些参数，您应确保使用这些参数。首先是声明一个单独的 Namespace，以保持 cert-manager 在您的虚拟数据中心中的组织井然有序。第二是安装
+    CRD 资源。这组合允许您创建自动化管理证书的服务：
+- en: '[PRE4]'
+  id: totrans-93
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: 'After the cert-manager is installed, you’ll then need to configure the certificate
+    issuer that will be called when new certificates are needed. You have many options
+    based on the environment you are operating in, and these are covered quite extensively
+    in the documentation. One of the custom resources created when installing cert-manager
+    is `Issuer`. The most basic `Issuer` is the `selfsigned-issuer` that can create
+    a certificate with a user-supplied private key. You can create a basic `Issuer`
+    by applying the following YAML configuration:'
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安装 cert-manager 后，您需要配置证书发行者，以便在需要新证书时调用它。根据您操作的环境，您有很多选择，这些选择在文档中得到了广泛涵盖。在安装
+    cert-manager 时创建的自定义资源之一是 `Issuer`。最基本的 `Issuer` 是 `selfsigned-issuer`，它可以使用用户提供的私钥创建证书。您可以通过应用以下
+    YAML 配置来创建一个基本的 `Issuer`：
+- en: '[PRE5]'
+  id: totrans-95
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'When installing Pulsar with Helm, you can secure inter-service communication
+    with a few lines of YAML configuration. You can pick which services are secured
+    by setting the TLS `enabled` to `true` or `false` for each service in the YAML
+    that defines your Pulsar cluster. The examples provided by the project are quite
+    large, so for brevity, we’ll look at some key areas:'
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当使用 Helm 安装 Pulsar 时，您可以通过几行 YAML 配置来保护服务之间的通信。您可以通过在定义 Pulsar 集群的 YAML 中将 TLS
+    `enabled` 设置为 `true` 或 `false` 来选择要保护的服务。由项目提供的示例非常丰富，为了简洁起见，我们将关注一些关键区域：
+- en: '[PRE6]'
+  id: totrans-97
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: 'Alternatively, you can secure the entire cluster with just one command:'
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 或者，您可以通过一个命令来保护整个集群：
+- en: '[PRE7]'
+  id: totrans-99
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: 'Later in your configuration file, you can use self-signing certificates to
+    create TLS connections between components:'
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在您的配置文件中，稍后可以使用自签名证书来创建组件之间的 TLS 连接：
+- en: '[PRE8]'
+  id: totrans-101
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: If you have been involved in securing infrastructure communication any time
+    in the past, you know the toil in working through all the steps and applying TLS.
+    Inside a Kubernetes virtual datacenter, you no longer have an excuse to leave
+    network communication unencrypted. With a few lines of configuration, everything
+    is secured and maintained.
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您之前参与过保护基础设施通信的工作，您就知道在处理所有步骤并应用 TLS 时的繁重工作。在 Kubernetes 虚拟数据中心中，您再也没有借口将网络通信留在未加密状态下。通过几行配置，一切都可以得到安全和维护。
+- en: cert-manager should be one of the first things you install in a new Kubernetes
+    cluster. The combination of project maturity and simplicity makes security the
+    easy first thing to add to your project instead of the last. This is true not
+    only for Pulsar but for every service you deploy in Kubernetes that requires network
+    communication.
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: cert-manager 应该是在新的 Kubernetes 集群中首先安装的东西之一。项目成熟度和简单性的结合使得安全性成为项目中最容易添加的第一项，而不是最后一项。这不仅适用于
+    Pulsar，还适用于在 Kubernetes 中部署的每个需要网络通信的服务。
+- en: Using Helm to Deploy Apache Pulsar
+  id: totrans-104
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用 Helm 部署 Apache Pulsar
+- en: 'Now that we have covered how to design a Pulsar cluster to maximize resources,
+    you can use Helm to carry out the deployment into Kubernetes. First, add the Pulsar
+    Helm repository:'
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经讲解了如何设计 Pulsar 集群以最大化资源利用，您可以使用 Helm 将其部署到 Kubernetes 中。首先，添加 Pulsar Helm
+    仓库：
+- en: '[PRE9]'
+  id: totrans-106
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: 'One of the special requirements for a Helm install of Pulsar is preparing Kubernetes.
+    The Git repository you cloned earlier has a script that will run through all the
+    preparations, such as creating the destination Namespace. The more complicated
+    setup is the roles with associated keys and tokens. These are important for inter-service
+    communication inside the Pulsar cluster. From the docs, you can invoke the prep
+    script by using this example:'
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pulsar的Helm安装的一个特殊要求是准备Kubernetes。您之前克隆的Git存储库具有一个脚本，将通过所有准备工作，例如创建目标命名空间。更复杂的设置是带有关联密钥和令牌的角色。这对于Pulsar集群内部服务通信非常重要。从文档中，您可以使用以下示例调用准备脚本：
+- en: '[PRE10]'
+  id: totrans-108
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: 'Once the Kubernetes cluster has been prepared for Pulsar, the final installation
+    can be run. At this point, you should have a YAML configuration file with the
+    settings you need for your Pulsar use case as we described earlier. The `helm
+    install` command will take that config file and direct Kubernetes to meet the
+    desired state you have specified. When creating a new cluster, use `initalize=true`
+    to create the base metadata configuration in ZooKeeper:'
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦Kubernetes集群已经为Pulsar准备好，可以运行最终安装。在这一点上，您应该有一个YAML配置文件，其中包含您需要的Pulsar用例设置，就像我们之前描述的那样。`helm
+    install`命令将获取该配置文件，并指示Kubernetes满足您已指定的期望状态。创建新集群时，请使用`initalize=true`来在ZooKeeper中创建基本元数据配置：
+- en: '[PRE11]'
+  id: totrans-110
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: In a typical production deployment, you should expect the setup time to take
+    10 minutes or more. There are a lot of dependencies to walk through as ZooKeeper,
+    bookies, brokers, and finally, proxies are brought online and in order.
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在典型的生产部署中，您应该预计设置时间需要10分钟或更长时间。在启动和排序ZooKeeper、bookies、brokers和最后是代理之后，需要解决许多依赖项。
+- en: Stream Analytics with Apache Flink
+  id: totrans-112
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用Apache Flink进行流分析
+- en: 'Now, let’s look at a different type of streaming project that is quickly gaining
+    popularity in cloud native deployments: Apache Flink. Flink is a system primarily
+    designed to focus on stream analytics at an incredible scale. As we discussed
+    at the beginning of the chapter, streaming systems come in many flavors, and this
+    is a perfect example. Flink has its competencies that overlap very little with
+    other systems; in fact, it’s widespread to see Pulsar and Flink deployed together
+    to complement each other’s strengths in a cloud native application.'
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，让我们看看在云原生部署中迅速流行的不同类型的流式处理项目：Apache Flink。 Flink是一个主要设计用于以令人惊叹的规模进行流分析的系统。正如我们在本章开头讨论的那样，流系统有许多不同的类型，这是一个完美的例子。
+    Flink有其与其他系统几乎没有重叠的能力；事实上，广泛看到Pulsar和Flink一起部署以在云原生应用程序中互补彼此的优势。
+- en: 'As a streaming system, the following are available in Flink:'
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为流式处理系统，Flink提供以下功能：
+- en: 'Type of delivery: one-to-one'
+  id: totrans-115
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 交付类型：一对一
+- en: 'Delivery guarantee: exactly once'
+  id: totrans-116
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 交付保证：仅一次
+- en: 'Feature scope for streaming: analytics'
+  id: totrans-117
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 流式处理的特性范围：分析
+- en: 'The two main components of the Flink architecture are shown in [Figure 8-6](#apache_flink_architecture)—the
+    JobManager and TaskManager:'
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Flink架构的两个主要组件显示在[图8-6](#apache_flink_architecture)中——JobManager和TaskManager：
+- en: JobManager
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: JobManager
+- en: This is the control plane for any running Flink application code deployed. A
+    JobManager consumes CPU resources but only to maintain Job control; no actual
+    processing is done on the JobManager. In high availability (HA) mode, which is
+    exclusive to Flink running on Kubernetes, multiple standby JobManagers will be
+    provisioned but remain idle until the primary is no longer available.
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是部署任何运行中的Flink应用程序代码的控制平面。 JobManager消耗CPU资源，但仅用于维护作业控制；在JobManager上不执行实际处理。在高可用性（HA）模式下，这是专门用于在Kubernetes上运行的Flink的，将会提供多个待命的JobManager，但仅当主要JobManager不再可用时才会空闲。
+- en: TaskManager
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: TaskManager
+- en: This is where the work gets done on a running Flink job. The JobManger uses
+    TaskManagers to satisfy the chain of tasks needed in the application. A chain
+    is the order of operation. In some cases, these operations can be run in parallel,
+    and some need to be run in series. The TaskManger will run only one discrete task
+    and pass it on. Resource management can be controlled through the number of TaskManagers
+    in a cluster and execution slots per TaskManager. The current guidance says that
+    you should allocate one CPU to each TaskManager or slot.
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在运行中的Flink作业上完成工作。 JobManger使用TaskManagers满足应用程序中所需的任务链。链是操作的顺序。在某些情况下，这些操作可以并行运行，有些需要按顺序运行。TaskManger将仅运行一个离散任务并传递它。资源管理可以通过集群中TaskManagers的数量和每个TaskManager的执行插槽来控制。目前的指导建议是为每个TaskManager或插槽分配一个CPU。
+- en: '![Apache Flink architecture](assets/mcdk_0806.png)'
+  id: totrans-123
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Apache Flink架构](assets/mcdk_0806.png)'
+- en: Figure 8-6\. Apache Flink architecture
+  id: totrans-124
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图8-6\. Apache Flink架构
+- en: 'The Flink project is designed for managing stateful computations, which should
+    cause you to immediately think of storage requirements. Every transaction in Flink
+    is guaranteed to be strongly consistent with no single point of failure. These
+    are the features you need when you are trying to build the kind of highly scalable
+    systems that Flink was designed to accomplish. There are two types of streaming,
+    bounded and unbounded:'
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Flink项目旨在管理有状态计算，这应该让你立即想到存储需求。在Flink中，每个事务都保证强一致性，没有单点故障。这些是在构建Flink旨在实现的高度可扩展系统时所需的特性。流处理分为有界和无界两种类型：
+- en: Unbounded streaming
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 无界流处理
+- en: These streaming systems react to new data whenever the data arrives—there is
+    no endpoint where you can stop and analyze the data gathered. Every piece of data
+    received is independent. The use cases for this can be alerting on values or counting
+    when exactness is essential. Reactive processing can be very resource-efficient.
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些流处理系统会在数据到达时立即对新数据作出反应——没有可以停止和分析收集数据的终点。每个接收到的数据片段都是独立的。这种情况下的用例可能是在值发生警报或计数时要求精确性。反应式处理可以非常节约资源。
+- en: Bounded streaming
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有界流处理
+- en: This is also known as *batch processing* in other systems but is a specific
+    case within Flink. Bounded windows can be marked by time or specific values. In
+    the case of time windows, they can also slide forward, giving the ability to do
+    rolling updates on values. Resource considerations should be given based on the
+    data window size to be processed. The limit of the boundary size is constrained
+    mainly by memory.
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在其他系统中也称为*批处理*，但在Flink中是一种特殊情况。有界窗口可以由时间或特定值标记。在时间窗口的情况下，它们也可以向前滑动，具备在值上进行滚动更新的能力。基于要处理的数据窗口大小，应考虑资源的使用情况。边界大小的限制主要受内存约束。
+- en: 'One of the foundational tenets of Flink is a strong focus on operations. At
+    the scale required for cloud native applications, easy to use and deploy can be
+    the difference between using it or not. This includes core support for continuous
+    deployment workloads in Kubernetes and feature parity with cloud native applications
+    in the areas of reliability and observability:'
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Flink的基础理念之一是对运维的强调。在云原生应用所需的规模下，易于使用和部署可能决定是否使用它。这包括在Kubernetes中对连续部署工作负载的核心支持，以及在可靠性和可观测性领域与云原生应用的功能平衡：
+- en: Continuous deployment
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 连续部署
+- en: The core unit of work for Flink is called a *job*. Jobs are Java or Scala programs
+    that define how the data is read, analyzed, and output. Jobs are chained together
+    and compiled into a JAR file to create a Flink application. Flink provides a Docker
+    image that encapsulates the application in a form that makes deployment on Kubernetes
+    an easy task and facilitates continuous deployment.
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Flink的核心工作单元称为*作业*。作业是定义数据读取、分析和输出方式的Java或Scala程序。作业被串联在一起，并编译成JAR文件以创建一个Flink应用程序。Flink提供了一个Docker镜像，将应用程序封装成易于在Kubernetes上部署的形式，并支持连续部署。
+- en: Reliability
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可靠性
+- en: Flink also has built-in support for savepoints, which makes updates easier by
+    pausing and resuming jobs before and after system updates. Savepoints can also
+    be used for fast recovery if a processing Pod fails mid-job. Tighter integration
+    with Kubernetes allows Flink to self-heal on failure by restoring Pods and restarting
+    Jobs with savepoints.
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Flink还内置了对保存点的支持，通过在系统更新前后暂停和恢复作业来简化更新。如果处理Pod在作业中断时失败，保存点也可以用于快速恢复。与Kubernetes的更紧密集成使Flink在失败时能够通过恢复Pod和重新启动作业来自我修复。
+- en: Observability
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可观测性
+- en: Cluster metrics are instrumented to output in Prometheus format. Operations
+    teams can keep track of lifecycle events inside the Flink cluster with time-based
+    details. Application developers can expose custom metrics using the [Flink metric
+    system](https://oreil.ly/0x0IS) for further integrated observability.
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 集群指标已经仪表化为Prometheus格式输出。运维团队可以通过时间详细信息跟踪Flink集群内的生命周期事件。应用开发者可以使用[Flink度量系统](https://oreil.ly/0x0IS)暴露自定义指标，以进一步实现集成的可观测性。
+- en: Flink provides a way for data teams to participate in the overall cloud native
+    stack while giving operators everything needed to manage the entire deployment.
+    Application developers building microservices can share a CI/CD pipeline with
+    developers building the stream analytics of data generated from the application.
+    As changes occur in any part of the stack, they can be integration tested entirely
+    and deployed as a single unit. Teams can move faster with more confidence knowing
+    there aren’t disconnected requirements that may show up in production. This sort
+    of outcome is a solid argument to employ cloud native methodologies in your entire
+    stack, so it’s time to see how this is done.
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Flink 提供了一种让数据团队参与整体云原生堆栈的方式，同时为运维人员提供管理整个部署所需的一切。构建微服务的应用程序开发人员可以与构建从应用程序生成的数据流分析的开发人员共享
+    CI/CD 管道。当堆栈的任何部分发生变化时，可以进行完整的集成测试并作为单个单元部署。团队可以更快地移动，并更有信心，因为没有可能在生产中出现的断开的要求。这种结果是在整个堆栈中采用云原生方法的一个坚实论据，因此现在是时候看看如何做到这一点了。
+- en: Deploying Apache Flink on Kubernetes
+  id: totrans-138
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 上部署 Apache Flink
+- en: When deploying a Flink cluster into a running Kubernetes cluster, there are
+    a few things to consider. The Flink project has gone the route of offering what
+    it calls “Kubernetes Native,” which programmatically installs the required Flink
+    components without `kubectl` or Helm. These choices may change in the future.
+    Side projects in the Flink ecosystem already bring a more typical experience that
+    Kubernetes operators might expect, including operators and Helm charts. For now,
+    we will discuss the official method endorsed by the project.
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在将 Flink 集群部署到运行中的 Kubernetes 集群时，有几个要考虑的因素。Flink 项目采用了所谓的“Kubernetes Native”路线，可以在不使用
+    `kubectl` 或 Helm 的情况下编程安装所需的 Flink 组件。这些选择可能会在未来发生变化。Flink 生态系统中的边缘项目已经为 Kubernetes
+    运维人员带来更典型的体验，包括运维人员和 Helm 图表。目前，我们将讨论项目官方认可的方法。
+- en: 'As shown in [Figure 8-7](#deploying_flink_on_kubernetes), a running Flink cluster
+    has two main components we’ll deploy in Pods: the *JobManager* and *TaskManager*.
+    These are the basic units, but choosing which deployment mode is the critical
+    consideration for your use case. They dictate how compute and network resources
+    are utilized. Another thing of note is how to deploy on Kubernetes. As mentioned
+    before, there are no official project operators or Helm charts. The Flink [distribution](https://flink.apache.org/downloads.html)
+    contains command-line tools that will deploy into a running Kubernetes cluster
+    based on the mode for your application.'
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如 [图 8-7](#deploying_flink_on_kubernetes) 所示，运行中的 Flink 集群有两个主要组件，我们将在 Pod 中部署：*JobManager*
+    和 *TaskManager*。这些是基本单元，但选择部署模式是您用例的关键考虑因素。它们决定了如何利用计算和网络资源。另一个需要注意的是如何在 Kubernetes
+    上部署。如前所述，没有官方项目运维人员或 Helm 图表。Flink [分发版](https://flink.apache.org/downloads.html)
+    包含命令行工具，将根据应用程序的模式部署到运行中的 Kubernetes 集群中。
+- en: '![Deploying Flink on Kubernetes](assets/mcdk_0807.png)'
+  id: totrans-141
+  prefs: []
+  type: TYPE_IMG
+  zh: '![在 Kubernetes 上部署 Flink](assets/mcdk_0807.png)'
+- en: Figure 8-7\. Deploying Flink on Kubernetes
+  id: totrans-142
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 8-7\. 在 Kubernetes 上部署 Flink
+- en: '[Figure 8-8](#apache_flink_modes) shows the modes available for deploying Flink
+    clusters in Kubernetes: Application Mode and Session Mode. Flink also supports
+    a third mode called Per-Job Mode, but this is not available for Kubernetes deployments,
+    which leaves us with Application Mode and Session Mode.'
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 8-8](#apache_flink_modes)展示了在 Kubernetes 中部署 Flink 集群的可用模式：应用模式和会话模式。Flink
+    还支持第三种模式称为每作业模式，但这在 Kubernetes 部署中不可用，因此我们只能选择应用模式和会话模式。'
+- en: The selection of either Application Mode or Session Mode comes down to resource
+    management inside your Kubernetes cluster, so let’s look at both to make an informed
+    decision.
+  id: totrans-144
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 选择应用模式或会话模式取决于在 Kubernetes 集群中的资源管理，因此让我们分别看看它们以便做出明智的决定。
+- en: '*Application Mode* isolates each Flink application into its own cluster. As
+    a reminder, a Flink application JAR can consist of multiple jobs chained together.
+    The startup cost of the cluster can be minimized with a single application initialization
+    and Job graph. Once deployed, resources are consumed for client traffic and execution
+    of the jobs in the application. Network traffic is much more efficient since there
+    is only one JobManager and client traffic can be multiplexed.'
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*应用模式*将每个 Flink 应用程序隔离到自己的集群中。作为提醒，一个 Flink 应用程序 JAR 可以由多个任务链式组合而成。集群的启动成本可以通过单个应用程序初始化和作业图表来最小化。一旦部署完成，资源将被用于客户端流量和应用程序中作业的执行。由于只有一个
+    JobManager，网络流量效率更高，并且客户端流量可以进行多路复用。'
+- en: '![Apache Flink Modes](assets/mcdk_0808.png)'
+  id: totrans-146
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Apache Flink模式](assets/mcdk_0808.png)'
+- en: Figure 8-8\. Apache Flink modes
+  id: totrans-147
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图8-8\. Apache Flink模式
+- en: 'To start in Application Mode, you invoke the `flink` command with the target
+    of `kubernetes-application`. You will need the name of the running Kubernetes
+    cluster accessible via `kubectl`. The application to be run is contained in a
+    Docker image, and the path to the JAR file supplied in the command line. Once
+    started, the Flink cluster is created, application code is initialized, and will
+    then be ready for client connections:'
+  id: totrans-148
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要启动应用程序模式，您需要使用`flink`命令调用`kubernetes-application`目标。您将需要通过`kubectl`访问的运行中的Kubernetes集群的名称。要运行的应用程序包含在Docker镜像中，并且在命令行中提供了JAR文件的路径。一旦启动，将创建Flink集群，初始化应用程序代码，然后准备好接受客户端连接：
+- en: '[PRE12]'
+  id: totrans-149
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: '*Session Mode* changes resource management by creating a single Flink cluster
+    that can accept any number of applications on an ad hoc basis. Instead of having
+    multiple independent clusters running and consuming resources, you may find it
+    more efficient to have a single cluster that can grow and shrink when new applications
+    are submitted. The downside for operators is that you now have a single cluster
+    that will take several applications with it if it fails. Kubernetes will restart
+    the downed Pods, but you will have a recovery time to manage as resources are
+    reallocated. To start in Session Mode, use the `kubernetes-session` shell file
+    and give it the name of your running Kubernetes cluster. The default is for the
+    command to execute and detach from the cluster. To reattach or remain in an interactive
+    mode with the running cluster, use the `execution.attached=true` switch:'
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*会话模式*通过在特定场景下创建单个Flink集群来改变资源管理方式。与运行和消耗资源的多个独立集群不同，您可能会发现使用一个可以根据需要增长和缩小的单个集群更为高效。运维人员的不利之处在于，现在您有一个单一的集群，如果它失败，则会带走数个应用程序。Kubernetes将重新启动失败的Pods，但您需要管理资源重新分配的恢复时间。要启动会话模式，请使用`kubernetes-session`
+    shell文件，并给出您正在运行的Kubernetes集群的名称。默认情况下，该命令会执行并从集群分离。要重新连接或保持与运行中集群的交互模式，请使用`execution.attached=true`开关：'
+- en: '[PRE13]'
+  id: totrans-151
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: This was a quick fly-by of a massive topic, but hopefully, it inspires you to
+    look further. One resource we recommend is [*Stream Processing with Apache Flink*](https://oreil.ly/Iocv6)
+    by Fabian Hueske and Vasiliki Kalavri (O’Reilly). Adding Flink to your application
+    isn’t just about choosing a platform to perform stream processing. In cloud native
+    applications, we should be thinking holistically about the entire application
+    stack we are attempting to deploy in Kubernetes. Flink uses containers, as encapsulation
+    lends itself to working with other development workflows.
+  id: totrans-152
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这只是一个关于广泛话题的快速概述，希望能激发您进一步深入了解。我们推荐的一个资源是[*使用Apache Flink进行流处理*](https://oreil.ly/Iocv6)，由Fabian
+    Hueske和Vasiliki Kalavri（O’Reilly）编著。将Flink添加到您的应用程序中不仅仅是选择一个平台来执行流处理。在云原生应用程序中，我们应该全面考虑我们试图在Kubernetes中部署的整个应用程序堆栈。Flink使用容器，因为封装有助于与其他开发工作流集成。
+- en: Summary
+  id: totrans-153
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 概要
+- en: In this chapter, we have branched out from persistence-oriented data infrastructure
+    into the world of streaming. We defined what streaming is, how to navigate all
+    the terminology, and how it fits into Kubernetes. From there, we took a deeper
+    look into Apache Pulsar and learned how to deploy it into your Kubernetes cluster
+    according to your environment and application needs. As a part of deploying streaming,
+    we took a side trip into default secure communications with cert-manager to see
+    how it works and how to create self-managed encrypted communication. Finally,
+    we looked at Kubernetes deployments of Apache Flink, which is used primarily for
+    high-scale stream analytics.
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们从面向持久性数据基础设施扩展到流处理的世界。我们定义了流处理的概念，如何理解所有术语以及它们如何融入Kubernetes中。接着，我们深入研究了Apache
+    Pulsar，并学习了如何根据您的环境和应用程序需求将其部署到您的Kubernetes集群中。作为部署流处理的一部分，我们还简要了解了使用cert-manager进行默认安全通信的情况，以及如何创建自管理的加密通信。最后，我们查看了Apache
+    Flink在Kubernetes上的部署，主要用于高规模流分析。
+- en: As you saw in this chapter with Pulsar and cert-manager, running cloud native
+    data infrastructure on Kubernetes frequently involves the composition of multiple
+    components as part of an integrated stack. We’ll discuss more examples of this
+    in the next chapter and beyond.
+  id: totrans-155
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如您在本章中看到的Pulsar和cert-manager，运行云原生数据基础设施在Kubernetes上通常涉及多个组件的组合作为集成堆栈的一部分。我们将在下一章及以后讨论更多这方面的例子。

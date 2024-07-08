@@ -1,0 +1,1632 @@
+- en: Chapter 11\. Security, Backups, and Cluster Health
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第 11 章 安全性、备份和集群健康
+- en: If you think technology can solve your security problems, then you don’t understand
+    the problems and you don’t understand the technology.
+  id: totrans-1
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 如果您认为技术可以解决您的安全问题，那么您不了解这些问题，也不了解技术。
+- en: ''
+  id: totrans-2
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+- en: Bruce Schneier, *Applied Cryptography*
+  id: totrans-3
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: Bruce Schneier，《应用密码学》
+- en: In this chapter, we’ll explore the security and access control machinery in
+    Kubernetes, including Role-Based Access Control (RBAC), outline some vulnerability
+    scanning tools and services, and explain how to back up your Kubernetes data and
+    state (and even more importantly, how to restore it). We’ll also look at some
+    useful ways to get information about what’s happening in your cluster.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们将探讨 Kubernetes 中的安全性和访问控制机制，包括基于角色的访问控制（RBAC），概述一些漏洞扫描工具和服务，并解释如何备份您的
+    Kubernetes 数据和状态（甚至更重要的是如何恢复）。我们还将介绍一些有用的获取集群信息的方法。
+- en: Access Control and Permissions
+  id: totrans-5
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 访问控制和权限
+- en: Small tech companies tend to start out with just a few employees, and everyone
+    has administrator access on every system.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 小型科技公司往往从只有少数几名员工开始，每个人都对每个系统有管理员访问权限。
+- en: 'As the organization grows, though, eventually it becomes clear that it is no
+    longer a good idea for everyone to have administrator rights: it’s too easy for
+    someone to make a mistake and change something they shouldn’t. The same applies
+    to Kubernetes.'
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 随着组织的增长，最终会变得明显，不是每个人都拥有管理员权限都不是一个好主意：某人很容易犯错并改变不该改变的东西。同样适用于 Kubernetes。
+- en: Managing Access by Cluster
+  id: totrans-8
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 通过集群管理访问
+- en: 'One of the easiest and most effective things you can do to secure your Kubernetes
+    cluster is limit who has access to it. There are generally two groups of people
+    who need to access Kubernetes clusters: *cluster operators* and *application developers*,
+    and they often need different permissions and privileges as part of their job
+    function.'
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 保护您的 Kubernetes 集群的最简单和最有效的方法之一是限制谁可以访问它。通常有两组人需要访问 Kubernetes 集群：*集群操作员* 和
+    *应用开发者*，他们通常在工作职能中需要不同的权限和特权。
+- en: Also, you may well have multiple deployment environments, such as production
+    and staging. These separate environments will need different policies, depending
+    on your organization. Production may be restricted to only some individuals, whereas
+    staging may be open to a broader group of engineers.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此外，您可能会有多个部署环境，如生产环境和暂存环境。这些独立的环境将根据您的组织需求需要不同的策略。生产环境可能仅限于某些个人，而暂存环境可能对更广泛的工程师开放。
+- en: As we saw in [“Do I need multiple clusters?”](ch06.html#multiclusters), it’s
+    often a good idea to have separate clusters for production and staging or testing.
+    If someone accidentally deploys something in staging that brings down the cluster
+    nodes, it will not impact production.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如我们在[“我是否需要多个集群？”](ch06.html#multiclusters)中看到的，通常为生产和暂存或测试单独设置集群是个好主意。如果某人在暂存环境中意外部署了导致集群节点崩溃的东西，它不会影响生产环境。
+- en: If one team should not have access to another team’s software and deployment
+    process, each team could have their own dedicated cluster and not even have credentials
+    on the other team’s clusters.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果一个团队不应该访问另一个团队的软件和部署流程，那么每个团队可以拥有自己专用的集群，甚至不需要在其他团队的集群上拥有凭证。
+- en: This is certainly the most secure approach, but additional clusters come with
+    tradeoffs. Each needs to be patched and monitored, and many small clusters tend
+    to run less efficiently than larger clusters.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这无疑是最安全的方法，但额外的集群伴随着一些权衡。每个集群都需要打补丁和监控，而许多小集群的效率往往不如大集群高。
+- en: Introducing Role-Based Access Control (RBAC)
+  id: totrans-14
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 引入基于角色的访问控制（RBAC）
+- en: Another way you can manage access is by controlling who can perform certain
+    operations inside the cluster, using Kubernetes’ Role-Based Access Control (RBAC)
+    system.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您还可以通过控制谁可以在集群内执行特定操作来管理访问，使用 Kubernetes 的基于角色的访问控制（RBAC）系统。
+- en: RBAC is designed to grant specific permissions to specific users (or service
+    accounts, which are user accounts associated with automated systems). For example,
+    you can grant the ability to list all Pods in the cluster to a particular user
+    if they need it.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: RBAC 的设计目的是为特定用户（或与自动化系统关联的服务账户）授予特定权限。例如，如果需要，您可以授予特定用户在集群中列出所有 Pod 的能力。
+- en: The first and most important thing to know about RBAC is that it should be turned
+    on. RBAC was introduced in Kubernetes 1.6 as an option when setting up clusters.
+    However, whether this option is actually enabled in your cluster depends on your
+    cloud provider or Kubernetes installer.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 关于RBAC的第一点和最重要的事情是，它应该被启用。RBAC在Kubernetes 1.6中作为设置集群的选项引入。但是，您的集群是否实际启用了此选项取决于您的云提供商或Kubernetes安装程序。
+- en: 'If you’re running a self-hosted cluster, try this command to see whether or
+    not RBAC is enabled on your cluster:'
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您正在运行自托管集群，请尝试使用以下命令查看集群是否已启用RBAC：
+- en: '[PRE0]'
+  id: totrans-19
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: If `--authorization-mode` doesn’t contain `RBAC`, then RBAC is not enabled for
+    your cluster. Check the documentation for the installer to see how to rebuild
+    the cluster with RBAC enabled.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果`--authorization-mode`不包含`RBAC`，则您的集群未启用RBAC。请查阅安装程序的文档，了解如何重新构建已启用RBAC的集群。
+- en: Without RBAC, anyone with access to the cluster has the power to do anything,
+    including running arbitrary code or deleting workloads. This probably isn’t what
+    you want.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 没有RBAC，任何具有访问集群权限的人都有权执行任何操作，包括运行任意代码或删除工作负载。这可能不是您想要的。
+- en: Understanding Roles
+  id: totrans-22
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 理解角色
+- en: So, assuming you have RBAC enabled, how does it work? The most important concepts
+    to understand are *users*, *roles*, and *role bindings*.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，假设您已启用RBAC，它是如何工作的？了解最重要的概念是*用户*、*角色*和*角色绑定*。
+- en: Every time you connect to a Kubernetes cluster, you do so as a specific user.
+    Exactly how you authenticate to the cluster depends on your provider; for example,
+    in GKE, you use the `gcloud` tool to get an access token to a particular cluster.
+    On EKS, you use your AWS IAM credentials. There are also service accounts in the
+    cluster; for example, there is a default service account for each namespace. Users
+    and service accounts can all have different sets of permissions.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每次连接到Kubernetes集群时，您都会作为特定用户进行。您如何对集群进行身份验证取决于您的提供者；例如，在GKE中，您使用`gcloud`工具获取访问特定集群的访问令牌。在EKS中，您使用AWS
+    IAM凭据。集群中还有服务账户；例如，每个命名空间都有一个默认的服务账户。用户和服务账户都可以拥有不同的权限集。
+- en: These are governed by Kubernetes *roles*. A role describes a specific set of
+    permissions. Kubernetes includes some predefined roles to get you started. For
+    example, the `cluster-admin` role, intended for superusers, is permitted access
+    to read and change any resource in the cluster. By contrast, the `view` role can
+    list and examine most objects in a given namespace, but not modify them.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些由Kubernetes的*角色*管理。角色描述了特定的权限集。Kubernetes包含一些预定义的角色供您使用。例如，`cluster-admin`角色适用于超级用户，允许访问和更改集群中的任何资源。相比之下，`view`角色可以列出和检查给定命名空间中的大多数对象，但不能修改它们。
+- en: 'You can define roles on the namespace level (using the `Role` object) or across
+    the whole cluster (using the ClusterRole object). Here’s an example of a ClusterRole
+    manifest that grants read access to Secrets in any namespace:'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在命名空间级别（使用`Role`对象）或整个集群范围内（使用ClusterRole对象）定义角色。以下是授予任何命名空间中Secrets读取权限的ClusterRole清单示例：
+- en: '[PRE1]'
+  id: totrans-27
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: Binding Roles to Users
+  id: totrans-28
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 将角色绑定到用户
+- en: How do you associate a user with a role? You can do that using a role binding.
+    Just like with roles, you can create a `RoleBinding` object that applies to a
+    specific namespace, or a ClusterRoleBinding that applies at the cluster level.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如何将用户与角色关联？您可以使用角色绑定来实现。就像角色一样，您可以创建一个适用于特定命名空间的`RoleBinding`对象，或者适用于集群级别的ClusterRoleBinding。
+- en: 'Here’s the RoleBinding manifest that gives the `daisy` user the `edit` role
+    in the `demo` namespace only:'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下是RoleBinding清单示例，它在`demo`命名空间中仅为`daisy`用户分配`edit`角色：
+- en: '[PRE2]'
+  id: totrans-31
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: In Kubernetes, permissions are *additive*; users start with no permissions,
+    and you can add them using Roles and RoleBindings. You can’t subtract permissions
+    from someone who already has them.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在Kubernetes中，权限是*累加的*；用户起初没有权限，您可以使用Roles和RoleBindings为其添加权限。您不能从已经拥有权限的人那里减去权限。
+- en: Tip
+  id: totrans-33
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: You can read more about the details of RBAC, and the available roles and permissions,
+    in the Kubernetes [documentation](https://oreil.ly/SOxYN).
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在Kubernetes的[文档](https://oreil.ly/SOxYN)中详细了解RBAC的详情，以及可用的角色和权限。
+- en: What Roles Do I Need?
+  id: totrans-35
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 我需要哪些角色？
+- en: 'So what roles and bindings should you set up in your cluster? The predefined
+    roles `cluster-admin`, `edit`, and `view` will probably cover most requirements.
+    To see what permissions a given role has, use the `kubectl describe` command:'
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 那么在您的集群中应该设置哪些角色和绑定？预定义的角色`cluster-admin`、`edit`和`view`可能已经涵盖了大多数需求。要查看特定角色具有哪些权限，请使用`kubectl
+    describe`命令：
+- en: '[PRE3]'
+  id: totrans-37
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: You could create roles for specific people or jobs within your organization
+    (for example, a developer role), or individual teams (for example, QA or security).
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以为组织内的特定人员或工作角色（例如开发者角色）或个别团队（例如 QA 或安全团队）创建角色。
+- en: Guard Access to cluster-admin
+  id: totrans-39
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 保护对 cluster-admin 的访问
+- en: Be very careful about who has access to the `cluster-admin` role. This is the
+    cluster superuser, equivalent to the root user on Unix systems. They can do anything
+    to anything. Never give this role to users who are not cluster operators, and
+    especially not to service accounts for apps that might be exposed to the internet,
+    such as the Kubernetes Dashboard (see [“Kubernetes Dashboard”](#dashboard)).
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 谁有权限访问 `cluster-admin` 角色要非常小心。这是集群超级用户，相当于 Unix 系统上的 root 用户。他们可以对任何东西进行任何操作。永远不要将此角色授予不是集群运营商的用户，尤其是不要将此角色授予可能暴露在互联网上的应用程序服务账号，比如
+    Kubernetes 仪表盘（参见 [“Kubernetes 仪表盘”](#dashboard)）。
+- en: Warning
+  id: totrans-41
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Don’t fix problems by granting *cluster-admin* unnecessarily. You’ll find some
+    bad advice about this on sites like Stack Overflow. When faced with a Kubernetes
+    permissions error, a common response is to grant the `cluster-admin` role to the
+    application. *Don’t do this*. Yes, it makes the errors go away, but at the expense
+    of bypassing all security checks and potentially opening up your cluster to an
+    attacker. Instead, grant the application a role with the fewest privileges it
+    needs to do its job.
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不要通过不必要地授予 *cluster-admin* 来解决问题。在诸如 Stack Overflow 等网站上可能会找到一些错误的建议。面对 Kubernetes
+    权限错误时，一个常见的应对方式是将 `cluster-admin` 角色授予应用程序。*不要这样做*。是的，它可以让错误消失，但这是以绕过所有安全检查并可能打开集群给攻击者的风险为代价的。相反，应该授予应用程序最少所需的权限角色。
+- en: Applications and Deployment
+  id: totrans-43
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 应用程序和部署
+- en: Apps running in Kubernetes usually don’t need any special RBAC permissions.
+    Unless you specify otherwise, all Pods will run as the `default` service account
+    in their namespace, which has no roles associated with it.
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 中运行的应用通常不需要任何特殊的 RBAC 权限。除非另有指定，所有的 Pod 都会作为其命名空间中的 `default` 服务账号运行，该账号没有任何关联角色。
+- en: If your app needs access to the Kubernetes API for some reason (for example,
+    a monitoring tool that needs to list Pods), create a dedicated service account
+    for the app, use a `RoleBinding` to associate it with the necessary role (for
+    example, `view`), and limit it to specific namespaces.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您的应用程序因某种原因需要访问 Kubernetes API（例如需要列出 Pod 的监控工具），请为该应用程序创建一个专用的服务账号，使用 `RoleBinding`
+    将其关联到必要的角色（例如 `view`），并限制它只能访问特定的命名空间。
+- en: What about the permissions required to deploy applications to the cluster? The
+    most secure way is to allow only a continuous deployment tool to deploy apps (see
+    [Chapter 14](ch14.html#continuous)). It can use a dedicated service account, with
+    permission to create and delete Pods in a particular namespace.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 那么，部署应用程序到集群需要哪些权限呢？最安全的方式是只允许连续部署工具来部署应用程序（参见 [第 14 章](ch14.html#continuous)）。它可以使用专用的服务账号，在特定命名空间内具有创建和删除
+    Pod 的权限。
+- en: The `edit` role is ideal for this. Users with the `edit` role can create and
+    destroy resources in the namespace, but can’t create new roles or grant permissions
+    to other users.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`edit` 角色非常适合此用途。具有 `edit` 角色的用户可以在命名空间中创建和销毁资源，但不能创建新的角色或向其他用户授予权限。'
+- en: If you don’t have an automated deployment tool, and developers have to deploy
+    directly to the cluster, they will need edit rights to the appropriate namespaces
+    too. Grant these on an application-by-application basis; don’t give anyone edit
+    rights across the whole cluster. People who don’t need to deploy apps should have
+    only the `view` role by default.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果没有自动化的部署工具，并且开发人员必须直接部署到集群中，他们还需要在适当的命名空间中拥有编辑权限。基于应用程序的基础，逐个应用程序授予这些权限；不要在整个集群范围内授予任何人编辑权限。那些不需要部署应用程序的人默认只能具备
+    `view` 角色。
+- en: Ideally, you should set up a centralized CI/CD deployment process so that developers
+    do not need to directly deploy to Kubernetes. We will cover this more in [Chapter 14](ch14.html#continuous)
+    and in [“GitOps”](ch14.html#gitops).
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 理想情况下，应该设置一个集中化的 CI/CD 部署流程，这样开发人员就不需要直接在 Kubernetes 上进行部署。我们将在 [第 14 章](ch14.html#continuous)
+    和 [“GitOps”](ch14.html#gitops) 中更详细地介绍这一点。
+- en: Best Practice
+  id: totrans-50
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: Make sure RBAC is enabled in all your clusters. Give `cluster-admin` rights
+    only to users who actually need the power to destroy everything in the cluster.
+    If your app needs access to cluster resources, create a service account for it
+    and bind it to a role with only the permissions it needs, in only the namespaces
+    where it needs them.
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 确保 RBAC 在所有集群中启用。只将`cluster-admin`权限授予实际需要完全控制集群的用户。如果您的应用程序需要访问集群资源，请为其创建服务账户，并将其绑定到只在需要的命名空间中拥有所需权限的角色。
+- en: RBAC Troubleshooting
+  id: totrans-52
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: RBAC 故障排除
+- en: If you’re running an older third-party application that isn’t RBAC-aware, or
+    if you’re still working out the required permissions for your own application,
+    you may run into RBAC permission errors. What do these look like?
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您正在运行一个不支持 RBAC 或者您仍在调试自己应用程序所需权限的旧第三方应用程序，可能会遇到 RBAC 权限错误。这些错误看起来如何？
+- en: 'If an application makes an API request for something it doesn’t have permission
+    to do (for example, list nodes) it will see a *Forbidden* error response (HTTP
+    status 403) from the API server:'
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果一个应用程序请求执行它没有权限做的 API 请求（比如列出节点），它将会从 API 服务器看到*Forbidden*错误响应（HTTP 状态码 403）：
+- en: '[PRE4]'
+  id: totrans-55
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: 'If the application doesn’t log this information, or you’re not sure which application
+    is failing, you can check the API server’s log (see [“Viewing a Container’s Logs”](ch07.html#containerlogs)
+    for more about this). It will record messages like this, containing the string
+    `RBAC DENY` with a description of the error:'
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果应用程序没有记录这些信息，或者您不确定哪个应用程序失败了，可以检查 API 服务器的日志（详见[“Viewing a Container’s Logs”](ch07.html#containerlogs)了解更多信息）。它将记录包含`RBAC
+    DENY`字符串及错误描述的消息：
+- en: '[PRE5]'
+  id: totrans-57
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: '(You won’t be able to do this on a GKE cluster, or any other managed Kubernetes
+    service that doesn’t give you access to the control plane: see the documentation
+    for your Kubernetes provider to find out how to access API server logs.)'
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: （在 GKE 集群或任何不提供对控制平面访问的托管 Kubernetes 服务上，您将无法执行此操作：请参阅您的 Kubernetes 提供商的文档，了解如何访问
+    API 服务器日志。）
+- en: '`kubectl` also includes a useful command for testing out permissions called
+    `auth can-i`. This allows you to try out a Kubernetes operation using your current
+    role, or you can test the permisisons of someone else to see if their role allows
+    a particular command or not:'
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kubectl`还包括一个有用的命令来测试权限，称为`auth can-i`。这允许您使用当前角色尝试 Kubernetes 操作，或者测试其他人的权限以查看他们的角色是否允许特定命令：'
+- en: '[PRE6]'
+  id: totrans-60
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: RBAC has a reputation for being complicated, but it’s really not. Just grant
+    users the minimum privileges they need, keep `cluster-admin` safe, and you’ll
+    be fine.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: RBAC 以复杂而闻名，但其实并不是。只需授予用户所需的最低权限，保持`cluster-admin`安全，一切都会好起来的。
+- en: Cluster Security Scanning
+  id: totrans-62
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 集群安全扫描
+- en: In order to check for potential known security issues, there are tools for scanning
+    your clusters that will let you know of any issues detected.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了检查潜在的已知安全问题，有工具可以扫描您的集群，并通知您检测到的任何问题。
+- en: Gatekeeper/OPA
+  id: totrans-64
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Gatekeeper/OPA
+- en: In February of 2021, the CNCF graduated the [Open Policy Agent (OPA)](https://www.openpolicyagent.org)
+    project, meaning that it meets the standards and maturity required to be included
+    alongside the other officially adopted CNCF projects. OPA is a *policy engine*
+    tool that allows you to define security policies for any of your cloud native
+    tools, including Kubernetes.
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 2021 年 2 月，CNCF 毕业了 [Open Policy Agent (OPA)](https://www.openpolicyagent.org)
+    项目，这意味着它符合被包括在其他官方采纳的 CNCF 项目旁边的标准和成熟度。OPA 是一个 *策略引擎* 工具，允许您为您的任何云原生工具（包括 Kubernetes）定义安全策略。
+- en: '[Gatekeeper](https://oreil.ly/vosvu) is a related project that takes the OPA
+    engine and makes it run inside of Kubernetes as native resources.'
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Gatekeeper](https://oreil.ly/vosvu)是一个相关项目，它将 OPA 引擎作为本地资源在 Kubernetes 中运行。'
+- en: 'For example, using Gatekeeper you could add the following constraint to prevent
+    containers in a given namespace from running if they are using the `latest` tag
+    (see [“The latest Tag”](ch08.html#latesttag) for more info):'
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，使用 Gatekeeper，您可以添加以下约束来阻止在特定命名空间中运行使用`latest`标签的容器（详见[“The latest Tag”](ch08.html#latesttag)了解更多信息）：
+- en: '[PRE7]'
+  id: totrans-68
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: There are many other Kubernetes-specific policies maintained in the [`gatekeeper-library`
+    repo](https://oreil.ly/PPDYg). Other examples include ensuring that all Pods have
+    a known set of labels, or forcing containers to come from a list of trusted registry
+    sources. You can also consider using OPA for auditing and securing your non-Kubernetes
+    cloud resources.
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 [`gatekeeper-library` repo](https://oreil.ly/PPDYg) 中维护了许多其他的针对 Kubernetes
+    的特定策略。其他示例包括确保所有 Pod 具有已知的一组标签，或强制容器来自可信任的注册表源列表。你还可以考虑使用 OPA 来审计和保护你的非 Kubernetes
+    云资源。
+- en: kube-bench
+  id: totrans-70
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: kube-bench
+- en: '[kube-bench](https://oreil.ly/IFV8p) is a tool for auditing your Kubernetes
+    cluster against a set of benchmarks produced by the Center for Internet Security
+    (CIS). In effect, it verifies that your cluster is set up according to security
+    best practices. Although you probably won’t need to, you can configure the tests
+    that kube-bench runs, and even add your own, specified as YAML documents.'
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[kube-bench](https://oreil.ly/IFV8p) 是一个用于按照由网络安全中心（CIS）制定的一组基准审计你的 Kubernetes
+    集群的工具。实际上，它验证你的集群是否按照安全最佳实践进行了设置。虽然你可能不需要这样做，但你可以配置 kube-bench 运行的测试，甚至添加自己的测试，以
+    YAML 文档的形式指定。'
+- en: 'Similar to [“Conformance Testing with Sonobuoy”](ch06.html#sonobuoy), kube-bench
+    runs when you deploy a Job to Kubernetes and inspect the results. Download the
+    appropriate Job YAML file for your cluster, based on the [repository docs](https://oreil.ly/8zI5c),
+    and install it to your cluster:'
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与 [“使用 Sonobuoy 进行一致性测试”](ch06.html#sonobuoy) 类似，kube-bench 在你将 Job 部署到 Kubernetes
+    并检查结果时运行。根据 [存储库文档](https://oreil.ly/8zI5c) 下载适合你集群的适当的 Job YAML 文件，并将其安装到你的集群中：
+- en: '[PRE8]'
+  id: totrans-73
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: You can then read through the logs to get the specifics about any warnings or
+    failures that kube-bench has found.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后，你可以阅读日志，了解 kube-bench 发现的任何警告或失败的具体信息。
+- en: Kubescape
+  id: totrans-75
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Kubescape
+- en: Another tool in this space is called [Kubescape](https://oreil.ly/Bt9be), and
+    it checks to see if your clusters are secure according to recent standards defined
+    in the [CIS Benchmark](https://oreil.ly/vT8Kl). It will let you know about containers
+    that are running as root, any potentially insecure exposed ports, check that your
+    authentication and audit log settings are configured securely, and other similar
+    items defined in the CIS checklist.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个领域的另一个工具称为 [Kubescape](https://oreil.ly/Bt9be)，它检查你的集群是否根据最近在 [CIS 基准](https://oreil.ly/vT8Kl)
+    中定义的标准安全。它会告诉你关于以 root 权限运行的容器、任何可能不安全的公开端口、检查你的认证和审计日志设置是否安全配置等内容，这些项目都在 CIS
+    检查清单中定义。
+- en: Container Security Scanning
+  id: totrans-77
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 容器安全扫描
+- en: If you’re running third-party software in your cluster, it’s wise to check it
+    for security problems and malware. But even your own containers may have software
+    in them that you’re not aware of, and that needs to be checked too.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你在集群中运行第三方软件，检查其安全问题和恶意软件是明智之举。但即使是你自己的容器也可能包含你不知道的软件，也需要进行检查。
+- en: Clair
+  id: totrans-79
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Clair
+- en: '[Clair](https://oreil.ly/RDSHS) is an open source container scanner produced
+    by the CoreOS project. It statically analyzes container images, before they are
+    actually run, to see if they contain any software or versions that are known to
+    be insecure.'
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Clair](https://oreil.ly/RDSHS) 是 CoreOS 项目生产的开源容器扫描器。它静态分析容器镜像，即在实际运行之前，看看它们是否包含已知不安全的软件或版本。'
+- en: You can run Clair manually to check specific images for problems, or integrate
+    it into your CD pipeline to test all images before they are deployed (see [Chapter 14](ch14.html#continuous)).
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可以手动运行 Clair 来检查特定镜像是否存在问题，或将其集成到你的持续交付流程中，在部署之前测试所有镜像（参见 [第 14 章](ch14.html#continuous)）。
+- en: Alternatively, Clair can hook into your container registry to scan any images
+    that are pushed to it and report problems.
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另外，Clair 可以连接到你的容器注册表，扫描推送到其中的任何镜像并报告问题。
+- en: It’s worth mentioning that you shouldn’t automatically trust base images, such
+    as `alpine`. Clair is preloaded with security checks for many popular base images,
+    and will tell you immediately if you’re using one that has a known vulnerability.
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 值得一提的是，你不应该自动信任基础镜像，比如`alpine`。Clair 预装了许多流行基础镜像的安全检查，如果你使用的镜像存在已知漏洞，它会立即告诉你。
+- en: Aqua
+  id: totrans-84
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Aqua
+- en: '[Aqua’s Container Security Platform](https://oreil.ly/rLSPJ) is a full-service
+    commercial container security offering, allowing organizations to scan containers
+    for vulnerabilities, malware, and suspicious activity, as well as providing policy
+    enforcement and regulatory compliance.'
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Aqua 容器安全平台](https://oreil.ly/rLSPJ) 是一种全方位的商业容器安全解决方案，允许组织扫描容器以检测漏洞、恶意软件和可疑活动，同时提供策略执行和合规性监管。'
+- en: As you’d expect, Aqua’s platform integrates with your container registry, CI/CD
+    pipeline, and multiple orchestration systems, including Kubernetes.
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 顺理成章地，Aqua 的平台与您的容器注册表、CI/CD 管道以及包括 Kubernetes 在内的多个编排系统集成。
+- en: Aqua also offers [Trivy](https://oreil.ly/T4bSS), a free-to-use tool that you
+    can add to your container images to scan installed packages for known vulnerabilities
+    from the same database that the Aqua Security Platform uses.
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Aqua 还提供 [Trivy](https://oreil.ly/T4bSS)，这是一个可以添加到您的容器镜像中的免费工具，用于扫描安装的软件包，以检测来自
+    Aqua 安全平台使用的同一数据库中已知的漏洞。
+- en: 'If you want Trivy to scan a particular Docker image, install the CLI tool and
+    run:'
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您想让 Trivy 扫描特定的 Docker 镜像，请安装 CLI 工具并运行：
+- en: '[PRE9]'
+  id: totrans-89
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: 'You can also use it to scan for security issues and misconfigurations in your
+    Dockerfiles, Terraform files, and even your Kubernetes manifests:'
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您还可以使用它来扫描 Dockerfile、Terraform 文件甚至您的 Kubernetes 清单中的安全问题和错误配置：
+- en: '[PRE10]'
+  id: totrans-91
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: 'Another handy open source tool from Aqua is [kube-hunter](https://kube-hunter.aquasec.com),
+    designed to find security issues in your Kubernetes cluster itself. If you run
+    it as a container on a machine outside your cluster, as an attacker might, it
+    will check for various kinds of problems: exposed email addresses in certificates,
+    unsecured dashboards, open ports and endpoints, and so on.'
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个方便的来自 Aqua 的开源工具是 [kube-hunter](https://kube-hunter.aquasec.com)，旨在发现 Kubernetes
+    集群本身的安全问题。如果您将其作为容器在集群外的机器上运行，就像攻击者可能会做的那样，它将检查各种问题：证书中的公开电子邮件地址、不安全的仪表板、开放的端口和端点等。
+- en: Anchore Engine
+  id: totrans-93
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Anchore Engine
+- en: 'The [Anchore Engine](https://oreil.ly/O0ik7) is an open source tool for scanning
+    container images, not only for known vulnerabilities, but to identify the *bill
+    of materials* of everything present in the container, including libraries, configuration
+    files, and file permissions. You can use this to verify containers against user-defined
+    policies: for example, you can block any images that contain security credentials,
+    or application source code.'
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Anchore Engine](https://oreil.ly/O0ik7) 是一个开源工具，用于扫描容器镜像，不仅用于已知的漏洞，还可以识别容器中存在的一切内容的*物料清单*，包括库、配置文件和文件权限。您可以使用此工具根据用户定义的策略验证容器：例如，您可以阻止包含安全凭据或应用程序源代码的任何镜像。'
+- en: Synk
+  id: totrans-95
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Synk
+- en: 'Docker partnered with [Synk](https://snyk.io) to add vulnerability scanning
+    directly into the `docker` CLI tool. You can scan any image using the `docker
+    scan` command:'
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Docker 与 [Synk](https://snyk.io) 合作，将漏洞扫描直接添加到 `docker` CLI 工具中。您可以使用 `docker
+    scan` 命令扫描任何镜像：
+- en: '[PRE11]'
+  id: totrans-97
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: 'Synk will tell you about known security issues and deprecations found in the
+    image:'
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Synk 将告诉您在镜像中发现的已知安全问题和弃用问题：
+- en: '[PRE12]'
+  id: totrans-99
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: This can be a quick and easy way to add some basic security scanning into your
+    Docker workflow as well as your CI/CD pipelines.
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这可以是将一些基本安全扫描快速轻松地添加到您的 Docker 工作流程以及您的 CI/CD 管道中的一种方法。
+- en: Best Practice
+  id: totrans-101
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: Don’t run containers from untrusted sources, or when you’re not sure what’s
+    in them. Run a scanning tool like Clair or Synk over all containers, especially
+    those you build yourself, to make sure there are no known vulnerabilities in any
+    of the base images or dependencies.
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不要从不受信任的源运行容器，或者当您不确定其中包含什么内容时。运行像 Clair 或 Synk 这样的扫描工具来检查所有容器，特别是您自己构建的那些容器，确保基础镜像或依赖项中没有已知的漏洞。
+- en: Backups
+  id: totrans-103
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 备份
+- en: You might be wondering whether you still need backups in cloud native architectures.
+    After all, Kubernetes is inherently reliable and can handle the loss of several
+    nodes at once, without losing state or even degrading application performance
+    too much.
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可能想知道在云原生架构中是否仍然需要备份。毕竟，Kubernetes 本身是可靠的，可以处理一次丢失多个节点的情况，而不会丢失状态，甚至不会显著降低应用程序性能。
+- en: Also, Kubernetes is a declarative IaC system. All Kubernetes resources are described
+    by data stored in a reliable database (`etcd`). In the event of some Pods being
+    accidentally deleted, their supervising Deployment will re-create them from the
+    spec held in the database.
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此外，Kubernetes 是一种声明性的基础架构即代码系统。所有 Kubernetes 资源都由存储在可靠数据库（`etcd`）中的数据描述。如果某些
+    Pod 被意外删除，它们的监控 Deployment 将从数据库中保存的规范重新创建它们。
+- en: Do I Need to Back Up Kubernetes?
+  id: totrans-106
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 我需要备份 Kubernetes 吗？
+- en: So do you still need backups? Well, yes. The data stored on persistent volumes,
+    for example, is vulnerable to failure (see [“Persistent Volumes”](ch08.html#persistent)).
+    While your cloud vendor may provide nominally high-availability volumes (replicating
+    the data across two different availability zones, for example), that’s not the
+    same as backup.
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 那么，您是否仍然需要备份？是的。例如，存储在持久卷上的数据容易出现故障（参见[“持久卷”](ch08.html#persistent)）。虽然您的云供应商可能会提供名义上高可用的卷（例如跨两个不同可用性区域复制数据），但这并非备份。
+- en: 'Let’s repeat that point, because it’s not obvious:'
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们重申这一点，因为这并不明显：
+- en: Warning
+  id: totrans-109
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: '*Replication is not backup*. While replication may protect you from the failure
+    of the underlying storage volume, it won’t protect you from accidentally deleting
+    the volume by mis-clicking in a web console, for example.'
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*复制并非备份*。尽管复制可以保护您免受底层存储卷的故障影响，但它无法防止您在 Web 控制台误点击而意外删除卷，例如。'
+- en: Nor will replication prevent a misconfigured application from overwriting its
+    data, or an operator from running a command with the wrong environment variables
+    and accidentally dropping the production database instead of the development one.
+    ([This has happened](https://oreil.ly/0bxEk), probably more often than anyone’s
+    willing to admit.^([1](ch11.html#idm45979378784352)))
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 复制也不能防止配置错误的应用程序覆盖其数据，或者操作员在运行具有错误环境变量的命令时意外删除生产数据库而不是开发数据库。（[这种情况发生过](https://oreil.ly/0bxEk)，可能比任何人愿意承认的频繁^([1](ch11.html#idm45979378784352)))
+- en: Backing Up etcd
+  id: totrans-112
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 备份 `etcd`
+- en: As we saw in [“High Availability”](ch03.html#highavailability), Kubernetes stores
+    all its state in the `etcd` database, so any failure or data loss here could be
+    catastrophic. That’s one very good reason why we recommend that you use managed
+    services that guarantee the availability of `etcd` and the control plane generally
+    (see [“Use Managed Kubernetes if You Can”](ch03.html#usemanaged)).
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如我们在[“高可用性”](ch03.html#highavailability)中看到的，Kubernetes 将其所有状态存储在 `etcd` 数据库中，因此任何此处的故障或数据丢失都可能是灾难性的。这是为什么我们建议您使用保证
+    `etcd` 和控制平面可用性的托管服务的一个非常好的理由（参见[“如果可以，请使用托管 Kubernetes”](ch03.html#usemanaged)）。
+- en: If you run your own control plane nodes, you are responsible for managing `etcd`
+    clustering and replication. Even with regular data snapshots, it still takes a
+    certain amount of time to retrieve and verify the snapshot, rebuild the cluster,
+    and restore the data. During this time, your cluster will likely be unavailable
+    or seriously degraded.
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您自己运行控制平面节点，则需要负责管理 `etcd` 集群和复制。即使定期进行数据快照，仍然需要一定时间来检索和验证快照，重建集群并恢复数据。在此期间，您的集群可能会不可用或严重降级。
+- en: This is why it is critical that you keep your Kubernetes manifests and Helm
+    charts in source control, and implement efficient deployment processes so that
+    you can get your clusters back up and running quickly if you do have an issue
+    with `etcd`. We will cover this more in [Chapter 14](ch14.html#continuous).
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这就是为什么非常重要，您要将您的 Kubernetes 清单和 Helm 图表存储在源代码控制中，并实施高效的部署流程，以便在出现 `etcd` 问题时能够快速恢复和运行您的集群。我们将在[第
+    14 章](ch14.html#continuous)中进一步介绍此内容。
+- en: Best Practice
+  id: totrans-116
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: Use a managed or turnkey service provider to run your control plane nodes with
+    `etcd` clustering and backups. If you run them yourself, be very sure you know
+    what you’re doing. Resilient `etcd` management is a specialist job, and the consequences
+    of getting it wrong can be serious.
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用托管或即插即用服务提供商运行带有 `etcd` 集群和备份的控制平面节点。如果您自己运行它们，请务必确保您知道自己在做什么。弹性的 `etcd` 管理是一项专业工作，如果做错，后果可能很严重。
+- en: Backing Up Resource State
+  id: totrans-118
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 备份资源状态
+- en: Apart from `etcd` failures, there is also the question of saving the state of
+    your individual resources. If you delete the wrong Deployment, for example, how
+    would you re-create it?
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了 `etcd` 故障外，还有一个问题是保存您的各个资源的状态。例如，如果您误删了错误的 Deployment，您将如何重新创建它？
+- en: Throughout this book we emphasize the value of the *infrastructure as code*
+    paradigm, and recommend that you always manage your Kubernetes resources declaratively,
+    by applying YAML manifests or Helm charts stored in version control.
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本书中，我们强调了 *基础设施即代码* 范式的价值，并建议您始终通过应用存储在版本控制中的 YAML 清单或 Helm 图表来声明式管理您的 Kubernetes
+    资源。
+- en: In theory, then, to re-create the total state of your cluster workloads, you
+    should be able to check out the relevant version control repos and apply all the
+    resources in them. *In theory.*
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 理论上，为了重新创建集群工作负载的完整状态，您应该能够检出相关版本控制存储库，并应用其中的所有资源。*理论上*。
+- en: Backing Up Cluster State
+  id: totrans-122
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 备份集群状态
+- en: In practice, not everything you have in version control is running in your cluster
+    right now. Some apps may have been taken out of service, or replaced by newer
+    versions. Some may not be ready to deploy.
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 实际上，并非您在版本控制中拥有的所有内容都在您的集群中运行。某些应用程序可能已经停止服务，或者被更新版本替换。有些可能尚未准备好部署。
+- en: We’ve recommended throughout this book that you should avoid making direct changes
+    to resources, and instead apply changes from the updated manifest files (see [“When
+    Not to Use Imperative Commands”](ch07.html#dontuseimperative)). However, people
+    don’t always follow good advice.
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在整本书中建议您避免直接更改资源，而是应用来自更新的清单文件的更改（参见 [“不要使用命令式命令”](ch07.html#dontuseimperative)）。但人们并不总是遵循好的建议。
+- en: In any case, it’s likely that during initial deployment and testing of apps,
+    engineers may be adjusting settings like replica count and node affinities on
+    the fly, and only storing them in version control once they’ve arrived at the
+    right values.
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在任何情况下，很可能在应用程序的初始部署和测试过程中，工程师可能会动态调整设置，如副本数和节点亲和性，并且只有在确定了正确值后才将它们存储在版本控制中。
+- en: Supposing your cluster were to be shut down completely, or have all its resources
+    deleted (hopefully an unlikely scenario, but a useful thought experiment). How
+    quickly could you re-create it?
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设你的集群完全关闭，或者所有资源都被删除（希望这种情况不太可能，但这是一个有用的思想实验）。你能多快重新创建它？
+- en: Even if you have an admirably well-designed and up-to-date cluster automation
+    system that can redeploy everything to a fresh cluster, how do you *know* that
+    the state of this cluster matches the one that was lost?
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 即使您有一个设计优良且最新的集群自动化系统，可以重新部署所有内容到一个新的集群，您如何 *知道* 这个集群的状态与丢失的状态匹配？
+- en: One way to help ensure this is to make a snapshot of the running cluster, which
+    you can refer to later in case of problems.
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一种帮助确保这一点的方法是对正在运行的集群进行快照，以便以后在出现问题时进行参考。
+- en: Large and Small Disasters
+  id: totrans-129
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 大型和小型灾难
+- en: 'It’s not very likely that you’d lose the whole cluster: thousands of Kubernetes
+    contributors have worked hard to make sure that doesn’t happen.'
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 很少可能会整个丢失整个集群：成千上万的 Kubernetes 贡献者已经努力确保这种情况不会发生。
+- en: What’s more likely is that you (or your newest team member) might delete a namespace
+    by accident, shut down a Deployment without meaning to, or specify the wrong set
+    of labels to a `kubectl delete` command, removing more than you intended.
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 更有可能的情况是你（或者你最新的团队成员）可能会意外删除一个命名空间，无意中关闭一个 Deployment，或者在 `kubectl delete` 命令中错误地指定了一组标签，导致删除的东西比预期的更多。
+- en: Whatever the cause, disasters do happen, so let’s look at a backup tool that
+    can help you avoid them.
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不管原因是什么，灾难确实会发生，所以让我们看看一个可以帮助您避免它们的备份工具。
+- en: Velero
+  id: totrans-133
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Velero
+- en: '[Velero](https://velero.io) (formerly known as Ark) is a free and open source
+    tool that can back up and restore your cluster state and persistent data.'
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Velero](https://velero.io)（前身为 Ark）是一个可以备份和恢复集群状态及持久数据的免费开源工具。'
+- en: Velero runs in your cluster and connects to a cloud storage service of your
+    choice (for example, Amazon S3 or Azure Storage).
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Velero 在您的集群中运行，并连接到您选择的云存储服务（例如，Amazon S3 或 Azure Storage）。
+- en: Go to the [velero.io website](https://velero.io/docs/main) for the instructions
+    for setting up Velero on your platform.
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 前往 [velero.io 网站](https://velero.io/docs/main) 获取在您的平台上设置 Velero 的说明。
+- en: Configuring Velero
+  id: totrans-137
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 配置 Velero
+- en: 'Before you use Velero, you need to create a `BackupStorageLocation` object
+    in your Kubernetes cluster, telling it where to store backups (for example, an
+    AWS S3 cloud storage bucket). Here’s an example that configures Velero to back
+    up to the `demo-backup` bucket:'
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在使用 Velero 之前，您需要在 Kubernetes 集群中创建一个 `BackupStorageLocation` 对象，告诉它备份存储位置（例如，AWS
+    S3 云存储桶）。这里有一个配置 Velero 将备份到 `demo-backup` 存储桶的示例：
+- en: '[PRE13]'
+  id: totrans-139
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: You must have at least a storage location called `default`, though you can add
+    others with any names you like.
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您必须至少拥有一个名为 `default` 的存储位置，尽管您可以添加其他任何您喜欢的名称。
+- en: 'Velero can also back up the contents of your persistent volumes. To tell it
+    where to store them, you need to create a `VolumeSnapshotLocation` object:'
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Velero 还可以备份您的持久卷的内容。要告诉它存储它们的位置，您需要创建一个 `VolumeSnapshotLocation` 对象：
+- en: '[PRE14]'
+  id: totrans-142
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: Creating a Velero backup
+  id: totrans-143
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 创建一个 Velero 备份
+- en: 'When you create a backup using the `velero backup` command, the Velero server
+    queries the Kubernetes API to retrieve the resources matching the selector you
+    provided (by default, it backs up all resources). You can back up a set of namespaces,
+    or the whole cluster:'
+  id: totrans-144
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用`velero backup`命令创建备份时，Velero服务器会查询Kubernetes API以检索与您提供的选择器匹配的资源（默认情况下，它备份所有资源）。您可以备份一组命名空间或整个集群：
+- en: '[PRE15]'
+  id: totrans-145
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: It will then export all these resources to a named file in your cloud storage
+    bucket, according to your configured BackupStorageLocation. The metadata and contents
+    of your persistent volumes will also be backed up to your configured VolumeSnapshotLocation.
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后，它将根据您配置的BackupStorageLocation将所有这些资源导出到云存储桶中的一个命名文件中。还将备份到您配置的VolumeSnapshotLocation中的持久卷的元数据和内容。
+- en: 'Alternatively, you can back up everything in your cluster *except* specified
+    namespaces (for example, `kube-system`). You can also schedule automatic backups:
+    for example, you can have Velero back up your cluster nightly, or even hourly.'
+  id: totrans-147
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 或者，您可以备份集群中除了指定命名空间（例如，`kube-system`）以外的所有内容。您还可以安排自动备份：例如，您可以让Velero每晚或每小时备份您的集群。
+- en: Each Velero backup is complete in itself, not an incremental backup. So, to
+    restore a backup, you only need the most recent backup file.
+  id: totrans-148
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个Velero备份都是完整的，而不是增量备份。因此，要恢复备份，您只需要最近的备份文件。
+- en: Restoring data
+  id: totrans-149
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 恢复数据
+- en: 'You can list your available backups using the `velero backup get` command.
+    And to see what’s in a particular backup, use `velero backup download`:'
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用`velero backup get`命令可以列出您的可用备份。要查看特定备份中的内容，请使用`velero backup download`：
+- en: '[PRE16]'
+  id: totrans-151
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: The downloaded file is a *tar.gz* archive that you can unpack and inspect using
+    standard tools. If you only want the manifest for a specific resource, for example,
+    you can extract it from the backup file and restore it individually with `kubectl
+    apply -f`.
+  id: totrans-152
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下载的文件是一个* tar.gz *归档文件，您可以使用标准工具解压并检查。如果您只想要特定资源的清单，例如，您可以从备份文件中提取它，并使用`kubectl
+    apply -f`单独恢复它。
+- en: To restore the whole backup, the `velero restore` command will start the process,
+    and Velero will re-create all the resources and volumes described in the specified
+    snapshot, skipping anything that already exists.
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要恢复整个备份，`velero restore`命令将启动该过程，并且Velero将重新创建指定快照中描述的所有资源和卷，跳过任何已经存在的内容。
+- en: If the resource *does* exist, but is different from the one in the backup, Velero
+    will warn you, but not overwrite the existing resource. So, for example, if you
+    want to reset the state of a running Deployment to the way it was in the most
+    recent snapshot, delete the running Deployment first, then restore it with Velero.
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果资源*存在*，但与备份中的资源不同，Velero会警告您，但不会覆盖现有资源。因此，例如，如果您想要将运行中的部署状态重置为最新快照中的状态，请首先删除运行中的部署，然后使用Velero恢复。
+- en: Alternatively, if you’re restoring a backup of a namespace, you can delete the
+    namespace first, and then restore the backup.
+  id: totrans-155
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 或者，如果您正在恢复一个命名空间的备份，可以首先删除该命名空间，然后恢复备份。
+- en: Restore procedures and tests
+  id: totrans-156
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 恢复过程和测试
+- en: You should write a detailed, step-by-step procedure describing how to restore
+    data from backups, and make sure all staff know where to find this document. When
+    a disaster happens, it’s usually at an inconvenient time, the key people aren’t
+    available, everyone’s in a panic, and your procedure should be so clear and precise
+    that it can be carried out by someone who isn’t familiar with Velero or even Kubernetes.
+  id: totrans-157
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您应该编写详细的逐步过程描述如何从备份中恢复数据，并确保所有员工都知道在哪里找到此文档。当灾难发生时，通常是在不方便的时间，关键人员不可用，每个人都处于恐慌状态，您的程序应该如此清晰和精确，以至于可以由不熟悉Velero甚至Kubernetes的人员执行。
+- en: Each month, run a restore test by having a different team member execute the
+    restore procedure against a temporary cluster. This verifies that your backups
+    are good and that the restore procedure is correct, and makes sure everyone is
+    familiar with how to do it.
+  id: totrans-158
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个月，通过让不同团队成员执行恢复过程来运行恢复测试，对一个临时集群。这可以验证您的备份有效，并且恢复过程正确，确保每个人都熟悉如何操作。
+- en: Scheduling Velero backups
+  id: totrans-159
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 安排Velero备份
+- en: 'All backups should be automated, and Velero is no exception. You can schedule
+    a regular backup using the `velero schedule create` command:'
+  id: totrans-160
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有备份都应自动化，Velero也不例外。您可以使用`velero schedule create`命令安排定期备份：
+- en: '[PRE17]'
+  id: totrans-161
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: The `schedule` argument specifies when to run the backup, in Unix `cron` format
+    (see [“CronJobs”](ch09.html#cronjobs)). In the example, `0 1 * * *` runs the backup
+    at 01:00 every day.
+  id: totrans-162
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`schedule` 参数指定何时运行备份，使用 Unix `cron` 格式（参见 [“CronJobs”](ch09.html#cronjobs)）。例如，`0
+    1 * * *` 每天 01:00 运行备份。'
+- en: To see what backups you have scheduled, use `velero schedule get`.
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要查看你计划中的备份，请使用 `velero schedule get`。
+- en: Other uses for Velero
+  id: totrans-164
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: Velero 的其他用途
+- en: While Velero is extremely useful for disaster recovery, you can also use it
+    to migrate resources and data from one cluster.
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管 Velero 在灾难恢复方面非常有用，但你也可以使用它来迁移资源和数据从一个集群到另一个。
+- en: Making regular Velero backups can also help you understand how your Kubernetes
+    usage is changing over time, comparing the current state to the state a month
+    ago, six months ago, and a year ago, for example.
+  id: totrans-166
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 定期进行 Velero 备份还可以帮助你了解你的 Kubernetes 使用情况随时间的变化，比如将当前状态与一个月前、六个月前和一年前的状态进行比较。
+- en: 'The snapshots can also be a useful source of audit information: for example,
+    finding out what was running in your cluster at a given date or time, and how
+    and when the cluster state changed.'
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 快照也可以是审计信息的有用来源：例如，在给定日期或时间运行的集群中有什么在运行，以及集群状态如何以及何时发生了变化。
+- en: Best Practice
+  id: totrans-168
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: 'Use Velero to back up your cluster state and persistent data regularly: at
+    least nightly. Run a restore test at least monthly.'
+  id: totrans-169
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 定期使用 Velero 备份你的集群状态和持久数据：至少每天一次。至少每月运行一次恢复测试。
+- en: Monitoring Cluster Status
+  id: totrans-170
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 监控集群状态
+- en: Monitoring cloud native applications is a big topic, which, as we’ll see in
+    [Chapter 15](ch15.html#observability), includes things like observability, metrics,
+    logging, tracing, and traditional closed-box monitoring.
+  id: totrans-171
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 监控云原生应用是一个重要的主题，正如我们将在 [第 15 章](ch15.html#observability) 中看到的那样，包括可观察性、指标、日志、跟踪和传统的封闭箱监控。
+- en: 'However, in this chapter, we’ll be concerned only with monitoring the Kubernetes
+    cluster itself: the health of the cluster, the status of individual nodes, and
+    the utilization of the cluster and the progress of its workloads.'
+  id: totrans-172
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，在本章中，我们只关心监控 Kubernetes 集群本身：集群的健康状况、单个节点的状态以及集群的利用率和其工作负载的进度。
+- en: kubectl
+  id: totrans-173
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: kubectl
+- en: We introduced the invaluable `kubectl` command in [Chapter 2](ch02.html#firststeps),
+    but we haven’t yet exhausted its possibilities. As well as being a general administration
+    tool for Kubernetes resources, `kubectl` can also report useful information about
+    the state of the cluster components.
+  id: totrans-174
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在 [第 2 章](ch02.html#firststeps) 中介绍了无价的 `kubectl` 命令，但我们还没有探索完它的所有可能性。除了作为
+    Kubernetes 资源的通用管理工具外，`kubectl` 还可以报告有关集群组件状态的有用信息。
+- en: Control plane status
+  id: totrans-175
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 控制平面状态
+- en: 'The `kubectl get componentstatuses` command (or `kubectl get cs` for short)
+    gives health information for the control plane components—the scheduler, the controller
+    manager, and `etcd`:'
+  id: totrans-176
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kubectl get componentstatuses` 命令（或简称 `kubectl get cs`）提供了控制平面组件的健康信息——调度程序、控制器管理器和
+    `etcd`：'
+- en: '[PRE18]'
+  id: totrans-177
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: If there were a serious problem with any of the control plane components, it
+    would soon become apparent anyway, but it’s still handy to be able to check and
+    report on them, as a sort of top-level health indicator for the cluster.
+  id: totrans-178
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果任何控制平面组件出现严重问题，这很快就会显现出来，但仍然有必要能够检查和报告它们，作为集群的一种顶级健康指标。
+- en: If any of your control plane components is not in a `Healthy` state, it will
+    need to be fixed. This should never be the case with a managed Kubernetes service,
+    but for self-hosted clusters, you will have to take care of this yourself.
+  id: totrans-179
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你的任何控制平面组件状态不为 `Healthy`，则需要修复。对于托管 Kubernetes 服务，这种情况不应该发生，但对于自托管集群，你将需要自行处理。
+- en: Node status
+  id: totrans-180
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 节点状态
+- en: 'Another useful command is `kubectl get nodes`, which will list all the nodes
+    in your cluster, and report their status and Kubernetes version:'
+  id: totrans-181
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个有用的命令是 `kubectl get nodes`，它将列出集群中的所有节点，并报告它们的状态和 Kubernetes 版本：
+- en: '[PRE19]'
+  id: totrans-182
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: 'Since Docker Desktop clusters only have one node, this output isn’t particularly
+    informative; let’s look at the output from a small GKE cluster for something more
+    realistic:'
+  id: totrans-183
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于 Docker Desktop 集群只有一个节点，所以这个输出并不特别具有信息量；让我们看一下来自一个小型 GKE 集群的输出，以获得更现实的数据：
+- en: '[PRE20]'
+  id: totrans-184
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: Note that in the Docker Desktop `get nodes` output, the node *role* was shown
+    as `control-plane`. Naturally enough, since there’s only one node, that must be
+    the control plane and the lone worker node, too.
+  id: totrans-185
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，在 Docker Desktop 的 `get nodes` 输出中，节点的 *角色* 显示为 `control-plane`。理所当然的是，因为只有一个节点，那必定是控制平面和唯一的工作节点。
+- en: In managed Kubernetes services, you typically don’t have direct access to the
+    control plane nodes. Accordingly, `kubectl get nodes` lists the worker nodes only.
+  id: totrans-186
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在托管 Kubernetes 服务中，通常无法直接访问控制平面节点。因此，`kubectl get nodes` 仅列出工作节点。
+- en: If any of the nodes shows a status of `NotReady`, there is a problem. A reboot
+    of the node may fix it, but if not, it may need further debugging—or you could
+    just delete it and create a new node instead.
+  id: totrans-187
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果任何节点显示 `NotReady` 状态，则存在问题。重新启动节点可能会修复问题，但如果无效，则可能需要进一步调试——或者您可以删除它，然后创建一个新节点。
+- en: 'For detailed troubleshooting of bad nodes, you can use the `kubectl describe
+    node` command to get more information:'
+  id: totrans-188
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 若要详细排查不良节点问题，您可以使用 `kubectl describe node` 命令获取更多信息：
+- en: '[PRE21]'
+  id: totrans-189
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: This will show you, for example, the memory and CPU capacity of the node, and
+    the resources currently in use by Pods.
+  id: totrans-190
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这将显示节点的内存和 CPU 容量，以及当前由 Pod 使用的资源。
+- en: Workloads
+  id: totrans-191
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 工作负载
+- en: 'You may recall from [“Querying the Cluster with kubectl”](ch04.html#querykubectl)
+    that you can also use `kubectl` to list all Pods (or any resources) in your cluster.
+    In that example, you listed only the Pods in the default namespace, but the `--all-namespaces`
+    flag (or just `-A` for short) will allow you to see all Pods in the entire cluster:'
+  id: totrans-192
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可能还记得来自 [“使用 kubectl 查询集群”](ch04.html#querykubectl) 的内容，您也可以使用 `kubectl` 列出集群中所有
+    Pod（或任何资源）。在该示例中，您仅列出了默认命名空间中的 Pod，但 `--all-namespaces` 标志（或简写为 `-A`）将允许您查看整个集群中的所有
+    Pod：
+- en: '[PRE22]'
+  id: totrans-193
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: This can give you a helpful overview of what’s running in your cluster, and
+    any Pod-level problems. If any Pods are not in `Running` status, like the `permissions-auditor`
+    Pod in the example, it may need further investigation.
+  id: totrans-194
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这可以为您提供集群中正在运行的内容以及任何 Pod 级别的问题的概述。例如，在示例中，如果像 `permissions-auditor` Pod 这样的
+    Pod 不处于 `Running` 状态，则可能需要进一步调查。
+- en: 'The `READY` column shows how many containers in the Pod are actually running,
+    compared to the number configured. For example, the `metrics-api` Pod shows `3/3`:
+    3 out of 3 containers are running, so all is well.'
+  id: totrans-195
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`READY` 列显示 Pod 中实际运行的容器数与配置数的比较。例如，`metrics-api` Pod 显示 `3/3`：3 个容器中的 3 个正在运行，因此一切正常。'
+- en: 'On the other hand, `permissions-auditor` shows `0/1` containers ready: 0 containers
+    running, but 1 required. The reason is shown in the `STATUS` column: `CrashLoopBackOff`.
+    The container is failing to start properly.'
+  id: totrans-196
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一方面，`permissions-auditor` 显示 `0/1` 容器就绪：0 个容器正在运行，但需要 1 个。状态在 `STATUS` 列中显示原因为
+    `CrashLoopBackOff`，容器无法正常启动。
+- en: When a container crashes, Kubernetes will keep trying to restart it at increasing
+    intervals, starting at 10 seconds and doubling each time, up to 5 minutes. This
+    strategy is called *exponential backoff*, hence the `CrashLoopBackOff` status
+    message.
+  id: totrans-197
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当容器崩溃时，Kubernetes 将尝试以递增的时间间隔重新启动它，从 10 秒开始，并每次加倍，最多达到 5 分钟。这种策略称为*指数回退*，因此会显示
+    `CrashLoopBackOff` 状态消息。
+- en: CPU and Memory Utilization
+  id: totrans-198
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: CPU 和内存利用率
+- en: 'Another useful view on your cluster is provided by the `kubectl top` command.
+    For nodes, it will show you the CPU and memory capacity of each node, and how
+    much of each is currently in use:'
+  id: totrans-199
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以通过 `kubectl top` 命令查看集群的另一个有用视图。对于节点，它将显示每个节点的 CPU 和内存容量，以及当前使用量：
+- en: '[PRE23]'
+  id: totrans-200
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: 'For Pods, it will show how much CPU and memory each specified Pod is using:'
+  id: totrans-201
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于 Pod，它将显示每个指定 Pod 正在使用的 CPU 和内存：
+- en: '[PRE24]'
+  id: totrans-202
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: Another useful tool for getting a wide look at the health of the cluster and
+    Pods is to use [“Lens”](ch07.html#lens).
+  id: totrans-203
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用于广泛查看集群和 Pod 健康状况的另一个有用工具是使用 [“Lens”](ch07.html#lens)。
+- en: Cloud Provider Console
+  id: totrans-204
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 云提供商控制台
+- en: If you’re using a managed Kubernetes service that is offered by your cloud provider,
+    then you will have access to a web-based console that can show you useful information
+    about your cluster, its nodes, and workloads.
+  id: totrans-205
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您正在使用云提供商提供的托管 Kubernetes 服务，那么您将可以访问一个基于 web 的控制台，该控制台可以显示有关您的集群、节点和工作负载的有用信息。
+- en: 'You can also list nodes, services, and configuration details for the cluster.
+    This is much the same information as you can get from using the `kubectl` tool,
+    but the cloud consoles also allow you to perform administration tasks: create
+    clusters, upgrade nodes, and everything you’ll need to manage your cluster on
+    a day-to-day basis.'
+  id: totrans-206
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您还可以列出节点、服务和集群的配置详细信息。这与使用 `kubectl` 工具获取的信息基本相同，但云控制台还允许您执行管理任务：创建集群、升级节点以及日常管理集群所需的一切。
+- en: Kubernetes Dashboard
+  id: totrans-207
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Kubernetes 仪表板
+- en: The [Kubernetes Dashboard](https://oreil.ly/3ty9U) is a web-based user interface
+    for Kubernetes clusters ([Figure 11-1](#img-dashboard-1)). If you’re running your
+    own Kubernetes cluster, rather than using a managed service, you can run the Kubernetes
+    Dashboard to get more or less the same information as a managed service console
+    would provide.
+  id: totrans-208
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Kubernetes仪表盘](https://oreil.ly/3ty9U)是一个基于Web的用户界面，用于Kubernetes集群（[图11-1](#img-dashboard-1)）。如果您运行自己的Kubernetes集群，而不是使用托管服务，则可以运行Kubernetes仪表盘，以获得与托管服务控制台基本相同的信息。'
+- en: '![Screenshot of the Kubernetes Dashboard](assets/cnd2_1101.png)'
+  id: totrans-209
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Kubernetes仪表盘的截图](assets/cnd2_1101.png)'
+- en: Figure 11-1\. The Kubernetes Dashboard displays useful information about your
+    cluster
+  id: totrans-210
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图11-1\. Kubernetes仪表盘显示关于您的集群的有用信息
+- en: As you’d expect, the Dashboard lets you see the status of your clusters, nodes,
+    and workloads, in much the same way as the `kubectl` tool, but with a graphical
+    interface. You can also create and destroy resources using the Dashboard.
+  id: totrans-211
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如您所料，仪表盘允许您查看集群、节点和工作负载的状态，方式与`kubectl`工具类似，但具有图形界面。您还可以使用仪表盘创建和销毁资源。
+- en: Because the Dashboard exposes a great deal of information about your cluster
+    and workloads, it’s very important to secure it properly, and never expose it
+    to the public internet. The Dashboard lets you view the contents of ConfigMaps
+    and Secrets, which could contain credentials and crypto keys, so you need to control
+    access to the Dashboard as tightly as you would to those secrets themselves.
+  id: totrans-212
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于仪表盘公开了关于您的集群和工作负载的大量信息，因此正确保护它非常重要，并且绝不能将其暴露在公共互联网上。仪表盘允许您查看ConfigMaps和Secrets的内容，其中可能包含凭据和加密密钥，因此您需要像对待这些秘密本身一样严格控制对仪表盘的访问。
+- en: In 2018, security firm RedLock found [hundreds of Kubernetes Dashboard consoles](https://oreil.ly/3me4L)
+    accessible over the internet without any password protection, including one owned
+    by Tesla, Inc. From these they were able to extract cloud security credentials
+    and use them to access further sensitive information.
+  id: totrans-213
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 2018年，安全公司RedLock发现了数百个[Kubernetes仪表盘控制台](https://oreil.ly/3me4L)可以通过互联网访问而没有任何密码保护，其中包括一个由特斯拉公司所有。他们从中提取了云安全凭证，并使用这些凭证访问了更多的敏感信息。
+- en: Best Practice
+  id: totrans-214
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: If you don’t have to run the Kubernetes Dashboard (for example, if you already
+    have a Kubernetes console provided by a managed service such as GKE), don’t run
+    it. If you do run it, make sure it has [minimum privileges](https://oreil.ly/aCZ1e),
+    and never expose it to the internet. Instead, access it via `kubectl proxy`.
+  id: totrans-215
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您不必运行Kubernetes仪表盘（例如，如果您已经有由GKE等托管服务提供的Kubernetes控制台），则不要运行它。如果确实需要运行，确保它具有[最低权限](https://oreil.ly/aCZ1e)，并且永远不要将其暴露在互联网上。而是通过`kubectl
+    proxy`访问它。
+- en: Weave Scope
+  id: totrans-216
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Weave Scope
+- en: '[Weave Scope](https://oreil.ly/01cLN) is a great visualization and monitoring
+    tool for your cluster, showing you a real-time map of your nodes, containers,
+    and processes. You can also see metrics and metadata, and even start or stop containers
+    using Scope.'
+  id: totrans-217
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Weave Scope](https://oreil.ly/01cLN)是一个出色的可视化和监控工具，适用于您的集群，实时显示节点、容器和进程的地图。您还可以查看指标和元数据，甚至可以使用Scope启动或停止容器。'
+- en: kube-ops-view
+  id: totrans-218
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: kube-ops-view
+- en: '[kube-ops-view](https://oreil.ly/pmTGh) gives you a visualization of what’s
+    happening in your cluster: what nodes there are, the CPU and memory utilization
+    on each, how many Pods each one is running, and the status of those Pods. This
+    is a great way to get a general overview of your cluster and what it’s doing.'
+  id: totrans-219
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[kube-ops-view](https://oreil.ly/pmTGh)为您提供集群中正在发生的情况的可视化：节点信息、每个节点上的CPU和内存利用率、每个节点正在运行的Pod数量以及这些Pod的状态。这是获取集群概览及其运行情况的好方法。'
+- en: node-problem-detector
+  id: totrans-220
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: node-problem-detector
+- en: '[node-problem-detector](https://oreil.ly/rE7Sl) is a Kubernetes add-on that
+    can detect and report several kinds of node-level issues: hardware problems, such
+    as CPU or memory errors, filesystem corruption, and wedged container runtimes.'
+  id: totrans-221
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[node-problem-detector](https://oreil.ly/rE7Sl)是一个Kubernetes附加组件，可以检测并报告几种节点级问题：硬件问题（如CPU或内存错误）、文件系统损坏以及卡住的容器运行时。'
+- en: Currently, node-problem-detector reports problems by sending events to the Kubernetes
+    API, and comes with a Go client library that you can use to integrate with your
+    own tools.
+  id: totrans-222
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当前，node-problem-detector通过向Kubernetes API发送事件来报告问题，并配有一个Go客户端库，您可以用它来与自己的工具集成。
+- en: Although Kubernetes currently does not take any action in response to events
+    from node-problem-detector, there may be further integration in the future that
+    will allow the scheduler to avoid running Pods on problem nodes, for example.
+  id: totrans-223
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管 Kubernetes 目前对来自节点问题检测器的事件不采取任何行动，但未来可能会进一步集成，使调度器能够避免在有问题的节点上运行 Pod，例如。
+- en: Further Reading
+  id: totrans-224
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 进一步阅读
+- en: Kubernetes security and cluster management is a complex and specialized topic,
+    and we’ve only scratched the surface of it here. It really deserves a book of
+    its own… and there is one. Security experts Liz Rice and Michael Hausenblas have
+    written the excellent [*Kubernetes Security*](https://www.oreilly.com/library/view/kubernetes-security/9781492039075/)
+    (O’Reilly), covering secure cluster setup, container security, secrets management,
+    and more.
+  id: totrans-225
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 的安全和集群管理是一个复杂和专业的主题，我们在这里只是浅尝辄止。这确实值得一本专门的书…… 而且已经有了。安全专家Liz Rice和Michael
+    Hausenblas合著了优秀的[*Kubernetes Security*](https://www.oreilly.com/library/view/kubernetes-security/9781492039075/)（O’Reilly），涵盖了安全集群设置、容器安全、密钥管理等内容。
+- en: Another great resource is [*Production Kubernetes*](https://www.oreilly.com/library/view/production-kubernetes/9781492092292//)
+    (O’Reilly) by Josh Rosso, Rich Lander, Alex Brand, and John Harris. We recommend
+    both books highly.
+  id: totrans-226
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个很好的资源是[*Production Kubernetes*](https://www.oreilly.com/library/view/production-kubernetes/9781492092292//)（O’Reilly），由Josh
+    Rosso、Rich Lander、Alex Brand和John Harris合著。我们强烈推荐这两本书。
+- en: Summary
+  id: totrans-227
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 总结
+- en: Security is not a product or an end goal, but an ongoing process that requires
+    knowledge, thought, and attention. Container security is no different, and the
+    machinery to help ensure it is there for you to use. If you’ve read and understood
+    the information in this chapter, you know everything you need to know to configure
+    your containers securely in Kubernetes—but we’re sure you get the point that this
+    should be the start, not the end, of your security process.
+  id: totrans-228
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安全不是一个产品或一个最终目标，而是一个需要知识、思考和关注的持续过程。容器安全也不例外，确保安全的机制可以供你使用。如果你已经阅读并理解了本章的信息，你就知道如何在
+    Kubernetes 中安全配置你的容器了——但我们确信你明白，这只是安全流程的开始，而不是结束。
+- en: 'The main things to keep in mind:'
+  id: totrans-229
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 主要事项
+- en: RBAC gives you fine-grained management of permissions in Kubernetes. Make sure
+    it’s enabled, and use RBAC roles to grant specific users and apps only the minimum
+    privileges they need to do their jobs.
+  id: totrans-230
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: RBAC 在 Kubernetes 中为你提供了细粒度的权限管理。确保启用，并使用 RBAC 角色仅授予特定用户和应用所需的最低权限。
+- en: Containers aren’t magically exempt from security and malware problems. Use a
+    scanning tool to check any containers that you run in production.
+  id: totrans-231
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 容器并非神奇免于安全和恶意软件问题。使用扫描工具来检查你在生产环境中运行的任何容器。
+- en: Using Kubernetes does not mean that you don’t need backups. Use Velero to back
+    up your data and the state of the cluster. It’s handy for moving things between
+    clusters, too.
+  id: totrans-232
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用 Kubernetes 并不意味着你不需要备份。使用 Velero 来备份你的数据和集群状态。它对于在集群之间移动内容也很方便。
+- en: '`kubectl` is a powerful tool for inspecting and reporting on all aspects of
+    your cluster and its workloads. Get friendly with `kubectl`. You’ll be spending
+    a lot of time together.'
+  id: totrans-233
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`kubectl` 是一个强大的工具，可用于检查和报告集群及其工作负载的各个方面。熟悉 `kubectl`。你们将会一起花费很多时间。'
+- en: Use your Kubernetes provider’s web console and `kube-ops-view` for a graphical
+    overview of what’s going on. If you use the Kubernetes Dashboard, secure it as
+    tightly as you would your cloud credentials and crypto keys.
+  id: totrans-234
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用你的 Kubernetes 提供商的 Web 控制台和 `kube-ops-view` 查看图形化概览。如果使用 Kubernetes Dashboard，请像保护云凭证和加密密钥一样保护它的安全性。
+- en: ^([1](ch11.html#idm45979378784352-marker)) See “The Junior Dev Who Deleted the
+    Production Database,” 10 Jun 2017, by David Cassel, on [thenewstack.io blog](https://thenewstack.io).
+  id: totrans-235
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([1](ch11.html#idm45979378784352-marker)) 参见 David Cassel 在2017年6月10日发表的文章“初级开发人员误删生产数据库”，文章发表在
+    [thenewstack.io blog](https://thenewstack.io) 上。

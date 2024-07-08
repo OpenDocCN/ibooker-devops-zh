@@ -1,0 +1,2999 @@
+- en: Chapter 2\. Pod-Level Resources
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第二章\. Pod 级资源
+- en: 'This chapter concerns the atomic unit of Kubernetes deployment: a pod. Pods
+    run apps, and an app may be one or more containers working together in one or
+    more pods.'
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本章涉及 Kubernetes 部署的原子单位：pod。Pod 运行应用程序，一个应用程序可能由一个或多个容器在一个或多个 pod 中协同工作。
+- en: We’ll consider what bad things can happen in and around a pod, and look at how
+    you can mitigate the risk of getting attacked.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将考虑 pod 内外可能发生的坏事，并探讨如何减少遭受攻击的风险。
+- en: As with any sensible security effort, we’ll begin by defining a lightweight
+    threat model for your system, identifying the threat actors it defends against,
+    and highlighting the most dangerous threats. This gives you a solid basis to devise
+    countermeasures and controls, and take defensive steps to protect your customer’s
+    valuable data.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与任何合理的安全工作一样，我们将首先为系统定义一个轻量级的威胁模型，识别它所防御的威胁行为者，并突出最危险的威胁。这为您制定对策和控制措施，采取防御步骤以保护客户的宝贵数据提供了坚实的基础。
+- en: We’ll go deep into the security model of a pod and look at what is trusted by
+    default, where we can tighten security with configuration, and what an attacker’s
+    journey looks like.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将深入探讨 pod 的安全模型，并查看默认可信的内容，通过配置可以加强安全性，以及攻击者的行动轨迹。
+- en: Defaults
+  id: totrans-5
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 默认值
+- en: Kubernetes has historically not been security hardened out of the box, and sometimes
+    this may lead to privilege escalation or container breakout.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 历来没有默认进行安全加固，有时这可能导致权限提升或容器突破。
+- en: If we zoom in on the relationship between a single pod and the host in [Figure 2-1](#pod-diagram-temp),
+    we can see the services offered to the container by the `kubelet` and potential
+    security boundaries that may keep an adversary at bay.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果我们放大单个 pod 与主机之间的关系，在[图 2-1](#pod-diagram-temp)中，我们可以看到 `kubelet` 为容器提供的服务以及可能限制对手的潜在安全边界。
+- en: By default much of this is sensibly configured with least privilege, but where
+    user-supplied configuration is more common (pod YAML, cluster policy, container
+    images) there are more opportunities for accidental or malicious misconfiguration.
+    Most defaults are sane—in this chapter we will show you where they are not, and
+    demonstrate how to test that your clusters and workloads are configured securely.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，许多配置都是按最小特权合理配置的，但用户提供的配置更常见（如 pod YAML、集群策略、容器镜像），存在更多意外或恶意配置的机会。大多数默认配置是明智的——在本章中，我们将展示它们的例外情况，并演示如何测试您的集群和工作负载是否安全配置。
+- en: '![Pod Architecture](Images/haku_0201.png)'
+  id: totrans-9
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Pod 架构](Images/haku_0201.png)'
+- en: Figure 2-1\. Pod architecture
+  id: totrans-10
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-1\. Pod 架构
+- en: Threat Model
+  id: totrans-11
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 威胁模型
+- en: 'We define a scope for each threat model. Here, you are threat modeling a pod.
+    Let’s consider a simple group of Kubernetes threats to begin with:'
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们为每个威胁模型定义了一个范围。在这里，您正在对 pod 进行威胁建模。让我们首先考虑 Kubernetes 威胁的一个简单组。
+- en: '[Attacker on the network](https://oreil.ly/PoRXb)'
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[网络上的攻击者](https://oreil.ly/PoRXb)'
+- en: Sensitive endpoints (such as the API server) can be attacked easily if public.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 敏感端点（如 API 服务器）如果公开，易受攻击。
+- en: '[Compromised application leads to foothold in container](https://oreil.ly/CYG04)'
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[应用程序被妥协，导致容器立足点](https://oreil.ly/CYG04)'
+- en: A compromised application (remote code execution, supply chain compromise) is
+    the start of an attack.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用程序被妥协（远程代码执行、供应链被篡改）是攻击的开始。
+- en: '[Establish persistence](https://oreil.ly/zJGhK)'
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[建立持久性](https://oreil.ly/zJGhK)'
+- en: Stealing credentials or gaining persistence resilient to pod, node, and/or container
+    restarts.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 窃取凭据或获得对 pod、节点和/或容器重启具有韧性的持久性。
+- en: '[Malicious code execution](https://oreil.ly/POnQ9)'
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[恶意代码执行](https://oreil.ly/POnQ9)'
+- en: Running exploits to pivot or escalate and enumerating endpoints.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运行利用来旋转或升级，并枚举端点。
+- en: '[Access sensitive data](https://oreil.ly/agQ7E)'
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[访问敏感数据](https://oreil.ly/agQ7E)'
+- en: Reading Secret data from the API server, attached storage, and network-accessible
+    datastores.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从 API 服务器、附加存储和可通过网络访问的数据存储中读取机密数据。
+- en: '[Denial of service](https://oreil.ly/nr7Cb)'
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[拒绝服务](https://oreil.ly/nr7Cb)'
+- en: Rarely a good use of an attacker’s time. Denial of Wallet and cryptolocking
+    are common variants.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对攻击者而言，这很少是一个好的时间利用。拒绝钱包服务和加密锁定是常见的变体。
+- en: Tip
+  id: totrans-25
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: The threat sources in [“Prior Art”](ch01.xhtml#PriorArt) have other negative
+    outcomes to cross-reference with this list.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[“先前的艺术”](ch01.xhtml#PriorArt)中的威胁源有其他负面结果可以与此列表进行交叉参考。'
+- en: Anatomy of the Attack
+  id: totrans-27
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 攻击解剖
+- en: '![captain](Images/haku_0000.png)'
+  id: totrans-28
+  prefs: []
+  type: TYPE_IMG
+  zh: '![captain](Images/haku_0000.png)'
+- en: Captain Hashjack started their assault on your systems by enumerating BCTL’s
+    DNS subdomains and S3 buckets. These could have offered an easy way into the organization’s
+    systems, but there was nothing easily exploitable on this occasion.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Hashjack船长通过枚举BCTL的DNS子域和S3存储桶来开始对系统的攻击。这些可能为进入组织系统提供了一条简单的途径，但在这次事件中没有找到易于利用的东西。
+- en: Undeterred, they create an account on the public website and log in, using a
+    web application scanner like [zaproxy](https://www.zaproxy.org) (OWASP Zed Attack
+    Proxy) to pry into API calls and application code for unexpected responses. They’re
+    on the search for leaking web-server banner and version information (to learn
+    which exploits might succeed) and are generally injecting and fuzzing APIs for
+    poorly handled user input.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不受阻挡，他们在公共网站上创建一个帐户并登录，使用像[zaproxy](https://www.zaproxy.org)（OWASP Zed Attack
+    Proxy）这样的Web应用扫描器，来窥探API调用和应用程序代码，寻找意外响应。他们在寻找泄露Web服务器标头和版本信息（以了解哪些漏洞可能成功），通常会注入和模糊API以处理不良处理的用户输入。
+- en: This is not a level of scrutiny that your poorly maintained codebase and systems
+    are likely to withstand for long. Attackers may be searching for a needle in a
+    haystack, but only the safest haystack has no needles at all.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种严格程度，你糟糕维护的代码库和系统可能不会经受太久。攻击者可能在大海捞针，但只有最安全的干草堆里根本没有针。
+- en: Caution
+  id: totrans-32
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: 'Any computer should be resistant to this type of indiscriminate attack: a Kubernetes
+    system should achieve “minimum viable security” through the capability to protect
+    itself from casual attack with up-to-date software and hardened configuration.
+    Kubernetes encourages regular updates by supporting the last three minor releases
+    (e.g., 1.24, 1.23, and 1.22), which are released every 4 months and ensure a year
+    of patch support. Older versions are unsupported and likely to be vulnerable.'
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 任何计算机都应该抵抗这种不加区分的攻击类型：Kubernetes系统应通过能够使用最新软件和硬化配置保护自己来实现“最小可行安全性”。Kubernetes鼓励定期更新，支持最近的三个次要版本（例如1.24、1.23和1.22），每4个月发布一次，确保一年的补丁支持。旧版本不受支持且可能存在漏洞。
+- en: Although many parts of an attack can be automated, this is an involved process.
+    A casual attacker is more likely to scan widely for software paths that trigger
+    published CVEs and run automated tools and scripts against large ranges of IPs
+    (such as the ranges advertised by public cloud providers). These are noisy approaches.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管攻击的许多部分可以自动化，但这是一个复杂的过程。普通的攻击者更可能广泛扫描触发已发布CVE的软件路径，并运行自动化工具和脚本针对大范围的IP地址（例如公共云提供商广告的范围）。这些方法很吵。
+- en: Remote Code Execution
+  id: totrans-35
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 远程代码执行
+- en: 'If a vulnerability in your application can be used to run untrusted (and in
+    this case, external) code, it is called a remote code execution (RCE). An adversary
+    can use an RCE to spawn a remote control session into the application’s environment:
+    here it is the container handling the network request, but if the RCE manages
+    to pass untrusted input deeper into the system, it may exploit a different process,
+    pod, or cluster.'
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你的应用程序中存在漏洞可以用来运行不可信的（在这种情况下是外部的）代码，这被称为远程代码执行（RCE）。对手可以使用RCE生成一个远程控制会话到应用程序的环境中：这里是处理网络请求的容器，但如果RCE设法将不可信的输入传递到系统更深层，它可能利用不同的进程、Pod或集群。
+- en: Your first goal of Kubernetes and pod security should be to prevent RCE, which
+    could be as simple as a `kubectl exec`, or as complex as a reverse shell, such
+    as the one demonstrated in [Figure 2-2](#pods-reverse-shell).
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes和Pod安全的第一个目标应该是防止RCE，这可能是像`kubectl exec`这样简单，或者像在[图2-2](#pods-reverse-shell)中演示的反向Shell那样复杂。
+- en: '![haku 0202](Images/haku_0202.png)'
+  id: totrans-38
+  prefs: []
+  type: TYPE_IMG
+  zh: '![haku 0202](Images/haku_0202.png)'
+- en: Figure 2-2\. Reverse shell into a Kubernetes pod
+  id: totrans-39
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图2-2\. Kubernetes Pod中的反向Shell
+- en: Application code changes frequently and may hide undiscovered bugs, so robust
+    application security (AppSec) practices (including IDE and CI/CD integration of
+    tooling and dedicated security requirements as task acceptance criteria) are essential
+    to keep an attacker from compromising the processes running in a pod.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用程序代码经常变动，可能隐藏未发现的错误，因此强大的应用程序安全（AppSec）实践（包括工具的IDE和CI/CD集成以及专门的安全需求作为任务验收标准）对阻止攻击者入侵运行在Pod中的进程至关重要。
+- en: Note
+  id: totrans-41
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The Java framework Struts was one of the most widely deployed libraries to have
+    suffered a remotely exploitable vulnerability (CVE-2017-5638), which contributed
+    to the breach of Equifax customer data. To fix a supply chain vulnerability like
+    this in a container, it is quickly rebuilt in CI with a patched library and redeployed,
+    reducing the risk window of vulnerable libraries being exposed to the internet.
+    We examine other ways to get remote code execution throughout the book.
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Java 框架 Struts 是曾经部署最广泛的库之一，存在一个远程可利用的漏洞（CVE-2017-5638），这导致了 Equifax 客户数据泄漏事件。为了解决容器中此类供应链漏洞，可以通过
+    CI 快速重新构建带补丁的库并重新部署，从而减少暴露于互联网的易受攻击的库的风险窗口。我们将在全书中探讨其他获取远程代码执行的方法。
+- en: With that, let’s move on to the network aspects.
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有了这些，让我们继续讨论网络方面的内容。
+- en: Network Attack Surface
+  id: totrans-44
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 网络攻击面
+- en: The greatest attack surface of a Kubernetes cluster is its network interfaces
+    and public-facing pods. Network-facing services such as web servers are the first
+    line of defense in keeping your clusters secure, a topic we will dive into in
+    [Chapter 5](ch05.xhtml#ch-networking).
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 集群最大的攻击面是其网络接口和面向公众的 pod。面向网络的服务如 Web 服务器是保持集群安全的第一道防线，这是我们将在[第五章](ch05.xhtml#ch-networking)中深入探讨的主题。
+- en: This is because unknown users coming in from across the network can scan network-facing
+    applications for the exploitable signs of RCE. They can use automated network
+    scanners to attempt to exploit known vulnerabilities and input-handling errors
+    in network-facing code. If a process or system can be forced to run in an unexpected
+    way, there is the possibility that it can be compromised through these untested
+    logic paths.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是因为从网络各处进入的未知用户可以扫描面向网络的应用程序，寻找远程代码执行的可利用迹象。他们可以使用自动化的网络扫描工具来尝试利用已知的漏洞和网络代码中的输入处理错误。如果一个进程或系统被迫以意外的方式运行，那么通过这些未经测试的逻辑路径，它可能会被攻击者利用。
+- en: To investigate how an attacker may establish a foothold in a remote system using
+    only the humble, all-powerful Bash shell, see, for example, Chapter 16 of [*Cybersecurity
+    Ops with bash*](https://oreil.ly/ZmILo) by Paul Troncone and Carl Albing (O’Reilly).
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要了解攻击者如何仅仅通过强大的但又谦逊的 Bash shell 在远程系统中建立立足点，例如，可以参考《[Cybersecurity Ops with
+    bash](https://oreil.ly/ZmILo)》一书的第16章，作者为 Paul Troncone 和 Carl Albing（O’Reilly）。
+- en: To defend against this, we must scan containers for operating system and application
+    CVEs in the hope of updating them before they are exploited.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了防御此类攻击，我们必须扫描容器，寻找操作系统和应用程序的 CVE 漏洞，并希望在它们被利用之前对其进行更新。
+- en: If Captain Hashjack has an RCE into a pod, it’s a foothold to attack your system
+    more deeply from the pod’s network position and permissions set. You should strive
+    to limit what an attacker can do from this position, and customize your security
+    configuration to a workload’s sensitivity. If your controls are too loose, this
+    may be the beginning of an organization-wide breach for your employer, BCTL.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果 Hashjack 船长成功远程代码执行到一个 pod 内部，这将成为深入攻击您系统的一个立足点，通过 pod 的网络位置和权限设置。您应该努力限制攻击者在这个位置能做的事情，并根据工作负载的敏感性定制您的安全配置。如果您的控制太松散，这可能是雇主
+    BCTL 公司范围内遭遇全面违规的开端。
+- en: Tip
+  id: totrans-50
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: For an example of spawning a shell via Struts with Metasploit, see [Sam Bowne’s
+    guide](https://oreil.ly/nzsxP).
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如使用 Metasploit 在 Struts 中生成一个 shell，请参阅[Sam Bowne 的指南](https://oreil.ly/nzsxP)。
+- en: As Dread Pirate Hashjack has just discovered, we have also been running a vulnerable
+    version of the Struts library. This offers an opportunity to start attacking the
+    cluster from within.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如 Dread Pirate Hashjack 刚刚发现的，我们还一直在运行一个有漏洞的 Struts 库版本。这给攻击者从内部开始攻击集群提供了机会。
+- en: Warning
+  id: totrans-53
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: 'A simple Bash reverse shell like this one is a good reason to remove Bash from
+    your containers. It uses Bash’s virtual */dev/tcp/* filesystem, and is not exploitable
+    in `sh`, which doesn’t include this oft-abused feature:'
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 类似这样一个简单的 Bash 反向 shell 是移除容器中 Bash 的一个很好的理由。它利用了 Bash 的虚拟 */dev/tcp/* 文件系统，而在不包含这个常被滥用功能的`sh`中则无法利用：
+- en: '[PRE0]'
+  id: totrans-55
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'As the attack begins, let’s take a look at where the pirates have landed: inside
+    a Kubernetes pod.'
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 攻击开始时，让我们看看海盗们登陆的位置：在一个 Kubernetes pod 内部。
+- en: 'Kubernetes Workloads: Apps in a Pod'
+  id: totrans-57
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Kubernetes 工作负载：Pod 内的应用程序
+- en: Multiple cooperating containers can be logically grouped into a single pod,
+    and every container Kubernetes runs must run inside a pod. Sometimes a pod is
+    called a “workload,” which is one of many copies of the same execution environment.
+    Each pod must run on a Node in your Kubernetes cluster as shown in [Figure 2-3](#pod-cluster-example).
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 多个协作容器可以被逻辑地分组到一个 pod 中，Kubernetes 运行的每个容器必须运行在一个 pod 内。有时一个 pod 被称为一个“工作负载”，这是同一个执行环境的多个副本之一。每个
+    pod 必须在你的 Kubernetes 集群中的一个节点上运行，如图 [2-3](#pod-cluster-example) 所示。
+- en: A pod is a single instance of your application, and to scale to demand, many
+    identical pods are used to replicate the application by a workload resource (such
+    as a Deployment, DaemonSet, or StatefulSet).
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个 pod 是你的应用的单个实例，为了按需扩展，使用多个相同的 pod 来复制应用程序，通过工作负载资源（如 Deployment、DaemonSet
+    或 StatefulSet）。
+- en: Your pods may include sidecar containers supporting monitoring, network, and
+    security, and “init” containers for pod bootstrap, enabling you to deploy different
+    application styles. These sidecars are likely to have elevated privileges and
+    be of interest to an adversary.
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你的 pod 可能包括支持监控、网络和安全的 sidecar 容器，以及用于 pod 引导的“init”容器，使你能够部署不同的应用程序风格。这些 sidecar
+    很可能具有提升的权限，并且对攻击者来说是感兴趣的对象之一。
+- en: “Init” containers run in order (first to last) to set up a pod and can make
+    security changes to the namespaces, like Istio’s init container that configures
+    the pod’s *iptables* (in the kernel’s netfilter) so the runtime (non-init container)
+    pods route traffic through a sidecar container. Sidecars run alongside the primary
+    container in the pod, and all non-init containers in a pod start at the same time.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: “Init” 容器按顺序运行（从头到尾）以设置一个 pod，并可以对命名空间进行安全更改，例如 Istio 的 init 容器配置 pod 的 *iptables*（在内核的
+    netfilter 中），以便运行时（非 init 容器）的 pod 通过 sidecar 容器路由流量。Sidecar 与 pod 中的主要容器并行运行，一个
+    pod 中的所有非 init 容器同时启动。
+- en: '![Cluster deployment example](Images/haku_0203.png)'
+  id: totrans-62
+  prefs: []
+  type: TYPE_IMG
+  zh: '![集群部署示例](Images/haku_0203.png)'
+- en: 'Figure 2-3\. Cluster deployment example; source: [Kubernetes documentation](https://oreil.ly/Co9Hx)'
+  id: totrans-63
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-3\. 集群部署示例；来源：[Kubernetes 文档](https://oreil.ly/Co9Hx)
+- en: What’s inside a pod? Cloud native applications are often microservices, web
+    servers, workers, and batch processes. Some pods run one-shot tasks (wrapped with
+    a job, or maybe one single nonrestarting container), perhaps running multiple
+    other pods to assist. All these pods present an opportunity to an attacker. Pods
+    get hacked. Or, more often, a network-facing container process gets hacked.
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 云原生应用通常是微服务、Web 服务器、工作者和批处理进程。一些 pod 运行一次性任务（封装在作业中，或者可能是一个单独的不重启的容器），也许运行多个其他
+    pod 以进行辅助。所有这些 pod 都为攻击者提供了机会。Pod 被入侵了。或者更常见的是，一个面向网络的容器进程被入侵。
+- en: A pod is a trust boundary encompassing all the containers inside, including
+    their identity and access. There is still separation between pods that you can
+    enhance with policy configuration, but you should consider the entire contents
+    of a pod when threat modeling it.
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个 pod 是一个信任边界，包括其内部的所有容器，包括它们的身份和访问权限。在 pod 之间仍然存在分离，你可以通过策略配置增强它，但在威胁建模时应考虑
+    pod 的所有内容。
+- en: Tip
+  id: totrans-66
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: Tip
+- en: Kubernetes is a distributed system, and ordering of actions (such as applying
+    a multidoc YAML file) is eventually consistent, meaning that API calls don’t always
+    complete in the order that you expect. Ordering depends on various factors and
+    shouldn’t be relied upon. Tabitha Sable has a mechanically sympathetic definition
+    of Kubernetes.
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 是一个分布式系统，操作的顺序（例如应用多文档 YAML 文件）是最终一致的，这意味着 API 调用并不总是按照你期望的顺序完成。顺序依赖于各种因素，不应该依赖于它们。Tabitha
+    Sable 对 Kubernetes 有一个机械同情的定义。
+- en: '![tabby sable](Images/haku_0204.png)'
+  id: totrans-68
+  prefs: []
+  type: TYPE_IMG
+  zh: '![tabby sable](Images/haku_0204.png)'
+- en: What’s a Pod?
+  id: totrans-69
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 什么是 Pod？
+- en: A pod as depicted in [Figure 2-4](#pod-examples) is a Kubernetes invention.
+    It’s an environment for multiple containers to run inside. The pod is the smallest
+    deployable unit you can ask Kubernetes to run and all containers in it will be
+    launched on the same node. A pod has its own IP address, can mount in storage,
+    and its namespaces surround the containers created by the container runtime such
+    as `containerd` or CRI-O.
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个 pod 如图 [2-4](#pod-examples) 所示，是 Kubernetes 的一项发明。它是多个容器运行的环境。Pod 是你可以要求
+    Kubernetes 运行的最小可部署单元，并且其中的所有容器将在同一节点上启动。一个 pod 拥有自己的 IP 地址，可以挂载存储，其命名空间包围由容器运行时（如
+    `containerd` 或 CRI-O）创建的容器。
+- en: '![Example pods](Images/haku_0205.png)'
+  id: totrans-71
+  prefs: []
+  type: TYPE_IMG
+  zh: '![示例 pods](Images/haku_0205.png)'
+- en: 'Figure 2-4\. Example pods (source: [Kubernetes documentation](https://oreil.ly/YwBSv))'
+  id: totrans-72
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-4\. 示例 pods（来源：[Kubernetes 文档](https://oreil.ly/YwBSv)）
+- en: A container is a mini-Linux, and its processes are containerized with control
+    groups (`cgroups`) to limit resource usage and namespaces to limit access. A variety
+    of other controls can be applied to restrict a containerized process’s behavior,
+    as we’ll see in this chapter.
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器是一个迷你 Linux，其进程通过控制组（`cgroups`）进行容器化，以限制资源使用，并通过命名空间限制访问。正如我们将在本章中看到的，还可以应用各种其他控制来限制容器化进程的行为。
+- en: The lifecycle of a pod is controlled by the `kubelet`, the Kubernetes API server’s
+    deputy, deployed on each node in the cluster to manage and run containers. If
+    the `kubelet` loses contact with the API server, it will continue to manage its
+    workloads, restarting them if necessary. If the `kubelet` crashes, the container
+    manager will also keep containers running in case they crash. The `kubelet` and
+    container manager oversee your workloads.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod 的生命周期由 `kubelet` 控制，它是 Kubernetes API 服务器的副手，部署在集群中的每个节点上来管理和运行容器。如果 `kubelet`
+    与 API 服务器失去联系，它将继续管理其工作负载，并在必要时重新启动它们。如果 `kubelet` 崩溃，容器管理器也会保持容器的运行状态，以防它们崩溃。`kubelet`
+    和容器管理器负责监视您的工作负载。
+- en: The `kubelet` runs pods on worker nodes to instruct the container runtime and
+    configuring network and storage. Each container in a pod is a collection of Linux
+    namespaces, `cgroups`, capabilities, and Linux Security Modules (LSMs). As the
+    container runtime builds a container, each namespace is created and configured
+    individually before being combined into a container.
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kubelet` 在工作节点上运行 Pod，指导容器运行时并配置网络和存储。Pod 中的每个容器都是 Linux 命名空间、`cgroups`、权限和
+    Linux 安全模块（LSM）的集合。当容器运行时构建容器时，每个命名空间都会被单独创建和配置，然后再组合成一个容器。'
+- en: Tip
+  id: totrans-76
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: Capabilities are individual switches for “special” root user operations such
+    as changing any file’s permissions, loading modules into the kernel, accessing
+    devices in raw mode (e.g., networks and I/O), BPF and performance monitoring,
+    and every other operation.
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 权限（Capabilities）是针对“特殊”根用户操作的单个开关，例如更改任何文件的权限、将模块加载到内核中、以原始模式访问设备（例如网络和 I/O）、BPF
+    和性能监视，以及其他每一项操作。
+- en: The root user has all capabilities, and capabilities can be granted to any process
+    or user (“ambient capabilities”). Excess capability grants may lead to container
+    breakout, as we see later in this chapter.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 根用户拥有所有权限，并且可以授予任何进程或用户（“环境权限”）。在本章后面我们将看到，过多的权限授予可能会导致容器的突破。
+- en: In Kubernetes, a newly created container is added to the pod by the container
+    runtime, where it shares network and interprocess communication namespaces between
+    pod containers.
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 中，容器运行时会将新创建的容器添加到 Pod 中，其中它会在 Pod 容器之间共享网络和进程通信命名空间。
+- en: '[Figure 2-5](#node-examples) shows a `kubelet` running four individual pods
+    on a single node.'
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 2-5](#node-examples) 显示了一个 `kubelet` 在单个节点上运行四个独立的 Pod。'
+- en: 'The container is the first line of defense against an adversary, and container
+    images should be scanned for CVEs before being run. This simple step reduces the
+    risk of running an outdated or malicious container and informs your risk-based
+    deployment decisions: do you ship to production, or is there an exploitable CVE
+    that needs patching first?'
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器是对抗敌人的第一道防线，应在运行之前扫描容器镜像以检测 CVE（公共漏洞和暴露）。这一简单步骤可以降低运行过时或恶意容器的风险，并帮助您基于风险做出部署决策：您是否将其部署到生产环境中，或者是否需要先修补可利用的
+    CVE？
+- en: '![Example pods on a node](Images/haku_0206.png)'
+  id: totrans-82
+  prefs: []
+  type: TYPE_IMG
+  zh: '![节点上的示例Pod](Images/haku_0206.png)'
+- en: 'Figure 2-5\. Example pods on a node (source: [Kubernetes documentation](https://oreil.ly/ksFim))'
+  id: totrans-83
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-5\. 节点上的示例Pod（来源：[Kubernetes文档](https://oreil.ly/ksFim)）
+- en: Tip
+  id: totrans-84
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: “Official” container images in public registries have a greater likelihood of
+    being up to date and well-patched, and Docker Hub signs all official images with
+    Notary, as we’ll see in [Chapter 4](ch04.xhtml#ch-apps-supply-chain).
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 公共注册表中的“官方”容器镜像更有可能是最新的并且已经修补完毕，Docker Hub 使用 Notary 对所有官方镜像进行签名，正如我们将在 [第四章](ch04.xhtml#ch-apps-supply-chain)
+    中看到的。
+- en: Public container registries often host malicious images, so detecting them before
+    production is essential. [Figure 2-6](#app-poison-container-registry) shows how
+    this might happen.
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 公共容器注册表通常托管恶意镜像，因此在生产之前检测它们至关重要。[图 2-6](#app-poison-container-registry) 展示了这种可能发生的情况。
+- en: The `kubelet` attaches pods to a Container Network Interface (CNI). CNI network
+    traffic is treated as layer 4 TCP/IP (although the underlying network technology
+    used by the CNI plug-in may differ), and encryption is the job of the CNI plug-in,
+    the application, a service mesh, or at a minimum, the underlay networking between
+    the nodes. If traffic is unencrypted, it may be sniffed by a compromised pod or
+    node.
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kubelet`将pod连接到容器网络接口（CNI）。 CNI 网络流量被视为第4层TCP/IP（尽管CNI插件使用的底层网络技术可能不同），加密由CNI插件、应用程序、服务网格或至少节点之间的底层网络处理。如果流量未加密，可能会被受损pod或节点嗅探。'
+- en: '![Poisoning a public container registry](Images/haku_0207.png)'
+  id: totrans-88
+  prefs: []
+  type: TYPE_IMG
+  zh: '![污染公共容器注册表](Images/haku_0207.png)'
+- en: Figure 2-6\. Poisoning a public container registry
+  id: totrans-89
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图2-6\. 污染公共容器注册表
+- en: Warning
+  id: totrans-90
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Although starting a malicious container under a correctly configured container
+    runtime is usually safe, there have been attacks against the container bootstrap
+    phase. We examine the */proc/self/exe* breakout CVE-2019-5736 later in this chapter.
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然在正确配置的容器运行时下启动恶意容器通常是安全的，但已经有攻击针对容器引导阶段。我们将在本章稍后讨论*/proc/self/exe*突破CVE-2019-5736。
+- en: Pods can also have storage attached by Kubernetes, using the ([Container Storage
+    Interface (CSI)](https://oreil.ly/S8v3B)), which includes the PersistentVolumeClaim
+    and StorageClass shown in [Figure 2-7](#pod-cluster-example-2). In [Chapter 6](ch06.xhtml#ch-storage)
+    we will get deeper into the storage aspects.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pods还可以通过Kubernetes附加存储，使用[容器存储接口（CSI）](https://oreil.ly/S8v3B)，其中包括[Figure 2-7](#pod-cluster-example-2)中显示的PersistentVolumeClaim和StorageClass。在[第6章](ch06.xhtml#ch-storage)中，我们将更深入地探讨存储方面的内容。
+- en: 'In [Figure 2-7](#pod-cluster-example-2) you can see a view of the control plane
+    and the API server’s central role in the cluster. The API server is responsible
+    for interacting with the cluster datastore (`etcd`), hosting the cluster’s extensible
+    API surface, and managing the `kubelet`s. If the API server or `etcd` instance
+    is compromised, the attacker has complete control of the cluster: these are the
+    most sensitive parts of the system.'
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[图2-7](#pod-cluster-example-2)中，您可以看到控制平面和 API 服务器在集群中的中心角色。 API 服务器负责与集群数据存储（`etcd`）交互，托管集群的可扩展
+    API 表面，并管理`kubelet`。如果 API 服务器或`etcd`实例被攻击者控制，攻击者将完全控制集群：这些是系统中最敏感的部分。
+- en: '![Cluster Example 2](Images/haku_0208.png)'
+  id: totrans-94
+  prefs: []
+  type: TYPE_IMG
+  zh: '![集群示例2](Images/haku_0208.png)'
+- en: 'Figure 2-7\. Cluster example 2 (source: [Tsuyoshi Ushio](https://oreil.ly/szUug))'
+  id: totrans-95
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图2-7\. 集群示例2（来源：[Tsuyoshi Ushio](https://oreil.ly/szUug)）
+- en: Warning
+  id: totrans-96
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Vulnerabilities have been found in many storage drivers, including CVE-2018-11235,
+    which exposed a Git attack on the `gitrepo` storage volume, and CVE-2017-1002101,
+    a subpath volume mount mishandling error. We will cover these in [Chapter 6](ch06.xhtml#ch-storage).
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 许多存储驱动程序存在漏洞，包括CVE-2018-11235，它在`gitrepo`存储卷上暴露了对Git的攻击，以及CVE-2017-1002101，一个子路径卷挂载处理错误。我们将在[第6章](ch06.xhtml#ch-storage)中详细介绍这些内容。
+- en: For performance in larger clusters, the control plane should run on separate
+    infrastructure to `etcd`, which requires high disk and network I/O to support
+    reasonable response times for its distributed consensus algorithm, [Raft](https://oreil.ly/V5lbf).
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于较大的集群性能，控制平面应在独立的基础设施上运行，以与`etcd`分离，后者需要高磁盘和网络I/O以支持其分布式共识算法[Raft](https://oreil.ly/V5lbf)的合理响应时间。
+- en: 'As the API server is the `etcd` cluster’s only client, compromise of either
+    effectively roots the cluster: due to the asynchronous scheduling, in Kubernetes
+    the injection of malicious, unscheduled pods into `etcd` will trigger their scheduling
+    to a `kubelet`.'
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于API服务器是`etcd`集群的唯一客户端，攻击者成功攻击其中一个将有效地获取对集群的控制权：由于异步调度，在Kubernetes中，将恶意的未安排的pod注入`etcd`将触发它们被调度到`kubelet`。
+- en: As with all fast-moving software, there have been vulnerabilities in most parts
+    of the Kubernetes stack. The only solution to running modern software is a healthy
+    continuous integration infrastructure capable of promptly redeploying vulnerable
+    clusters upon a vulnerability announcement.
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与所有快速移动的软件一样，Kubernetes 栈的大部分组件都存在漏洞。运行现代软件的唯一解决方案是具备健康的持续集成基础设施，能够在漏洞公告后及时重新部署受影响的集群。
+- en: Understanding Containers
+  id: totrans-101
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 理解容器
+- en: Okay, so we have a high-level view of a cluster. But at a low level, what is
+    a “container”? It is a microcosm of Linux that gives a process the illusion of
+    a dedicated kernel, network, and userspace. Software trickery fools the process
+    inside your container into believing it is the only process running on the host
+    machine. This is useful for isolation and migration of your existing workloads
+    into Kubernetes.
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 好了，我们已经对集群有了高层次的视图。但是在低层次上，“容器”是什么？它是Linux的微观世界，为进程提供了一个专用内核、网络和用户空间的幻觉。软件技巧使容器内的进程误以为自己是在主机上唯一运行的进程。这对于将现有工作负载隔离和迁移到Kubernetes中是有用的。
+- en: Note
+  id: totrans-103
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: As [Christian Brauner](https://oreil.ly/lBByx) and [Stéphane Graber](https://oreil.ly/DsmkD)
+    like [to say](https://oreil.ly/sTkqN) “(Linux) containers are a userspace fiction,”
+    a collection of configurations that present an illusion of isolation to a process
+    inside. Containers emerged from the primordial kernel soup, a child of evolution
+    rather than intelligent design that has been morphed, refined, and coerced into
+    shape so that we now have something usable.
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如[Christian Brauner](https://oreil.ly/lBByx)和[Stéphane Graber](https://oreil.ly/DsmkD)喜欢[说的](https://oreil.ly/sTkqN)，“（Linux）容器是用户空间的虚构”，是一组配置，为容器内的进程提供隔离的幻象。容器源自原始的内核汤，是演变的产物，而不是智能设计，经过改进和形成，现在变得可以使用起来了。
+- en: Containers don’t exist as a single API, library, or kernel feature. They are
+    merely the resultant bundling and isolation that’s left over once the kernel has
+    started a collection of namespaces, configured some `cgroups` and capabilities,
+    added Linux Security Modules like AppArmor and SELinux, and started our precious
+    little process inside.
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器并不以单一的API、库或内核特性存在。它们仅仅是内核启动一组命名空间、配置一些`cgroups`和能力、添加像AppArmor和SELinux这样的Linux安全模块，并在容器内启动我们珍贵的小进程后所剩下的捆绑和隔离结果。
+- en: A container is a process in a special environment with some combination of namespaces
+    either enabled or shared with the host (or other containers). The process comes
+    from a container image, a TAR file containing the container’s root filesystem,
+    its application(s), and any dependencies. When the image is unpacked into a directory
+    on the host and a special filesystem “pivot root” is created, a “container” is
+    constructed around it, and its `ENTRYPOINT` is run from the filesystem within
+    the container. This is roughly how a container starts, and each container in a
+    pod must go through this process.
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器是一个进程，处于特殊环境中，并具有一些命名空间的组合，这些命名空间可能已启用或与主机（或其他容器）共享。该进程来自容器镜像，这是一个包含容器根文件系统、其应用程序及任何依赖项的
+    TAR 文件。当镜像被解压到主机上的目录中，并创建一个特殊的文件系统“pivot root”时，就围绕它构建了一个“容器”，并且其`ENTRYPOINT`从容器内的文件系统中运行。这大致是容器启动的过程，Pod中的每个容器都必须经历此过程。
+- en: 'Container security has two parts: the contents of the container image, and
+    its runtime configuration and security context. An abstract risk rating of a container
+    can be derived from the number of security primitives it enables and uses safely,
+    avoiding host namespaces, limiting resource use with `cgroups`, dropping unneeded
+    capabilities, tightening security module configuration for the process’s usage
+    pattern, and minimizing process and filesystem ownership and contents. [Kubesec.io](https://kubesec.io)
+    rates a pod configuration’s security on how well it enables these features at
+    runtime.'
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器安全有两个部分：容器镜像的内容及其运行时配置和安全上下文。从容器启用和安全使用的安全原语数量中可以推导出容器的抽象风险评级，避免主机命名空间，使用`cgroups`限制资源使用，放弃不必要的能力，根据进程使用模式加强安全模块配置，以及最小化进程和文件系统的所有权和内容。[Kubesec.io](https://kubesec.io)
+    根据运行时如何有效启用这些特性来评估Pod配置的安全性。
+- en: 'When the kernel detects a network namespace is empty, it will destroy the namespace,
+    removing any IPs allocated to network adapters in it. For a pod with only a single
+    container to hold the network namespace’s IP allocation, a crashed and restarting
+    container would have a new network namespace created and so have a new IP assigned.
+    This rapid churn of IPs would create unnecessary noise for your operators and
+    security monitoring. Kubernetes uses the so-called pause container (see also [“Intra-Pod
+    Networking”](ch05.xhtml#workload-networking-intra-pod)), to hold the pod’s shared
+    network namespace open in the event of a crash-looping tenant container. From
+    inside a worker node, the companion pause container in each pod looks as follows:'
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当内核检测到网络命名空间为空时，它将销毁该命名空间，移除其中网络适配器分配的任何 IP 地址。对于只有一个单独容器持有网络命名空间 IP 分配的 Pod，崩溃并重新启动的容器将会创建一个新的网络命名空间，并分配新的
+    IP 地址。这种 IP 地址的快速变化会为运维人员和安全监控带来不必要的噪音。Kubernetes 使用所谓的暂停容器（参见 [“Pod 内部网络”](ch05.xhtml#workload-networking-intra-pod)），在发生崩溃循环的租户容器时保持
+    Pod 的共享网络命名空间开放。从工作节点内部看，每个 Pod 中的伴随暂停容器如下所示：
+- en: '[PRE1]'
+  id: totrans-109
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: This pause container is invisible via the Kubernetes API, but visible to the
+    container runtime on the worker node.
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此暂停容器在 Kubernetes API 中是不可见的，但在工作节点的容器运行时中是可见的。
+- en: Note
+  id: totrans-111
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: 'CRI-O dispenses with the pause container (unless absolutely necessary) by pinning
+    namespaces, as described in the KubeCon talk [“CRI-O: Look Ma, No Pause”](https://oreil.ly/EqEwr).'
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 'CRI-O 通过固定命名空间（除非绝对必要）来省去暂停容器的步骤，如 KubeCon 演讲 [“CRI-O: Look Ma, No Pause”](https://oreil.ly/EqEwr)
+    所述。'
+- en: Sharing Network and Storage
+  id: totrans-113
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 共享网络和存储
+- en: A group of containers in a pod share a network namespace, so all your containers’
+    ports are available on the same network adapter to every container in the pod.
+    This gives an attacker in one container of the pod a chance to attack private
+    sockets available on any network interface, including the loopback adapter `127.0.0.1`.
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个 Pod 中的一组容器共享网络命名空间，因此 Pod 中的每个容器都可以在同一个网络适配器上访问所有其他容器的端口。这使得 Pod 中的一个容器中的攻击者有机会攻击任何网络接口上可用的私有套接字，包括回环适配器
+    `127.0.0.1`。
+- en: Tip
+  id: totrans-115
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: We examine these concepts in greater detail in Chapters [5](ch05.xhtml#ch-networking)
+    and [6](ch06.xhtml#ch-storage).
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将在第 [5](ch05.xhtml#ch-networking) 和第 [6](ch06.xhtml#ch-storage) 章节详细讨论这些概念。
+- en: Each container runs in a root filesystem from its container image that is not
+    shared between containers. Volumes must be mounted into each container in the
+    pod configuration, but a pod’s volumes may be available to all containers if configured
+    that way, as you saw in [Figure 2-4](#pod-examples).
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个容器使用其容器镜像中的根文件系统，这些根文件系统之间不共享。卷必须挂载到 Pod 配置中的每个容器中，但如果配置为这样，Pod 的卷可能对所有容器都可用，正如您在
+    [图 2-4](#pod-examples) 中所见。
+- en: '[Figure 2-8](#pod-namespace-nested) shows some of the paths inside a container
+    workload that an attacker may be interested in (note the `user` and `time` namespaces
+    are not currently in use).'
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 2-8](#pod-namespace-nested) 显示容器工作负载内部的一些路径，攻击者可能会感兴趣（请注意 `user` 和 `time`
+    命名空间目前未使用）。'
+- en: '![Nested Pod Namespaces](Images/haku_0209.png)'
+  id: totrans-119
+  prefs: []
+  type: TYPE_IMG
+  zh: '![嵌套 Pod 命名空间](Images/haku_0209.png)'
+- en: Figure 2-8\. Namespaces wrapping the containers in a pod ([inspired by Ian Lewis](https://oreil.ly/nH9y8))
+  id: totrans-120
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-8\. 将容器包装在 Pod 中的命名空间（灵感来源于 [Ian Lewis](https://oreil.ly/nH9y8)）
+- en: Note
+  id: totrans-121
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: 'User namespaces are the ultimate kernel security frontier, and are generally
+    not enabled due to historically being likely entry points for kernel attacks:
+    everything in Linux is a file, and user namespace implementation cuts across the
+    whole kernel, making it more difficult to secure than other namespaces.'
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用户命名空间是最终的内核安全前沿，由于历史上可能是内核攻击的入口点，通常不启用：Linux 中的所有内容都是文件，用户命名空间的实现横跨整个内核，使其比其他命名空间更难以保护。
+- en: 'The special virtual filesystems listed here are all possible paths of breakout
+    if misconfigured and accessible inside the container: */dev* may give access to
+    the host’s devices, */proc* can leak process information, or */sys* supports functionality
+    like launching new containers.'
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里列出的特殊虚拟文件系统都是容器内配置错误时的潜在突破口：*/dev* 可能会访问主机设备，*/proc* 可泄露进程信息，而 */sys* 支持启动新容器的功能。
+- en: What’s the Worst That Could Happen?
+  id: totrans-124
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 最糟糕的可能性是什么？
+- en: A CISO is responsible for the organization’s security. Your role as a CISO means
+    you should consider worst-case scenarios, to ensure that you have appropriate
+    defenses and mitigations in place. Attack trees help to model these negative outcomes,
+    and one of the data sources you can use is the [threat matrix](https://oreil.ly/LyjsO)
+    as shown in [Figure 2-9](#pod-threat-matrix).
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为安全首席信息官（CISO），您负责组织的安全。作为 CISO 的角色意味着您应考虑最坏的情况，确保您已经采取适当的防御和缓解措施。攻击树有助于对这些负面结果进行建模，您可以使用的数据源之一是威胁矩阵，如图
+    2-9 所示。
+- en: '![Microsoft Kubernetes Threat Matrix](Images/haku_0210.png)'
+  id: totrans-126
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Microsoft Kubernetes 威胁矩阵](Images/haku_0210.png)'
+- en: 'Figure 2-9\. Microsoft Kubernetes threat matrix; source: [“Secure Containerized
+    Environments with Updated Threat Matrix for Kubernetes”](https://oreil.ly/JzdmV)'
+  id: totrans-127
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-9\. 微软 Kubernetes 威胁矩阵；来源：[“Secure Containerized Environments with Updated
+    Threat Matrix for Kubernetes”](https://oreil.ly/JzdmV)
+- en: But there are some threats missing, and the community has added some (thanks
+    to Alcide, and [Brad Geesaman](https://oreil.ly/Ll2de) and [Ian Coldwater](https://oreil.ly/NmidV)
+    again), as shown in [Table 2-1](#table0201).
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 但是还有一些遗漏的威胁，并且社区已经添加了一些（感谢 Alcide 和 [Brad Geesaman](https://oreil.ly/Ll2de)
+    以及 [Ian Coldwater](https://oreil.ly/NmidV)），如表 2-1 所示。
+- en: Table 2-1\. Our enhanced Microsoft Kubernetes threat matrix
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 2-1\. 我们增强的微软 Kubernetes 威胁矩阵
+- en: '| Initial access (popping a shell pt 1 - prep) | Execution (popping a shell
+    pt 2 - exec) | Persistence (keeping the shell) | Privilege escalation (container
+    breakout) | Defense evasion (assuming no IDS) | Credential access (juicy creds)
+    | Discovery (enumerate possible pivots) | Lateral movement (pivot) | Command &
+    control (C2 methods) | Impact (dangers) |'
+  id: totrans-130
+  prefs: []
+  type: TYPE_TB
+  zh: '| 初始访问（弹出 shell pt 1 - 准备） | 执行（弹出 shell pt 2 - 执行） | 持久性（保持 shell） | 特权升级（容器突破）
+    | 防御规避（假设没有入侵检测系统） | 凭证访问（重要的凭证） | 发现（枚举可能的枢纽） | 横向移动（枢纽） | 命令与控制（C2 方法） | 影响（危险性）
+    |'
+- en: '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
+  id: totrans-131
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
+- en: '| Using cloud credentials: service account keys, impersonation | Exec into
+    container (bypass admission control policy) | Backdoor container (add a reverse
+    shell to local or container registry image) | Privileged container (legitimate
+    escalation to host) | Clear container logs (covering tracks after host breakout)
+    | List K8s Secrets | List K8s API server (nmap, curl) | Access cloud resources
+    (workload identity and cloud integrations) | Dynamic resolution (DNS tunneling)
+    | Data destruction (datastores, files, NAS, ransomware…) |'
+  id: totrans-132
+  prefs: []
+  type: TYPE_TB
+  zh: '| 使用云凭据：服务帐户密钥，冒充 | 执行到容器（绕过准入控制策略） | 容器后门（向本地或容器注册表图像添加反向 shell） | 特权容器（合法提升到主机）
+    | 清除容器日志（主机突破后覆盖轨迹） | 列出 K8s 机密 | 列出 K8s API 服务器（nmap，curl） | 访问云资源（工作负载身份和云集成）
+    | 动态解析（DNS 隧道） | 数据销毁（数据存储，文件，NAS，勒索软件…） |'
+- en: '| Compromised images in registry (supply chain unpatched or malicious) | BASH/CMD
+    inside container (implant or trojan, RCE/reverse shell, malware, C2, DNS tunneling)
+    | Writable host path mount (host mount breakout) | Cluster admin role binding
+    (untested RBAC) | Delete K8s events (covering tracks after host breakout) | Mount
+    service principal (Azure specific) | Access `kubelet` API | Container service
+    account (API server) | App protocols (L7 protocols, TLS, …) | Resource hijacking
+    (cryptojacking, malware C2/distribution, open relays, botnet membership) |'
+  id: totrans-133
+  prefs: []
+  type: TYPE_TB
+  zh: '| 受损镜像在注册表中（供应链未修复或恶意） | 容器内的 BASH/CMD（植入物或特洛伊木马，RCE/反向 shell，恶意软件，C2，DNS 隧道）
+    | 可写主机路径挂载（主机挂载突破） | 集群管理员角色绑定（未经测试的 RBAC） | 删除 K8s 事件（主机突破后覆盖轨迹） | 挂载服务主体（特定于
+    Azure） | 访问 `kubelet` API | 容器服务帐户（API 服务器） | 应用程序协议（L7 协议，TLS，…） | 资源劫持（加密货币挖矿，恶意软件
+    C2/分发，开放中继，僵尸网络成员资格） |'
+- en: '| Application vulnerability (supply chain unpatched or malicious) | Start new
+    container (with malicious payload: persistence, enumeration, observation, escalation)
+    | K8s CronJob (reverse shell on a timer) | Access cloud resources (metadata attack
+    via workload identity) | Connect from proxy server (to cover source IP, external
+    to cluster) | Applications credentials in config files (key material) | Access
+    K8s dashboard (UI requires service account credentials) | Cluster internal networking
+    (attack neighboring pods or systems) | Botnet (k3d, or traditional) | Application
+    DoS |'
+  id: totrans-134
+  prefs: []
+  type: TYPE_TB
+  zh: '| 应用程序漏洞（供应链未修复或恶意） | 启动新容器（带有恶意有效载荷：持久性，枚举，观察，升级） | K8s CronJob（定时反向 shell）
+    | 访问云资源（通过工作负载身份元数据攻击） | 从代理服务器连接（覆盖源 IP，外部到集群） | 应用程序配置文件中的应用程序凭据（密钥材料） | 访问
+    K8s 仪表板（UI 需要服务帐户凭据） | 集群内部网络（攻击相邻的 pod 或系统） | 僵尸网络（k3d 或传统的） | 应用程序拒绝服务 |'
+- en: '| kubeconfig file (exfiltrated, or uploaded to the wrong place) | Application
+    exploit (RCE) | Static pods (reverse shell, shadow API server to read audit-log-only
+    headers) | Pod `hostPath` mount (logs to container breakout) | Pod/container name
+    similarity (visual evasion, CronJob attack) | Access container service account
+    (RBAC lateral jumps) | Network mapping (nmap, curl) | Access container service
+    account (RBAC lateral jumps) |  | Node scheduling DoS |'
+  id: totrans-135
+  prefs: []
+  type: TYPE_TB
+  zh: '| kubeconfig 文件（泄露或上传到错误位置） | 应用程序漏洞利用（RCE） | 静态 Pod（反向 shell，影子 API 服务器以读取仅审计日志标头）
+    | Pod `hostPath` 挂载（日志到容器越界） | Pod/容器名称相似性（视觉回避，CronJob 攻击） | 访问容器服务帐户（RBAC 横向跳跃）
+    | 网络映射（nmap，curl） | 访问容器服务帐户（RBAC 横向跳跃） |  | 节点调度 DoS |'
+- en: '| Compromise user endpoint (2FA and federating auth mitigate) | SSH server
+    inside container (bad practice) | Injected sidecar containers (malicious mutating
+    webhook) | Node to cluster escalation (stolen credentials, node label rebinding
+    attack) | Dynamic resolution (DNS) (DNS tunneling/exfiltration) | Compromise admission
+    controllers | Instance metadata API (workload identity) | Host writable volume
+    mounts |  | Service discovery DoS |'
+  id: totrans-136
+  prefs: []
+  type: TYPE_TB
+  zh: '| 受损的用户端点（2FA 和联合身份验证缓解） | 容器内的 SSH 服务器（不良实践） | 注入的 sidecar 容器（恶意变异 Webhook）
+    | 节点到集群升级（窃取凭据，节点标签重新绑定攻击） | 动态解析（DNS）（DNS 隧道/泄露） | 受损的准入控制器 | 实例元数据 API（工作负载身份）
+    | 主机可写卷挂载 |  | 服务发现 DoS |'
+- en: '| K8s API server vulnerability (needs CVE and unpatched API server) | Container
+    lifecycle hooks (`postStart` and `preStop` events in pod YAML) | Rewrite container
+    lifecycle hooks (`postStart` and `preStop` events in pod YAML) | Control plane
+    to cloud escalation (keys in Secrets, cloud or control plane credentials) | Shadow
+    admission control or API server |  | Compromise K8s Operator (sensitive RBAC)
+    | Access K8s dashboard |  | PII or IP exfiltration (cluster or cloud datastores,
+    local accounts) |'
+  id: totrans-137
+  prefs: []
+  type: TYPE_TB
+  zh: '| K8s API 服务器漏洞（需要 CVE 和未打补丁的 API 服务器） | 容器生命周期钩子（在 Pod YAML 中的 `postStart`
+    和 `preStop` 事件） | 重写容器生命周期钩子（在 Pod YAML 中的 `postStart` 和 `preStop` 事件） | 控制平面到云升级（Secrets
+    中的密钥，云或控制平面凭据） | 影子准入控制或 API 服务器 |  | 威胁 K8s Operator（敏感 RBAC） | 访问 K8s 仪表板 |  |
+    PII 或 IP 泄露（集群或云数据存储，本地帐户） |'
+- en: '| Compromised host (credentials leak/stuffing, unpatched services, supply chain
+    compromise) |  | Rewrite liveness probes (exec into and reverse shell in container)
+    | Compromise admission controller (reconfigure and bypass to allow blocked image
+    with flag) |  |  | Access host filesystem (host mounts) | Access tiller endpoint
+    (Helm v3 negates this) |  | Container pull rate limit DoS (container registry)
+    |'
+  id: totrans-138
+  prefs: []
+  type: TYPE_TB
+  zh: '| 受损的主机（凭据泄露/塞满，未打补丁的服务，供应链威胁） |  | 重写存活探针（在容器中执行和反向 shell） | 威胁准入控制器（重新配置并绕过以允许带有标记的阻止镜像）
+    |  |  | 访问主机文件系统（主机挂载） | 访问 tiller 端点（Helm v3 无视此问题） |  | 容器拉取速率限制 DoS（容器注册表）
+    |'
+- en: '| Compromised `etcd` (missing auth) |  | Shadow admission control or API server
+    (privileged RBAC, reverse shell) | Compromise K8s Operator (compromise flux and
+    read any Secrets) |  |  |  | Access K8s Operator |  | SOC/SIEM DoS (event/audit/log
+    rate limit) |'
+  id: totrans-139
+  prefs: []
+  type: TYPE_TB
+  zh: '| 受损的 `etcd`（缺少身份验证） |  | 影子准入控制或 API 服务器（特权 RBAC，反向 shell） | 威胁 K8s Operator（威胁
+    flux 并读取任何 Secrets） |  |  |  | 访问 K8s Operator |  | SOC/SIEM DoS（事件/审计/日志速率限制）
+    |'
+- en: '|  |  | K3d botnet (secondary cluster running on compromised nodes) | Container
+    breakout (kernel or runtime vulnerability e.g., DirtyCOW, `/proc/self/exe`, eBPF
+    verifier bugs, Netfilter) |  |  |  |  |  |  |'
+  id: totrans-140
+  prefs: []
+  type: TYPE_TB
+  zh: '|  |  | K3d 僵尸网络（在受损节点上运行的次要集群） | 容器越界（内核或运行时漏洞，例如 DirtyCOW，`/proc/self/exe`，eBPF
+    验证程序漏洞，Netfilter） |  |  |  |  |  |  |'
+- en: We’ll explore these threats in detail as we progress through the book. But the
+    first threat, and the greatest risk to the isolation model of our systems, is
+    an attacker breaking out of the container itself.
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 随着我们逐步深入本书，我们将详细探讨这些威胁。
+- en: Container Breakout
+  id: totrans-142
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 容器越界
+- en: A cluster admin’s worst fear is a container breakout; that is, a user or process
+    inside a container that can run code outside of the container’s execution environment.
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 集群管理员最担心的是容器越界，即容器内的用户或进程可以在容器执行环境之外运行代码。
+- en: Note
+  id: totrans-144
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Speaking strictly, a container breakout should exploit the kernel, attacking
+    the code a container is supposed to be constrained by. In the authors’ opinion,
+    any avoidance of isolation mechanisms breaks the contract the container’s maintainer
+    or operator thought they had with the process(es) inside. This means it should
+    be considered equally threatening to the security of the host system and its data,
+    so we define container breakout to include any evasion of isolation.
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 严格来说，容器突破应该利用内核，攻击容器应该受到约束的代码。在作者看来，任何避开隔离机制的行为都违反了容器的维护者或操作者认为与容器内进程之间的协议，这意味着它应被视为对主机系统及其数据安全同样构成威胁，因此我们定义容器突破来包括任何逃避隔离的行为。
+- en: 'Container breakouts may occur in various ways:'
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器突破可能以各种方式发生：
+- en: An *exploit* including against the kernel, network or storage stack, or container
+    runtime
+  id: totrans-147
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 包括对内核、网络或存储堆栈或容器运行时的*利用*
+- en: A *pivot* such as attacking exposed local, cloud, or network services, or escalating
+    privilege and abusing discovered or inherited credentials
+  id: totrans-148
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 诸如攻击暴露的本地、云或网络服务，或提升权限并滥用已发现或继承的凭据的*转轴*
+- en: A *misconfiguration* that allows an attacker an easier or legitimate path to
+    exploit or pivot (this is the most likely way)
+  id: totrans-149
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 通过*错误配置*，允许攻击者更轻松或合法地利用或转轴（这是最有可能的方式）
+- en: If the running process is owned by an unprivileged user (that is, one with no
+    root capabilities), many breakouts are not possible. In that case the process
+    or user must gain capabilities with a local privilege escalation inside the container
+    before attempting to break out.
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果运行进程由非特权用户拥有（即没有root权限的用户），则许多突破是不可能的。在这种情况下，进程或用户必须在尝试突破之前在容器内部通过本地特权升级获取权限。
+- en: 'Once this is achieved, a breakout may start with a hostile root-owned process
+    running in a poorly configured container. Access to the root user’s capabilities
+    within a container is the precursor to most escapes: without root (and sometimes
+    `CAP_SYS_ADMIN`), many breakouts are nullified.'
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦实现了这一点，突破可能从运行在配置不当容器中的敌对root拥有的进程开始。在容器内获得对root用户能力的访问是大多数逃逸的先决条件：没有root权限（有时没有`CAP_SYS_ADMIN`），许多突破是无效的。
+- en: Tip
+  id: totrans-152
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: The `securityContext` and LSM configurations are vital to constrain unexpected
+    activity from zero-day vulnerabilities, or supply chain attacks (library code
+    loaded into the container and exploited automatically at runtime).
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`securityContext`和LSM配置对于限制来自零日漏洞或供应链攻击（加载到容器中并在运行时自动利用的库代码）的意外活动至关重要。'
+- en: 'You can define the active user, group, and filesystem group (set on mounted
+    volumes for readability, gated by `fsGroupChangePolicy`) in your workloads’ security
+    contexts, and enforce it with admission control (see [Chapter 8](ch08.xhtml#ch-policy)),
+    as this [example from the docs](https://oreil.ly/YJNS6) shows:'
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在你的工作负载安全上下文中，可以定义活动用户、组和文件系统组（设置在已挂载卷上以提高可读性，由`fsGroupChangePolicy`控制），并通过准入控制（参见[第8章](ch08.xhtml#ch-policy)）强制执行，正如文档中的[示例](https://oreil.ly/YJNS6)所示：
+- en: '[PRE2]'
+  id: totrans-155
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'In a container breakout scenario, if the user is root inside the container
+    or has mount capabilities (granted by default under `CAP_SYS_ADMIN`, which root
+    is granted unless dropped), they can interact with virtual and physical disks
+    mounted into the container. If the container is privileged (which among other
+    things disables masking of kernel paths in */dev*), it can see and mount the host
+    filesystem:'
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在容器突破场景中，如果用户在容器内部是root用户或具有挂载能力（默认由`CAP_SYS_ADMIN`授予，除非放弃），则可以与挂载到容器中的虚拟和物理磁盘进行交互。如果容器是特权容器（其中包括禁用*/dev*中内核路径屏蔽），它可以看到并挂载主机文件系统：
+- en: '[PRE3]'
+  id: totrans-157
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: We look at `nsenter` privileged container breakouts, which escape more elegantly
+    by entering the host’s namespaces, in [Chapter 6](ch06.xhtml#ch-storage).
+  id: totrans-158
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们查看`nsenter`特权容器的突破，通过进入主机的命名空间更加优雅地逃逸，在[第6章](ch06.xhtml#ch-storage)中讨论。
+- en: While you should prevent this attack easily by avoiding the root user and privilege
+    mode, and enforcing that with admission control, it’s an indication of just how
+    slim the container security boundary can be if misconfigured.
+  id: totrans-159
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管你应该通过避免root用户和特权模式轻松防止这种攻击，并通过准入控制强制执行，但如果配置错误，这表明容器安全边界可以有多薄弱。
+- en: Warning
+  id: totrans-160
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: 'An attacker controlling a containerized process may have control of the networking,
+    some or all of the storage, and potentially other containers in the pod. Containers
+    generally assume other containers in the pod are friendly as they share resources,
+    and we can consider the pod as a trust boundary for the processes inside. Init
+    containers are an exception: they complete and shut down before the main containers
+    in the pod start, and as they operate in isolation may have more security sensitivity.'
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 控制容器化进程的攻击者可能控制网络、部分或全部存储，以及可能是pod中的其他容器。容器通常假定pod中的其他容器是友好的，因为它们共享资源，我们可以将pod视为内部进程的信任边界。初始化容器是一个例外：它们在主容器启动之前完成并关闭，并且因为它们在隔离中运行，可能具有更高的安全敏感性。
+- en: The container and pod isolation model relies on the Linux kernel and container
+    runtime, both of which are generally robust when not misconfigured. Container
+    breakout occurs more often through insecure configuration than kernel exploit,
+    although zero-day kernel vulnerabilities are inevitably devastating to Linux systems
+    without correctly configured LSMs (such as SELinux and AppArmor).
+  id: totrans-162
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器和pod隔离模型依赖于Linux内核和容器运行时，通常情况下配置正确时都很健壮。容器逃逸更多地是通过不安全的配置而非内核漏洞发生，尽管零日内核漏洞对未正确配置LSM（如SELinux和AppArmor）的Linux系统必然具有毁灭性影响。
+- en: Note
+  id: totrans-163
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: In [“Architecting Containerized Apps for Resilience”](ch04.xhtml#architecting-apps-resilience)
+    we explore how the Linux DirtyCOW vulnerability could be used to break out of
+    insecurely configured containers.
+  id: totrans-164
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[“为弹性构建容器化应用程序”](ch04.xhtml#architecting-apps-resilience)中，我们探讨了Linux DirtyCOW漏洞如何被利用来突破不安全配置的容器。
+- en: 'Container escape is rarely plain sailing, and any fresh vulnerabilities are
+    often patched shortly after disclosure. Only occasionally does a kernel vulnerability
+    result in an exploitable container breakout, and the opportunity to harden individually
+    containerized processes with LSMs enables defenders to tightly constrain high-risk
+    network-facing processes; it may entail one or more of:'
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器逃逸很少是一帆风顺的，而任何新的漏洞通常在披露后不久就会被修复。只有偶尔会出现内核漏洞导致可利用的容器逃逸，而使用LSM（如SELinux和AppArmor）正确配置可以让防御者紧密限制高风险的面向网络的进程；它可能涉及以下一项或多项：
+- en: Finding a zero-day in the runtime or kernel
+  id: totrans-166
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 发现运行时或内核中的零日漏洞
+- en: Exploiting excess privilege and escaping using legitimate commands
+  id: totrans-167
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 利用过多的特权并使用合法命令逃逸
+- en: Evading misconfigured kernel security mechanisms
+  id: totrans-168
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 规避错误配置的内核安全机制
+- en: Introspection of other processes or filesystems for alternate escape routes
+  id: totrans-169
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 检查其他进程或文件系统以寻找替代的逃逸路径
+- en: Sniffing network traffic for credentials
+  id: totrans-170
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 监听网络流量以获取凭证
+- en: Attacking the underlying orchestrator or cloud environment
+  id: totrans-171
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 攻击底层协调器或云环境
+- en: Warning
+  id: totrans-172
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Vulnerabilities in the underlying physical hardware often can’t be defended
+    against in a container. For example, `Spectre` and `Meltdown` (CPU speculative
+    execution attacks), and `rowhammer`, `TRRespass`, and `SPOILER` (DRAM memory attacks)
+    bypass container isolation mechanisms as they cannot intercept the entire instruction
+    stream that a CPU processes. Hypervisors suffer the same lack of possible protection.
+  id: totrans-173
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 底层物理硬件的漏洞通常无法在容器中进行防御。例如，`Spectre`和`Meltdown`（CPU推测执行攻击），以及`rowhammer`、`TRRespass`和`SPOILER`（DRAM内存攻击）通过容器隔离机制，因为它们无法拦截CPU处理的整个指令流。虚拟化程序遇到同样的保护缺乏问题。
+- en: Finding new kernel attacks is hard. Misconfigured security settings, exploiting
+    published CVEs, and social engineering attacks are easier. But it’s important
+    to understand the range of potential threats in order to decide your own risk
+    tolerance.
+  id: totrans-174
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 发现新的内核攻击很困难。错误配置的安全设置、利用已发布的CVE以及社会工程攻击更容易。但是理解潜在威胁范围对于确定自身的风险容忍度至关重要。
+- en: We’ll go through a step-by-step security feature exploration to see a range
+    of ways in which your systems may be attacked in [Appendix A](app01.xhtml#appendix-pod-attack).
+  id: totrans-175
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将逐步探索安全功能，以查看系统可能受到攻击的一系列方式，见[附录 A](app01.xhtml#appendix-pod-attack)。
+- en: 'For more information on how the Kubernetes project manages CVEs, see Anne Bertucio
+    and CJ Cullen’s blog post, [“Exploring Container Security: Vulnerability Management
+    in Open-Source Kubernetes”](https://oreil.ly/wYvv6).'
+  id: totrans-176
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 欲了解Kubernetes项目如何管理CVE，请参阅Anne Bertucio和CJ Cullen的博文，“[探索容器安全：开源Kubernetes中的漏洞管理](https://oreil.ly/wYvv6)”。
+- en: Pod Configuration and Threats
+  id: totrans-177
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Pod配置和威胁
+- en: We’ve spoken generally about various parts of a pod, so let’s finish off by
+    going into depth on a pod spec to call out any gotchas or potential footguns.
+  id: totrans-178
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们已经广泛地讨论了 pod 的各个部分，因此让我们深入了解 pod spec，以强调任何问题或潜在的风险。
+- en: Warning
+  id: totrans-179
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: In order to secure a pod or container, the container runtime should be minimally
+    viably secure; that is, not hosting sockets to unauthenticated connections (e.g.,
+    Docker’s */var/run/docker.sock* and `tcp://127.0.0.1:2375`) as it [leads to host
+    takeover](https://oreil.ly/jy8Ol).
+  id: totrans-180
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了保护 pod 或容器，容器运行时应该是最小可用安全的；即不应该主持未经身份验证的连接的套接字（例如 Docker 的 */var/run/docker.sock*
+    和 `tcp://127.0.0.1:2375`），因为这将 [导致主机被接管](https://oreil.ly/jy8Ol)。
+- en: 'For the purpose of this example, we are using a `frontend` pod from the [`GoogleCloudPlatform/microservices-demo`
+    application](https://oreil.ly/6WVwV), and it was deployed with the following command:'
+  id: totrans-181
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 出于此示例的目的，我们使用了 [`GoogleCloudPlatform/microservices-demo` 应用程序](https://oreil.ly/6WVwV)
+    中的 `frontend` pod，并使用以下命令部署：
+- en: '[PRE4]'
+  id: totrans-182
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: We have updated and added some extra configuration where relevant for demonstration
+    purposes and will progress through these in the following sections.
+  id: totrans-183
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们已经更新并添加了一些额外的配置，以便进行演示，并将在接下来的几节中进行详细讨论。
+- en: Pod Header
+  id: totrans-184
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Pod Header
+- en: 'The pod header is the standard header of all Kubernetes resources we know and
+    love, defining the type of entity this YAML defines, and its version:'
+  id: totrans-185
+  prefs: []
+  type: TYPE_NORMAL
+  zh: pod 头是我们所熟悉和喜爱的所有 Kubernetes 资源的标准头部，定义了此 YAML 定义的实体类型及其版本：
+- en: '[PRE5]'
+  id: totrans-186
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'Metadata and annotations may contain sensitive information like IP addresses
+    or security hints (in this case, for Istio), although this is only useful if the
+    attacker has read-only access:'
+  id: totrans-187
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 元数据和注释可能包含敏感信息，如 IP 地址或安全提示（在这种情况下，适用于 Istio），尽管只有当攻击者具有只读访问权限时才有用：
+- en: '[PRE6]'
+  id: totrans-188
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: 'It also historically holds the `seccomp`, `AppArmor`, and `SELinux` policies:'
+  id: totrans-189
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 它也历史性地持有 `seccomp`、`AppArmor` 和 `SELinux` 策略：
+- en: '[PRE7]'
+  id: totrans-190
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: We look at how to use these annotations in [“Runtime Policies”](ch08.xhtml#policy-runtime-policies).
+  id: totrans-191
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将讨论如何在 [“运行时策略”](ch08.xhtml#policy-runtime-policies) 中使用这些注释。
+- en: Note
+  id: totrans-192
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: After many years in limbo, `seccomp` in Kubernetes [progressed to General Availability
+    in v1.19](https://oreil.ly/F7zOs).
+  id: totrans-193
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 经过多年的悬而未决，`seccomp` 在 Kubernetes 中在 v1.19 中 [进入了一般可用状态](https://oreil.ly/F7zOs)。
+- en: 'This [changes the syntax](https://oreil.ly/raOrF) from an annotation to a `securityContext`
+    entry:'
+  id: totrans-194
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这将从注释语法 [更改为 `securityContext` 条目](https://oreil.ly/raOrF)：
+- en: '[PRE8]'
+  id: totrans-195
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: The [Kubernetes Security Profiles Operator](https://oreil.ly/Lrw5d) (SPO) can
+    install `seccomp` profiles on your nodes (a prerequisite to their use by the container
+    runtime), and record new profiles from workloads in the cluster with [oci-seccomp-bpf-hook](https://oreil.ly/A3Ub4).
+  id: totrans-196
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Kubernetes 安全配置文件运算符](https://oreil.ly/Lrw5d)（SPO）可以在您的节点上安装 `seccomp` 配置文件（容器运行时使用的先决条件），并从集群中的工作负载中记录新配置文件，使用
+    [oci-seccomp-bpf-hook](https://oreil.ly/A3Ub4)。'
+- en: The SPO also supports SELinux via [selinuxd](https://oreil.ly/nYQOU), with plenty
+    of details [in this blog post](https://oreil.ly/3ZFui).
+  id: totrans-197
+  prefs: []
+  type: TYPE_NORMAL
+  zh: SPO 也支持通过 [selinuxd](https://oreil.ly/nYQOU) 实现 SELinux，详细信息请参见 [此博客文章](https://oreil.ly/3ZFui)。
+- en: AppArmor is still in beta but annotations will be replaced with first-class
+    fields like `seccomp` once it graduates to GA.
+  id: totrans-198
+  prefs: []
+  type: TYPE_NORMAL
+  zh: AppArmor 仍处于测试阶段，但一旦升级到 GA，注释将被像 `seccomp` 这样的一流字段取代。
+- en: Let’s move on to a part of the pod spec that is not writable by the client but
+    contains some important hints.
+  id: totrans-199
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们继续讨论一个对客户端不可写的 pod spec 的部分，但包含一些重要的提示。
+- en: Reverse Uptime
+  id: totrans-200
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 反向正常运行时间
+- en: 'When you dump a pod spec from the API server (using, for example, `kubectl
+    get` `-o yaml`) it includes the pod’s start time:'
+  id: totrans-201
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您从 API 服务器转储一个 pod spec（例如使用 `kubectl get` `-o yaml`）时，它包括 pod 的启动时间：
+- en: '[PRE9]'
+  id: totrans-202
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: Pods running for longer than a week or two are likely to be at higher risk of
+    unpatched bugs. Sensitive workloads running for more than 30 days will be safer
+    if they’re rebuilt in CI/CD to account for library or operating system patches.
+  id: totrans-203
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运行时间超过一两周的 pod 可能面临未打补丁的 bug 风险增加。如果敏感工作负载运行超过 30 天，通过 CI/CD 重建以适应库或操作系统补丁会更安全。
+- en: 'Pipeline scanning the existing container image offline for CVEs can be used
+    to inform rebuilds. The safest approach is to combine both: “repave” (that is,
+    rebuild and redeploy containers) regularly, and rebuild through the CI/CD pipelines
+    whenever a CVE is detected.'
+  id: totrans-204
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过离线扫描现有容器镜像中的 CVE 来通知重建的流水线可以使用。最安全的方法是定期结合“重建”（即重建和重新部署容器）和在检测到 CVE 时通过 CI/CD
+    流水线进行重建。
+- en: Labels
+  id: totrans-205
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 标签
+- en: 'Labels in Kubernetes are not validated or strongly typed; they are metadata.
+    But labels are targeted by things like services and controllers using selectors
+    for referencing, and are also used for security features such as network policy.
+    This makes them security-sensitive and easily susceptible to misconfiguration:'
+  id: totrans-206
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 中的标签不受验证或强类型化；它们是元数据。但是标签受到服务和控制器使用选择器引用的影响，并且还用于安全功能，如网络策略。这使它们对安全敏感，并且很容易受到误配置的影响：
+- en: '[PRE10]'
+  id: totrans-207
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: 'Typos in labels mean they do not match the intended selectors, and so can inadvertently
+    introduce security issues such as:'
+  id: totrans-208
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 标签中的拼写错误意味着它们与预期的选择器不匹配，因此可能无意中引入安全问题，例如：
+- en: Exclusions from expected network policy or admission control policy
+  id: totrans-209
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 从预期的网络策略或准入控制策略中排除
+- en: Unexpected routing from service target selectors
+  id: totrans-210
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 从服务目标选择器的意外路由
+- en: Rogue pods that are not accurately targeted by operators or observability tooling
+  id: totrans-211
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 不被运营商或可观察性工具精确定位的恶意 pod
+- en: Managed Fields
+  id: totrans-212
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 管理字段
+- en: 'Managed fields were introduced in v1.18 and support [server-side apply](https://oreil.ly/UjXPY).
+    They duplicate information from elsewhere in the pod spec but are of limited interest
+    to us as we can read the entire spec from the API server. They look like this:'
+  id: totrans-213
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 管理字段是在 v1.18 中引入的，支持 [服务器端应用](https://oreil.ly/UjXPY)。它们复制了 pod 规范中其他地方的信息，但我们对它们的兴趣有限，因为我们可以从
+    API 服务器读取整个规范。它们看起来像这样：
+- en: '[PRE11]'
+  id: totrans-214
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: Pod Namespace and Owner
+  id: totrans-215
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Pod 的命名空间和所有者
+- en: We know the pod’s name and namespace from the API request we made to retrieve
+    it.
+  id: totrans-216
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们通过 API 请求获取它时知道 pod 的名称和命名空间。
+- en: 'If we used `--all-namespaces` to return all pod configurations, this shows
+    us the namespace:'
+  id: totrans-217
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果我们使用`--all-namespaces`返回所有 pod 配置，这将显示命名空间：
+- en: '[PRE12]'
+  id: totrans-218
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: 'From within a pod it’s possible to infer the current namespace from the DNS
+    resolver configuration in */etc/resolv.conf* (which is `secret-namespace` in this
+    example):'
+  id: totrans-219
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 pod 内部，可以通过 */etc/resolv.conf* 中的 DNS 解析器配置推断出当前命名空间（例如此示例中为`secret-namespace`）：
+- en: '[PRE13]'
+  id: totrans-220
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: Other less-robust options include the mounted service account (assuming it’s
+    in the same namespace, which it may not be), or the cluster’s DNS resolver (if
+    you can enumerate or scrape it).
+  id: totrans-221
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 其他不太健壮的选项包括挂载的服务账户（假设它在相同的命名空间中，这可能并非如此），或者集群的 DNS 解析器（如果您可以枚举或抓取它）。
+- en: Environment Variables
+  id: totrans-222
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 环境变量
+- en: Now we’re getting into interesting configuration. We want to see the environment
+    variables in a pod, partially because they may leak secret information (which
+    should have been mounted as a file), and also because they may list which other
+    services are available in the namespace and so suggest other network routes and
+    applications to attack.
+  id: totrans-223
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们开始进入有趣的配置。我们想看到 pod 中的环境变量，部分原因是它们可能泄露秘密信息（应该已作为文件挂载），还因为它们可能列出命名空间中可用的其他服务，并因此建议其他网络路由和攻击应用程序：
+- en: Warning
+  id: totrans-224
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Passwords set in deployment and pod YAML are visible to the operator that deploys
+    the YAML, the process at runtime and any other processes that can read its environment,
+    and to anybody that can read from the Kubernetes or `kubelet` APIs.
+  id: totrans-225
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在部署和 pod YAML 中设置的密码对部署 YAML 的操作员、运行时的进程和任何其他能够读取其环境的进程可见，并对能够从 Kubernetes 或
+    `kubelet` API 中读取的任何人可见。
+- en: 'Here we see the container’s `PORT` (which is good practice and required by
+    applications running in Knative, Google Cloud Run, and some other systems), the
+    DNS names and ports of its coordinating services, some badly set database config
+    and credentials, and finally a sensibly referenced Secret file:'
+  id: totrans-226
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里我们看到容器的`PORT`（这是良好的实践，并且应用程序在 Knative、Google Cloud Run 和一些其他系统中运行时所必需的），其协调服务的
+    DNS 名称和端口，一些设置不良的数据库配置和凭据，最后还有一个合理引用的 Secret 文件：
+- en: '[PRE14]'
+  id: totrans-227
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: That wasn’t too bad, right? Let’s move on to container images.
+  id: totrans-228
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这并不算太糟糕，对吧？让我们继续讨论容器镜像。
+- en: Container Images
+  id: totrans-229
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 容器镜像
+- en: The container image’s filesystem is of paramount importance, as it may hold
+    vulnerabilities that assist in privilege escalation. If you’re not patching regularly,
+    Captain Hashjack might get the same image from a public registry to scan it for
+    vulnerabilities they may be able to exploit. Knowing what binaries and files are
+    available also enables attack planning “offline,” so adversaries can be more stealthy
+    and targeted when attacking the live system.
+  id: totrans-230
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器镜像的文件系统非常重要，因为它可能存在有助于提升特权的漏洞。如果您不定期打补丁，Captain Hashjack 可能会从公共注册表获取相同的镜像以扫描可能可以利用的漏洞。知道哪些二进制文件和文件可用还能够在攻击计划“离线”时进行攻击，这样对手在攻击实时系统时可以更隐秘和有针对性。
+- en: Tip
+  id: totrans-231
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: 'The OCI registry specification allows arbitrary image layer storage: it’s a
+    two-step process and the first step uploads the manifest, with the second uploading
+    the blob. If an attacker only performs the second step they gain free arbitrary
+    blob storage.'
+  id: totrans-232
+  prefs: []
+  type: TYPE_NORMAL
+  zh: OCI注册表规范允许任意图像层存储：这是一个两步过程，第一步上传清单，第二步上传数据块。如果攻击者只执行第二步，他们可以免费获得任意数据块存储空间。
+- en: Most registries don’t index this automatically (with Harbour being the exception),
+    and so they will store the “orphaned” layers forever, potentially hidden from
+    view until manually garbage collected.
+  id: totrans-233
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大多数注册表不会自动索引这一点（Harbour是个例外），因此它们将永久存储“孤立”的数据块，可能隐藏在视图之外，直到手动进行垃圾回收。
+- en: 'Here we see an image referenced by label, which means we can’t tell what the
+    actual SHA256 hash digest of the container image is. The container tag could have
+    been updated since this deployment as it’s not referenced by digest:'
+  id: totrans-234
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里我们看到一个通过标签引用的图像，这意味着我们无法确定容器镜像的实际SHA256哈希摘要。由于在部署后未使用摘要引用，容器标签可能已更新：
+- en: '[PRE15]'
+  id: totrans-235
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: 'Instead of using image tags, we can use the SHA256 image digests to pull the
+    image by its content address:'
+  id: totrans-236
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以使用SHA256图像摘要而不是图像标签来拉取图像，以便按其内容地址引用：
+- en: '[PRE16]'
+  id: totrans-237
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: Images should always be referenced by SHA256 or use signed tags; otherwise,
+    it’s impossible to know what’s running as the label may have been updated in the
+    registry since the container start. You can validate what’s being run by inspecting
+    the running container for its image’s SHA256.
+  id: totrans-238
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 图像应始终通过SHA256或使用已签名标签进行引用；否则，由于标签可能已在容器启动后在注册表中更新，因此无法知道正在运行什么。您可以通过检查运行中容器的图像SHA256来验证正在运行的内容。
+- en: 'It’s possible to specify both a tag and an SHA256 digest in a Kubernetes `image:`
+    key, in which case the tag is ignored and the image is retrieved by digest. This
+    leads to potentially confusing image definitions including a tag and SHA256 such
+    as the following being retrieved as the image matching the SHA rather than the
+    tag:'
+  id: totrans-239
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在Kubernetes的`image:`键中可以同时指定标签和SHA256摘要，此时将忽略标签并通过摘要检索图像。这会导致包含标签和SHA256的潜在混乱的图像定义，如以下内容将按SHA而不是标签检索的图像：
+- en: '[PRE17]'
+  id: totrans-240
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: '[![1](Images/1.png)](#co_pod_level_resources_CO1-1)'
+  id: totrans-241
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](Images/1.png)](#co_pod_level_resources_CO1-1)'
+- en: Container name, plus the ignored “latest” tag
+  id: totrans-242
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器名称，加上忽略的“latest”标签
+- en: '[![2](Images/2.png)](#co_pod_level_resources_CO1-2)'
+  id: totrans-243
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](Images/2.png)](#co_pod_level_resources_CO1-2)'
+- en: Image SHA256, which overrides the “latest” tag defined in the previous line
+  id: totrans-244
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 图像SHA256，覆盖了前一行定义的“latest”标签
+- en: being retrieved as the image matching the SHA rather than the tag.
+  id: totrans-245
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 检索作为匹配SHA的图像而不是标签。
+- en: 'If an attacker can influence the local `kubelet` image cache, they can add
+    malicious code to an image and relabel it on the worker node (note: to run this
+    again, don’t forget to remove the `cidfile`):'
+  id: totrans-246
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果攻击者可以影响本地`kubelet`图像缓存，他们可以向图像添加恶意代码并在工作节点上重新标记它（注意：要再次运行此操作，请不要忘记删除`cidfile`）：
+- en: '[PRE18]'
+  id: totrans-247
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: '[![1](Images/1.png)](#co_pod_level_resources_CO2-1)'
+  id: totrans-248
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](Images/1.png)](#co_pod_level_resources_CO2-1)'
+- en: Load a malicious shell backdoor and overwrite the container’s default command
+    (`/bin/sh`).
+  id: totrans-249
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 加载恶意shell后门并覆盖容器的默认命令（`/bin/sh`）。
+- en: '[![2](Images/2.png)](#co_pod_level_resources_CO2-2)'
+  id: totrans-250
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](Images/2.png)](#co_pod_level_resources_CO2-2)'
+- en: Commit the changed container using the same.
+  id: totrans-251
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 提交更改后的容器使用相同方法。
+- en: While the compromise of a local registry cache may lead to this attack, container
+    cache access probably comes by rooting the node, and so this may be the least
+    of your worries.
+  id: totrans-252
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然本地注册表缓存的妥协可能导致此攻击，容器缓存访问可能通过对节点进行root权限获取，因此这可能是您最不用担心的问题。
+- en: Note
+  id: totrans-253
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The image pull policy of `Always` has a performance drawback in highly dynamic,
+    “autoscaling from zero” environments such as Knative. When startup times are crucial,
+    a potentially multisecond `imagePullPolicy` latency is unacceptable and image
+    digests must be used.
+  id: totrans-254
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在高度动态的“从零自动扩展”环境中，如Knative，使用`Always`的图像拉取策略存在性能问题。当启动时间至关重要时，多秒级的`imagePullPolicy`潜在延迟是不可接受的，必须使用图像摘要。
+- en: 'This attack on a local image cache can be mitigated with an image pull policy
+    of `Always`, which will ensure the local tag matches what’s defined in the registry
+    it’s pulled from. This is important and you should always be mindful of this setting:'
+  id: totrans-255
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对本地图像缓存的此攻击可以通过使用`Always`的图像拉取策略来减轻，这将确保本地标签与从中拉取的注册表中定义的内容匹配。这非常重要，您应始终注意此设置：
+- en: '[PRE19]'
+  id: totrans-256
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: Typos in container image names, or registry names, will deploy unexpected code
+    if an adversary has “typosquatted” the image with a malicious container.
+  id: totrans-257
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器镜像名称或注册表名称中的拼写错误会导致意外部署恶意容器代码，如果对手已将图像与恶意容器“typosquatted”。
+- en: This can be difficult to detect when only a single character changes—for example,
+    `controlplan/hack` instead of `controlplane/hack`. Tools like Notary protect against
+    this by checking for valid signatures from trusted parties. If a TLS-intercepting
+    middleware box intercepts and rewrites an image tag, a spoofed image may be deployed.
+  id: totrans-258
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当只有一个字符变化时，例如 `controlplan/hack` 而非 `controlplane/hack`，这可能很难检测到。像 Notary 这样的工具通过检查来自可信方的有效签名来防范此类情况。如果
+    TLS 拦截中间件框拦截并重写图像标签，则可能部署虚假图像。
+- en: Again, TUF and Notary side-channel signing mitigates against this, as do other
+    container signing approaches like `cosign`, as discussed in [Chapter 4](ch04.xhtml#ch-apps-supply-chain).
+  id: totrans-259
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 再次强调，TUF 和 Notary 侧信道签名以及像 `cosign` 这样的其他容器签名方法可以缓解这种情况，正如 [第 4 章](ch04.xhtml#ch-apps-supply-chain)
+    中讨论的那样。
+- en: Pod Probes
+  id: totrans-260
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Pod 探测
+- en: Your liveness probes should be tuned to your application’s performance characteristics,
+    and used to keep them alive in the stormy waters of your production environment.
+    Probes inform Kubernetes if the application is incapable of fulfilling its specified
+    purpose, perhaps through a crash or external system failure.
+  id: totrans-261
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您的活跃探测应根据应用程序的性能特征进行调整，并用于保持其在生产环境中的活跃性。探测用于通知 Kubernetes 应用程序是否无法履行其指定目的，例如由于崩溃或外部系统故障。
+- en: 'The Kubernetes audit finding [TOB-K8S-024](https://oreil.ly/OWnq6) shows probes
+    can be subverted by an attacker with the ability to schedule pods: without changing
+    the pod’s `command` or `args` they have the power to make network requests and
+    execute commands within the target container. This yields local network discovery
+    to an attacker as the probes are executed by the `kubelet` on the host networking
+    interface, and not from within the pod.'
+  id: totrans-262
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 审计发现 [TOB-K8S-024](https://oreil.ly/OWnq6) 表明，具备调度 Pod 能力的攻击者可以通过无需更改
+    Pod 的 `command` 或 `args` 来操控网络请求并在目标容器内执行命令。由于探测由 `kubelet` 在主机网络接口上执行，而不是从容器内部执行，这使得攻击者可以进行本地网络发现。
+- en: 'A `host` header can be used here to enumerate the local network. The proof
+    of concept exploit is as follows:'
+  id: totrans-263
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里可以使用 `host` 头来枚举本地网络。概念验证漏洞如下：
+- en: '[PRE20]'
+  id: totrans-264
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: CPU and Memory Limits and Requests
+  id: totrans-265
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: CPU 和内存限制以及请求
+- en: Resource limits and requests which manage the pod’s `cgroups` prevent the exhaustion
+    of finite memory and compute resources on the `kubelet` host, and defend from
+    fork bombs and runaway processes. Networking bandwidth limits are not supported
+    in the pod spec, but may be supported by your CNI implementation.
+  id: totrans-266
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 管理 Pod 的 `cgroups` 的资源限制和请求可以防止 `kubelet` 主机上有限内存和计算资源的耗尽，并防御 fork 炸弹和运行异常的进程。Pod
+    规范不支持网络带宽限制，但您的 CNI 实现可能支持。
+- en: '`cgroups` are a useful resource constraint. `cgroups` v2 offers more protection,
+    but `cgroups` v1 are not a security boundary and [they can be escaped easily](https://oreil.ly/uDhso).'
+  id: totrans-267
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`cgroups` 是一种有用的资源限制。`cgroups` v2 提供了更多保护，但 `cgroups` v1 并非安全边界，[可以很容易地逃逸](https://oreil.ly/uDhso)。'
+- en: 'Limits restrict the potential cryptomining or resource exhaustion that a malicious
+    container can execute. It also stops the host becoming overwhelmed by bad deployments.
+    It has limited effectiveness against an adversary looking to further exploit the
+    system unless they need to use a memory-hungry attack:'
+  id: totrans-268
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 限制可以防止恶意容器执行的加密挖矿或资源耗尽。它还阻止主机因糟糕的部署而不堪重负。对于进一步利用系统的对手，除非它们需要使用内存密集型攻击，其效果有限：
+- en: '[PRE21]'
+  id: totrans-269
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: DNS
+  id: totrans-270
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: DNS
+- en: By default Kubernetes DNS servers provide all records for services across the
+    cluster, preventing namespace segregation unless deployed individually per-namespace
+    or domain.
+  id: totrans-271
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，Kubernetes DNS 服务器提供集群中所有服务的所有记录，除非单独按命名空间或域部署，否则无法实现命名空间隔离。
+- en: Tip
+  id: totrans-272
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: CoreDNS supports policy plug-ins, including OPA, to restrict access to DNS records
+    and defeat the following enumeration attacks.
+  id: totrans-273
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CoreDNS 支持策略插件，包括 OPA，以限制对 DNS 记录的访问并防止以下枚举攻击。
+- en: The default Kubernetes CoreDNS installation leaks information about its services,
+    and offers an attacker a view of all possible network endpoints (see [Figure 2-10](#tweet-rory-hard-dns)).
+    Of course they may not all be accessible due to a network policy in place, as
+    we will see in [“Traffic Flow Control”](ch05.xhtml#workload-network-policies).
+  id: totrans-274
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes CoreDNS 默认安装泄漏了关于其服务的信息，并为攻击者提供了查看所有可能网络端点的视图（见 [图 2-10](#tweet-rory-hard-dns)）。当然，由于网络策略的存在，它们可能并非全部可访问，正如我们将在
+    [“流量流控”](ch05.xhtml#workload-network-policies) 中看到的那样。
+- en: 'DNS enumeration can be performed against a default, unrestricted CoreDNS installation.
+    To retrieve all services in the cluster namespace (output edited to fit):'
+  id: totrans-275
+  prefs: []
+  type: TYPE_NORMAL
+  zh: DNS 枚举可以针对默认的无限制 CoreDNS 安装执行。为检索集群命名空间中的所有服务（输出经过编辑以适应）：
+- en: '[PRE22]'
+  id: totrans-276
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: '![tweet-rory-hard-dns](Images/haku_0211.png)'
+  id: totrans-277
+  prefs: []
+  type: TYPE_IMG
+  zh: '![tweet-rory-hard-dns](Images/haku_0211.png)'
+- en: Figure 2-10\. The wisdom of Rory McCune on the difficulties of hard multitenancy
+  id: totrans-278
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-10\. Rory McCune 关于硬多租户难题的智慧
+- en: 'For all service endpoints and names do the following (output edited to fit):'
+  id: totrans-279
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于所有服务终端和名称，请执行以下操作（输出经过编辑以适应）：
+- en: '[PRE23]'
+  id: totrans-280
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: 'To return an IPv4 address based on the query:'
+  id: totrans-281
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 基于查询返回 IPv4 地址：
+- en: '[PRE24]'
+  id: totrans-282
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: 'The Kubernetes API server service IP information is mounted into the pod’s
+    environment by default:'
+  id: totrans-283
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes API 服务器服务 IP 信息默认挂载到 pod 的环境中：
+- en: '[PRE25]'
+  id: totrans-284
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE25]'
+- en: The response matches the API server’s `/version` endpoint.
+  id: totrans-285
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 响应匹配 API 服务器的 `/version` 终端。
+- en: Tip
+  id: totrans-286
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: Tip
+- en: 'You can detect Kubernetes API servers with [this nmap script](https://oreil.ly/PAqte)
+    and the following function:'
+  id: totrans-287
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用 [此 nmap 脚本](https://oreil.ly/PAqte) 和以下函数检测 Kubernetes API 服务器：
+- en: '[PRE26]'
+  id: totrans-288
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE26]'
+- en: 'Next up is an important runtime policy piece: the securityContext, initially
+    introduced by Red Hat.'
+  id: totrans-289
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来是一个重要的运行时策略部分：securityContext，最初由 Red Hat 引入。
+- en: Pod securityContext
+  id: totrans-290
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Pod 的 securityContext
+- en: 'This pod is running with an empty `securityContext`, which means that without
+    admission controllers mutating the configuration at deployment time, the container
+    can run a root-owned process and has all capabilities available to it:'
+  id: totrans-291
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此 pod 使用空的 `securityContext` 运行，这意味着在部署时没有准入控制器对配置进行修改，容器可以运行一个属于 root 的进程，并且具有所有可用的能力：
+- en: '[PRE27]'
+  id: totrans-292
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE27]'
+- en: Exploiting the capability landscape involves an understanding of the kernel’s
+    flags, and [Stefano Lanaro’s guide](https://oreil.ly/mtvCX) provides a comprehensive
+    overview.
+  id: totrans-293
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 利用能力风险涉及对内核标志的理解，[Stefano Lanaro 的指南](https://oreil.ly/mtvCX) 提供了全面的概述。
+- en: 'Different capabilities may have particular impact on a system, and `CAP_SYS_ADMIN`
+    and `CAP_BPF` are particularly enticing to an attacker. Notable capabilities you
+    should be cautious about granting include:'
+  id: totrans-294
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不同的能力可能对系统产生特定影响，`CAP_SYS_ADMIN` 和 `CAP_BPF` 尤其吸引攻击者。你应谨慎授予的显著能力包括：
+- en: '`CAP_DAC_OVERRIDE`, `CAP_CHOWN`, `CAP_DAC_READ_SEARCH`, `CAP_FORMER`, `CAP_SETFCAP`'
+  id: totrans-295
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`CAP_DAC_OVERRIDE`、`CAP_CHOWN`、`CAP_DAC_READ_SEARCH`、`CAP_FORMER`、`CAP_SETFCAP`'
+- en: Bypass filesystem permissions
+  id: totrans-296
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 绕过文件系统权限
+- en: '`CAP_SETUID`, `CAP_SETGID`'
+  id: totrans-297
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`CAP_SETUID`, `CAP_SETGID`'
+- en: Become the root user
+  id: totrans-298
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 成为 root 用户
+- en: '`CAP_NET_RAW`'
+  id: totrans-299
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`CAP_NET_RAW`'
+- en: Read network traffic
+  id: totrans-300
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 读取网络流量
+- en: '`CAP_SYS_ADMIN`'
+  id: totrans-301
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`CAP_SYS_ADMIN`'
+- en: Filesystem mount permission
+  id: totrans-302
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 文件系统挂载权限
+- en: '`CAP_SYS_PTRACE`'
+  id: totrans-303
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`CAP_SYS_PTRACE`'
+- en: All-powerful debugging of other processes
+  id: totrans-304
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对其他进程进行全能调试
+- en: '`CAP_SYS_MODULE`'
+  id: totrans-305
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`CAP_SYS_MODULE`'
+- en: Load kernel modules to bypass controls
+  id: totrans-306
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 加载内核模块以绕过控制
+- en: '`CAP_PERFMON`, `CAP_BPF`'
+  id: totrans-307
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`CAP_PERFMON`、`CAP_BPF`'
+- en: Access deep-hooking BPF systems
+  id: totrans-308
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 访问深度钩住 BPF 系统
+- en: These are the precursors for many container breakouts. As [Brad Geesaman](https://oreil.ly/swfMU)
+    points out in [Figure 2-11](#tweet-brad-not-a-container-escape), processes want
+    to be free! And an adversary will take advantage of anything within the pod they
+    can use to escape.
+  id: totrans-309
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些是许多容器突破的先导条件。正如 [Brad Geesaman](https://oreil.ly/swfMU) 在 [图 2-11](#tweet-brad-not-a-container-escape)
+    中指出的那样，进程想要自由！对手会利用 pod 中可以用来逃逸的任何东西。
+- en: '![haku 0212](Images/haku_0212.png)'
+  id: totrans-310
+  prefs: []
+  type: TYPE_IMG
+  zh: '![haku 0212](Images/haku_0212.png)'
+- en: Figure 2-11\. Brad Geesaman’s evocative container freedom cry
+  id: totrans-311
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-11\. Brad Geesaman 引人入胜的容器自由呼吁
+- en: Note
+  id: totrans-312
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: Note
+- en: '`CAP_NET_RAW` is enabled by default in `runc`, and enables UDP (which bypasses
+    TCP service meshes like Istio), ICMP messages, and ARP poisoning attacks. [Aqua
+    found DNS poisoning attacks](https://oreil.ly/ceARf) against Kubernetes DNS, and
+    the `net.ipv4.ping_group_range` `sysctl` flag means [it should be dropped when
+    needed for ICMP](https://oreil.ly/tJ7rQ).'
+  id: totrans-313
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`CAP_NET_RAW` 在 `runc` 中默认启用，允许 UDP（绕过如 Istio 的 TCP 服务网格）、ICMP 消息和 ARP 毒化攻击。[Aqua
+    发现 DNS 毒化攻击](https://oreil.ly/ceARf) 目标是 Kubernetes DNS，而 `net.ipv4.ping_group_range`
+    的 `sysctl` 标志意味着 [在需要 ICMP 时应该丢弃](https://oreil.ly/tJ7rQ)。'
+- en: 'These are some container breakouts requiring `root` and/or `CAP_SYS_ADMIN`,
+    `CAP_NET_RAW`, `CAP_BPF`, or `CAP_SYS_MODULE` to function:'
+  id: totrans-314
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些是一些容器突破，需要 `root` 和/或 `CAP_SYS_ADMIN`、`CAP_NET_RAW`、`CAP_BPF` 或 `CAP_SYS_MODULE`
+    来运行：
+- en: Subpath volume mount traversal and */proc/self/exe* (both described in [Chapter 6](ch06.xhtml#ch-storage)).
+  id: totrans-315
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 子路径卷挂载遍历以及 */proc/self/exe*（均在 [第 6 章](ch06.xhtml#ch-storage) 描述）。
+- en: '[CVE-2016-5195](https://oreil.ly/ZdYJ8) is a read-only memory copy-on-write
+    race condition, aka DirtyCow, and detailed in [“Architecting Containerized Apps
+    for Resilience”](ch04.xhtml#architecting-apps-resilience).'
+  id: totrans-316
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[CVE-2016-5195](https://oreil.ly/ZdYJ8) 是一个只读内存写时复制竞争条件，又称 DirtyCow，在 [“Architecting
+    Containerized Apps for Resilience”](ch04.xhtml#architecting-apps-resilience) 中有详细介绍。'
+- en: '[CVE-2020-14386](https://oreil.ly/Scrau) is an unprivileged memory corruption
+    bug that requires `CAP_NET_RAW`.'
+  id: totrans-317
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[CVE-2020-14386](https://oreil.ly/Scrau) 是一个需要 `CAP_NET_RAW` 的非特权内存破坏漏洞。'
+- en: '[CVE-2021-30465](https://oreil.ly/QzkuG), `runc` mount destinations symlink-exchange
+    swap to mount outside the `rootfs`, limited by use of unprivileged user.'
+  id: totrans-318
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[CVE-2021-30465](https://oreil.ly/QzkuG)，`runc` 挂载目标符号链接交换到 `rootfs` 外部的挂载，受未授权用户的限制。'
+- en: '[CVE-2021-22555](https://oreil.ly/Zj1Rl) is a `Netfilter` heap out-of-bounds
+    write that requires `CAP_NET_RAW`.'
+  id: totrans-319
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[CVE-2021-22555](https://oreil.ly/Zj1Rl) 是一个 `Netfilter` 堆溢出写，需要 `CAP_NET_RAW`。'
+- en: '[CVE-2021-31440](https://oreil.ly/VLeQK) is `eBPF` out-of-bounds access to
+    the Linux kernel requiring root or `CAP_BPF`, and `CAPS_SYS_MODULE`.'
+  id: totrans-320
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[CVE-2021-31440](https://oreil.ly/VLeQK) 是 `eBPF` 对 Linux 内核的越界访问，需要 root 或
+    `CAP_BPF` 和 `CAP_SYS_MODULE`。'
+- en: '[@andreyknvl](https://oreil.ly/wlzra) kernel bugs and [`core_pattern` escape](https://oreil.ly/RWlF0).'
+  id: totrans-321
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[@andreyknvl](https://oreil.ly/wlzra) 内核漏洞和 [`core_pattern` 逃逸](https://oreil.ly/RWlF0)。'
+- en: When there’s no breakout, root capabilities are still required for a number
+    of other attacks, such as [CVE-2020-10749](https://oreil.ly/XoxVW) which are Kubernetes
+    CNI plug-in person-in-the-middle (PitM) attacks via IPv6 rogue router advertisements.
+  id: totrans-322
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当没有分裂时，仍然需要根能力来执行其他攻击，比如通过 IPv6 伪造路由广告进行的 Kubernetes CNI 插件中间人攻击 [CVE-2020-10749](https://oreil.ly/XoxVW)。
+- en: Tip
+  id: totrans-323
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: The excellent [“A Compendium of Container Escapes”](https://oreil.ly/LAGB9)
+    goes into more detail on some of these attacks.
+  id: totrans-324
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 优秀的 [“A Compendium of Container Escapes”](https://oreil.ly/LAGB9) 在这些攻击方面提供了更详细的信息。
+- en: We enumerate the options available in a `securityContext` for a pod to defend
+    itself from hostile containers in [“Runtime Policies”](ch08.xhtml#policy-runtime-policies).
+  id: totrans-325
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在 [“Runtime Policies”](ch08.xhtml#policy-runtime-policies) 中枚举了一个 pod 的 `securityContext`
+    的可用选项，以保护自己免受敌对容器的攻击。
+- en: Pod Service Accounts
+  id: totrans-326
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Pod 服务账户
+- en: Service Accounts are JSON Web Tokens (JWTs) and are used by a pod for authentication
+    and authorization to the API server. The default service account shouldn’t be
+    given any permissions, and by default comes with no authorization.
+  id: totrans-327
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 服务账户是 JSON Web Tokens（JWT），由 pod 用于 API 服务器的身份验证和授权。默认服务账户不应被赋予任何权限，并且默认情况下不具备任何授权。
+- en: 'A pod’s `serviceAccount` configuration defines its access privileges with the
+    API server; see [“Service accounts”](ch08.xhtml#service-accounts) for the details.
+    The service account is mounted into all pod replicas, and which share the single
+    “workload identity”:'
+  id: totrans-328
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个 pod 的 `serviceAccount` 配置定义了其与 API 服务器的访问权限；详细信息请参见 [“Service accounts”](ch08.xhtml#service-accounts)。服务账户被挂载到所有
+    pod 副本中，并共享单个的 “工作负载身份”：
+- en: '[PRE28]'
+  id: totrans-329
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE28]'
+- en: 'Segregating duty in this way reduces the blast radius if a pod is compromised:
+    limiting an attacker post-intrusion is a primary goal of policy controls.'
+  id: totrans-330
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过这种方式分离职责，减少了 pod 被攻击后的爆炸半径：限制入侵后的攻击者是策略控制的主要目标。
+- en: Scheduler and Tolerations
+  id: totrans-331
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 调度器和容忍性
+- en: 'The scheduler is responsible for allocating a pod workload to a node. It looks
+    as follows:'
+  id: totrans-332
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 调度器负责将 pod 工作负载分配给节点。其运行如下：
+- en: '[PRE29]'
+  id: totrans-333
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE29]'
+- en: A hostile scheduler could conceivably exfiltrate data or workloads from the
+    cluster, but requires the cluster to be compromised in order to add it to the
+    control plane. It would be easier to schedule a privileged container and root
+    the control plane `kubelets`.
+  id: totrans-334
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 敌对的调度器可能会从集群中渗透数据或工作负载，但需要先攻陷集群才能将其添加到控制平面。更容易的方式是调度一个特权容器并根据控制平面的 `kubelets`
+    获取根权限。
+- en: Pod Volume Definitions
+  id: totrans-335
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Pod 卷定义
+- en: 'Here we are using a bound service account token, defined in YAML as a projected
+    service account token (instead of a standard service account). The `kubelet` protects
+    this against exfiltration by regularly rotating it (configured for every 3600
+    seconds, or one hour), so it’s only of limited use if stolen. An attacker with
+    persistence is still able to use this value, and can observe its value after it’s
+    rotated, so this only protects the service account after the attack has completed:'
+  id: totrans-336
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里我们使用了一个绑定的服务账户令牌，以 YAML 格式定义为投影式服务账户令牌（而不是标准服务账户）。`kubelet` 定期旋转它来防止外泄（每 3600
+    秒，或一个小时），所以如果被窃取，它的使用是有限的。攻击者持久存在时仍然能够使用这个值，并且可以在旋转后观察到其值，因此这只在攻击完成后保护服务账户：
+- en: '[PRE30]'
+  id: totrans-337
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE30]'
+- en: Volumes are a rich source of potential data for an attacker, and you should
+    ensure that standard security practices like discretionary access control (DAC,
+    e.g., files and permissions) is correctly configured.
+  id: totrans-338
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 卷对于攻击者来说是潜在数据的丰富来源，您应确保正确配置诸如自主访问控制（DAC，例如文件和权限）等标准安全实践。
+- en: Tip
+  id: totrans-339
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: The downward API reflects Kubernetes-level values into the containers in the
+    pod, and is useful to expose things like the pod’s name, namespace, UID, and labels
+    and annotations into the container. It’s capabilities are [listed in the documentation](https://oreil.ly/UyC90).
+  id: totrans-340
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下行 API 将 Kubernetes 级别的值映射到 Pod 中的容器中，用于公开诸如 Pod 名称、命名空间、UID 以及标签和注释等内容。它的功能在[文档中列出](https://oreil.ly/UyC90)。
+- en: A container is just Linux, and will not protect its workload from incorrect
+    configuration.
+  id: totrans-341
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个容器仅仅是 Linux，不会保护其工作负载免受配置错误的影响。
+- en: Pod Network Status
+  id: totrans-342
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Pod 网络状态
+- en: 'Network information about the pod is useful to debug containers without services,
+    or that aren’t responding as they should, but an attacker might use this information
+    to connect directly to a pod without scanning the network:'
+  id: totrans-343
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 关于 Pod 的网络信息对于调试没有服务的容器或者不按预期响应的容器非常有用，但攻击者可能利用这些信息直接连接到 Pod，而无需扫描网络：
+- en: '[PRE31]'
+  id: totrans-344
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE31]'
+- en: Using the securityContext Correctly
+  id: totrans-345
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 正确使用 `securityContext`
+- en: A pod is more likely to be compromised if a `securityContext` is not configured,
+    or is too permissive. The `securityContext` is your most effective tool to prevent
+    container breakout.
+  id: totrans-346
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果未配置或者权限过于宽松，Pod 更有可能受到威胁。`securityContext` 是防止容器越界的最有效工具。
+- en: After gaining an RCE into a running pod, the `securityContext` is the first
+    line of defensive configuration you have available. It has access to kernel switches
+    that can be set individually. Additional Linux Security Modules can be configured
+    with fine-grained policies that prevent hostile applications taking advantage
+    of your systems.
+  id: totrans-347
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在成功对运行中的 Pod 进行远程代码执行（RCE）之后，`securityContext` 是你可用的第一行防御配置。它可以访问可以单独设置的内核开关。还可以配置额外的
+    Linux 安全模块，以细化策略防止恶意应用程序利用系统。
+- en: 'Docker’s `containerd` has a default `seccomp` profile that has prevented some
+    zero-day attacks against the container runtime by blocking system calls in the
+    kernel. From Kubernetes v1.22 you should enable this by default for all runtimes
+    with the `--seccomp-default` `kubelet` flag. In some cases workloads may not run
+    with the default profile: observability or security tools may require low-level
+    kernel access. These workloads should have custom `seccomp` profiles written (rather
+    than resorting to running them `Unconfined`, which allows any system call).'
+  id: totrans-348
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Docker 的 `containerd` 默认具有 `seccomp` 配置文件，通过阻止内核中的系统调用，防止了对容器运行时的一些零日攻击。从 Kubernetes
+    v1.22 开始，您应该通过`--seccomp-default` `kubelet` 标志默认启用此配置。在某些情况下，工作负载可能无法使用默认配置文件运行：可观察性或安全工具可能需要低级别的内核访问。这些工作负载应编写自定义的
+    `seccomp` 配置文件（而不是将它们运行为`Unconfined`，这允许任何系统调用）。
+- en: 'Here’s an example of a fine-grained `seccomp` profile loaded from the host’s
+    filesystem under `/var/lib/kubelet/seccomp`:'
+  id: totrans-349
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里有一个从主机文件系统`/var/lib/kubelet/seccomp`加载的细粒度`seccomp`配置文件的示例：
+- en: '[PRE32]'
+  id: totrans-350
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE32]'
+- en: '`seccomp` is for system calls, but SELinux and AppArmor can monitor and enforce
+    policy in userspace too, protecting files, directories, and devices.'
+  id: totrans-351
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`seccomp` 是用于系统调用的，但 SELinux 和 AppArmor 也可以在用户空间监视和执行策略，保护文件、目录和设备。'
+- en: SELinux configuration is able to block most container breakouts (excluding with
+    a label-based approach to filesystem and process access) as it doesn’t allow containers
+    to write anywhere but their own filesystem, nor to read other directories, and
+    comes enabled on OpenShift and Red Hat Linuxes.
+  id: totrans-352
+  prefs: []
+  type: TYPE_NORMAL
+  zh: SELinux 配置能够阻止大多数容器越界攻击（除非使用基于标签的文件系统和进程访问方法），因为它不允许容器写入任何位置，除了它们自己的文件系统，也不允许读取其他目录，并且在
+    OpenShift 和 Red Hat Linux 上默认启用。
+- en: 'AppArmor can similarly monitor and prevent many attacks in Debian-derived Linuxes.
+    If AppArmor is enabled, then `cat /sys/module/apparmor/parameters/enabled` returns
+    `Y`, and it can be used in pod definitions:'
+  id: totrans-353
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在基于 Debian 的 Linux 中，AppArmor 同样可以监视和防止许多攻击。如果启用了 AppArmor，则`cat /sys/module/apparmor/parameters/enabled`
+    返回 `Y`，并且可以在 Pod 定义中使用：
+- en: '[PRE33]'
+  id: totrans-354
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE33]'
+- en: The `privileged` flag was quoted as being “the most dangerous flag in the history
+    of computing” by Liz Rice, but why are privileged containers so dangerous? Because
+    they leave the process namespace enabled to give the illusion of containerization,
+    but actually disable all security features.
+  id: totrans-355
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Liz Rice 称 `privileged` 标志为“计算历史上最危险的标志”，但为什么特权容器如此危险？因为它们使进程命名空间保持启用，从而产生容器化的幻觉，但实际上禁用了所有安全功能。
+- en: '“Privileged” is a specific `securityContext` configuration: all but the process
+    namespace is disabled, virtual filesystems are unmasked, LSMs are disabled, and
+    all capabilities are granted.'
+  id: totrans-356
+  prefs: []
+  type: TYPE_NORMAL
+  zh: “特权”是特定的 `securityContext` 配置：除进程命名空间外，所有配置都已禁用，虚拟文件系统已解除掩码，LSM 已禁用，并且授予了所有权限。
+- en: 'Running as a nonroot user without capabilities, and setting `AllowPrivilegeEscalation`
+    to `false` provides a robust protection against many privilege escalations:'
+  id: totrans-357
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为非 root 用户运行且设置 `AllowPrivilegeEscalation` 为 `false` 可有效防止许多特权升级：
+- en: '[PRE34]'
+  id: totrans-358
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE34]'
+- en: 'The granularity of security contexts means each property of the configuration
+    must be tested to ensure it is not set: as a defender by configuring admission
+    control and testing YAML or as an attacker with a dynamic test (or [amicontained](https://oreil.ly/BIQCJ))
+    at runtime.'
+  id: totrans-359
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安全上下文的粒度意味着必须测试配置的每个属性，以确保它未设置：作为防御者通过配置准入控制和测试 YAML，或作为攻击者在运行时使用动态测试（或 [amicontained](https://oreil.ly/BIQCJ)）。
+- en: Tip
+  id: totrans-360
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: We explore how to detect privileges inside a container later in this chapter.
+  id: totrans-361
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将在本章后面探讨如何检测容器内的特权。
+- en: Sharing namespaces with the host also reduces the isolation of the container
+    and opens it to greater potential risk. Any mounted filesystems effectively add
+    to the mount namespace.
+  id: totrans-362
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与主机共享命名空间还会降低容器的隔离性并使其面临更大的潜在风险。任何挂载的文件系统实际上都增加了挂载命名空间。
+- en: Ensure your pods’ `securityContext`s are correct and your systems will be safer
+    against known attacks.
+  id: totrans-363
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 确保您的 pod 的 `securityContext` 设置正确，您的系统将更安全地抵御已知攻击。
+- en: Enhancing the securityContext with Kubesec
+  id: totrans-364
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 通过 Kubesec 增强 securityContext
+- en: '[Kubesec](https://kubesec.io) is a simple tool to validate the security of
+    a Kubernetes resource.'
+  id: totrans-365
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Kubesec](https://kubesec.io) 是一个验证 Kubernetes 资源安全性的简单工具。'
+- en: 'It returns a risk score for the resource, and advises on how to tighten the
+    `securityContext` (note that we edited the output to fit):'
+  id: totrans-366
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 它为资源返回一个风险评分，并建议如何加强 `securityContext`（请注意，我们已编辑输出以适应）：
+- en: '[PRE35]'
+  id: totrans-367
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE35]'
+- en: '[Kubesec.io](https://kubesec.io) documents practical changes to make to your
+    securityContext, and we’ll document some of them here.'
+  id: totrans-368
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Kubesec.io](https://kubesec.io) 记录了对您的 `securityContext` 进行实际更改的详细说明，我们将在这里记录其中一些。'
+- en: Tip
+  id: totrans-369
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: Shopify’s excellent [kubeaudit](https://oreil.ly/LHy2P) provides similar functionality
+    for all resources in a cluster.
+  id: totrans-370
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Shopify 出色的 [kubeaudit](https://oreil.ly/LHy2P) 为集群中的所有资源提供类似功能。
+- en: Hardened securityContext
+  id: totrans-371
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 加固的 `securityContext`
+- en: The NSA published [“Kubernetes Hardening Guidance”](https://oreil.ly/2riDP),
+    which recommends a hardened set of `securityContext` standards. It recommends
+    scanning for vulnerabilities and misconfigurations, least privilege, good RBAC
+    and IAM, network firewalling and encryption, and “to periodically review all Kubernetes
+    settings and use vulnerability scans to help ensure risks are appropriately accounted
+    for and security patches are applied.”
+  id: totrans-372
+  prefs: []
+  type: TYPE_NORMAL
+  zh: NSA 发布了 [“Kubernetes 硬化指南”](https://oreil.ly/2riDP)，建议采用一组加固的 `securityContext`
+    标准。它建议扫描漏洞和错误配置，最小特权，良好的 RBAC 和 IAM，网络防火墙和加密，“定期审查所有 Kubernetes 设置，并使用漏洞扫描来确保适当地考虑风险并应用安全补丁”。
+- en: Assigning least privilege to a container in a pod is the responsibility of the
+    `securityContext` (see details in [Table 2-2](#sec-context-fields)). Note that
+    the PodSecurityPolicy resource discussed in [“Runtime Policies”](ch08.xhtml#policy-runtime-policies)
+    maps onto the config flags available in `securityContext`.
+  id: totrans-373
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将 pod 中容器的最小特权分配给 `securityContext` 是一个责任（详细信息见 [表 2-2](#sec-context-fields)）。请注意，我们在
+    [“运行时策略”](ch08.xhtml#policy-runtime-policies) 中讨论的 PodSecurityPolicy 资源映射到 `securityContext`
+    中可用的配置标志。
+- en: Table 2-2\. `securityContext fields`
+  id: totrans-374
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 2-2\. `securityContext` 字段
+- en: '| Field name(s) | Usage | Recommendations |'
+  id: totrans-375
+  prefs: []
+  type: TYPE_TB
+  zh: '| 字段名 | 使用 | 建议 |'
+- en: '| --- | --- | --- |'
+  id: totrans-376
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- |'
+- en: '| `privileged` | Controls whether pods can run privileged containers. | Set
+    to `false`. |'
+  id: totrans-377
+  prefs: []
+  type: TYPE_TB
+  zh: '| `privileged` | 控制 pod 是否可以运行特权容器。 | 设置为 `false`。 |'
+- en: '| `hostPID`, `hostIPC` | Controls whether containers can share host process
+    namespaces. | Set to `false`. |'
+  id: totrans-378
+  prefs: []
+  type: TYPE_TB
+  zh: '| `hostPID`，`hostIPC` | 控制容器是否可以共享主机进程命名空间。 | 设置为 `false`。 |'
+- en: '| `hostNetwork` | Controls whether containers can use the host network. | Set
+    to `false`. |'
+  id: totrans-379
+  prefs: []
+  type: TYPE_TB
+  zh: '| `hostNetwork` | 控制容器是否可以使用主机网络。 | 设置为 `false`。 |'
+- en: '| `allowedHostPaths` | Limits containers to specific paths of the host filesystem.
+    | Use a “dummy” path name (such as `/foo` marked as read-only). Omitting this
+    field results in no admission restrictions being placed on containers. |'
+  id: totrans-380
+  prefs: []
+  type: TYPE_TB
+  zh: '| `allowedHostPaths` | 限制容器只能访问主机文件系统中的特定路径。 | 使用“虚拟”路径名（如 `/foo` 设为只读）。如果省略此字段，则不会对容器施加任何准入限制。
+    |'
+- en: '| `readOnlyRootFilesystem` | Requires the use of a read only root filesystem.
+    | Set to `true` when possible. |'
+  id: totrans-381
+  prefs: []
+  type: TYPE_TB
+  zh: '| `readOnlyRootFilesystem` | 要求使用只读根文件系统。 | 在可能的情况下设置为 `true`。 |'
+- en: '| `runAsUser`, `runAsGroup`, `supplementalGroups`, `fsGroup` | Controls whether
+    container applications can run with root privileges or with root group membership.
+    | Set `runAsUser` to `MustRunAsNonRoot`.Set `runAsGroup` to `nonzero`.Set `supplementalGroups`
+    to `nonzero`.Set `fsGroup` to `nonzero`. |'
+  id: totrans-382
+  prefs: []
+  type: TYPE_TB
+  zh: '| `runAsUser`, `runAsGroup`, `supplementalGroups`, `fsGroup` | 控制容器应用程序是否可以以
+    root 特权或 root 组成员身份运行。 | 将 `runAsUser` 设置为 `MustRunAsNonRoot`。将 `runAsGroup` 设置为
+    `nonzero`。将 `supplementalGroups` 设置为 `nonzero`。将 `fsGroup` 设置为 `nonzero`。 |'
+- en: '| `allowPrivilegeEscalation` | Restricts escalation to root privileges. | Set
+    to `false`. This measure is required to effectively enforce `runAsUser: MustRunAsNonRoot`
+    settings. |'
+  id: totrans-383
+  prefs: []
+  type: TYPE_TB
+  zh: '| `allowPrivilegeEscalation` | 限制特权升级到 root 权限。 | 设置为 `false`。这一措施是为了有效实施 `runAsUser:
+    MustRunAsNonRoot` 设置。 |'
+- en: '| `SELinux` | Sets the SELinux context of the container. | If the environment
+    supports SELinux, consider adding SELinux labeling to further harden the container.
+    |'
+  id: totrans-384
+  prefs: []
+  type: TYPE_TB
+  zh: '| `SELinux` | 设置容器的 SELinux 安全上下文。 | 如果环境支持 SELinux，请考虑添加 SELinux 标签以进一步加固容器。
+    |'
+- en: '| `AppArmor` annotations | Sets the AppArmor profile used by containers. |
+    Where possible, harden containerized applications by employing AppArmor to constrain
+    exploitation. |'
+  id: totrans-385
+  prefs: []
+  type: TYPE_TB
+  zh: '| `AppArmor` 注解 | 设置容器使用的 AppArmor 配置文件。 | 在可能的情况下，通过使用 AppArmor 来限制容器应用程序的利用。
+    |'
+- en: '| `seccomp` annotations | Sets the `seccomp` profile used to sandbox containers.
+    | Where possible, use a `seccomp` auditing profile to identify required syscalls
+    for running applications; then enable a `seccomp` profile to block all other syscalls.
+    |'
+  id: totrans-386
+  prefs: []
+  type: TYPE_TB
+  zh: '| `seccomp` 注解 | 设置容器使用的 `seccomp` 沙箱配置文件。 | 在可能的情况下，使用 `seccomp` 审计配置文件来识别应用程序运行所需的系统调用；然后启用一个
+    `seccomp` 配置文件来阻止所有其他系统调用。 |'
+- en: Let’s explore these in more detail using the `kubesec` static analysis tool,
+    and the selectors it uses to interrogate your Kubernetes resources.
+  id: totrans-387
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们使用 `kubesec` 静态分析工具更详细地探索这些内容，以及它用于查询您的 Kubernetes 资源的选择器。
+- en: containers[] .securityContext .privileged
+  id: totrans-388
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: containers[] .securityContext .privileged
+- en: A privileged container running is potentially a bad day for your security team.
+    Privileged containers disable namespaces (except `process`) and LSMs, grant all
+    capabilities, expose the host’s devices through */dev*, and generally make things
+    insecure by default. This is the first thing an attacker looks for in a newly
+    compromised pod.
+  id: totrans-389
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个运行特权容器可能会给您的安全团队带来糟糕的一天。特权容器禁用了除 `process` 外的所有命名空间和 LSM（Linux 安全模块），授予了所有的
+    capabilities，通过 */dev* 暴露了主机的设备，并且通常会因为默认配置不安全。这是攻击者在新受损的 Pod 中寻找的第一件事情。
+- en: .spec .hostPID
+  id: totrans-390
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: .spec .hostPID
+- en: '`hostPID` allows traversal from the container to the host through the */proc*
+    filesystem, which symlinks other processes’ root filesystems. To read from the
+    host’s process namespace, `privileged` is needed as well:'
+  id: totrans-391
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`hostPID` 允许通过 */proc* 文件系统从容器遍历到主机，该文件系统链接到其他进程的根文件系统。为了读取主机的进程命名空间，还需要 `privileged`
+    权限：'
+- en: '[PRE36]'
+  id: totrans-392
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE36]'
+- en: '[![1](Images/1.png)](#co_pod_level_resources_CO3-1)'
+  id: totrans-393
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](Images/1.png)](#co_pod_level_resources_CO3-1)'
+- en: Start a privileged container and share the host process namespace.
+  id: totrans-394
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 启动一个特权容器并共享主机进程命名空间。
+- en: '[![2](Images/2.png)](#co_pod_level_resources_CO3-2)'
+  id: totrans-395
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](Images/2.png)](#co_pod_level_resources_CO3-2)'
+- en: As the root user in the container, check the container’s operating system version.
+  id: totrans-396
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为容器中的 root 用户，检查容器的操作系统版本。
+- en: '[![3](Images/3.png)](#co_pod_level_resources_CO3-3)'
+  id: totrans-397
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](Images/3.png)](#co_pod_level_resources_CO3-3)'
+- en: Verify we’re in the host’s process namespace (we can see PID 1, and kernel helper
+    processes).
+  id: totrans-398
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 验证我们位于主机的进程命名空间中（我们可以看到 PID 1 和内核辅助进程）。
+- en: '[![4](Images/4.png)](#co_pod_level_resources_CO3-4)'
+  id: totrans-399
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](Images/4.png)](#co_pod_level_resources_CO3-4)'
+- en: Check the distribution version of the host, via the */proc* filesystem inside
+    the containe. This is possible because the PID namespace is shared with the host.
+  id: totrans-400
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 检查容器内部 */proc* 文件系统中的分发版本，以了解主机的发行版版本。这是因为 PID 命名空间与主机共享。
+- en: Note
+  id: totrans-401
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: 'Without `privileged`, the host process namespace is inaccessible to root in
+    the container:'
+  id: totrans-402
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果没有 `privileged` 权限，容器中的 root 用户无法访问主机的进程命名空间：
+- en: '[PRE37]'
+  id: totrans-403
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE37]'
+- en: In this case the attacker is limited to searching the filesystem or memory as
+    their UID allows, hunting for key material or sensitive data.
+  id: totrans-404
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这种情况下，攻击者仅限于根据其 UID 的权限搜索文件系统或内存，寻找关键材料或敏感数据。
+- en: .spec .hostNetwork
+  id: totrans-405
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: .spec .hostNetwork
+- en: Host networking access allows us to sniff traffic or send fake traffic over
+    the host adapter (but only if we have permission to do so, enabled by `CAP_NET_RAW`
+    or `CAP_NET_ADMIN`), and evade network policy (which depends on traffic originating
+    from the expected source IP of the adapter in the pod’s network namespace).
+  id: totrans-406
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 主机网络访问允许我们嗅探流量或在主机适配器上发送虚假流量（但仅在我们有权限和启用了 `CAP_NET_RAW` 或 `CAP_NET_ADMIN` 时），并规避网络策略（这取决于来自
+    Pod 网络命名空间中预期源 IP 的流量）。
+- en: It also grants access to services bound to the host’s loopback adapter (`localhost`
+    in the root network namespace) that traditionally was considered a security boundary.
+    Server Side Request Forgery (SSRF) attacks have reduced the incidence of this
+    pattern, but it may still exist (Kubernetes’ API server `--insecure-port` used
+    this pattern until it was deprecated in v1.10 and finally removed in v1.20).
+  id: totrans-407
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 它还授予访问绑定到主机环回适配器（根网络命名空间中的 `localhost`）的服务的权限，传统上这被视为安全边界。尽管 Kubernetes 的 API
+    服务器在 v1.10 中弃用并在 v1.20 中最终移除了此模式，但 SSRF 攻击仍可能存在。
+- en: .spec .hostAliases
+  id: totrans-408
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: .spec .hostAliases
+- en: Permits pods to override their local */etc/hosts* files. This may have more
+    operational implications (like not being updated in a timely manner and causing
+    an outage) than security connotations.
+  id: totrans-409
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 允许 Pod 覆盖其本地的 */etc/hosts* 文件。这可能会比安全意义更多地影响操作（比如不能及时更新导致中断）。
+- en: .spec .hostIPC
+  id: totrans-410
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: .spec .hostIPC
+- en: Gives the pod access to the host’s Interprocess Communication namespace, where
+    it may be able to interfere with trusted processes on the host. It’s likely this
+    will enable simple host compromise via */usr/bin/ipcs* or files in shared memory
+    at */dev/shm*.
+  id: totrans-411
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使 Pod 访问主机的进程间通信命名空间，从而可能干扰主机上的受信任进程。这很可能会通过 */usr/bin/ipcs* 或共享内存中的文件实现简单的主机ompromise。
+- en: containers[] .securityContext .runAsNonRoot
+  id: totrans-412
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: containers[] .securityContext .runAsNonRoot
+- en: The root user has special permissions in a Linux system, and although the permissions
+    set is reduced within a container, the root user is still treated differently
+    by lots of kernel code.
+  id: totrans-413
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Linux 系统中，root 用户拥有特殊权限，尽管在容器内权限被减小，但内核代码仍然会特别对待 root 用户。
+- en: Preventing root from owning the processes inside the container is a simple and
+    effective security measure. It stops many of the container breakout attacks listed
+    in this book, and adheres to standard and established Linux security practice.
+  id: totrans-414
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 阻止 root 用户拥有容器内的进程是一项简单有效的安全措施。它防止了本书列出的许多容器越界攻击，并符合标准和已建立的 Linux 安全实践。
+- en: containers[] .securityContext .runAsUser > 10000
+  id: totrans-415
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: containers[] .securityContext .runAsUser > 10000
+- en: 'In addition to preventing root running processes, enforcing high UIDs for containerized
+    processes lowers the risk of breakout without user namespaces: if the user in
+    the container (e.g., 12345) has an equivalent UID on the host (that is, also 12345),
+    and the user in the container is able to reach them through mounted volume or
+    shared namespace, then resources may accidentally be shared and allow container
+    breakout (e.g., filesystem permissions and authorization checks).'
+  id: totrans-416
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了阻止 root 运行进程外，强制容器化进程使用高 UID 降低了在没有用户命名空间的情况下越界的风险：如果容器中的用户（例如 12345）在主机上有相同的
+    UID（即也是 12345），并且容器中的用户通过挂载卷或共享命名空间能够访问它们，则资源可能会意外共享，从而允许容器越界（例如文件系统权限和授权检查）。
+- en: containers[] .securityContext .readOnlyRootFilesystem
+  id: totrans-417
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: containers[] .securityContext .readOnlyRootFilesystem
+- en: 'Immutability is not a security boundary as code can be downloaded from the
+    internet and run by an interpreter (such as Bash, PHP, and Java) without using
+    the filesystem, as the `bashark` post-exploitation toolkit shows:'
+  id: totrans-418
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不可变性不是安全边界，因为代码可以从互联网下载并由解释器（如 Bash、PHP 和 Java）运行，而不使用文件系统，正如 `bashark` 后渗透工具所示：
+- en: '[PRE38]'
+  id: totrans-419
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE38]'
+- en: Filesystem locations like */tmp* and */dev/shm* will probably always be writable
+    to support application behavior, and so read-only filesystems cannot be relied
+    upon as a security boundary. Immutability will prevent against some drive-by and
+    automated attacks, but is not a robust security boundary.
+  id: totrans-420
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 像 */tmp* 和 */dev/shm* 这样的文件系统位置可能会始终可写，以支持应用程序行为，因此只读文件系统不能作为安全边界。不可变性可以防止一些恶意和自动化攻击，但不能作为坚固的安全边界。
+- en: Intrusion detection tools such as `falco` and `tracee` can detect new Bash shells
+    spawned in a container (or any non-allowlisted applications). Additionally `tracee`
+    can [detect in-memory execution](https://oreil.ly/Ur0wV) of malware that attempts
+    to hide itself by observing */proc/pid/maps* for memory that was once writable
+    but is now executable.
+  id: totrans-421
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 诸如`falco`和`tracee`之类的入侵检测工具可以检测到容器中生成的新Bash shell（或任何未列入白名单的应用程序）。此外，`tracee`还可以通过监视*/proc/pid/maps*中曾经可写但现在可执行的内存，检测到试图通过内存执行的恶意软件。
+- en: Note
+  id: totrans-422
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: We look at Falco in more detail in [Chapter 9](ch09.xhtml#ch-intrusion-detection).
+  id: totrans-423
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将在[第9章](ch09.xhtml#ch-intrusion-detection)中更详细地讨论Falco。
+- en: containers[] .securityContext .capabilities .drop | index(“ALL”)
+  id: totrans-424
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: containers[] .securityContext .capabilities .drop | index(“ALL”)
+- en: You should always drop all capabilities and only readd those that your application
+    needs to operate.
+  id: totrans-425
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您应始终放弃所有功能，并仅重新添加应用程序运行所需的那些功能。
+- en: containers[] .securityContext .capabilities .add | index(“SYS_ADMIN”)
+  id: totrans-426
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: containers[] .securityContext .capabilities .add | index(“SYS_ADMIN”)
+- en: 'The presence of this capability is a red flag: try to find another way to deploy
+    any container that requires this, or deploy into a dedicated namespace with custom
+    security rules to limit the impact of compromise.'
+  id: totrans-427
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此能力的存在是一个警示信号：尝试找到其他部署容器的方法，或者部署到具有自定义安全规则的专用命名空间中，以限制妥协的影响。
+- en: containers[] .resources .limits .cpu, .memory
+  id: totrans-428
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: containers[] .resources .limits .cpu, .memory
+- en: Limiting the total amount of memory available to a container prevents denial
+    of service attacks taking out the host machine, as the container dies first.
+  id: totrans-429
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 限制容器可用内存的总量可以防止拒绝服务攻击将主机机器挤垮，因为容器会首先终止。
+- en: containers[] .resources .requests .cpu, .memory
+  id: totrans-430
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: containers[] .resources .requests .cpu, .memory
+- en: Requesting resources helps the scheduler to “bin pack” resources effectively.
+    Over-requesting resources may be an adversary’s attempt to schedule new pods to
+    another Node they control.
+  id: totrans-431
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请求资源有助于调度程序有效地“装箱”资源。过度请求资源可能是对手试图将新Pod调度到其控制的另一节点的尝试。
+- en: .spec .volumes[] .hostPath .path
+  id: totrans-432
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: .spec .volumes[] .hostPath .path
+- en: A writable */var/run/docker.sock* host mount allows breakout to the host. Any
+    filesystem that an attacker can write a symlink to is vulnerable, and an attacker
+    can use that path to explore and exfiltrate from the host.
+  id: totrans-433
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可写的*/var/run/docker.sock*主机挂载允许突破到主机。攻击者可以将符号链接写入任何文件系统，这些文件系统容易受到漏洞，攻击者可以利用该路径来探索和从主机中渗透。
+- en: Into the Eye of the Storm
+  id: totrans-434
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 进入风暴眼
+- en: The Captain and crew have had a fruitless raid, but this is not the last we
+    will hear of their escapades.
+  id: totrans-435
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 船长和船员进行了一次徒劳的袭击，但这并非他们的最后一次逃亡活动。
+- en: As we progress through this book, we will see how Kubernetes pod components
+    interact with the wider system, and we will witness Captain Hashjack’s efforts
+    to exploit them.
+  id: totrans-436
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 随着我们在这本书中的进展，我们将看到Kubernetes Pod组件如何与更广泛的系统交互，我们将见证Hashjack船长为利用它们而努力。
+- en: Conclusion
+  id: totrans-437
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 结论
+- en: There are multiple layers of configuration to secure for a pod to be used safely,
+    and the workloads you run are the soft underbelly of Kubernetes security.
+  id: totrans-438
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了安全地使用Pod，需要对多个层次的配置进行保护，而您运行的工作负载是Kubernetes安全性的软肚腩。
+- en: The pod is the first line of defense and the most important part of a cluster
+    to protect. Application code changes frequently and is likely to be a source of
+    potentially exploitable bugs.
+  id: totrans-439
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod是集群中的第一道防线，也是保护集群最重要的部分。应用程序代码经常变动，可能成为潜在的可利用漏洞源。
+- en: To extend the anchor and chain metaphor, a cluster is only a strong as its weakest
+    link. In order to be provably secure, you must use robust configuration testing,
+    preventative control and policy in the pipeline and admission control, and runtime
+    intrusion detection—as nothing is infallible.
+  id: totrans-440
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 扩展锚和链的比喻，一个集群的强壮程度取决于其最弱的环节。为了能够被证明是安全的，您必须在流水线和准入控制中使用健壮的配置测试、预防性控制和策略，以及运行时入侵检测
+    —— 因为没有什么是绝对可靠的。

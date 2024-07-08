@@ -1,0 +1,2209 @@
+- en: Chapter 16\. Metrics in Kubernetes
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第16章\. Kubernetes中的度量标准
+- en: It is possible to know so much about a subject that you become totally ignorant.
+  id: totrans-1
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 可能你对某一主题的了解非常深入，以至于你变得完全无知。
+- en: ''
+  id: totrans-2
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+- en: 'Frank Herbert, *Chapterhouse: Dune*'
+  id: totrans-3
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 弗兰克·赫伯特，《沙丘星际：教会堂》
+- en: 'In this chapter, we’ll take the concept of metrics that we introduced in [Chapter 15](ch15.html#observability)
+    and dive into the details for Kubernetes: what kind of metrics are there, which
+    ones are important for cloud native services, how do you choose which metrics
+    to focus on, how do you analyze metrics data to get actionable information, and
+    how do you turn raw metrics data into useful dashboards and alerts? Finally, we’ll
+    outline some of the options for metrics tools and platforms.'
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们将深入探讨我们在[第15章](ch15.html#observability)中引入的度量标准概念，并详细介绍适用于Kubernetes的细节：有哪些类型的度量标准，哪些对于云原生服务很重要，如何选择要关注的度量标准，如何分析度量标准数据以获取可操作信息，以及如何将原始度量标准数据转换为有用的仪表板和警报？最后，我们将概述一些度量工具和平台的选项。
+- en: What Are Metrics, Really?
+  id: totrans-5
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 究竟什么是度量标准？
+- en: As we saw in [“Introducing Metrics”](ch15.html#metrics-intro), metrics are numerical
+    measures of specific things. A familiar example from the world of traditional
+    servers is the memory usage of a particular machine. If only 10% of physical memory
+    is currently allocated to user processes, the machine has spare capacity. But
+    if 90% of the memory is in use, the machine is probably pretty busy.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如我们在[“引入度量标准”](ch15.html#metrics-intro)中看到的那样，度量标准是特定事物的数值度量。传统服务器世界中一个熟悉的例子是特定机器的内存使用情况。如果当前只有10%的物理内存分配给用户进程，那么机器有多余的容量。但如果内存使用率达到90%，那么机器可能相当忙碌。
+- en: So one valuable kind of information that metrics can give us is a snapshot of
+    what’s going on at a particular instant. But we can do more. Memory usage goes
+    up and down all the time as workloads start and stop, but sometimes what we’re
+    interested in is the *change* in memory usage over time.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，度量标准可以为我们提供的一种宝贵信息是特定时刻正在发生的事情的快照。但我们可以做得更多。内存使用情况会随着工作负载的启动和停止而不断上下波动，但有时我们感兴趣的是随时间的内存使用量的*变化*。
+- en: Time-Series Data
+  id: totrans-8
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 时间序列数据
+- en: If you sample memory usage regularly, you can create a *time series* of that
+    data. [Figure 16-1](#img-timeseries) shows a graph of the time-series data for
+    memory usage on a Google Kubernetes Engine node, over one week. This gives a much
+    more intelligible picture of what’s happening than a handful of instantaneous
+    values.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你定期采样内存使用情况，可以创建该数据的*时间序列*。[图 16-1](#img-timeseries)展示了谷歌Kubernetes引擎节点内存使用时间序列数据的图表，跨越了一周的时间。这比一些瞬时值更能清晰地展示发生了什么。
+- en: '![Graph showing fluctuating memory usage](assets/cnd2_1601.png)'
+  id: totrans-10
+  prefs: []
+  type: TYPE_IMG
+  zh: '![显示内存使用波动的图表](assets/cnd2_1601.png)'
+- en: Figure 16-1\. Time-series graph of memory usage for a GKE node
+  id: totrans-11
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 16-1\. GKE节点内存使用的时间序列图
+- en: Most metrics that we’re interested in for cloud native observability purposes
+    are expressed as time series. They are also all numeric. Unlike log data, for
+    example, metrics are values that you can do math and statistics on.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于云原生可观察性目的而言，大多数我们感兴趣的度量标准都以时间序列形式表示，并且它们都是数值。例如，与日常日志数据不同，度量标准是可以进行数学和统计处理的值。
+- en: Counters and Gauges
+  id: totrans-13
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 计数器与量规
+- en: What kind of numbers are they? While some quantities can be represented by integers
+    (the number of physical CPUs in a machine, for example), most require a decimal
+    part, and to save having to handle two different types of numbers, metrics are
+    almost always represented as floating-point decimal values.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 它们是什么样的数字？虽然某些数量可以由整数表示（例如一台机器中的物理CPU数量），但大多数需要有小数部分，为了避免处理两种不同类型的数字，度量标准几乎总是表示为浮点十进制值。
+- en: 'Given that, there are two main types of metric values: *counters* and *gauges*.
+    Counters can only go up (or reset to zero); they’re suitable for measuring things
+    like number of requests served and number of errors received. Gauges, on the other
+    hand, can vary up and down; they’re useful for continuously varying quantities
+    like memory usage, or for expressing ratios of other quantities.'
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 鉴于此，度量标准值主要有两种类型：*计数器*和*量规*。计数器只能增加（或重置为零）；它们适用于测量诸如请求服务的次数和接收到的错误数等事物。另一方面，量规可以上下变动；它们适用于连续变化的数量，例如内存使用量，或者用于表达其他数量的比率。
+- en: 'The answers to some questions are just yes or no: whether a particular endpoint
+    is responding to HTTP connections, for example. In this case, the appropriate
+    metric will be a gauge with a limited range of values: 0 and 1, perhaps.'
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于一些问题，答案只能是是或否：例如特定端点是否响应HTTP连接。在这种情况下，适当的度量标准将是一个量规，其取值范围有限：可能是0和1。
+- en: For example, an HTTP check of an endpoint might be named something like `http.can_connect`,
+    and its value might be 1 when the endpoint is responding, and 0 otherwise.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，一个端点的 HTTP 检查可以被命名为`http.can_connect`，当端点响应时，其值可能为1，否则为0。
+- en: What Can Metrics Tell Us?
+  id: totrans-18
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 度量能告诉我们什么？
+- en: What use are metrics? Well, as we’ve seen earlier in this chapter, metrics can
+    tell you when things are broken. For example, if your error rate suddenly goes
+    up (or requests to your support page suddenly spike), that may indicate a problem.
+    You can generate alerts automatically for certain metrics based on a threshold.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 度量有什么用处？嗯，正如我们在本章前面看到的那样，度量可以告诉你什么时候出了问题。例如，如果你的错误率突然上升（或者对支持页面的请求突然激增），这可能表明存在问题。你可以根据阈值为某些度量自动生成警报。
+- en: But metrics can also tell you how well things are working, for example, how
+    many simultaneous users your application is currently supporting. Long-term trends
+    in these numbers can be useful for operations decision-making and for business
+    intelligence.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 但是度量也可以告诉你事物的运行情况，例如你的应用程序当前支持多少个同时用户。这些数字的长期趋势对操作决策和业务智能都是有用的。
+- en: Choosing Good Metrics
+  id: totrans-21
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 选择好的度量标准
+- en: 'At first, you might think “If metrics are good, then lots of metrics must be
+    even better!” But it doesn’t work that way. You can’t monitor everything. Google
+    Cloud’s Operations suite, for example, captures data for literally hundreds of
+    built-in metrics about your cloud resources, including:'
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 起初，你可能会认为“如果度量好，那么越多的度量肯定会更好！”但事实并非如此。你不能监控所有东西。例如，Google Cloud 的运维套件捕获了关于你的云资源的数百种内置度量数据，包括：
+- en: '`instance/network/sent_packets_count`'
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`instance/network/sent_packets_count`'
+- en: The number of network packets sent by each compute instance
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个计算实例发送的网络数据包数量
+- en: '`storage/object_count`'
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`storage/object_count`'
+- en: The total number of objects in each storage bucket
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个存储桶中对象的总数
+- en: '`container/cpu/utilization`'
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`container/cpu/utilization`'
+- en: The percentage of its CPU allocation that a container is currently using
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个容器当前使用的 CPU 分配的百分比
+- en: The list [goes on](https://oreil.ly/QBgM0) (and on, and on). Even if you could
+    display graphs of all these metrics at once, which would need a monitor screen
+    the size of a house, you’d never be able to take in all that information and deduce
+    anything useful from it. To do that, we need to *focus* on the subset of metrics
+    that we care about.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 列表[继续](https://oreil.ly/QBgM0)（而且还会继续）。即使你能同时显示所有这些度量的图表，那需要一个像房子那么大的显示屏，你也不可能从中获取有用的信息。为了做到这一点，我们需要*专注*于我们关心的度量子集。
+- en: So what should you focus on when observing your own applications? Only you can
+    answer that, but we have a few suggestions that may be helpful. In the rest of
+    this section, we’ll outline some common metrics patterns for observability, aimed
+    at different audiences and designed to meet different requirements.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当你观察自己的应用程序时，你应该关注什么？只有你自己能回答这个问题，但我们有一些可能有帮助的建议。在本节的其余部分，我们将概述一些面向不同受众并设计以满足不同需求的可观测性常见度量模式。
+- en: It’s worth saying that this is a perfect opportunity for some DevOps collaboration,
+    and you should start thinking and talking about what metrics you’ll need at the
+    beginning of development, not at the end (see [“Learning Together”](ch01.html#learningtogether)).
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 值得一提的是，这是一次完美的 DevOps 协作机会，你应该在开发初期开始思考和讨论你将在开发开始时需要哪些度量标准，而不是在最后（参见[“共同学习”](ch01.html#learningtogether)）。
+- en: 'Services: The RED Pattern'
+  id: totrans-32
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 服务：RED 模式
+- en: 'Most people using Kubernetes are running some kind of web service: users make
+    requests, and the application sends responses. The *users* could be programs or
+    other services; in a distributed system based on microservices, each service makes
+    requests to other services or to a central API gateway server and uses the results
+    to serve information back to yet more services. Either way, it’s a request-driven
+    system.'
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大多数使用 Kubernetes 的人都在运行某种类型的 Web 服务：用户发出请求，应用程序发送响应。*用户*可以是程序或其他服务；在基于微服务的分布式系统中，每个服务向其他服务或中央
+    API 网关服务器发出请求，并使用结果返回信息给更多服务。无论哪种方式，这都是一个请求驱动的系统。
+- en: What’s useful to know about a request-driven system?
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于一个请求驱动的系统，了解什么是有用的？
+- en: One obvious thing is the number of *requests* you’re getting.
+  id: totrans-35
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 显而易见的是请求的数量。
+- en: Another is the number of requests that failed in various ways; that is to say,
+    the number of *errors*.
+  id: totrans-36
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 另一个是各种方式失败的请求数量；也就是说，*错误*的数量。
+- en: A third useful metric is the *duration* of each request. This gives you an idea
+    how well your service is performing and how unhappy your users might be getting.
+  id: totrans-37
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 第三个有用的指标是每个请求的*持续时间*。这为您提供了一个了解服务表现如何以及用户可能感到多么不满意的概念。
+- en: The *Requests-Errors-Duration* (RED) pattern is a classic observability tool
+    that goes back to the earliest days of online services. [Google’s *Site Reliability
+    Engineering* book](https://oreil.ly/zD72v) talks about the Four Golden Signals,
+    which are essentially requests, errors, duration, and *saturation* (we’ll talk
+    about saturation in a moment).
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*Requests-Errors-Duration*（RED）模式是一个经典的可观察性工具，可以追溯到在线服务的早期阶段。[Google的*Site
+    Reliability Engineering*书籍](https://oreil.ly/zD72v)讨论了四个黄金信号，基本上是请求、错误、持续时间和*饱和度*（我们稍后会谈论饱和度）。'
+- en: 'Engineer Tom Wilkie, who coined the *RED* acronym, has outlined the rationale
+    behind this pattern in a blog post:'
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 引入了**RED**首字母缩写的工程师Tom Wilkie在一篇博客文章中阐述了该模式背后的原理：
+- en: Why should you measure the same metrics for every service? Surely each service
+    is special? The benefits of treating each service the same, from a monitoring
+    perspective, is scalability in your operations teams. By making every service
+    look, feel and taste the same, this reduces the cognitive load on those responding
+    to an incident. As an aside, if you treat all your services the same, many repetitive
+    tasks become automatable.
+  id: totrans-40
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 为什么你应该为每个服务测量相同的指标？每个服务不是都很特别吗？从监控的角度来看，将每个服务都视为相同，能够提高运营团队的可扩展性。通过使每个服务看起来、感觉起来和品尝起来都相同，这减少了响应事件的认知负荷。顺便说一句，如果你对所有服务都采取相同的对待方式，许多重复性任务就可以自动化。
+- en: ''
+  id: totrans-41
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+- en: Tom Wilkie
+  id: totrans-42
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: Tom Wilkie
+- en: 'So how exactly do we measure these numbers? Since the total number of requests
+    only ever goes up, it’s more useful to look at request *rate*: the number of requests
+    per second, for example. This gives us a meaningful idea of how much traffic the
+    system is handling over a given time interval.'
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 那么我们究竟如何测量这些数字呢？由于总请求数量只会增加，查看请求*速率*更为有用：例如每秒请求数量。这为我们提供了一个有意义的概念，即系统在给定时间间隔内处理了多少流量。
+- en: 'Because error rate is related to request rate, it’s a good idea to measure
+    errors as a percentage of requests. So, for example, a typical service dashboard
+    might show:'
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因为错误率与请求率相关，所以测量错误作为请求的百分比是个好主意。因此，例如，典型的服务仪表板可能显示：
+- en: Requests received per second
+  id: totrans-45
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 每秒接收的请求数
+- en: Percentage of requests that returned an error
+  id: totrans-46
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 返回错误的请求百分比
+- en: Duration of requests (also known as *latency*)
+  id: totrans-47
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 请求的持续时间（也称为*延迟*）
+- en: 'Resources: The USE Pattern'
+  id: totrans-48
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 资源：USE模式
+- en: You’ve seen that the RED pattern gives you useful information about how your
+    services are performing, and how your users are experiencing them. You could think
+    of this as a top-down way of looking at observability data.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你已经看到**RED**模式为你提供了关于你的服务性能和用户体验的有用信息。你可以将其视为一种自上而下查看可观察性数据的方法。
+- en: On the other hand, the [USE pattern](https://oreil.ly/PpB0f), developed by Netflix
+    performance engineer Brendan Gregg, is a bottom-up approach that is intended to
+    help analyze performance issues and find bottlenecks. USE stands for Utilization,
+    Saturation, and Errors.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一方面，由Netflix性能工程师Brendan Gregg开发的[USE模式](https://oreil.ly/PpB0f)是一种自下而上的方法，旨在帮助分析性能问题并找出瓶颈。USE代表利用率（Utilization）、饱和度（Saturation）和错误（Errors）。
+- en: 'Rather than services, with USE we’re interested in *resources*: lower-level
+    infrastructure server components such as CPU and disks, or network interfaces
+    and links. Any of these could be a bottleneck in system performance, and the USE
+    metrics will help us find out which:'
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与服务不同，我们在USE中关注的是*资源*：更低级别的基础设施服务器组件，如CPU和磁盘，或网络接口和链路。这些任何一个都可能成为系统性能的瓶颈，而USE指标将帮助我们找出是哪个：
+- en: Utilization
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 利用率
+- en: The average time that the resource was busy serving requests, or the amount
+    of resource capacity that’s currently in use. For example, a disk that is 90%
+    full would have a utilization of 90%.
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 资源忙于服务请求的平均时间，或者当前正在使用的资源容量。例如，一个已经使用90%的磁盘将具有90%的利用率。
+- en: Saturation
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 饱和度
+- en: The extent to which the resource is overloaded, or the length of the queue of
+    requests waiting for this resource to become available. For example, if there
+    are 10 processes waiting to run on a CPU, it has a saturation value of 10.
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 资源过载的程度，或等待此资源可用的请求队列长度。例如，如果有10个进程在等待在CPU上运行，那么它的饱和度值为10。
+- en: Errors
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 错误
+- en: The number of times an operation on that resource failed. For example, a disk
+    with some bad sectors might have an error count of 25 failed reads.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 某资源上操作失败的次数。例如，具有一些坏扇区的磁盘可能有 25 次读取失败的错误计数。
+- en: 'Measuring this data for the key resources in your system is a good way to spot
+    bottlenecks and potential upcoming problems. Resources with low utilization, no
+    saturation, and no errors are probably fine. Anything that deviates from this
+    is worth looking into. For example, if one of your network links is saturated,
+    or has a high number of errors, it may be contributing to overall performance
+    problems:'
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对系统中关键资源进行这些数据测量是发现瓶颈和可能即将发生的问题的好方法。低利用率、无饱和度和无错误的资源可能是正常的。任何偏离这一情况的都值得关注。例如，如果您的某个网络链路饱和，或者出现大量错误，可能会影响整体性能问题：
+- en: The USE Method is a simple strategy you can use to perform a complete check
+    of system health, identifying common bottlenecks and errors. It can be deployed
+    early in the investigation and quickly identify problem areas, which then can
+    be studied in more detail other methodologies, if need be.
+  id: totrans-59
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: USE 方法是一种简单的策略，您可以用来对系统健康进行全面检查，识别常见的瓶颈和错误。它可以早期部署，快速识别问题区域，然后可以根据需要深入研究其他方法。
+- en: ''
+  id: totrans-60
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+- en: 'The strength of USE is its speed and visibility: by considering all resources,
+    you are unlikely to overlook any issues. It will, however, only find certain types
+    of issues–bottlenecks and errors–and should be considered as one tool in a larger
+    toolbox.'
+  id: totrans-61
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: USE 方法的优势在于其速度和可见性：通过考虑所有资源，您不太可能忽视任何问题。然而，它只能发现某些类型的问题——瓶颈和错误——应将其视为更大工具箱中的一个工具。
+- en: ''
+  id: totrans-62
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+- en: Brendan Gregg
+  id: totrans-63
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: Brendan Gregg
+- en: Business Metrics
+  id: totrans-64
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 业务指标
+- en: 'We’ve looked at application and service metrics ([“Services: The RED Pattern”](#redpattern)),
+    which are likely to be of most interest to developers, and infrastructure metrics
+    ([“Resources: The USE Pattern”](#usepattern)), which are helpful to ops and platform
+    engineers. But what about the business? Can observability help managers and executives
+    understand how the business is performing and give them useful input for business
+    decisions? And what metrics would contribute to this?'
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们已经研究了应用和服务指标（[“服务：RED 模式”](#redpattern)），这些指标可能对开发人员最感兴趣，以及基础设施指标（[“资源：USE
+    模式”](#usepattern)），这些对运维和平台工程师有帮助。但是业务方面呢？可观测性是否能帮助管理人员和高管了解业务绩效，并为业务决策提供有用的输入？哪些指标可以为此做出贡献呢？
+- en: Most businesses already track the key performance indicators (KPIs) that matter
+    to them, such as sales revenue, profit margin, and cost of customer acquisition.
+    These metrics usually come from the finance department and don’t need support
+    from developers and infrastructure staff.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大多数企业已经跟踪他们关心的关键绩效指标（KPI），如销售收入、利润率和客户获取成本。这些指标通常来自财务部门，不需要开发人员和基础设施人员的支持。
+- en: 'But there are other useful business metrics that can be generated by applications
+    and services. For example, a subscription business, such as a software-as-a-service
+    (SaaS) product, needs to know data about its subscribers:'
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此外，应用和服务还能生成其他有用的业务指标。例如，像软件即服务（SaaS）产品这样的订阅业务需要了解其订阅者的数据：
+- en: Funnel analytics (how many people hit the landing page, how many click through
+    to the sign-up page, how many complete the transaction, and so on)
+  id: totrans-68
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 漏斗分析（有多少人访问了登陆页面、有多少点击了注册页面、有多少完成了交易等）
+- en: Rate of sign-ups and cancellations (churn)
+  id: totrans-69
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 注册和取消的速率（流失率）
+- en: Revenue per customer (useful for calculating monthly recurring revenue, average
+    revenue per customer, and lifetime value of a customer)
+  id: totrans-70
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 每位客户的收入（用于计算月度重复收入、每位客户的平均收入和客户的生命周期价值）
+- en: Effectiveness of help and support pages (for example, percentage of people who
+    answered yes to the question “Did this page solve your problem?”)
+  id: totrans-71
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 帮助和支持页面的效果（例如，“此页面是否解决了您的问题？”的回答是“是”的百分比）
+- en: Traffic to the *system status* announcement page (which often spikes when there
+    are outages or degraded services)
+  id: totrans-72
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '*系统状态*公告页面的流量（在出现故障或服务降级时通常会激增）'
+- en: Much of this information is often easier to gather by generating real-time metrics
+    data from your applications, rather than by trying to analyze after-the-fact by
+    processing logs and querying databases. When you’re instrumenting your applications
+    to produce metrics, don’t neglect information that is important to the business.
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大部分信息通常更容易通过从您的应用生成实时指标数据来收集，而不是通过处理日志和查询数据库来分析。当您为生成指标的应用程序添加工具时，不要忽视对业务重要的信息。
+- en: There isn’t necessarily a clear line between the observability information the
+    business and customer engagement experts need, and what the technical experts
+    need. In fact, there’s a lot of overlap. It’s wise to discuss metrics at an early
+    stage with all the stakeholders involved, and agree on what data needs to be collected,
+    how often, how it’s aggregated, and so on.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在业务和客户参与专家需要的可观察性信息以及技术专家需要的信息之间，并没有必然的清晰界限。实际上，它们之间存在很多重叠。最好在早期阶段与所有利益相关者讨论指标，并就需要收集的数据、收集频率、聚合方式等达成一致。
+- en: Nonetheless, these two (or more) groups have different questions to ask of the
+    observability data that you’re gathering, so each will need its own view on that
+    data. You can use the common *data lake* to create dashboards (see [“Graphing
+    Metrics with Dashboards”](#dashboards)) and reports for each of the different
+    groups involved.
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管如此，这两个（或更多）群体对您正在收集的可观察性数据有不同的问题需要解决，因此每个群体都需要其数据的独特视图。您可以使用常见的*数据湖*为每个不同的群体创建仪表板（参见[“使用仪表板绘制指标”](#dashboards)）和报告。
+- en: Kubernetes Metrics
+  id: totrans-76
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Kubernetes指标
+- en: We’ve talked about observability and metrics in general terms, and looked at
+    different types of data and ways to analyze it. So how does all this apply to
+    Kubernetes? What metrics is it worth tracking for Kubernetes clusters, and what
+    kinds of decisions can they help us make?
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们已经从一般术语上讨论了可观察性和指标，并查看了不同类型的数据及其分析方法。那么所有这些如何适用于Kubernetes呢？对Kubernetes集群来说，值得跟踪的指标是什么，它们能帮助我们做出什么样的决策？
+- en: At the lowest level, a tool called `cAdvisor` monitors the resource usage and
+    performance statistics for the containers running on each cluster node—for example,
+    how much CPU, memory, and disk space each container is using.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在最低层次上，一个名为`cAdvisor`的工具监控每个集群节点上运行的容器的资源使用情况和性能统计信息，例如每个容器使用的CPU、内存和磁盘空间。
+- en: Kubernetes itself consumes this `cAdvisor` data by querying the kubelet, and
+    uses the information to make decisions about scheduling, autoscaling, and so on.
+    But you can also export this data to a third-party metrics service, where you
+    can graph it and alert on it. For example, it would be useful to track how much
+    CPU and memory each container is using.
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes本身通过查询kubelet获取并使用这些`cAdvisor`数据，用于关于调度、自动伸缩等方面的决策。但是，您也可以将这些数据导出到第三方指标服务，在那里您可以绘制图表并对其进行警报。例如，跟踪每个容器使用的CPU和内存将非常有用。
+- en: You can also monitor Kubernetes itself, using a tool called [`kube-state-metrics`](https://oreil.ly/ZW25p).
+    This listens to the Kubernetes API and reports information about logical objects
+    such as nodes, Pods, and Deployments. This data can also be very useful for cluster
+    observability. For example, if there are replicas configured for a Deployment
+    that can’t currently be scheduled for some reason (perhaps the cluster doesn’t
+    have enough capacity), you probably want to know about it.
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您还可以使用一个名为[`kube-state-metrics`](https://oreil.ly/ZW25p)的工具来监视Kubernetes本身。它监听Kubernetes
+    API并报告关于逻辑对象（如节点、Pod和部署）的信息。这些数据对于集群可观察性也非常有用。例如，如果为某个部署配置了副本，但由于某些原因（可能是集群容量不足），当前无法调度，您可能希望了解这一情况。
+- en: As usual, the problem is not a shortage of metrics data, but deciding which
+    key metrics to focus on, track, and visualize. Here are some suggestions.
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常情况下，问题不在于缺少指标数据，而在于决定关注、跟踪和可视化哪些关键指标。以下是一些建议。
+- en: Cluster health metrics
+  id: totrans-82
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 集群健康指标
+- en: 'To monitor the health and performance of your cluster at the top level, you
+    should be looking at least at the following:'
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要在顶层监控您集群的健康状态和性能，您至少应该关注以下内容：
+- en: Number of nodes
+  id: totrans-84
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 节点数量
+- en: Node health status
+  id: totrans-85
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 节点健康状态
+- en: Number of Pods per node, and overall
+  id: totrans-86
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 每个节点和整体的Pod数量
+- en: Resource usage/allocation per node, and overall
+  id: totrans-87
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 每个节点的资源使用/分配情况，以及总体情况
+- en: These overview metrics will help you understand how your cluster is performing,
+    whether it has enough capacity, how its usage is changing over time, and whether
+    you need to expand or reduce the cluster.
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些概览指标将帮助您了解您的集群的性能如何，是否有足够的容量，其使用情况随时间的变化如何，以及是否需要扩展或减少集群。
+- en: If you’re using a managed Kubernetes service such as GKE, unhealthy nodes will
+    be detected automatically and autorepaired (providing autorepair is enabled for
+    your cluster and node pool). It’s still useful to know if you’re getting an unusual
+    number of failures, which may indicate an underlying problem.
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您正在使用像GKE这样的托管Kubernetes服务，不健康节点将会自动检测并自动修复（前提是为您的集群和节点池启用了自动修复）。然而，了解是否出现异常故障仍然很有用，这可能表明存在潜在问题。
+- en: Deployment metrics
+  id: totrans-90
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 部署指标
+- en: 'For all your deployments, it’s worth knowing:'
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于所有您的部署，了解以下信息是很值得的：
+- en: Number of deployments
+  id: totrans-92
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 部署数量
+- en: Number of configured replicas per deployment
+  id: totrans-93
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 每个部署的配置副本数量
+- en: Number of unavailable replicas per deployment
+  id: totrans-94
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 每个部署的不可用副本数量
+- en: It’s especially useful to be able to track this information over time if you
+    have enabled some of the various autoscaling options available in Kubernetes (see
+    [“Autoscaling”](ch06.html#autoscaling)). Data on unavailable replicas in particular
+    will help alert you about capacity issues.
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您在Kubernetes中启用了某些自动缩放选项，能够随时间跟踪这些信息尤为有用（参见[“自动缩放”](ch06.html#autoscaling)）。特别是关于不可用副本的数据将帮助您警觉容量问题。
+- en: Container metrics
+  id: totrans-96
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 容器指标
+- en: 'At the container level, the most useful things to know are:'
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在容器级别，了解以下信息最为有用：
+- en: Number of containers/Pods per node, and overall
+  id: totrans-98
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 每个节点和总体上的容器/Pods数量
+- en: Resource usage for each container against its requests/limits (see [“Resource
+    Requests”](ch05.html#resourcerequests))
+  id: totrans-99
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 每个容器的资源使用与其请求/限制的比较（参见[“资源请求”](ch05.html#resourcerequests)）
+- en: Liveness/readiness of containers
+  id: totrans-100
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 容器的活跃性/准备性
+- en: Number of container/Pod restarts
+  id: totrans-101
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 容器/Pod的重启次数
+- en: Network in/out traffic and errors for each container
+  id: totrans-102
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 每个容器的网络收发流量和错误
+- en: Because Kubernetes automatically restarts containers that have failed or exceeded
+    their resource limits, you need to know how often this is happening. An excessive
+    number of restarts may tell you there’s a problem with a particular container.
+    If a container is regularly busting its resource limits, that could be a sign
+    of a program bug, or maybe just that you need to increase the limits, such as
+    giving it more memory.
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因为Kubernetes会自动重新启动失败或超出资源限制的容器，您需要知道这种情况发生的频率。过多的重新启动可能表明特定容器存在问题。如果某个容器经常超出其资源限制，这可能是程序错误的迹象，或者可能只是需要增加资源限制，如提供更多内存。
+- en: Application metrics
+  id: totrans-104
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 应用程序指标
+- en: Whichever language or software platform your application uses, there’s probably
+    a library or tool available to allow you to export custom metrics from it. These
+    are primarily useful for developers and operations teams to be able to see what
+    the application is doing, how often it’s doing it, and how long it takes. These
+    are key indicators of performance problems or availability issues.
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 无论您的应用程序使用哪种语言或软件平台，可能都有一个库或工具可供您导出自定义指标。这些主要用于开发人员和运维团队，以便了解应用程序的活动情况、频率及其持续时间。这些是性能问题或可用性问题的关键指标。
+- en: 'The choice of application metrics to capture and export depends on exactly
+    what your application does. But there are some common patterns. For example, if
+    your service consumes messages from a queue, processes them, and takes some action
+    based on the message, you might want to report the following metrics:'
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 选择要捕获和导出的应用程序指标取决于您的应用程序具体的功能。但是有一些常见模式。例如，如果您的服务从队列中消费消息、处理它们，并根据消息采取某些操作，您可能希望报告以下指标：
+- en: Number of messages received
+  id: totrans-107
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 接收到的消息数量
+- en: Number of successfully processed messages
+  id: totrans-108
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 成功处理的消息数量
+- en: Number of messages still in the queue waiting to be processed
+  id: totrans-109
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 等待处理的消息数量
+- en: Number of invalid or erroneous messages
+  id: totrans-110
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 无效或错误消息的数量
+- en: Time to process and act on each message
+  id: totrans-111
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 处理每条消息的时间
+- en: Number of successful actions generated
+  id: totrans-112
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 生成的成功操作数量
+- en: Number of failed actions
+  id: totrans-113
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 失败操作的数量
+- en: 'Similarly, if your application is primarily request-driven, you can use the
+    RED pattern (see [“Services: The RED Pattern”](#redpattern)):'
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 同样地，如果您的应用程序主要是请求驱动的，可以使用RED模式（参见[“服务：RED模式”](#redpattern)）：
+- en: Requests received
+  id: totrans-115
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 收到的请求
+- en: Errors returned
+  id: totrans-116
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 返回的错误
+- en: Duration (time to handle each request)
+  id: totrans-117
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 每个请求处理的时间
+- en: It can be difficult to know what metrics are going to be useful when you’re
+    at an early stage of development. If in doubt, record everything. Metrics are
+    relatively cheap for most applications to output and for time-series databases
+    to store; you may discover an unforeseen production issue a long way down the
+    line, thanks to metrics data that didn’t seem important at the time.
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在开发的早期阶段，很难知道哪些指标会对您有用。如果不确定，请记录一切。对于大多数应用程序来说，输出指标相对便宜，对于时间序列数据库来说也很容易存储；您可能会因为当时看似不重要的指标数据而在很长一段时间后发现一个意想不到的生产问题。
+- en: If it moves, graph it. Even it doesn’t move, graph it anyway, because it might
+    someday.
+  id: totrans-119
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 如果它移动，就对其进行图形化。即使它不动，也要将其图形化，因为它未来可能会移动。
+- en: ''
+  id: totrans-120
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+- en: '[Laurie Denness](https://oreil.ly/HTMse) (Bloomberg)'
+  id: totrans-121
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: '[劳里·丹尼斯](https://oreil.ly/HTMse)（彭博社）'
+- en: If you are going to have your application generate business metrics (see [“Business
+    Metrics”](#businessmetrics)), you can calculate and export these as custom metrics
+    too.
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您要求您的应用程序生成业务指标（请参阅[“业务指标”](#businessmetrics)），您也可以将这些计算并导出为自定义指标。
+- en: Another thing that may be useful to the business is to see how your applications
+    are performing against any Service Level Objectives (SLO) or Service Level Agreements
+    (SLA) that you may have with customers, or how vendor services are performing
+    against SLOs. You could create a custom metric to show the target request duration
+    (for example, 200 ms), and create a dashboard that overlays this on the actual
+    current performance.
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个可能对业务有用的事情是查看您的应用程序如何根据您与客户的任何服务级别目标（SLO）或服务级别协议（SLA）以及供应商服务如何根据SLO执行的表现。您可以创建一个自定义指标来显示目标请求持续时间（例如，200毫秒），并创建一个仪表板，将其叠加在实际当前性能之上。
+- en: Runtime metrics
+  id: totrans-124
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 运行时指标
+- en: 'At the runtime level, most metrics libraries will also report useful data about
+    what the program is doing, such as:'
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在运行时级别，大多数指标库还会报告有关程序正在执行的有用数据，例如：
+- en: Number of processes/threads/goroutines
+  id: totrans-126
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 进程/线程/goroutine数量
+- en: Heap and stack usage
+  id: totrans-127
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 堆和栈的使用情况
+- en: Nonheap memory usage
+  id: totrans-128
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 非堆内存使用情况
+- en: Network I/O buffer pools
+  id: totrans-129
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 网络I/O缓冲池
+- en: Garbage collector runs and pause durations (for garbage-collected languages)
+  id: totrans-130
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 垃圾收集器运行和暂停持续时间（适用于垃圾收集语言）
+- en: File descriptors/network sockets in use
+  id: totrans-131
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 正在使用的文件描述符/网络套接字
+- en: This kind of information can be very valuable for diagnosing poor performance,
+    or even crashes. For example, it’s quite common for long-running applications
+    to gradually use more and more memory until they are killed and restarted due
+    to exceeding Kubernetes resource limits. Application runtime metrics may help
+    you work out exactly where this memory is going, especially in combination with
+    custom metrics about what the application is doing.
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种信息对于诊断性能不佳甚至崩溃非常有价值。例如，长时间运行的应用程序通常会逐渐使用更多内存，直到由于超出Kubernetes资源限制而被终止并重新启动。应用程序运行时指标可能会帮助您准确找出内存消耗情况，特别是与应用程序正在执行的操作相关的自定义指标结合使用时。
+- en: 'Now that you have some idea what metrics data is worth capturing, in the next
+    section we’ll look at what to *do* with this data: in other words, how to analyze
+    it.'
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在您对值得捕获的指标数据有了一些了解，接下来我们将看看如何使用这些数据：换句话说，如何分析它。
+- en: Analyzing Metrics
+  id: totrans-134
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 分析指标
+- en: 'Data is not the same thing as understanding. In order to get useful information
+    out of the raw data we’ve captured, we need to aggregate, process, and analyze
+    it, which means doing *statistics* on it. Statistics can be a slippery business,
+    especially in the abstract, so let’s illustrate this discussion with a concrete
+    example: *request duration*.'
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 数据并非理解的同义词。为了从我们捕获的原始数据中获取有用的信息，我们需要对其进行聚合、处理和分析，这意味着对其进行统计分析。统计学可能是一门棘手的生意，特别是在抽象层面上，因此让我们通过一个具体的例子来阐明这一讨论：*请求持续时间*。
+- en: 'In [“Services: The RED Pattern”](#redpattern), we mentioned that you should
+    track the duration metric for service requests, but we didn’t say exactly how
+    to do that. What precisely do we mean by *duration*? Usually, we’re interested
+    in the time the user has to wait to get a response to some request.'
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[“服务：RED模式”](#redpattern)中，我们提到您应该跟踪服务请求的持续时间指标，但我们没有明确说明如何做到这一点。我们究竟是什么意思*持续时间*？通常，我们对用户等待获取某些请求响应的时间感兴趣。
+- en: With a website, for example, we might define *duration* as the time between
+    when the user connects to the server and when the server first starts sending
+    data in response. (The user’s total waiting time is actually longer than that
+    because making the connection takes some time, and so does reading the response
+    data and rendering it in a browser. We usually don’t have access to that data,
+    though, so we just capture what we can.)
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，在网站中，我们可以将*持续时间*定义为用户连接到服务器并服务器首次开始发送响应数据之间的时间。（用户的总等待时间实际上比这更长，因为建立连接需要一些时间，读取响应数据并在浏览器中呈现也需要时间。尽管如此，我们通常无法访问这些数据，所以我们只捕捉我们能够的。）
+- en: And every request has a different duration, so how do we aggregate the data
+    for hundreds or even thousands of requests into a single number?
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个请求的持续时间都不同，那么我们如何将数百甚至数千个请求的数据聚合为一个单一的数字呢？
+- en: What’s Wrong with a Simple Average?
+  id: totrans-139
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 简单平均值有什么问题？
+- en: The obvious answer is to take the average. But, on closer inspection, what *average*
+    means isn’t necessarily straightforward. An old joke in statistics is that the
+    average person has slightly less than two legs. To put it another way, most people
+    have more than the average number of legs. How can this be?
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 显而易见的答案是取平均值。但仔细观察后，*平均*意味着并不一定简单。统计学中一个古老的笑话是，平均人的腿略少于两条。换句话说，大多数人的腿比平均值多。这怎么可能？
+- en: Most people have two legs, but some have one or none, bringing down the overall
+    average. (Possibly some people have more than two, but many more people have fewer
+    than two.) A simple average doesn’t give us much useful information about leg
+    distribution in the population, or about most people’s experience of leg ownership.
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大多数人有两条腿，但有些人只有一条或没有，这会降低整体平均值。（可能有些人有超过两条腿，但更多的人有少于两条腿。）简单的平均值并不能为我们提供关于人群中腿的分布或大多数人腿拥有体验的有用信息。
+- en: There is also more than one kind of average. You probably know that the commonplace
+    notion of *average* refers to the *mean*. The mean of a set of values is the total
+    of all the values, divided by the number of values. For example, the mean age
+    of a group of three people is the total of their ages divided by 3.
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 平均值也有多种类型。你可能知道，普通的*平均*概念指的是*均值*。一组值的均值是所有值的总和除以值的数量。例如，三个人的组合的平均年龄是他们年龄总和除以3。
+- en: The *median*, on the other hand, refers to the value that would divide the set
+    into two equal halves, one containing values larger than the median, and the other
+    containing smaller values. For example, in any group of people, half of them are
+    taller than the median height, by definition, and half of them are shorter.
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一方面，*中位数*指的是将集合分成两个相等的部分的值，一个部分包含大于中位数的值，另一个部分包含较小的值。例如，在任何一群人中，一半人的身高高于中位身高，根据定义，另一半则更矮。
+- en: Means, Medians, and Outliers
+  id: totrans-144
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 均值、中位数和异常值
+- en: 'What’s the problem with taking a straightforward average (mean) of request
+    duration? One important problem is that the mean is easily skewed by *outliers*:
+    one or two extreme values can distort the average quite a bit.'
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 采用直接平均值（均值）作为请求持续时间的方法有什么问题？其中一个重要问题是均值很容易被*异常值*所偏离：一两个极端值可以大幅扭曲平均值。
+- en: Therefore, the median, which is less affected by outliers, is a more helpful
+    way of averaging metrics than the mean. If the median latency for a service is
+    one second, half your users experience a latency less than one second, and half
+    experience more.
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，中位数比均值受异常值影响小，是平均度量指标更有帮助的一种方式。如果某项服务的中位数延迟为一秒，那么有一半的用户经历的延迟小于一秒，另一半则更多。
+- en: '[Figure 16-2](#img-anscombe-quartet) shows how averages can be misleading.
+    All four sets of data have the same mean value, but look very different when shown
+    graphically (statisticians know this example as *Anscombe’s quartet*). Incidentally,
+    this is also a good way to demonstrate the importance of graphing data, rather
+    than just looking at raw numbers.'
+  id: totrans-147
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图16-2](#img-anscombe-quartet)展示了平均值可能会误导的情况。这四组数据的均值相同，但在图形上看起来截然不同（统计学家将此例称为*安斯库姆四重奏*）。顺便说一句，这也是演示绘制数据的重要性，而不仅仅查看原始数字的好方法。'
+- en: '![Scatter plots of four datasets with the same mean](assets/cnd2_1602.png)'
+  id: totrans-148
+  prefs: []
+  type: TYPE_IMG
+  zh: '![四个数据集的散点图，均值相同](assets/cnd2_1602.png)'
+- en: Figure 16-2\. These four datasets all have the same average (mean) value [(image](https://oreil.ly/ieutR)
+    by Schutz, CC BY-SA 3.0).
+  id: totrans-149
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图16-2\. 这四个数据集的均值（平均值）相同 [(图像](https://oreil.ly/ieutR)，由Schutz，CC BY-SA 3.0提供)。
+- en: Discovering Percentiles
+  id: totrans-150
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 发现百分位数
+- en: When we talk about metrics for observing request-driven systems, we’re usually
+    interested in knowing what the *worst* latency experience is for users, rather
+    than the average. After all, having a median latency of 1 second for all users
+    is no comfort to the small group who may be experiencing latencies of 10 seconds
+    or more.
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当我们讨论观察请求驱动系统的指标时，我们通常更感兴趣的是知道用户体验的*最坏*延迟，而不是平均值。毕竟，对于那些可能经历10秒或更长延迟的小群体来说，中位数延迟1秒并没有什么安慰之处。
+- en: The way to get this information is to break down the data into *percentiles*.
+    The 90th percentile latency (often referred to as *P90*) is the value that is
+    greater than that experienced by 90% of your users. To put it another way, 10%
+    of users will experience a latency higher than the P90 value.
+  id: totrans-152
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 获得这些信息的方法是将数据分解为*百分位数*。第90百分位数延迟（通常称为*P90*）是高于90%用户体验到的值。换句话说，10%的用户将会经历高于P90值的延迟。
+- en: Expressed in this language, the median is the 50th percentile, or P50\. Other
+    percentiles that are often measured in observability are P95 and P99, the 95th
+    and 99th percentile, respectively.
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用这种语言表达，中位数就是第50百分位数，或者P50。在可观察性中经常测量的其他百分位数是P95和P99，分别是95th和99th百分位数。
+- en: Applying Percentiles to Metrics Data
+  id: totrans-154
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 应用百分位数到指标数据
+- en: Igor Wiedler of Travis CI has produced a nice [demonstration](https://igor.io/latency)
+    of what this means in concrete terms, starting from a dataset of 135,000 requests
+    to a production service over 10 minutes ([Figure 16-3](#img-latency-raw)). As
+    you can see, this data is noisy and spiky, and it’s not easy to draw any useful
+    conclusions from it in a raw state.
+  id: totrans-155
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Travis CI的Igor Wiedler提供了一个不错的[demonstration](https://igor.io/latency)，从一个10分钟内向生产服务的135,000次请求数据集开始（[图16-3](#img-latency-raw)）。正如您所见，这些数据杂乱而波动，并且从原始状态很难得出任何有用的结论。
+- en: '![Graph of raw latency values](assets/cnd2_1603.png)'
+  id: totrans-156
+  prefs: []
+  type: TYPE_IMG
+  zh: '![原始延迟值的图表](assets/cnd2_1603.png)'
+- en: Figure 16-3\. Raw latency data for 135,000 requests, in ms
+  id: totrans-157
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图16-3\. 135,000次请求的原始延迟数据，以毫秒为单位
+- en: 'Now let’s see what happens if we average that data over 10-second intervals
+    ([Figure 16-4](#img-latency-avg)). This looks wonderful: all the data points are
+    below 50 ms. So it looks as though most of our users are experiencing latencies
+    of less than 50 ms. But is that really true?'
+  id: totrans-158
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在让我们看看如果我们将这些数据在10秒间隔内进行平均化会发生什么（[图16-4](#img-latency-avg)）。这看起来很不错：所有数据点都在50毫秒以下。因此看起来大多数用户的延迟都在50毫秒以下。但这真的是这样吗？
+- en: '![Graph of average latency values (all very low)](assets/cnd2_1604.png)'
+  id: totrans-159
+  prefs: []
+  type: TYPE_IMG
+  zh: '![所有非常低的平均延迟值的图表](assets/cnd2_1604.png)'
+- en: Figure 16-4\. Average (mean) latency for the same data, over 10-second intervals
+  id: totrans-160
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图16-4\. 相同数据的平均（均值）延迟，每10秒一个间隔
+- en: Let’s graph the P99 latency instead. This is the maximum latency observed, if
+    we discard the highest 1% of samples. It looks very different ([Figure 16-5](#img-latency-p99)).
+    Now we see a jagged pattern with most of the values clustering between 0 and 500
+    ms, with several requests spiking close to 1,000 ms.
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在让我们绘制P99延迟。这是观察到的最大延迟，如果我们舍弃最高1%的样本。看起来完全不同（[图16-5](#img-latency-p99)）。现在我们看到一个崎岖的模式，大多数值聚集在0到500毫秒之间，有几个请求尖峰接近1,000毫秒。
+- en: '![Graph of P99 latency (spiking up to 1 second)](assets/cnd2_1605.png)'
+  id: totrans-162
+  prefs: []
+  type: TYPE_IMG
+  zh: '![P99延迟的图表（高达1秒的尖峰）](assets/cnd2_1605.png)'
+- en: Figure 16-5\. P99 (99th percentile) latency for the same data
+  id: totrans-163
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图16-5\. 相同数据的P99（99th百分位数）延迟
+- en: We Usually Want to Know the Worst
+  id: totrans-164
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 我们通常希望知道最坏的情况
+- en: Since we disproportionately notice slow web requests, the P99 data is likely
+    to give us a more realistic picture of the latency experienced by users. For example,
+    consider a high-traffic website with 1 million page views per day. If the P99
+    latency is 10 seconds, then 10,000 page views take longer than 10 seconds. That’s
+    a lot of unhappy users.
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于我们会特别注意到慢的网络请求，所以P99数据很可能给我们提供用户体验延迟的更真实的图像。例如，考虑一个每天有100万页面浏览量的高流量网站。如果P99延迟为10秒，则有10,000个页面视图需要超过10秒。这是很多不满意的用户。
+- en: 'But it gets worse: in distributed systems, each page view may require tens
+    or even hundreds of internal requests to fulfill. If the P99 latency of each internal
+    service is 10s, and 1 page view makes 10 internal requests, then the number of
+    slow page views rises to 100,000 per day. Now around 10% of users are unhappy,
+    which is a [big problem](https://oreil.ly/zO9HV).'
+  id: totrans-166
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 但情况变得更糟：在分布式系统中，每个页面视图可能需要完成数十甚至数百个内部请求。如果每个内部服务的P99延迟为10秒，并且每个页面视图进行10个内部请求，那么慢页面视图的数量每天将增加到100,000个。现在大约有10%的用户感到不满意，这是一个[大问题](https://oreil.ly/zO9HV)。
+- en: Beyond Percentiles
+  id: totrans-167
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 超越百分位数
+- en: One problem with percentile latencies, as implemented by many metrics services,
+    is that requests tend to be sampled locally, and statistics then aggregated centrally.
+    Consequently, you end up with your P99 latency being an average of the P99 latencies
+    reported by each agent, potentially across hundreds of agents.
+  id: totrans-168
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 许多指标服务实施的百分位数延迟的一个问题是，请求往往在本地进行采样，然后在中心进行统计聚合。因此，您最终得到的 P99 延迟是每个代理报告的 P99 延迟的平均值，可能涵盖数百个代理。
+- en: Well, a percentile is already an average, and trying to average averages is
+    a well-known [statistical trap](https://oreil.ly/ZHCMU).^([1](ch16.html#idm45979374096544))
+    The result is not necessarily the same as the real average.
+  id: totrans-169
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 嗯，百分位数已经是一个平均值了，试图平均这些平均值是一个众所周知的[统计陷阱](https://oreil.ly/ZHCMU)。结果未必与实际平均值相同。
+- en: Depending how we choose to aggregate the data, the final P99 latency figure
+    can vary by as much as a factor of 10\. That doesn’t bode well for a meaningful
+    result. Unless your metrics service ingests every single raw event and produces
+    a true average, this figure will be unreliable.
+  id: totrans-170
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 根据我们选择如何聚合数据，最终的 P99 延迟数字可能会相差多达 10 倍。这对于得出有意义的结果并不吉利。除非您的指标服务接收每个原始事件并生成真正的平均值，否则这个数字将是不可靠的。
+- en: 'Engineer [Yan Cui](https://oreil.ly/XgFDV) suggests that a better approach
+    is to monitor what’s *wrong*, not what’s *right*:'
+  id: totrans-171
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 工程师 [Yan Cui](https://oreil.ly/XgFDV) 建议更好的方法是监控出现了什么问题，而不是正常情况：
+- en: What could we use instead of per­centiles as the pri­ma­ry met­ric to mon­i­tor
+    our application’s per­for­mance with and alert us when it starts to dete­ri­o­rate?
+  id: totrans-172
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 作为监控应用程序性能的主要指标，我们可以使用什么来替代百分位数呢？当应用程序性能开始下降时，我们可以接收警报吗？
+- en: ''
+  id: totrans-173
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+- en: If you go back to your SLOs or SLAs, you prob­a­bly have some­thing along the
+    lines of “99% of requests should com­plete in 1s or less.” In oth­er words, less
+    than 1% of requests is allowed to take more than 1s to com­plete.
+  id: totrans-174
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 如果您回顾您的 SLO 或 SLA，您可能有类似于“99% 的请求应在 1 秒或更短时间内完成”的要求。换句话说，允许超过1%的请求花费超过1秒的时间完成。
+- en: ''
+  id: totrans-175
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+- en: So what if we mon­i­tor the per­cent­age of requests that are over the thresh­old
+    instead? To alert us when our SLAs are vio­lat­ed, we can trig­ger alarms when
+    that per­cent­age is greater than 1% over some pre­de­fined time win­dow.
+  id: totrans-176
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 那么，如果我们监控超过阈值的请求百分比呢？当我们的 SLA 违反时，我们可以在预定义的时间窗口内触发警报，当该百分比大于1%时。
+- en: ''
+  id: totrans-177
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+- en: Yan Cui
+  id: totrans-178
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: Yan Cui
+- en: If each agent submits a metric of total requests and the number of requests
+    that were over threshold, we *can* usefully average that data to produce a percentage
+    of requests that exceeded SLO—and alert on it.
+  id: totrans-179
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果每个代理提交一个总请求数量的指标和超过阈值的请求数量，我们可以有用地对这些数据进行平均处理，以生成超过 SLO 的请求百分比，并对其进行警报。
+- en: Graphing Metrics with Dashboards
+  id: totrans-180
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用仪表板图形化指标
+- en: So far in this chapter we’ve learned about why metrics are useful, what metrics
+    we should record, and some useful statistical techniques for analyzing them in
+    bulk. All well and good, but what are we actually going to *do* with all these
+    metrics?
+  id: totrans-181
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，在本章中，我们已经了解了为什么指标很有用，应该记录哪些指标以及一些有用的统计技术来批量分析它们。这都很好，但我们实际上要做什么来利用所有这些指标呢？
+- en: 'The answer is simple: we’re going to graph them, group them into dashboards,
+    and possibly alert on them. We’ll talk about alerting in the next section, but
+    for now, let’s look at some tools and techniques for graphing and dashboarding.'
+  id: totrans-182
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 答案很简单：我们将对它们进行图表化处理，将它们分组到仪表板中，并可能对其进行警报。我们将在下一节讨论警报，但现在让我们看看一些图表化和仪表板技术和工具。
+- en: Use a Standard Layout for All Services
+  id: totrans-183
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 对所有服务使用标准布局
+- en: When you have more than a handful of services, it makes sense to always lay
+    out your dashboards in the same way for each service. Someone responding to an
+    on-call page can glance at the dashboard for the affected service and know how
+    to interpret it immediately, without having to be familiar with that specific
+    service.
+  id: totrans-184
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您拥有多个服务时，始终以相同的方式布局您的仪表板是有意义的。响应现场页的人员可以一眼看到受影响服务的仪表板，并立即知道如何解释它，而不必熟悉该特定服务。
+- en: 'Tom Wilkie, in a [Weaveworks blog post](https://oreil.ly/GTzpX), suggests the
+    following standard format (see [Figure 16-6](#img-dashboard-2)):'
+  id: totrans-185
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 [Weaveworks 博客文章](https://oreil.ly/GTzpX) 中，Tom Wilkie 建议以下标准格式（见 [图 16-6](#img-dashboard-2)）：
+- en: One row per service
+  id: totrans-186
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 每个服务一行
+- en: Request and error rate on the left, with errors as a percentage of requests
+  id: totrans-187
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 左侧是请求和错误率，错误率是请求的百分比
+- en: Latency on the right
+  id: totrans-188
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 右侧是延迟
+- en: '![Dashboard screenshot](assets/cnd2_1606.png)'
+  id: totrans-189
+  prefs: []
+  type: TYPE_IMG
+  zh: '![仪表板截图](assets/cnd2_1606.png)'
+- en: Figure 16-6\. Weaveworks’ suggested dashboard layout for services
+  id: totrans-190
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 16-6\. Weaveworks 建议的服务仪表板布局
+- en: You don’t have to use this exact layout; the important thing is that you always
+    use the same layout for every dashboard, and that everyone is familiar with it.
+    You should review your key dashboards regularly (at least once a week), looking
+    at the previous week’s data, so that everyone knows what *normal* looks like.
+  id: totrans-191
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你不必使用这个精确的布局；重要的是每个仪表板都采用相同的布局，并且每个人都熟悉它。你应该定期审查你的关键仪表板（至少每周一次），查看上周的数据，这样每个人都知道*正常*的样子。
+- en: 'The *requests, errors, duration* dashboard works well for services (see [“Services:
+    The RED Pattern”](#redpattern)). For resources, such as cluster nodes, disks,
+    and networks, the most useful things to know are usually *utilization, saturation,
+    errors* (see [“Resources: The USE Pattern”](#usepattern)).'
+  id: totrans-192
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*请求、错误、持续时间* 仪表板对服务非常有效（见 [“服务：RED 模式”](#redpattern)）。对于资源，如集群节点、磁盘和网络，通常最有用的信息是*利用率、饱和度、错误*（见
+    [“资源：USE 模式”](#usepattern)）。'
+- en: Build an Information Radiator with Primary Dashboards
+  id: totrans-193
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 构建一个主要仪表板的信息辐射器
+- en: If you have a hundred services, you have a hundred dashboards, but you probably
+    won’t look at them very often. It’s still important to have that information available
+    (to help spot which service is failing, for example), but at this scale you need
+    a more general overview.
+  id: totrans-194
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你有一百个服务，你就有一百个仪表板，但你可能不经常看它们。仍然很重要将这些信息提供出来（例如帮助发现哪个服务出现故障），但在这个规模上，你需要一个更一般的概览。
+- en: To do this, make a primary dashboard that shows requests, errors, and duration
+    across *all* your services, in aggregate. Don’t do anything fancy like stacked
+    area charts; stick to simple line graphs of total requests, total error percentage,
+    and total latency. These are easier to interpret, and more accurate visualizations
+    than complex charts.
+  id: totrans-195
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了做到这一点，请制作一个主要的仪表板，显示所有服务的请求、错误和持续时间，汇总显示。不要使用任何复杂的东西，如堆叠面积图表；坚持使用简单的总请求数、总错误百分比和总延迟的折线图。这些比复杂图表更容易解释，也更准确。
+- en: 'Ideally, you’ll be using an *information radiator* (also known as a wallboard,
+    or Big Visible Chart). This is a large screen showing key observability data that
+    is visible to everybody in the relevant team or office. Or, for distributed teams,
+    maybe this is the homepage of the monitoring website that everyone sees when they
+    first log in. The purpose of an information radiator is:'
+  id: totrans-196
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 理想情况下，您将使用一个*信息辐射器*（也称为墙板或大型可见图表）。这是一个大屏幕，显示着关键的可观察性数据，对相关团队或办公室的每个人都可见。或者，对于分布式团队，也许这是监控网站的主页，每个人在首次登录时都会看到。信息辐射器的目的是：
+- en: To show the current system status at a glance
+  id: totrans-197
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一目了然地显示当前系统状态
+- en: To send a clear message about which metrics the team considers important
+  id: totrans-198
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 为了明确传达团队认为重要的度量标准
+- en: To make people familiar with what *normal* looks like
+  id: totrans-199
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 让人熟悉*正常*的样子
+- en: 'What should you include on this radiator screen? Only vital information. *Vital*,
+    in the sense of *really important*, but also in the sense of *vital signs*: information
+    that tells you about the life of the system.'
+  id: totrans-200
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个辐射屏幕上应该包括什么？只有关键信息。*关键*，既指*真正重要*，也指*生命体征*：告诉你关于系统生命的信息。
+- en: 'The vital signs monitors you’ll see next to a hospital bed are a good example.
+    They show the key metrics for human beings: heart rate, blood pressure, oxygen
+    saturation, temperature, and breathing rate. There are many other metrics you
+    could track for a patient, and they have medically important uses, but at the
+    primary dashboard level, these are the key ones. Any serious medical problem will
+    show up in one or more of these metrics; everything else is a matter of diagnostics.'
+  id: totrans-201
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您将在医院床边看到的生命体征监视器是一个很好的例子。它们显示人类的关键指标：心率、血压、氧饱和度、体温和呼吸频率。还有许多其他指标可以用于追踪患者，它们在医学上有重要的用途，但在主要仪表板级别，这些是关键的指标。任何严重的医学问题都会在这些指标中的一个或多个中显示出来；其他一切都是诊断的问题。
+- en: Similarly, your information radiator should show the vital signs of your business
+    or service. If it has numbers, it should probably have no more than four or five
+    numbers. If it has graphs, it should have no more than four or five graphs.
+  id: totrans-202
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 同样，您的信息辐射器应显示业务或服务的生命体征。如果有数字，可能不应超过四到五个数字。如果有图表，可能不应超过四到五个图表。
+- en: It’s tempting to cram too much information into a dashboard so it looks complicated
+    and technical. That’s not the goal. The goal is to focus on a few key things and
+    make them easily visible from across a room (see [Figure 16-7](#img-radiator)).
+  id: totrans-203
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 人们往往会试图把太多信息塞进仪表板中，使其看起来复杂和技术性。这不是目标。目标是专注于少数几个关键点，并使它们在整个房间内易于看到（参见[图16-7](#img-radiator)）。
+- en: Dashboard Things That Break
+  id: totrans-204
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 会出故障的仪表板
+- en: Apart from your main information radiator, and dashboards for individual services
+    and resources, you may want to create dashboards for specific metrics that tell
+    you important things about the system. You might be able to think of some of these
+    things already, based on the system architecture. But another useful source of
+    information is *things that break*.
+  id: totrans-205
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了主要信息辐射器和单个服务和资源的仪表板之外，您可能还希望创建特定指标的仪表板，这些指标告诉您关于系统的重要信息。您可能已经能够根据系统架构考虑到其中一些事项。但另一个有用的信息来源是*会出故障的东西*。
+- en: '![Dashboard showing request and latency data](assets/cnd2_1607.png)'
+  id: totrans-206
+  prefs: []
+  type: TYPE_IMG
+  zh: '![显示请求和延迟数据的仪表板](assets/cnd2_1607.png)'
+- en: Figure 16-7\. Example information radiator produced by [Grafana Dash Gen](https://oreil.ly/lyEwc)
+  id: totrans-207
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图16-7。由[Grafana Dash Gen](https://oreil.ly/lyEwc)生成的信息辐射器示例
+- en: Every time you have an incident or outage, look for a metric, or combination
+    of metrics, which would have alerted you to this problem in advance. For example,
+    if you have a production outage caused by a server running out of disk space,
+    it’s possible that a graph of disk space on that server would have warned you
+    beforehand that the available space was trending downward and heading into outage
+    territory.
+  id: totrans-208
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每当发生事故或停机时，都要寻找一项或多项指标，这些指标本应在事先警告您此问题。例如，如果生产停机是由于服务器磁盘空间耗尽引起的，那么服务器磁盘空间图可能会事先警告您可用空间趋向下降并进入停机领域。
+- en: We’re not talking here about problems that happen over a period of minutes or
+    even hours; those are usually caught by automated alerts (see [“Alerting on Metrics”](#alerting)).
+    Rather, we’re interested in the slow-moving icebergs that draw closer over days
+    or weeks. Those are dangers that, if you don’t spot them and take avoiding action,
+    will sink your system at the worst possible time.
+  id: totrans-209
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在这里讨论的不是在几分钟甚至几个小时内发生的问题；这些通常会被自动警报捕捉到（参见[“关于指标的警报”](#alerting)）。相反，我们关注的是在几天或几周内逐渐接近的缓慢移动的冰山。这些是危险，如果您不注意并采取避免行动，它们将在最糟糕的时刻击沉您的系统。
+- en: After an incident, always ask, “What would have warned us about this problem
+    in advance, if only we’d been aware of it?” If the answer is a piece of data you
+    already had but didn’t pay attention to, take action to highlight that data. A
+    dashboard is one possible way to do this.
+  id: totrans-210
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 事故发生后，总是要问：“如果我们事先知道这个问题会有什么预警？” 如果答案是你已经拥有但没有注意到的一些数据，那么就采取行动突出显示这些数据。仪表板是实现这一目标的一种可能方式。
+- en: While alerts can tell you that some value has exceeded a preset threshold, you
+    may not always know in advance what the danger level is. A graph lets you visualize
+    how that value is behaving over long periods of time, and helps you detect problematic
+    trends before they actually affect the system.
+  id: totrans-211
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然警报可以告诉您某个值已超过预设阈值，但您可能并不总能事先知道危险级别。图形让您可以可视化该值在长时间内的行为，并帮助您在实际影响系统之前检测到问题趋势。
+- en: Alerting on Metrics
+  id: totrans-212
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 关于指标的警报
+- en: You might be surprised that we’ve spent most of this chapter talking about observability
+    and monitoring without mentioning alerts. For some people, alerts are what monitoring
+    is all about. We think that philosophy needs to change, for a number of reasons.
+  id: totrans-213
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 也许你会感到惊讶，我们在大部分章节中都在讨论可观察性和监控，却没有提到警报。对于一些人来说，警报就是监控的全部。我们认为这种理念需要改变，原因有几点。
+- en: What’s Wrong with Alerts?
+  id: totrans-214
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 警报存在哪些问题？
+- en: Alerts indicate some unexpected deviation from a stable, working state. Well,
+    distributed systems don’t have those states!
+  id: totrans-215
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 警报表示从稳定的工作状态中出现了一些意外偏离。好吧，分布式系统没有那种状态！
+- en: 'As we’ve mentioned, large-scale distributed systems are never completely *up*;
+    they’re almost always in a state of partially degraded service (see [“Cloud native
+    applications are never “up””](ch15.html#neverup)). They have so many metrics that
+    if you alert every time some metric goes outside normal limits, you’d be sending
+    hundreds of pages a day to no good purpose:'
+  id: totrans-216
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如我们所提到的，大规模分布式系统从来不完全处于*正常运行*状态；它们几乎总是处于部分降级服务状态（参见[“云原生应用永远不“正常””](ch15.html#neverup)）。它们有如此多的指标，如果每次某个指标超出正常限制就发出警报，你每天都会发送数百页没有任何好处：
+- en: People are over-paging themselves because their observability blows and they
+    don’t trust their tools to let them reliably debug and diagnose the problem. So
+    they get tens or hundreds of alerts, which they pattern-match for clues about
+    what the root cause might be. They’re flying blind. In the chaotic future we’re
+    all hurtling toward, you actually have to have the discipline to have radically
+    *fewer* paging alerts, not more. Request rate, latency, error rate, saturation.
+  id: totrans-217
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 人们过度对自己发出警报，因为他们的可观察性有问题，他们不信任他们的工具能够可靠地调试和诊断问题。因此，他们会收到数十甚至数百个警报，他们通过模式匹配来寻找问题根本原因的线索。他们在盲目飞行。在我们所有人都朝着混乱的未来快速前进的情况下，你实际上必须有纪律地减少*更多*的分页警报，而不是增加。请求速率、延迟、错误率、饱和度。
+- en: ''
+  id: totrans-218
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+- en: '[Charity Majors](https://oreil.ly/FiRbV)'
+  id: totrans-219
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: '[Charity Majors](https://oreil.ly/FiRbV)'
+- en: For some unfortunate people, on-call alert pages are a way of life. This is
+    a bad thing, not just for the obvious human reasons. Alert fatigue is a well-known
+    issue in medicine, where clinicians can rapidly become desensitized by constant
+    alarms, making them more likely to overlook a serious issue when it does arise.
+  id: totrans-220
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于一些不幸的人来说，值班警报是生活的一部分。这不仅仅因为人性的明显原因是一件坏事。警报疲劳在医学上是一个众所周知的问题，医护人员可能会因为不断的警报而迅速变得麻木，导致在真正出现问题时更容易忽略严重情况。
+- en: 'For a monitoring system to be useful, it has to have a very high signal-to-noise
+    ratio. False alarms are not only annoying, but dangerous: they reduce trust in
+    the system, and condition people that alerts can be safely ignored.'
+  id: totrans-221
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要使监控系统有用，它必须具有非常高的信号与噪声比。虚假警报不仅令人恼火，而且危险：它们降低了对系统的信任，并使人们认为可以安全地忽略警报。
+- en: Excessive, incessant, and irrelevant alarms were a major factor in the [Three
+    Mile Island disaster](https://oreil.ly/cXEOk), and even when individual alarms
+    are well designed, operators can be overwhelmed by too many of them going off
+    simultaneously.
+  id: totrans-222
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 过多、持续不断和无关紧要的警报是[三里岛核事故](https://oreil.ly/cXEOk)的一个主要因素，即使单个警报设计良好，操作员同时收到过多警报也可能会感到不堪重负。
+- en: 'An alert should mean one very simple thing: [*action needs to be taken now,
+    by a person*](https://oreil.ly/pMZqD).'
+  id: totrans-223
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 警报应该有一个非常简单的含义：[*现在需要由人来采取行动*](https://oreil.ly/pMZqD)。
+- en: 'If no action is needed, no alert is needed. If action needs to happen *sometime*,
+    but not right now, the alert can be downgraded to a lower priority notification,
+    like an email or chat message. If the action can be taken by an automated system,
+    then automate it: don’t wake up a valuable human being.'
+  id: totrans-224
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果不需要采取任何行动，就不需要警报。如果行动需要在*某个时候*进行，但现在不需要，那么可以将警报降级为较低优先级的通知，比如电子邮件或聊天消息。如果可以由自动化系统执行操作，则应该自动化：不要唤醒宝贵的人类。
+- en: On-Call Should Not Be Hell
+  id: totrans-225
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 值班不应该成为地狱
+- en: While the idea of being on-call for your own services is key to the DevOps philosophy,
+    it’s equally important that being on-call should be as painless an experience
+    as possible.
+  id: totrans-226
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然作为DevOps哲学的关键部分，对自己的服务负责任是一个好主意，但同样重要的是，值班应该尽可能少地带来痛苦。
+- en: Alert pages should be a rare and exceptional occurrence. When they do happen,
+    there should be a well-established and effective procedure for handling them,
+    which puts as little strain as possible on the responder.
+  id: totrans-227
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 警报页面应该是一种罕见和特殊的情况。当它们确实发生时，应该有一个既定而有效的处理程序，尽量减少响应者的压力。
+- en: 'Nobody should be on-call all the time. If this is the case, add more people
+    to the rotation. You don’t need to be a subject-matter expert to be on-call: your
+    main task is to triage the problem, decide if it needs action, and escalate it
+    to the right people.'
+  id: totrans-228
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 没有人应该全天候值班。如果情况如此，可以增加轮换人数。你不需要成为专家就可以值班：你的主要任务是对问题进行分类，决定是否需要采取行动，并将其升级给合适的人员。
+- en: While the burden of on-call should be fairly distributed, people’s personal
+    circumstances differ. If you have a family, or other commitments outside work,
+    it may not be so easy for you to take on-call shifts. It takes careful and sensitive
+    management to arrange on-call in a way that’s fair to everybody.
+  id: totrans-229
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管值班的负担应该公平分配，但人们的个人情况有所不同。如果你有家庭或工作外的其他承诺，可能不那么容易参加值班。需要仔细和敏感的管理来安排值班，以确保对每个人都公平。
+- en: If the job involves being on-call, that should be made clear to the person when
+    they’re hired. Expectations about the frequency and circumstances of on-call shifts
+    should be written into their contract. It’s not fair to hire someone for a strictly
+    nine–to-five job, and then decide you also want them to be on-call nights and
+    weekends.
+  id: totrans-230
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果工作涉及到值班，那么在雇佣该人时应当明确告知。对于值班轮班的频率和情况的期望应当写入他们的合同。雇佣某人从事严格的九点到五点工作，然后又决定让他们在晚上和周末值班，这是不公平的。
+- en: On-call should be properly compensated with cash, time off in lieu, or some
+    other meaningful benefit. This applies whether or not you actually receive any
+    alerts; when you’re on-call, to some extent you’re at work.
+  id: totrans-231
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 值班应当得到适当的补偿，可以是现金、调休或其他有意义的福利。无论您是否真正收到任何警报，当您值班时，在某种程度上您都在工作。
+- en: There should also be a hard limit on the amount of time someone can spend on-call.
+    People with more spare time or energy may want to volunteer to help reduce the
+    stress on their coworkers, and that’s great, but don’t let anyone take on too
+    much.
+  id: totrans-232
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个人在值班时的时间应该有严格限制。拥有更多空闲时间或精力的人可能愿意自愿帮助减少同事的压力，这很好，但不要让任何人承担过多的责任。
+- en: Recognize that when you put people on-call, you are spending human capital.
+    Spend it wisely.
+  id: totrans-233
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 认识到当您让人们值班时，您正在花费人力资本。要明智地使用它。
+- en: Urgent, Important, and Actionable Alerts
+  id: totrans-234
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 紧急、重要和可行动的警报
+- en: If alerts are so terrible, why are we talking about them at all? Well, you still
+    need alerts. Things go wrong, blow up, fall over, and grind to a halt—usually
+    at the most inconvenient time.
+  id: totrans-235
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果警报如此可怕，为什么我们还要讨论它们呢？好吧，您仍然需要警报。事情会出错、爆炸、崩溃和停顿——通常发生在最不方便的时候。
+- en: Observability is wonderful, but you can’t find a problem when you’re not looking
+    for one. Dashboards are great, but you don’t pay somebody to sit looking at a
+    dashboard all day. For detecting an outage or issue that’s happening right now,
+    and drawing a human’s attention to it, you can’t beat automated alerts based on
+    thresholds.
+  id: totrans-236
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可观察性是很棒的，但如果您没有寻找问题，那么您就找不到问题。仪表板很好用，但您不会付钱让某人整天盯着仪表板看。要检测当前发生的停机或问题，并引起人类注意，基于阈值的自动警报是最佳选择。
+- en: For example, you might want the system to alert you if error rates for a given
+    service exceed 10% for some period of time, like five minutes. You might generate
+    an alert when P99 latency for a service goes above some fixed value, like 1000
+    ms.
+  id: totrans-237
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，您可能希望系统在某个服务的错误率在某段时间内超过10%时向您发出警报，比如五分钟。当某个服务的P99延迟超过某个固定值，比如1000毫秒时，您可能会生成一个警报。
+- en: In general, if a problem has real or potential business impact, and action needs
+    to be taken now, by a person, it’s a possible candidate for an urgent alert notification.
+  id: totrans-238
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一般来说，如果一个问题对业务有实际或潜在的影响，并且需要立即采取行动，那么它有可能成为紧急警报通知的候选。
+- en: Don’t alert on every metric. Out of hundreds, or possibly thousands, of metrics,
+    you should have only a handful of metrics that can generate alerts. Even when
+    they do generate alerts, that doesn’t necessarily mean you need to page somebody.
+  id: totrans-239
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不要对每一个指标都发出警报。在数百甚至数千个指标中，您应该只有少数几个可以生成警报的指标。即使它们生成了警报，也不一定意味着您需要给某人发出页面。
+- en: 'Pages should be restricted to only *urgent*, *important*, and *actionable*
+    alerts:'
+  id: totrans-240
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 页面应该仅限于*紧急*、*重要*和*可行动*的警报：
+- en: Alerts that are important, but not urgent, can be dealt with during normal working
+    hours. Only things that can’t wait till morning should be paged.
+  id: totrans-241
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 重要但不紧急的警报可以在正常工作时间内处理。只有不能等到早晨的事情才需要页面。
+- en: Alerts that are urgent, but not important, don’t justify waking someone up.
+    For example, the failure of a little-used internal service that doesn’t affect
+    customers.
+  id: totrans-242
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 紧急但不重要的警报并不值得唤醒某人。例如，一个很少使用且不影响客户的内部服务的失败。
+- en: If there’s no immediate action that can be taken to fix it, there’s no point
+    paging about it.
+  id: totrans-243
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如果没有立即可以采取的行动来修复它，那么对此发出页面毫无意义。
+- en: 'For everything else, you can send asynchronous notifications: emails, chat
+    messages, support tickets, project issues, and so on. They will be seen and dealt
+    with in a timely fashion, if your system is working properly. You don’t need to
+    send someone’s cortisol levels skyrocketing by waking them up in the middle of
+    the night with a blaring alarm.'
+  id: totrans-244
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于其他情况，您可以发送异步通知：电子邮件、聊天消息、支持票据、项目问题等等。如果您的系统正常工作，这些通知将及时被查看和处理。不需要通过响亮的警报声在半夜唤醒某人，使其皮质醇水平飙升。
+- en: Track Your Alerts, Out-of-Hours Pages, and Wake-Ups
+  id: totrans-245
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 跟踪您的警报、非工作时间页面和唤醒
+- en: Your people are just as critical to your infrastructure as your cloud servers
+    and Kubernetes clusters, in fact, more so. It makes sense, then, to monitor what’s
+    happening to your people in just the same way as you monitor what’s happening
+    with your services.
+  id: totrans-246
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您的人员对您的基础设施同样至关重要，事实上，更为重要。因此，监控您的人员情况与监控您的服务情况一样是有意义的。
+- en: The number of alerts sent in a given week is a good indicator of the overall
+    health and stability of your system. The number of urgent pages, especially the
+    number of pages sent out of hours, on weekends, and during normal sleep times,
+    is a good indicator of your team’s overall health and morale.
+  id: totrans-247
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在给定周发送的警报数量是系统整体健康和稳定性的良好指标。紧急页面的数量，特别是在非工作时间、周末和正常睡眠时间发送的页面数量，是您团队整体健康和士气的良好指标。
+- en: You should set a budget for the number of urgent pages, especially out of hours,
+    and it should be very low. One or two out-of-hours pages per on-call engineer
+    per week should probably be the limit. If you’re regularly exceeding this, you
+    need to fix the alerts, fix the system, or hire more engineers.
+  id: totrans-248
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您应该为紧急页面设置预算，特别是在非工作时间，应该非常低。每周每个值班工程师收到一到两个非工作时间页面可能是限制。如果您经常超过这个限制，您需要修复警报、修复系统或增加更多工程师。
+- en: Review all urgent pages at least weekly, and fix or eliminate any false alarms
+    or unnecessary alerts. If you don’t take this seriously, people won’t take your
+    alerts seriously. And if you regularly interrupt people’s sleep and private life
+    with unnecessary alerts, they will start looking for better jobs.
+  id: totrans-249
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 至少每周审核所有紧急页面，并修复或消除任何虚假警报或不必要的警报。如果您不认真对待这一点，人们也不会认真对待您的警报。如果您经常因不必要的警报打断人们的睡眠和私人生活，他们会开始寻找更好的工作。
+- en: Metrics Tools and Services
+  id: totrans-250
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 指标工具和服务
+- en: Now let’s get into some specifics. What tools or services should you use to
+    collect, analyze, and communicate metrics? In [“Don’t build your own monitoring
+    infrastructure”](ch15.html#dontbuildyourown), we made the point that, when faced
+    with a commodity problem, you should use a commodity solution. Does that mean
+    you should necessarily use a third-party, hosted metrics service like Datadog
+    or New Relic?
+  id: totrans-251
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在让我们具体讨论一些问题。您应该使用哪些工具或服务来收集、分析和传达指标？在[“不要建立自己的监控基础设施”](ch15.html#dontbuildyourown)中，我们指出面对普通问题时，应该使用普通解决方案。这是否意味着您一定要使用像Datadog或New
+    Relic这样的第三方托管指标服务呢？
+- en: The answer here isn’t quite so clear-cut. While these services offer lots of
+    powerful features, they can be expensive, especially at scale. The decision to
+    run your own metrics servers or not will largely depend on your situation, including
+    how many applications you manage and how much data you are collecting. If you
+    decide to set up your own metrics infrastructure, there is an excellent free and
+    open source product available.
+  id: totrans-252
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里的答案并不那么明确。尽管这些服务提供了许多强大的功能，但在大规模使用时可能会很昂贵。是否运行您自己的指标服务器的决定在很大程度上取决于您的情况，包括您管理的应用数量以及您正在收集的数据量。如果您决定建立自己的指标基础设施，有一个优秀的免费开源产品可供选择。
+- en: Prometheus
+  id: totrans-253
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Prometheus
+- en: The de facto standard metrics solution in the cloud native world is [Prometheus](https://prometheus.io).
+    It’s very widely used, especially with Kubernetes, and almost everything can interoperate
+    with Prometheus in some way, so it’s the first thing you should consider when
+    you’re thinking about metrics-monitoring options.
+  id: totrans-254
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在云原生世界中，事实上的标准指标解决方案是[Prometheus](https://prometheus.io)。它被广泛使用，特别是在Kubernetes上，几乎所有东西都可以以某种方式与Prometheus互操作，因此在考虑指标监控选项时，这是您应该首先考虑的东西。
+- en: Prometheus is an open source systems-monitoring and alerting toolkit, based
+    on time-series metrics data. The core of Prometheus is a server that collects
+    and stores metrics. It also has various other optional components, such as an
+    alerting tool ([Alertmanager](https://oreil.ly/jaKyF)), and client libraries for
+    programming languages such as Go, which you can use to instrument your applications.
+  id: totrans-255
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Prometheus是一个基于时间序列指标数据的开源系统监控和警报工具包。Prometheus的核心是一个收集和存储指标的服务器。它还有各种其他可选组件，如一个警报工具([Alertmanager](https://oreil.ly/jaKyF))，以及针对诸如Go之类的编程语言的客户端库，您可以用它来为您的应用程序添加仪表。
+- en: It all sounds rather complicated, but in practice it’s very simple. You can
+    install Prometheus in your Kubernetes cluster with one command, using the [community
+    Helm chart](https://oreil.ly/P2Qym). It will then gather metrics automatically
+    from the cluster, and also from any applications you tell it to, using a process
+    called *scraping*.
+  id: totrans-256
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这听起来可能有些复杂，但实际操作中非常简单。您可以使用[社区Helm图表](https://oreil.ly/P2Qym)在您的Kubernetes集群中一条命令安装Prometheus。它将自动从集群中收集指标，还会从您指定的任何应用程序中收集数据，使用一个称为*抓取*的过程。
+- en: Prometheus scrapes metrics by making an HTTP connection to your application
+    on a prearranged port, and downloading whatever metrics data is available. It
+    then stores the data in its database, where it will be available for you to query,
+    graph, or alert on.
+  id: totrans-257
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Prometheus通过在预设端口向您的应用程序进行HTTP连接并下载可用的指标数据来抓取指标。然后它将数据存储在其数据库中，您可以随时查询、绘制或进行警报。
+- en: Tip
+  id: totrans-258
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: 'Prometheus’s approach to collecting metrics is called *pull* monitoring. In
+    this scheme, the monitoring server contacts the application and requests metrics
+    data. The opposite approach, called *push*, and used by some other monitoring
+    tools such as StatsD, works the other way: applications contact the monitoring
+    server to send it metrics. Prometheus also supports the push model with their
+    [Pushgateway](https://oreil.ly/NAucC) component.'
+  id: totrans-259
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Prometheus收集指标的方法称为*拉取*监控。在这种方案中，监控服务器会联系应用程序并请求指标数据。相反的方法称为*推送*，被一些其他监控工具如StatsD所使用，其工作方式正好相反：应用程序联系监控服务器并发送指标数据。Prometheus还通过其[Pushgateway](https://oreil.ly/NAucC)组件支持推送模型。
+- en: 'Like Kubernetes itself, Prometheus is inspired by Google’s own infrastructure.
+    It was developed at SoundCloud, but it takes many of its ideas from a tool called
+    Borgmon. Borgmon, as the name suggests, was designed to monitor Google’s Borg
+    container orchestration system (see [“From Borg to Kubernetes”](ch01.html#borgtok8s)):'
+  id: totrans-260
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 就像Kubernetes本身一样，Prometheus也受到Google自家基础设施的启发。它是在SoundCloud开发的，但是它吸收了来自一个名为Borgmon的工具的许多想法。正如其名所示，Borgmon旨在监控Google的Borg容器编排系统（见[“从Borg到Kubernetes”](ch01.html#borgtok8s)）。
+- en: Kubernetes directly builds on Google’s decade-long experience with their own
+    cluster scheduling system, Borg. Prometheus’s bonds to Google are way looser but
+    it draws a lot of inspiration from Borgmon, the internal monitoring system Google
+    came up with at about the same time as Borg. In a very sloppy comparison, you
+    could say that Kubernetes is Borg for mere mortals, while Prometheus is Borgmon
+    for mere mortals. Both are “second systems” trying to iterate on the good parts
+    while avoiding the mistakes and dead ends of their ancestors.
+  id: totrans-261
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: Kubernetes直接建立在Google十年的自家集群调度系统Borg的经验基础上。Prometheus与Google的联系则要松散得多，但它从Borgmon中汲取了大量灵感，这是Google在大约同一时期提出的内部监控系统。用一个非常粗糙的比较来说，你可以说Kubernetes是面向凡人的Borg，而Prometheus是面向凡人的Borgmon。它们都是“第二代系统”，试图在保留优点的同时避免祖先们的错误和死胡同。
+- en: ''
+  id: totrans-262
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+- en: '[Björn Rabenstein](https://www.oreilly.com/ideas/google-infrastructure-for-everyone-else)
+    (SoundCloud)'
+  id: totrans-263
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: '[Björn Rabenstein](https://www.oreilly.com/ideas/google-infrastructure-for-everyone-else)（SoundCloud）'
+- en: You can read more about Prometheus on its [site](https://prometheus.io), including
+    instructions on how to install and configure it for your environment.
+  id: totrans-264
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在其[网站](https://prometheus.io)上了解更多关于Prometheus的信息，包括如何在您的环境中安装和配置它的说明。
+- en: While Prometheus itself is focused on the job of collecting and storing metrics,
+    there are other high-quality open source options for graphing, dashboarding, and
+    alerting. [Grafana](https://grafana.com) is a powerful and capable graphing engine
+    for time-series data ([Figure 16-8](#img-grafana)).
+  id: totrans-265
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然Prometheus本身专注于收集和存储指标的工作，但也有其他高质量的开源选项用于绘图、仪表板和警报。[Grafana](https://grafana.com)是一个强大而能干的时序数据绘图引擎（见[图16-8](#img-grafana)）。
+- en: The Prometheus project includes a tool called [Alertmanager](https://oreil.ly/jaKyF),
+    which works well with Prometheus but can also operate independently of it. Alertmanager’s
+    job is to receive alerts from various sources, including Prometheus servers, and
+    process them (see [“Alerting on Metrics”](#alerting)).
+  id: totrans-266
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Prometheus项目包括一个名为[Alertmanager](https://oreil.ly/jaKyF)的工具，它与Prometheus配合良好，但也可以独立运行。Alertmanager的工作是接收来自多个来源（包括Prometheus服务器）的警报，并对其进行处理（见[“基于指标进行警报”](#alerting)）。
+- en: The first step in processing alerts is to deduplicate them. Alertmanager can
+    then group alerts it detects to be related; for example, a major network outage
+    might result in hundreds of individual alerts, but Alertmanager can group all
+    of these into a single message so that responders aren’t overwhelmed with pages.
+  id: totrans-267
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 处理警报的第一步是去重。然后，Alertmanager 可以将其检测到的警报分组为相关的警报；例如，主要的网络中断可能会导致数百个单独的警报，但 Alertmanager
+    可以将所有这些警报组合成单个消息，以便响应人员不会被页面所淹没。
+- en: Finally, Alertmanager will route the processed alerts to an appropriate notification
+    service, such as PagerDuty, Slack, or email.
+  id: totrans-268
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，Alertmanager 将处理过的警报路由到适当的通知服务，例如 PagerDuty、Slack 或电子邮件。
+- en: Conveniently, the Prometheus metrics format is supported by a very wide range
+    of tools and services, and this de facto standard is now the basis for [OpenMetrics](https://openmetrics.io),
+    a Cloud Native Computing Foundation project to produce a neutral standard format
+    for metrics data. Many popular hosted monitoring tools such as Amazon CloudWatch,
+    Operations Suite, Datadog, and New Relic can import and understand Prometheus
+    data.
+  id: totrans-269
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 令人方便的是，Prometheus 指标格式得到了广泛的工具和服务支持，这种事实上的标准现在已成为 OpenMetrics 的基础，OpenMetrics
+    是一个云原生计算基金会项目，旨在生产度量数据的中立标准格式。许多受欢迎的托管监控工具，如 Amazon CloudWatch、Operations Suite、Datadog
+    和 New Relic，都可以导入和理解 Prometheus 数据。
+- en: '![Grafana dashboard](assets/cnd2_1608.png)'
+  id: totrans-270
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Grafana 仪表板](assets/cnd2_1608.png)'
+- en: Figure 16-8\. Grafana dashboard showing Prometheus data
+  id: totrans-271
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 16-8\. 显示 Prometheus 数据的 Grafana 仪表板
+- en: Google Operations Suite
+  id: totrans-272
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Google Operations Suite
+- en: 'Operations Suite was previously called Stackdriver, and although now a part
+    of Google, it’s not limited to Google Cloud: it also works with AWS. The Cloud
+    Monitoring component can collect, graph, and alert on metrics and log data from
+    a variety of sources. It will autodiscover and monitor your cloud resources, including
+    VMs, databases, and Kubernetes clusters. Operations Suite brings all this data
+    into a central web console where you can create custom dashboards and alerts.'
+  id: totrans-273
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Operations Suite 之前被称为 Stackdriver，虽然现在是 Google 的一部分，但并不仅限于 Google Cloud：它也与
+    AWS 兼容。Cloud Monitoring 组件可以收集、绘制和警报来自各种来源的指标和日志数据。它会自动发现和监视您的云资源，包括虚拟机、数据库和 Kubernetes
+    集群。Operations Suite 将所有这些数据汇集到一个中央网络控制台，您可以在其中创建自定义仪表板和警报。
+- en: Operations Suite understands how to get operational metrics from such popular
+    software tools as PostgreSQL, NGINX, Cassandra, and Elasticsearch. If you want
+    to include your own custom metrics from your applications, you can use Operations
+    Suite’s client library to export whatever data you want. It also offers the ability
+    to run a managed Prometheus instance for you, allowing you to continue using your
+    existing Prometheus exporters and Grafana dashboards.
+  id: totrans-274
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Operations Suite 理解如何从诸如 PostgreSQL、NGINX、Cassandra 和 Elasticsearch 等流行软件工具中获取运营指标。如果您想包含自己应用程序的自定义指标，可以使用
+    Operations Suite 的客户端库导出您想要的任何数据。它还提供了运行托管的 Prometheus 实例的能力，使您可以继续使用现有的 Prometheus
+    导出器和 Grafana 仪表板。
+- en: If you’re in Google Cloud, Operations Suite is free for all GCP-related metrics;
+    for custom metrics, or metrics from other cloud platforms, you pay per megabyte
+    of monitoring data per month.
+  id: totrans-275
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您使用 Google Cloud，Operations Suite 对所有与 GCP 相关的指标免费；对于自定义指标或来自其他云平台的指标，您需要按每月监控数据的兆字节支付费用。
+- en: AWS CloudWatch
+  id: totrans-276
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: AWS CloudWatch
+- en: Amazon’s own cloud monitoring product, CloudWatch, has a similar feature set
+    to Operations Suite. It integrates with all AWS services, and you can export custom
+    metrics using the CloudWatch SDK or command-line tool.
+  id: totrans-277
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 亚马逊自己的云监控产品 CloudWatch 具有与 Operations Suite 类似的功能集。它与所有 AWS 服务集成，您可以使用 CloudWatch
+    SDK 或命令行工具导出自定义指标。
+- en: CloudWatch has a free tier that allows you to gather *basic* metrics (such as
+    CPU utilization for VMs) at five-minute intervals, a certain number of dashboards
+    and alarms, and so on. Over and above those you pay per metric, per dashboard,
+    or per alarm, and you can also pay for high-resolution metrics (one-minute intervals)
+    on a per-instance basis.
+  id: totrans-278
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CloudWatch 提供了免费套餐，允许您以五分钟的间隔收集基本指标（例如 VM 的 CPU 利用率），一定数量的仪表板和警报等等。除此之外，您需要按指标、仪表板或警报每月支付费用，还可以按实例支付高分辨率指标（每分钟间隔）的费用。
+- en: '[CloudWatch](https://aws.amazon.com/cloudwatch) is basic, but effective. If
+    your primary cloud infrastructure is AWS, CloudWatch is a good place to start
+    working with metrics, and for small deployments it may be all you ever need.'
+  id: totrans-279
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[CloudWatch](https://aws.amazon.com/cloudwatch) 是基础但有效的。如果您的主要云基础设施是 AWS，CloudWatch
+    是开始使用指标的良好选择，并且对于小型部署可能是您所需要的全部。'
+- en: Azure Monitor
+  id: totrans-280
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Azure Monitor
+- en: '[Azure Monitor](https://oreil.ly/FPvPR) is the Microsoft equivalent of GCP’s
+    Operations Suite or AWS CloudWatch. It collects logs and metrics data from all
+    your Azure resources, including Kubernetes clusters, and allows you to visualize
+    and alert on it. It also offers a Prometheus-based metric scraper so that you
+    do not need to use a different instrumentation tool in your applications if you
+    already have Prometheus configured.'
+  id: totrans-281
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Azure Monitor](https://oreil.ly/FPvPR) 是微软的等同于 GCP 的 Operations Suite 或 AWS
+    的 CloudWatch 的产品。它收集来自所有 Azure 资源（包括 Kubernetes 集群）的日志和指标数据，并允许您对其进行可视化和警报。它还提供基于
+    Prometheus 的指标抓取器，这样您就不需要在应用程序中使用其他工具进行仪表化，如果您已经配置了 Prometheus 的话。'
+- en: Datadog
+  id: totrans-282
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Datadog
+- en: In comparison to the cloud providers’ built-in tools like Operations Suite and
+    CloudWatch, [Datadog](https://www.datadoghq.com) is a very sophisticated and powerful
+    monitoring and analytics platform. It offers integrations for over 250 platforms
+    and services, including all the cloud services from major providers, and popular
+    software such as Jenkins, NGINX, Consul, PostgreSQL, and MySQL.
+  id: totrans-283
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与像 Operations Suite 和 CloudWatch 这样的云提供商内置工具相比，[Datadog](https://www.datadoghq.com)
+    是一个非常复杂和强大的监控和分析平台。它为超过 250 个平台和服务提供集成，包括所有主要提供商的云服务以及流行的软件，如 Jenkins、NGINX、Consul、PostgreSQL
+    和 MySQL。
+- en: 'Datadog also offers an application performance monitoring (APM) component,
+    along with a log aggregation product, designed to help you monitor and analyze
+    how your applications are performing. Whether you use Go, Java, Ruby, or any other
+    software platform, Datadog can gather metrics, logs, and traces from your software,
+    and answer questions for you like:'
+  id: totrans-284
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Datadog 还提供应用程序性能监控（APM）组件，以及一个日志聚合产品，旨在帮助您监视和分析应用程序的性能。无论您使用 Go、Java、Ruby 还是任何其他软件平台，Datadog
+    都可以从您的软件中收集指标、日志和跟踪数据，并为您解答以下问题：
+- en: What is the user experience like for a specific, individual user of my service?
+  id: totrans-285
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 我的服务的特定个体用户的用户体验如何？
+- en: Who are the 10 customers who see the slowest responses on a particular endpoint?
+  id: totrans-286
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在特定端点上，哪些 10 个客户端看到了最慢的响应？
+- en: Which of my various distributed services are contributing to the overall latency
+    of requests?
+  id: totrans-287
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 我的各种分布式服务中哪些正在导致请求的总体延迟？
+- en: Together with the usual dashboarding (see [Figure 16-9](#img-datadog)) and alerting
+    features (automatable via the Datadog API and client libraries, including Terraform),
+    Datadog also provides features like anomaly detection, powered by machine learning,
+    and they also support collecting Prometheus metrics from your applications.
+  id: totrans-288
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了通常的仪表化（见[图 16-9](#img-datadog)）和警报功能（可通过 Datadog API 和客户端库自动化，包括 Terraform），Datadog
+    还提供由机器学习驱动的异常检测功能，它还支持从您的应用程序收集 Prometheus 指标。
+- en: '![Datadog screenshot](assets/cnd2_1609.png)'
+  id: totrans-289
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Datadog 截图](assets/cnd2_1609.png)'
+- en: Figure 16-9\. Datadog dashboard
+  id: totrans-290
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 16-9\. Datadog 仪表板
+- en: New Relic
+  id: totrans-291
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: New Relic
+- en: New Relic is a very well established and widely used metrics platform focused
+    on application performance monitoring (APM). Its chief strength is in diagnosing
+    performance problems and bottlenecks inside applications and distributed systems
+    (see [Figure 16-10](#img-new-relic)). However, it also offers infrastructure metrics
+    and monitoring, alerting, software analytics, and everything else you’d expect.
+  id: totrans-292
+  prefs: []
+  type: TYPE_NORMAL
+  zh: New Relic 是一个非常成熟和广泛使用的指标平台，专注于应用程序性能监控（APM）。它的主要优势在于诊断应用程序和分布式系统内部的性能问题和瓶颈（见[图 16-10](#img-new-relic)）。然而，它也提供基础设施指标和监控、警报、软件分析等所有您所期望的功能。
+- en: If you’re in the market for a premium corporate metrics platform, you’ll probably
+    be looking either at New Relic (slightly more application focused) or Datadog
+    (slightly more infrastructure focused). Both also offer good infrastructure as
+    code support; for example, you can create monitoring dashboards and alerts for
+    both New Relic and Datadog using official Terraform providers.
+  id: totrans-293
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您正在寻找高级企业指标平台，您可能会看向 New Relic（稍微更加关注应用程序）或 Datadog（稍微更加关注基础设施）。两者都提供良好的基础设施即代码支持；例如，您可以使用官方
+    Terraform 提供程序为 New Relic 和 Datadog 创建监控仪表板和警报。
+- en: '![New Relic interface](assets/cnd2_1610.png)'
+  id: totrans-294
+  prefs: []
+  type: TYPE_IMG
+  zh: '![New Relic 界面](assets/cnd2_1610.png)'
+- en: Figure 16-10\. New Relic APM dashboard
+  id: totrans-295
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 16-10\. New Relic APM 仪表板
+- en: Summary
+  id: totrans-296
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 摘要
+- en: '*Measure twice, cut once* is a favorite saying of many engineers. In the cloud
+    native world, without proper metrics and observability data it’s very difficult
+    to know what’s going on. On the other hand, once you open the metrics floodgates,
+    too much information can be just as useless as too little.'
+  id: totrans-297
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 许多工程师喜欢的一句话是“量一次，砍两次”。在云原生世界中，如果没有适当的指标和可观测性数据，很难知道发生了什么。另一方面，一旦打开了指标的闸门，信息过载可能和信息不足一样无用。
+- en: The trick is to gather the right data in the first place, process it in the
+    right way, use it to answer the right questions, visualize it in the right way,
+    and use it to alert the right people at the right time about the right things.
+  id: totrans-298
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 关键是首先收集正确的数据，以正确的方式处理它，用它来回答正确的问题，在正确的方式下可视化它，并在正确的时间用它向正确的人员发出关于正确事项的警报。
+- en: 'If you forget everything else in this chapter, remember this:'
+  id: totrans-299
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你在这一章中忘记了其他所有内容，请记住这一点：
+- en: 'Focus on the key metrics for each service: requests, errors, and duration (RED).
+    For each resource: utilization, saturation, and errors (USE).'
+  id: totrans-300
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 专注于每个服务的关键指标：请求量，错误率和持续时间（RED）。对于每个资源：利用率，饱和度和错误（USE）。
+- en: Instrument your apps to expose custom metrics, both for internal observability
+    and for business KPIs.
+  id: totrans-301
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 为你的应用程序安装仪表，以公开自定义指标，既用于内部可观测性，也用于业务 KPI。
+- en: Useful Kubernetes metrics include, at the cluster level, the number of nodes,
+    Pods per node, and resource usage of nodes.
+  id: totrans-302
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 有用的 Kubernetes 指标包括，在集群级别，节点数量，每个节点的 Pod 数量，以及节点资源的使用情况。
+- en: At the deployment level, track deployments and replicas, especially unavailable
+    replicas, which might indicate a capacity problem.
+  id: totrans-303
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在部署级别，跟踪部署和副本，特别是不可用的副本，这可能表明存在容量问题。
+- en: At the container level, track resource usage per container, liveness/readiness
+    states, restarts, network traffic, and network errors.
+  id: totrans-304
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在容器级别，跟踪每个容器的资源使用情况，活跃/准备状态，重启次数，网络流量和网络错误。
+- en: Build a dashboard for each service, using a standard layout and a primary information
+    radiator that reports the vital signs of the whole system.
+  id: totrans-305
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 为每个服务构建一个仪表板，使用标准布局和主要信息显示器，报告整个系统的重要信息。
+- en: If you alert on metrics, alerts should be urgent, important, and actionable.
+    Alert noise creates fatigue and damages morale.
+  id: totrans-306
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如果你基于指标发出警报，警报应该是紧急的，重要的，并且可操作的。警报噪音会造成疲劳并损害士气。
+- en: Track and review the number of urgent pages your team receives, especially wake-ups
+    and weekends.
+  id: totrans-307
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 跟踪和审查团队接收的紧急页面数量，特别是在周末和休息日的唤醒。
+- en: The de facto standard metrics solution in the cloud native world is Prometheus,
+    and almost everything speaks the Prometheus data format.
+  id: totrans-308
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 云原生世界中的事实标准指标解决方案是 Prometheus，并且几乎所有内容都使用 Prometheus 数据格式。
+- en: Popular third-party managed metrics services include Google Operations Suite,
+    Amazon CloudWatch, Datadog, and New Relic.
+  id: totrans-309
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 流行的第三方托管指标服务包括 Google Operations Suite，Amazon CloudWatch，Datadog 和 New Relic。
+- en: ^([1](ch16.html#idm45979374096544-marker)) [The Wikipedia entry on Simpson’s
+    paradox](https://oreil.ly/ZHCMU) provides more information.
+  id: totrans-310
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([1](ch16.html#idm45979374096544-marker)) [辛普森悖论的维基百科条目](https://oreil.ly/ZHCMU)
+    提供了更多信息。

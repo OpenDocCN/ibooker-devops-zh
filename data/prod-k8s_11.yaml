@@ -1,0 +1,2363 @@
+- en: Chapter 10\. Identity
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第10章。身份
+- en: 'Establishing the identity of both users and application workloads is a key
+    concern when designing and implementing a Kubernetes platform. No one wants to
+    be in the news for having their systems breached. So it’s vital that we ensure
+    that only the appropriately privileged entities (human or application) can access
+    particular systems or take certain actions. For this we need to ensure that there
+    are both Authentication and Authorization systems implemented. As a refresher:'
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在设计和实施Kubernetes平台时，确立用户和应用程序工作负载的身份是一个关键问题。没有人希望因系统被入侵而登上新闻头条。因此，我们必须确保只有适当特权的实体（人类或应用程序）可以访问特定的系统或执行某些操作。为此，我们需要确保已经实施了认证和授权系统。作为复习：
+- en: '*Authentication* is the process of establishing the identity of an application
+    or user.'
+  id: totrans-2
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: “认证”是建立应用程序或用户身份的过程。
+- en: '*Authorization* is the process of determining what actions an application or
+    user are able to do, after they have been authenticated.'
+  id: totrans-3
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: “授权”是在认证后确定应用程序或用户能够执行什么操作的过程。
+- en: This chapter is solely focused on authentication. That’s not to say that authorization
+    is not important, and we will touch on it briefly where appropriate. For more
+    information you should definitely research Role Based Access Control (RBAC) in
+    Kubernetes (there are many great resources available) and ensure that you have
+    a solid strategy for implementing it for your own applications, so that you understand
+    the permissions that are required by any external applications that you might
+    deploy.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本章专注于认证。这并不意味着授权不重要，我们会在适当的地方简要提及。欲了解更多信息，您应当详细研究Kubernetes中的基于角色的访问控制（RBAC）（有许多优秀的资源可用），并确保为您自己的应用程序实施一个坚固的策略，以便了解您可能部署的任何外部应用程序所需的权限。
+- en: 'Establishing identity for the purposes of authentication is a key requirement
+    of almost every distributed system. A simple example of this that everyone has
+    used is a username and password. Together, the information identifies you as a
+    user of the system. In this context then, *identity* needs to have a couple of
+    properties:'
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了认证的目的，建立身份是几乎每个分布式系统的关键要求。每个人都用过的一个简单例子是用户名和密码。这些信息一起识别你作为系统的用户。因此，在这种背景下，“身份”需要具备几个属性：
+- en: It needs to be verifiable. If a user enters their username and password, we
+    need to be able to go to a database or source of truth and compare the values
+    to make sure they’re correct. In the case of a TLS certificate that might be presented,
+    we need to be able to verify that certificate against a trusted issuing Certificate
+    Authority (CA).
+  id: totrans-6
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 它需要是可验证的。如果用户输入他们的用户名和密码，我们需要能够访问数据库或真实数据源，比对数值以确保其正确性。在TLS证书的情况下，我们需要能够验证该证书是否由可信的颁发证书机构（CA）颁发。
+- en: It needs to be unique. If an identity provided to us is not unique, we cannot
+    specifically identify the bearer. However, we need to maintain uniqueness only
+    *within our desired scope*—for example, a username or email address.
+  id: totrans-7
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 它需要是唯一的。如果提供给我们的身份不唯一，我们无法特定识别持有者。然而，我们只需要在“我们期望的范围内”保持唯一性，例如用户名或电子邮件地址。
+- en: Establishing identity is also a crucial precursor to handling authorization
+    concerns. Before we can determine what scope of resource access should be granted,
+    we need to uniquely identify the entity that is authenticating to the system.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在处理授权问题之前，建立身份也是一个至关重要的先决条件。在我们确定应授予资源访问的范围之前，我们需要唯一标识验证系统的实体。
+- en: Kubernetes clusters commonly serve multiple tenants where many users and teams
+    are deploying and operating multiple applications in a single cluster. Solving
+    for tenancy in Kubernetes presents challenges (many covered in this book), of
+    which one is identity. Given the matrix of privileges and resources that must
+    be considered, we must solve for many deployment and configuration scenarios.
+    Development teams should have access to their applications. Operations teams should
+    have access to all applications and might need access to platform services. Application-to-application
+    communication should be limited among applications. Then the list goes on. What
+    about shared services? Security teams? Deployment tooling?
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes集群通常为多个租户提供服务，在单个集群中部署和操作多个应用程序的多个用户和团队。解决Kubernetes中的租户问题会带来挑战（本书中涵盖了许多），其中之一是身份认证。考虑到必须考虑的权限和资源矩阵，我们必须解决许多部署和配置场景。开发团队应该可以访问其应用程序。运维团队应该可以访问所有应用程序，并可能需要访问平台服务。应用程序间的通信应该受到限制。接下来又该考虑什么？共享服务？安全团队？部署工具？
+- en: These are all common concerns and add significant complexity to cluster configuration
+    and maintenance. Remember, we have to keep these privileges updated somehow as
+    well. These things are easy to get wrong. But the good news is that Kubernetes
+    has capabilities that allow us to integrate with external systems and to model
+    identity and access controls in a secure fashion.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些都是常见的问题，会给集群配置和维护增加显著的复杂性。请记住，我们还必须找到方法及时更新这些权限。这些问题很容易出错。但好消息是，Kubernetes具有使我们能够与外部系统集成，并以安全方式建模身份和访问控制的能力。
+- en: In this chapter we’ll begin by discussing *user* identity and the different
+    methods for authenticating users to Kubernetes. We’ll then move on to options
+    and patterns for establishing *application* identity within a Kubernetes cluster.
+    We’ll see how to authenticate applications to the Kubernetes API server (for writing
+    tools that interact directly with Kubernetes, such as operators). We’ll also cover
+    how to establish unique application identities to enable those applications to
+    authenticate to each other within the cluster, in addition to authenticating to
+    *external* services like AWS.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们将首先讨论*用户*身份以及在Kubernetes中对用户进行认证的不同方法。然后，我们将进入选项和模式，以在Kubernetes集群中建立*应用程序*身份。我们将了解如何将应用程序认证到Kubernetes
+    API服务器（用于编写与Kubernetes直接交互的工具，例如操作员）。我们还将涵盖如何建立独特的应用程序身份，使这些应用程序能够在集群内互相认证，同时也能认证到*外部*服务如AWS。
+- en: User Identity
+  id: totrans-12
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 用户身份
+- en: In this section we’ll cover the methods and patterns for implementing a robust
+    system of *user* identity across your Kubernetes cluster(s). In this context we’re
+    defining a user as a human who will be interacting with the cluster directly (either
+    through the Kubectl CLI or the API). The properties of identity (described in
+    the previous section) are common to user and application identity, but some of
+    the methods will differ. For example, we always want our identities to be verifiable
+    and unique; however, these properties will be achieved in different ways for a
+    user utilizing OpenID Connect (OIDC) versus an application using service account
+    tokens.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本节中，我们将讨论在您的Kubernetes集群中实施强大的*用户*身份系统的方法和模式。在这个上下文中，我们将用户定义为直接与集群交互的人员（通过Kubectl
+    CLI或API）。身份的属性（在前一节中描述）对用户和应用程序身份都是通用的，但某些方法会有所不同。例如，我们始终希望我们的身份是可验证和唯一的；然而，对于使用OpenID
+    Connect（OIDC）的用户和使用服务账号令牌的应用程序，这些属性的实现方式将有所不同。
+- en: Authentication Methods
+  id: totrans-14
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 认证方法
+- en: There are a number of different authentication methods available to Kubernetes
+    operators, and each have their own strengths and weaknesses. In keeping with the
+    core theme of this book, it’s essential to understand your specific use cases,
+    evaluate what’s going to work for you, integrate with your systems, provide the
+    user experience (UX), and deliver the security posture that your organization
+    requires.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes操作员可以使用多种不同的认证方法，每种方法都有其优势和劣势。与本书的核心主题保持一致，了解您的特定用例是至关重要的，评估什么对您有效，与您的系统集成，提供用户体验（UX），并提供组织所需的安全姿态。
+- en: In this section we’ll cover each method of establishing *user* identity and
+    their trade-offs while describing some commonly used patterns we’ve implemented
+    in the field. Some of the methods described here are platform-specific and tied
+    to functionality available in certain cloud vendors, while others are platform-agnostic.
+    How well a system integrates into your existing technology landscape is definitely
+    going to be a factor in determining whether to adopt it. The trade-off is between
+    extra functionality available in new tooling versus the ease-of-maintenance of
+    integrations with the incumbent stack.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这一节中，我们将介绍建立*用户*身份的每种方法及其权衡，同时描述我们在现场实施的一些常用模式。这里描述的一些方法是特定于平台的，并与某些云供应商提供的功能相关联，而其他方法则是平台无关的。系统如何与您现有的技术架构集成良好，绝对会影响是否采纳它。权衡是在新工具提供的额外功能与与现有堆栈集成的易维护性之间。
+- en: In addition to providing identity, some of the methods described may also provide
+    encryption. For example, the flow described for the public key infrastructure
+    (PKI) method provides certificates that could be used in Mutual Transport Layer
+    Security (mTLS) communication. However, encryption is not the focus of this chapter
+    and is an incidental benefit from those methods of identity grants.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了提供身份外，这里描述的某些方法还可能提供加密。例如，公钥基础设施（PKI）方法描述的流程提供了可以用于互联传输层安全性（mTLS）通信的证书。但是，加密并非本章的重点，而是身份授予方法的附带好处。
+- en: Shared secrets
+  id: totrans-18
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 共享密钥
+- en: A shared secret is a unique piece (or set) of information that is held by the
+    calling entity and the server. For example, when an application needs to connect
+    to a MySQL database, it can use a username and password combination to authenticate.
+    This method necessitates that both parties have access to that combination in
+    some form. You must create an entry in MySQL with that information, and then distribute
+    the secret to any calling application that may need it. [Figure 10-1](#shared_secrets_flow)
+    shows this pattern, with the backend application storing valid credentials that
+    need to be presented by the frontend to gain access.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 共享密钥是由调用实体和服务器共同持有的唯一信息片段（或集合）。例如，当应用程序需要连接到MySQL数据库时，它可以使用用户名和密码组合进行身份验证。此方法要求双方以某种形式访问该组合。您必须在MySQL中创建一个包含该信息的条目，然后将密钥分发给可能需要它的任何调用应用程序。[图
+    10-1](#shared_secrets_flow)显示了此模式，后端应用程序存储了需要由前端提供以获取访问权限的有效凭据。
+- en: '![prku 1001](assets/prku_1001.png)'
+  id: totrans-20
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1001](assets/prku_1001.png)'
+- en: Figure 10-1\. Shared secrets flow.
+  id: totrans-21
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 10-1\. 共享密钥流程。
+- en: Kubernetes provides two options that allow you to utilize a shared secret model
+    to authenticate to the API server. In the first method you can give the API server
+    a list of comma-separated values (CSV) mapping usernames (and optionally, groups)
+    to static tokens. When you want to authenticate to the API server, you can provide
+    the token as a Bearer token within the HTTP Authorization header. Kubernetes will
+    treat the request as coming from the mapped user and act accordingly.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes提供了两种选项，允许您使用共享密钥模型对API服务器进行身份验证。在第一种方法中，您可以向API服务器提供一个逗号分隔值（CSV）映射用户名（以及可选的组）到静态令牌的列表。当您要对API服务器进行身份验证时，可以在HTTP授权头中提供令牌作为Bearer令牌。Kubernetes将把请求视为来自映射用户，并相应地操作。
+- en: The other method is to supply the API server with a CSV of username (and optionally,
+    groups) and password mappings. With this method configured, users can supply the
+    credentials base64-encoded in the HTTP Basic Authorization header.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一种方法是向API服务器提供一个用户名（以及可选的组）和密码映射的CSV。使用此方法配置后，用户可以在HTTP基本授权头中提供Base64编码的凭据。
+- en: Note
+  id: totrans-24
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Kubernetes has no resource or object called User or Group. These are just predefined
+    names for the purposes of identification within RBAC RoleBindings. The user can
+    be mapped from a static file to token or password (as described previously), can
+    be pulled from the CN of an x509 cert, or can be read as a field from an OAuth
+    request, etc. The method of determining the user and group is entirely dependent
+    on the authentication method in use, and Kubernetes has no way to define or manage
+    them internally. In our opinion this pattern is a strength of the API because
+    it allows us to plug in a variety of different implementations and delegate those
+    concerns to systems specifically designed to handle them.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 没有称为用户或组的资源或对象。这些只是在 RBAC RoleBindings 内部标识目的的预定义名称。用户可以从静态文件映射到令牌或密码（如前所述），可以从
+    x509 证书的 CN 中提取，或者可以作为 OAuth 请求的字段读取，等等。确定用户和组的方法完全取决于正在使用的身份验证方法，而 Kubernetes
+    没有办法在内部定义或管理它们。在我们看来，这种模式是 API 的一个优点，因为它允许我们插入各种不同的实现，并将这些问题委托给专门设计来处理它们的系统。
+- en: 'Both of these methods have serious weaknesses and are not recommended. Some
+    of these weaknesses are due to the Kubernetes-specific implementation, and some
+    are inherent to the shared secret model, which we’ll discuss shortly. In Kubernetes,
+    the main issues are:'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这两种方法都存在严重的弱点，不建议使用。其中一些弱点是由于 Kubernetes 的具体实现，而一些则是共享密钥模型固有的问题，我们将很快讨论它们。在
+    Kubernetes 中，主要问题包括：
+- en: Static token and/or password files must be stored (in plain text) somewhere
+    accessible to the API server. This is less of a risk than it initially seems,
+    because if someone was able to compromise an API server and gain access to that
+    node you would have greater things to worry about than an unencrypted password
+    file. However, Kubenetes installations are mostly automated, and all assets required
+    for setup should be stored in a repository. This repository must be secured, audited,
+    and updated. This opens another potential area for carelessness or bad practices
+    to leak credentials.
+  id: totrans-27
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 静态令牌和/或密码文件必须以明文形式存储在API服务器可访问的某个位置。这比起初看起来的风险要小，因为如果有人能够 compromise API 服务器并访问该节点，你将有更大的问题要担心，而不仅仅是一个未加密的密码文件。然而，Kubernetes
+    安装大多是自动化的，设置所需的所有资产应存储在一个仓库中。这个仓库必须是安全的、经过审计和更新的。这打开了另一个潜在的疏忽或不良实践泄露凭据的可能区域。
+- en: Both the static tokens and the username/password combinations have no expiration
+    date. If any credentials are compromised, the breach must be identified quickly
+    and remediated by removing the relevant credentials and restarting the API server.
+  id: totrans-28
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 静态令牌和用户名/密码组合均没有过期日期。如果任何凭据被泄露，必须快速识别并通过移除相关凭据并重新启动 API 服务器来修复漏洞。
+- en: Any modifications to these credential files require that the API server is restarted.
+    In practice (and in isolation) this is fairly trivial. However, many organizations
+    are rightly moving away from manual intervention into their running software and
+    servers. Changing configurations is now mostly a rebuild and redeploy process
+    versus simply SSH’ing into the machines (cattle over pets). Therefore, modifying
+    API server configurations and restarting the processes is likely a more involved
+    action.
+  id: totrans-29
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 对这些凭据文件的任何修改都要求 API 服务器重新启动。在实践中（以及孤立情况下），这相当简单。然而，许多组织正逐渐从手动干预转向其运行软件和服务器的过程。现在，改变配置大多是重新构建和重新部署的过程，而不仅仅是通过
+    SSH 进入机器（牛群而非宠物）。因此，修改 API 服务器配置并重新启动进程可能是一个更为复杂的操作。
+- en: Outside of the Kubernetes-specific disadvantages just described, the shared
+    secrets model suffers from another drawback. If I am an untrusted entity, how
+    can I authenticate to a secret store *in the first place* to receive an appropriate
+    identity? We’ll look more at this *secure introduction* problem and how to solve
+    it in [“Application/Workload Identity”](#app_workload_security).
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了刚刚描述的特定于 Kubernetes 的劣势外，共享密钥模型还遭受另一个缺点的困扰。如果我是一个不受信任的实体，我如何首先在*第一次*中进行身份验证，以接收适当的身份？我们将更详细地讨论这个*安全引入*问题以及如何在[“应用程序/工作负载身份验证”](#app_workload_security)中解决它。
+- en: Public key infrastructure
+  id: totrans-31
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 公钥基础设施
+- en: Note
+  id: totrans-32
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: This section assumes you are already familiar with PKI concepts.
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本节假设您已经熟悉 PKI 概念。
+- en: The PKI model uses certificates and keys to uniquely identify and authenticate
+    users to Kubernetes. Kubernetes makes extensive use of PKI to secure communications
+    between all of the core components of the system. It’s possible to configure the
+    Certificate Authorities (CA) and certificates in multiple ways, but we will demonstrate
+    it using kubeadm, the method most commonly seen in the field (and the de facto
+    installation method for upstream Kubernetes).
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: PKI 模型使用证书和密钥来唯一标识和认证用户到 Kubernetes。Kubernetes 广泛使用 PKI 来保护系统的所有核心组件之间的通信。可以通过多种方式配置证书颁发机构（CA）和证书，但我们将演示使用
+    kubeadm 的方式，这是现场中最常见的方法（也是上游 Kubernetes 的事实标准安装方法）。
+- en: 'After installing a Kubernetes cluster, you typically get a kubeconfig file
+    with the `kubernetes-admin` user details. This file is essentially the root key
+    to the cluster. Usually, this kubeconfig file is called *admin.conf* and is similar
+    to this:'
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在安装 Kubernetes 集群后，通常会得到一个 kubeconfig 文件，其中包含`kubernetes-admin`用户的详细信息。这个文件本质上是集群的根密钥。通常，这个
+    kubeconfig 文件称为*admin.conf*，类似于这样：
+- en: '[PRE0]'
+  id: totrans-36
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'To determine the user that this will authenticate us to the cluster with, we
+    need to first base64 decode the `client-certificate-data` field and then display
+    the contents using something like `openssl`:'
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要确定将用于向集群进行身份验证的用户，我们需要首先对`client-certificate-data`字段进行 base64 解码，然后使用类似`openssl`的工具显示其内容：
+- en: '[PRE1]'
+  id: totrans-38
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: We see from the certificate that it was issued by the Kubernetes CA, and identifies
+    the User as `kubernetes-admin` (the subject `CN` field) in the `system:masters`
+    group. When using x509 certificates, any Organizations (O=) present are treated
+    by Kubernetes as groups that the user should be considered part of. We will discuss
+    some advanced methods around user and group configuration and permissions later
+    in this chapter.
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们从证书中看到，它是由 Kubernetes CA 签发的，并且在`system:masters`组中标识用户为`kubernetes-admin`（主题`CN`字段）。在使用
+    x509 证书时，任何存在的组织（O=）将被 Kubernetes 视为用户应该被视为其中一部分的组。我们将在本章后面讨论关于用户和组配置以及权限的一些高级方法。
+- en: In the preceding example we saw the default configuration for the `kubernetes-admin`
+    user, a reserved default name that enables cluster-wide administrative privileges.
+    It would also be useful to see how to configure the provisioning of certificates
+    to identify other regular system users who can then be given appropriate permissions
+    using the RBAC system. Provisioning and maintaining a large set of certificate
+    artifacts is an arduous task, but one that Kubernetes can help us with by using
+    some built-in resources.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在前面的示例中，我们看到了`kubernetes-admin`用户的默认配置，这是一个保留的默认名称，使其具有集群范围的管理特权。看看如何配置证书的配发以识别其他常规系统用户，并可以使用
+    RBAC 系统为他们分配适当的权限也会很有用。使用内置资源，Kubernetes 可以帮助我们进行证书工件的配发和维护，虽然这是一个艰巨的任务。
+- en: 'In order for the CSR flow described next to function correctly, the controller-manager
+    needs to be configured with the `--cluster-signing-cert-file` and `--cluster-signing-key-file`
+    parameters as shown here:'
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了使下面描述的 CSR 流程能够正常运行，控制器管理器需要配置`--cluster-signing-cert-file`和`--cluster-signing-key-file`参数，如下所示：
+- en: '[PRE2]'
+  id: totrans-42
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: Any entity with appropriate RBAC permissions can submit a Certificate Signing
+    Request object to the Kubernetes API. If a user should be able to *self submit*,
+    this means we need to provide a mechanism for the user to submit those requests.
+    One way of doing this is to explicitly configure permissions to allow the `system:anonymous`
+    User and / or `system:unauthenticated` group to submit and retrieve CSRs.
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 任何具有适当 RBAC 权限的实体都可以向 Kubernetes API 提交证书签名请求对象。如果用户应该能够*自行提交*，这意味着我们需要为用户提供提交这些请求的机制。一种做法是明确配置权限，允许`system:anonymous`用户和/或`system:unauthenticated`组提交和检索
+    CSR。
+- en: Without this, any unauthenticated user would by definition be unable to initiate
+    the process that would allow them to become authenticated. We should definitely
+    be wary of this approach, though, as we never want to give unauthenticated users
+    any access to the Kubernetes API server. A common way of providing self-service
+    for CSRs is therefore to provide a thin abstraction or portal on top of Kubernetes
+    that will run with the appropriate permissions. Users can log in to the portal
+    using some other credentials (usually SSO) and initiate this CSR flow (as shown
+    in [Figure 10-2](#csr_flow)).
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果没有这样做，任何未经身份验证的用户都基本上无法启动允许他们进行身份验证的流程。但是，我们应该谨慎对待这种方法，因为我们绝不希望向未经身份验证的用户提供访问Kubernetes
+    API服务器的权限。因此，为CSRs提供自服务的常见方法是，在Kubernetes之上提供一个薄抽象或门户，并具有适当的权限运行。用户可以使用其他凭据（通常是SSO）登录门户，并启动此CSR流程（如[图10-2](#csr_flow)所示）。
+- en: '![prku 1002](assets/prku_1002.png)'
+  id: totrans-45
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1002](assets/prku_1002.png)'
+- en: Figure 10-2\. CSR flow.
+  id: totrans-46
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图10-2\. CSR流程。
+- en: 'In this flow the user could generate a private key locally and then submit
+    this through the portal. Or, the portal could generate private keys for each user
+    and return them with the approved certificate to the user. Generation can be done
+    using `openssl` or any number of other tools/libraries. The CSR should contain
+    the metadata the user wants encoded into their x509 certificate, including their
+    user name and any additional groups they should be part of. The following example
+    creates a certificate request that identifies the user as *john*:'
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这种流程中，用户可以在本地生成私钥，然后通过门户提交。或者，门户可以为每个用户生成私钥，并在批准证书后将其返回给用户。生成可以使用`openssl`或任何其他工具/库进行。CSR应包含用户希望编码到其x509证书中的元数据，包括他们的用户名和任何其他应该成为一部分的组。以下示例创建一个证书请求，将用户标识为*john*：
+- en: '[PRE3]'
+  id: totrans-48
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'After generating the CSR we can submit it to the cluster via our portal in
+    a CertificateSigningRequest resource. Following is an example of the request as
+    a YAML object, but our portal would likely programatically apply this via the
+    Kubernetes API rather than constructing the YAML manually:'
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在生成CSR之后，我们可以通过我们的门户将其提交给集群中的CertificateSigningRequest资源。以下是请求的示例，作为YAML对象，但我们的门户通常会通过Kubernetes
+    API程序化地应用它，而不是手动构建YAML：
+- en: '[PRE4]'
+  id: totrans-50
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: This creates a CSR object in Kubernetes with a `pending` state, awaiting approval.
+    This CSR object contains the (base64-encoded) signing request and the username
+    of the requestor. If using a Service Account token to authenticate to the Kubernetes
+    API (as a Pod would in an automated flow), then the username will be the Service
+    Account name. In the following example, I was authenticated to the Kubernetes
+    API as the `kubernetes-admin` user and it appears in the Requestor field. If using
+    a portal we’d see the Service Account assigned to that portal component.
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这在Kubernetes中创建一个具有`pending`状态的CSR对象，等待批准。此CSR对象包含（base64编码的）签名请求和请求者的用户名。如果使用服务账户令牌进行身份验证访问Kubernetes
+    API（如Pod在自动化流程中会这样），则用户名将是服务账户名。在以下示例中，我作为`kubernetes-admin`用户通过Kubernetes API进行了认证，并显示在请求者字段中。如果使用门户，我们会看到分配给该门户组件的服务账户。
+- en: '[PRE5]'
+  id: totrans-52
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: While the request is pending, the user has not been granted any certificate.
+    The next stage involves a cluster administrator (or a user with appropriate permissions)
+    approving the CSR. This may also be automated if the user’s identity can be programatically
+    determined. Approval will issue a certificate back to the user that can be used
+    to assert identity on that Kubernetes cluster. For this reason, it’s important
+    to perform verification that the submitter of the request *is* who they claim
+    to be. This could be achieved by adding some additional identifying metadata to
+    the CSR and having an automated process validate the information against the claimed
+    identity, or by having an out-of-band process to verify the user’s identity.
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在请求待定时，用户尚未获得任何证书。下一阶段涉及集群管理员（或具有适当权限的用户）批准CSR。如果可以程序化确定用户的身份，批准也可能是自动化的。批准将向用户发放一个证书，用于在Kubernetes集群上声明身份。因此，执行验证提交请求者*是*其声称的身份非常重要。这可以通过向CSR添加一些额外的标识元数据，并通过自动化流程验证信息与声称的身份进行对比，或通过一个独立的流程验证用户的身份来实现。
+- en: 'Once the CSR has been approved, the certificate (in the `status` field of the
+    CSR) can be retrieved and used (in conjunction with their private key) for TLS
+    communications with the Kubernetes API. In our portal implementation, the CSR
+    would be pulled by the portal system and made available for the requesting user
+    once they log back in and recheck the portal:'
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦CSR被批准，证书（在CSR的`status`字段中）就可以被检索和使用（与它们的私钥一起）用于与Kubernetes API进行TLS通信。在我们的门户实现中，CSR将由门户系统拉取，并在用户重新登录并重新检查门户后为请求用户提供：
+- en: '[PRE6]'
+  id: totrans-55
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: 'When decoding the certificate we can see that it contains the relevant identity
+    information (*john*) in the CN field:'
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 解码证书时，我们可以看到它包含CN字段中的相关身份信息（*john*）：
+- en: '[PRE7]'
+  id: totrans-57
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: 'Finally, we can craft a kubeconfig containing our private key and the approved
+    certificate that will allow us to communicate with the Kubernetes API server as
+    the *john* user. The certificate we get back from the preceding CSR process goes
+    into the `client-certificate-data` field shown here in the kubeconfig:'
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，我们可以制作一个kubeconfig，其中包含我们的私钥和批准的证书，使我们能够作为*john*用户与Kubernetes API服务器通信。从前面的CSR流程中获得的证书将放入kubeconfig中显示的`client-certificate-data`字段：
+- en: '[PRE8]'
+  id: totrans-59
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: 'We have seen implementations of this model in the field whereby an automated
+    system provisions certificates based on some verifiable SSO credentials or other
+    authentication method. When automated, these systems can be successful, but we
+    do not recommend them. Relying on x509 certificates as a primary authentication
+    method for users of Kubernetes introduces a number of issues:'
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在现场看到这种模型的实施，其中自动化系统基于一些可验证的SSO凭据或其他认证方法提供证书。当自动化时，这些系统可能会成功，但我们不建议使用。将x509证书作为Kubernetes用户的主要认证方法会引入许多问题：
+- en: Certificates provisioned through the Kubernetes CSR flow cannot be revoked prior
+    to their expiry. There is currently no support for certificate revocation lists
+    of Online Certificate Status Protocol (OSCP) stapling in Kubernetes.
+  id: totrans-61
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 通过Kubernetes CSR流程提供的证书在到期之前无法吊销。目前在Kubernetes中没有支持证书吊销列表或在线证书状态协议(OSCP)装订的支持。
+- en: Additional PKI needs to be provisioned, supported, and maintained, in addition
+    to creating and maintaining a component responsible for provisioning certificates
+    based on external authentication.
+  id: totrans-62
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 需要额外的PKI进行提供、支持和维护，除了创建和维护负责基于外部认证提供证书的组件。
+- en: x509 certificates have expiry timestamps, and these should be kept relatively
+    short to reduce the risk should a pair (key/cert) be compromised. This short life
+    span means that there is a high churn in certificates, and these must be distributed
+    out to users regularly to ensure that consistent access to the cluster is maintained.
+  id: totrans-63
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: x509证书具有到期时间戳，应保持相对较短，以减少密钥/证书对被 compromise 的风险。这种短暂的生命周期意味着证书的大量更换，并且必须定期将其分发给用户，以确保对集群的持续访问。
+- en: There needs to be a way to verify the identity of anyone requesting a certificate.
+    In an automated system, you can engineer ways of doing this via externally verifiable
+    metadata. In the absence of such metadata, out-of-band verification is often too
+    time-consuming to be practical, especially given the short life span of certificates
+    as noted previously.
+  id: totrans-64
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 需要一种方式来验证任何请求证书的人的身份。在自动化系统中，可以通过外部可验证的元数据来设计此类验证方式。在缺乏此类元数据的情况下，离线验证通常太耗时，不实用，特别是考虑到先前提到的证书的短生命周期。
+- en: Certificates are are localized to one cluster. In the field we see many (10s–100s)
+    Kubernetes clusters across projects and groups. Requiring unique credentials for
+    each cluster multiplies the complexity of storing and maintaining the relevant
+    credentials. This leads to a degraded user experience.
+  id: totrans-65
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 证书局限于一个集群。在现场，我们看到许多（10至100个）Kubernetes集群跨项目和组存在。为每个集群需要独特的凭据会增加存储和维护相关凭据的复杂性。这导致用户体验下降。
+- en: Caution
+  id: totrans-66
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Remember that even when not using certificates as the primary authentication
+    method, you should still keep the *admin.conf* kubeconfig somewhere secure. If
+    for whatever reason other authentication methods become unavailable, this can
+    act as an admin break-glass solution to access the cluster.
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 即使不将证书作为主要认证方法，也要记住将*admin.conf* kubeconfig保存在安全的地方。如果由于某些原因其他认证方法不可用，这可以作为管理员备用解决方案来访问集群。
+- en: OpenID Connect (OIDC)
+  id: totrans-68
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: OpenID Connect (OIDC)
+- en: In our opinion, the best choice when setting up user authentication and identity
+    with Kubernetes is to integrate with an existing Single Sign-On system or provider.
+    Almost every organization already has a solution such as Okta, Auth0, Google,
+    or even internal LDAP/AD that provides a single place for users to authenticate
+    and gain access to internal systems. For something like authentication (where
+    security is a strong factor), outsourcing the complexity is a solid choice unless
+    you have very specialized requirements.
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们认为，在设置Kubernetes用户身份验证和身份时，最好的选择是与现有的单点登录系统或提供者集成。几乎每个组织都已经有了诸如Okta、Auth0、Google，甚至是内部LDAP/AD之类的解决方案，提供了一个统一的地方供用户进行身份验证并获得对内部系统的访问。对于像身份验证这样安全性是一个重要因素的情况，外包复杂性是一个稳妥的选择，除非您有非常专业的需求。
+- en: These systems have many advantages. They are built on well-understood and widely
+    supported standards. They consolidate all management of user accounts and access
+    to a single well-secured system, making maintenance and removal of accounts/access
+    straightforward. Additionally, when using the common OIDC framework, they also
+    allow users to access downstream applications without exposing credentials to
+    those systems. Another advantage is that many Kubernetes clusters across multiple
+    environments can leverage a single identity provider, reducing variance between
+    cluster configurations.
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些系统有很多优点。它们建立在广为人知和广泛支持的标准上。它们将用户帐户和对单个安全系统的访问的所有管理都集中到一个良好安全的系统中，使得维护和删除帐户/访问变得简单。此外，当使用通用OIDC框架时，它们还允许用户访问下游应用程序而不向这些系统暴露凭据。另一个优点是，许多跨多个环境的Kubernetes集群可以利用单个身份提供者，从而减少了集群配置之间的差异。
+- en: Kubernetes supports OIDC directly as an authentication mechanism (as shown in
+    [Figure 10-3](#oidc_flow)). If your organization is using an identity provider
+    that natively exposes the relevant OIDC endpoints, then configuring Kubernetes
+    to take advantage of this is straightforward.
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes直接支持OIDC作为认证机制（如[图10-3](#oidc_flow)所示）。如果您的组织本身就提供了相关OIDC端点，那么配置Kubernetes以利用这一点就很简单。
+- en: '![prku 1003](assets/prku_1003.png)'
+  id: totrans-72
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1003](assets/prku_1003.png)'
+- en: Figure 10-3\. OIDC flow. Reproduced from the [official Kubernetes documentation](https://oreil.ly/VZCz5).
+  id: totrans-73
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图10-3。OIDC流程。摘自[官方Kubernetes文档](https://oreil.ly/VZCz5)。
+- en: However, there are several scenarios where some extra tooling may be required
+    or desired to provide additional functionality or improve user experience. Firstly,
+    if your organization has multiple identity providers it is necessary to utilize
+    an OIDC aggregator. Kubernetes only supports defining a single identity provider
+    in its configuration options, and an OIDC aggregator is capable of acting as a
+    single intermediary to multiple other providers (either OIDC or other methods).
+    We have used Dex ([a sandbox project](https://oreil.ly/_maX6) within the Cloud
+    Native Computing Foundation) with success many times before, although other popular
+    options like Keycloak and UAA offer similiar functionality.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，在某些情况下，可能需要或期望使用一些额外的工具来提供附加功能或改善用户体验。首先，如果您的组织有多个身份提供者，则有必要使用OIDC聚合器。Kubernetes仅支持在其配置选项中定义单个身份提供者，而OIDC聚合器可以作为多个其他提供者（无论是OIDC还是其他方法）的单个中间人。我们以前在云原生计算基金会内使用过Dex（[一个沙盒项目](https://oreil.ly/_maX6)），并且取得了成功，尽管其他流行的选项如Keycloak和UAA也提供了类似的功能。
+- en: Caution
+  id: totrans-75
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意   注意
+- en: Remember that authentication is in the critical path to cluster access. Dex,
+    Keycloak, and UAA are all configurable to variable degrees and you should optimize
+    for availability and stability when implementing these solutions. These tools
+    are additional maintenance burdens and must be configured, updated, and secured.
+    In the field we always try to emphasize the need to understand and own any additional
+    complexity that is introduced to your environment and clusters.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请记住，身份验证是集群访问的关键路径。Dex、Keycloak和UAA都可以根据不同程度进行配置，当实施这些解决方案时，您应该优化可用性和稳定性。这些工具是额外的维护负担，必须进行配置、更新和保护。在实践中，我们总是强调理解和拥有您的环境和集群引入的任何额外复杂性的必要性。
+- en: While configuring the API server to utilize OIDC is straightforward, attention
+    must be given to providing a seamless user experience for the users of the cluster.
+    OIDC solutions will return a token identifying us (given a successful login);
+    however, we require a properly formatted kubeconfig in order to access and perform
+    operations on the cluster. When we hit this use case in the field early on, our
+    colleagues developed a simple web UI called Gangway to automate the process of
+    logging in through an OIDC provider and generating a conformant kubeconfig from
+    the returned token (complete with relevant endpoints and certificates).
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然配置 API 服务器以利用 OIDC 是直截了当的，但必须注意为集群用户提供无缝的用户体验。OIDC 解决方案将返回一个标识我们的令牌（在成功登录后）；然而，为了访问并在集群上执行操作，我们需要一个格式正确的
+    kubeconfig。当我们在现场遇到这种用例时，我们的同事开发了一个简单的 Web UI，称为 Gangway，用于通过 OIDC 提供者自动化登录过程，并从返回的令牌生成符合标准的
+    kubeconfig（包括相关的端点和证书）。
+- en: Despite OIDC being our preferred method of authentication, it does not suit
+    all cases, and secondary methods may be required. OIDC (as defined in the specification)
+    requires users to log in directly through the web interface of the identity provider.
+    This is for obvious reasons, to ensure the user is actually providing the credentials
+    only to the trusted provider and not to the consuming application. This requirement
+    can cause issues in the case where robot users require access to the system. This
+    is common for automated tooling like CI/CD systems and others who are unable to
+    respond to the web-based credential challenge.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管 OIDC 是我们首选的身份验证方法，但并不适用于所有情况，可能需要使用次要方法。OIDC（如规范中定义的）要求用户直接通过身份提供者的 Web 接口登录。这是为了明显的原因，以确保用户只向受信任的提供者提供凭据，而不是向消费应用程序提供。这种要求在机器人用户需要访问系统的情况下可能会引起问题。这对于自动化工具如
+    CI/CD 系统和其他无法响应基于 Web 的凭据挑战的系统是常见的。
+- en: 'In these cases, we have seen a couple of different models/solutions:'
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这些情况下，我们看到了几种不同的模型/解决方案：
+- en: In cases where robot users are tied to centrally managed accounts, it’s possible
+    to implement a kubectl authentication plug-in that would log in to the external
+    system and receive a token in response. Kubernetes can be configured to verify
+    this token via the webhook token authenticator method. This method will likely
+    require some custom coding to create the token generator/webhook server.
+  id: totrans-80
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在机器人用户绑定到集中管理的账户的情况下，可以实现一个 kubectl 认证插件，该插件会登录到外部系统并接收一个令牌作为响应。Kubernetes 可以配置以通过
+    webhook 令牌认证器方法验证此令牌。这种方法可能需要一些定制编码来创建令牌生成器/webhook 服务器。
+- en: For other cases, we have seen users fall back to using a certificate-based auth
+    for robot accounts that don’t need to be centrally managed. This of course means
+    you need to manage certificate issuance and rotation, but it doesn’t require any
+    custom components.
+  id: totrans-81
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 对于其他情况，我们看到用户回退到使用基于证书的身份验证，适用于不需要集中管理的机器人账户。当然，这意味着您需要管理证书的签发和轮换，但不需要任何定制组件。
+- en: Another manual but effective alternative solution is to create a Service Account
+    for the tool and utilize the token generated for API access. If the tool is running
+    *in* cluster it can use the credential directly mounted into the Pod. If the tool
+    is *outside* the cluster we can manually copy and paste the token into a secure
+    location accessible by the tool and utilize that when making kubectl or API calls.
+    Service Accounts are covered in more detail in [“Service Account Tokens (SAT)”](#service_account_tokens).
+  id: totrans-82
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 另一个手动但有效的替代解决方案是为工具创建一个服务账户，并利用为 API 访问生成的令牌。如果工具在集群内运行，它可以直接使用挂载到 Pod 中的凭据。如果工具在集群外运行，我们可以手动复制并粘贴令牌到工具可访问的安全位置，并在进行
+    kubectl 或 API 调用时使用。服务账户的更多细节在 [“Service Account Tokens (SAT)”](#service_account_tokens)
+    中有详细介绍。
+- en: Implementing Least Privilege Permissions for Users
+  id: totrans-83
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 为用户实施最小特权权限
+- en: Now that we’ve seen the different ways it’s possible to implement identity and
+    authentication, let’s turn to the related topic of authorization. It’s out of
+    scope for this book to go deep into how you should be configuring RBAC across
+    your clusters. This will likely vary significantly between applications, environments,
+    and teams. However, we do want to describe a pattern we’ve implemented successfully
+    in the field around the principle of least privilege when designing administrative
+    access roles.
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经看到了实现身份验证和认证的不同方式，让我们转向授权的相关主题。在本书的范围之外深入讨论如何配置跨集群的RBAC不是我们的目的。这将在应用程序、环境和团队之间有显著差异。然而，我们确实想描述一种成功实施的模式，围绕最小权限原则设计管理访问角色。
+- en: Whether you have chosen to go with a cluster-per-team approach, or a multitenant
+    cluster approach, you will likely have *super-admin* users on the operations team
+    who are responsible for configuring, upgrading, and maintaining the environment.
+    While individual teams should have restricted permissions based on the access
+    they require, these admins will have full reign over the entire cluster and therefore
+    greater potential to accidentally perform destructive actions.
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 无论您选择了每个团队一个集群的方法还是多租户集群的方法，您都可能在操作团队上有*超级管理员*用户，负责配置、升级和维护环境。尽管个别团队应根据其所需的访问权限进行限制，这些管理员将对整个集群拥有完全控制权，因此更有可能意外执行破坏性操作。
+- en: In an ideal world, all cluster access and operations would be performed by an
+    automated process—GitOps or something similar, perhaps. However, practically speaking,
+    we regularly see users individually accessing clusters and found the following
+    pattern to be an effective way to limit potential issues. It is tempting to bind
+    an administrator role to a particular operator’s username/identity directly, only
+    for them to delete something important while mistakenly having loaded the wrong
+    kubeconfig, for example. It should never happen until it does!
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在理想情况下，所有集群访问和操作都应由自动化流程（如GitOps或类似工具）执行。然而，从实际操作角度来看，我们经常看到用户单独访问集群，并发现以下模式是限制潜在问题的有效方式。有时候，将管理员角色直接绑定到特定操作员的用户名/身份上是很诱人的，但可能因为加载了错误的kubeconfig而误删重要内容。在此之前，这种情况不应该发生，但却经常发生！
+- en: Kubernetes supports the concept of *impersonation*, and with this we can create
+    an experience that behaves closely to *sudo* on Linux systems by restricting the
+    default permissions of the user and requiring them to elevate permissions to perform
+    sensitive commands. Practically speaking, we want to enable these users to view
+    everything by default but deliberately elevate their privileges to be able to
+    write. This model significantly reduces the chances of the preceding scenario
+    occurring.
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes支持*模拟（impersonation）*的概念，通过这种方式，我们可以创建一个行为与Linux系统上的*sudo*非常接近的体验，通过限制用户的默认权限并要求他们提升权限来执行敏感命令。从实际操作角度来看，我们希望这些用户默认情况下可以查看所有内容，但必须有意提升权限才能进行写操作。这种模式显著降低了发生上述情况的可能性。
+- en: Let’s work through how you might implement the privilege elevation pattern just
+    described. We’ll assume that our operations team’s user identities are all part
+    of an `ops-team` group in Kubernetes. As mentioned earlier, Kubernetes has no
+    defined concept of a group per se, so we mean that those users all have additional
+    attributes in their Kubernetes identity (x509 cert, OIDC claim, etc.) that identify
+    them as being part of the group.
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们详细讨论一下如何实现刚才描述的权限提升模式。我们假设我们操作团队的用户身份都是Kubernetes中`ops-team`组的一部分。正如前面提到的，Kubernetes本身没有定义组的概念，所以我们指的是那些在其Kubernetes身份中具有额外属性（如x509证书、OIDC声明等）以标识他们属于该组的用户。
+- en: 'We create the ClusterRoleBinding that allows users in the `ops-team` group
+    access to the `view` built-in ClusterRole, which is what gives us our default
+    read-only access:'
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们创建了ClusterRoleBinding，允许`ops-team`组的用户访问`view`内置ClusterRole，这是我们默认只读访问的基础：
+- en: '[PRE9]'
+  id: totrans-90
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: 'Now we create a ClusterRoleBinding to allow our `cluster-admin` user to have
+    `cluster-admin` ClusterRole permissions on the cluster. Remember, we’re not binding
+    this ClusterRole directly to our `ops-team` group. No user can *directly* identify
+    as the `cluster-admin` user; this will be a user that is *impersonated* and their
+    permissions *assumed* by another authenticated user:'
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们创建一个 ClusterRoleBinding，允许我们的 `cluster-admin` 用户在集群上拥有 `cluster-admin` ClusterRole
+    权限。请记住，我们不直接将此 ClusterRole 绑定到我们的 `ops-team` 组。没有用户可以直接标识为 `cluster-admin` 用户；这将是一个被模拟的用户，并且他们的权限将被另一个经过身份验证的用户*假定*。
+- en: '[PRE10]'
+  id: totrans-92
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: 'Finally, we create a ClusterRole called `cluster-admin-impersonator` that allows
+    the impersonation of the `cluster-admin` user, and a ClusterRoleBinding that binds
+    that capability to everyone in the `ops-team` group:'
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，我们创建一个名为 `cluster-admin-impersonator` 的 ClusterRole，允许模拟 `cluster-admin`
+    用户，并创建一个 ClusterRoleBinding，将该功能绑定到 `ops-team` 组中的每个人：
+- en: '[PRE11]'
+  id: totrans-94
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: 'Now let’s use a kubeconfig for a user (john) in the `ops-team` group to see
+    how the elevation of privileges works in practice:'
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在让我们使用 `ops-team` 组中的用户（john）的 kubeconfig，看看特权的提升在实践中如何运作：
+- en: '[PRE12]'
+  id: totrans-96
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: We used the preceding setup for admin users, although implementing something
+    similiar for every user (having a *team-a* group, a *team-a* view role, and a
+    *team-a* admin user) is a solid pattern that removes a lot of the potential for
+    costly mistakes. Additionally, one of the great things about the impersonation
+    approach just described is that all of this is played out in the Kubernetes audit
+    logs, so we can see the original user log in, impersonate the cluster-admin, and
+    then take action.
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们使用前述设置用于管理员用户，尽管为每个用户实施类似的模式（拥有 *team-a* 组、*team-a* 视图角色和 *team-a* 管理员用户）是一种可靠的模式，可以消除许多潜在的昂贵错误。此外，刚才描述的模仿方法的一大优点是，所有这些都记录在
+    Kubernetes 审计日志中，因此我们可以看到原始用户登录，模拟集群管理员，然后采取行动。
+- en: Application/Workload Identity
+  id: totrans-98
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 应用程序/工作负载身份
+- en: 'In the previous section, we saw the main methods and patterns for establishing
+    the identity of human users of Kubernetes, and how they can authenticate to the
+    cluster. In this section, we’re going to take at look how we can establish identity
+    for our workloads that run in the cluster. There are three main use cases we’ll
+    be examining:'
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在前一节中，我们看到了 Kubernetes 的人类用户建立身份的主要方法和模式，以及他们如何对集群进行身份验证。在这一节中，我们将看看如何为在集群中运行的工作负载建立身份。我们将检查三个主要的用例：
+- en: Workloads identifying themselves to other workloads within the cluster, to potentially
+    establish a mutual authentication between them for additional security.
+  id: totrans-100
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 工作负载将自己标识给集群内的其他工作负载，可能为它们之间建立互相认证以提供额外的安全性。
+- en: Workloads identifying themselves to obtain appropriate access to the Kubernetes
+    API itself. This is a common use case for custom controllers that need to watch
+    and act on Kubernetes resources.
+  id: totrans-101
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 工作负载标识自身以获得适当的访问 Kubernetes API 本身。这是自定义控制器常见的用例，需要监视和操作 Kubernetes 资源。
+- en: Workloads identifying themselves and authenticating to external services. This
+    could be anything outside of the cluster but will be primarily cloud vendor services
+    running on AWS, GCP, etc.
+  id: totrans-102
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 工作负载标识自身并向集群外部的服务进行身份验证。这可能是集群外的任何内容，但主要是运行在 AWS、GCP 等上的云供应商服务。
+- en: In [“Network Identity”](#networking), we’ll look at two of the most popular
+    Container Networking Interface (CNI) tools (Calico and Cilium) and see how they
+    can assign identity and restrict access, primarily for the first use case we just
+    described.
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 [“网络身份”](#networking) 中，我们将看看两种最流行的容器网络接口（CNI）工具（Calico 和 Cilium），并看看它们如何分配身份和限制访问，主要用于我们刚刚描述的第一个用例。
+- en: Secondly, we’ll move on to service account tokens (SAT) and projected service
+    account tokens (PSAT). These are flexible and important Kubernetes primitives
+    that enable workload-to-workload identity (the first use case) in addition to
+    being the primary mechanism for workloads identifying to the Kubernetes API itself
+    (the second use case).
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 其次，我们将转向服务账户令牌（SAT）和预计服务账户令牌（PSAT）。这些是灵活且重要的 Kubernetes 原语，除了是工作负载之间身份识别（第一个用例）的主要机制外，还是工作负载向
+    Kubernetes API 本身标识的主要机制（第二个用例）。
+- en: Next we’ll cover options where an application’s identity is provided by the
+    platform itself. The most common use case we see in the field is workloads that
+    need access to AWS services, and we’ll look at the three main methods that are
+    possible today.
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来我们将讨论应用程序身份由平台本身提供的选项。我们在现场看到的最常见用例是需要访问 AWS 服务的工作负载，并且我们将看看今天可能的三种主要方法。
+- en: Lastly, we’ll extend the concept of platform-mediated identity to consider tooling
+    that aims to provide a consistent model of identity across multiple platforms
+    and environments. The flexibility of this approach can be used to cover all of
+    the use cases we mentioned, and we’ll show how this can be a very powerful capability.
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，我们将扩展平台中介的身份概念，考虑旨在在多个平台和环境中提供一致身份模型的工具。这种方法的灵活性可以用来涵盖我们提到的所有用例，并展示这是一个非常强大的能力。
+- en: Before implementing any of the patterns described in this section you should
+    definitely evaluate your requirements as they relate to establishing workload-to-workload
+    identity. Often, establishing this capability is an advanced-level activity, and
+    the majority of organizations may not need to solve this topic, at least initially.
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在实施本节描述的任何模式之前，您应该确实评估与建立工作负载身份相关的需求。通常，建立这种能力是一项高级活动，大多数组织可能最初不需要解决这个问题。
+- en: Shared Secrets
+  id: totrans-108
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 共享密钥
+- en: Most of the discussion around shared secrets for user identity also applies
+    to application identity; however, there are some additional nuances and guidance
+    based on field experience.
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大多数关于用户身份共享密钥的讨论也适用于应用程序身份；然而，基于现场经验，还有一些额外的细微差别和指导。
+- en: Once we have secrets in place that are known by the client and the server, how
+    do we safely rotate them upon expiry? Ideally we want these secrets to have a
+    fixed life span to mitigate the potential damage caused if one were to be compromised.
+    Additionally, because they are *shared*, they need to be redistributed to both
+    the client application and the server. Hashicorp’s Vault is a prominent example
+    of an enterprise secret store and features integrations with many tools that get
+    close to the goal of solving this re-syncing problem. However, Vault also suffers
+    from the secure introduction problem we first encountered in [“User Identity”](#user_identity).
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦我们在客户端和服务器上有已知的密钥，我们如何在到期时安全地旋转它们？理想情况下，我们希望这些密钥有一个固定的生命周期，以减少如果某个密钥被破坏可能造成的潜在损害。此外，因为它们是*共享*的，它们需要重新分发到客户端应用程序和服务器上。Hashicorp
+    的 Vault 是一个著名的企业秘密存储示例，具有与许多解决此重新同步问题的工具集成。然而，Vault 也受到我们在 [“用户身份”](#user_identity)
+    中首次遇到的安全引入问题的困扰。
+- en: This is the problem we have when trying to ensure that a shared secret is securely
+    distributed to both the client and the serving entity *before* we have any model
+    of identity and authentication established (the chicken and the egg). Any attempt
+    to initially seed a secret between two entities could be compromised, breaking
+    our guarantee of identity and unique authentication.
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是我们在试图确保共享密钥在我们建立身份和认证模型之前（鸡和蛋问题）安全分发到客户端和服务实体的问题。任何尝试在两个实体之间最初种子化密钥的行为都可能被破坏，打破了我们对身份和独特认证的保证。
+- en: Despite the flaws already discussed, shared secrets have one strong advantange
+    in that it is a model that is well supported and understood by almost all users
+    and applications. This makes it a strong choice for cross-platform operability.
+    We will see how to solve the secure introduction problem for Vault and Kubernetes
+    with more advanced methods of authentication later in this chapter. Once Vault
+    is securely configured with those methods, it is a fine choice (and one we have
+    implemented many times) as many of the issues with shared secrets are mitigated.
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管已经讨论了缺陷，共享密钥在一个方面具有强大的优势，即几乎所有用户和应用程序都支持并理解该模型。这使得它成为跨平台操作的强大选择。我们将在本章后面看到如何通过更高级的身份验证方法来解决
+    Vault 和 Kubernetes 的安全引入问题。一旦 Vault 使用这些方法进行了安全配置，它就是一个很好的选择（我们已经多次实施过），因为许多共享密钥的问题都得到了缓解。
+- en: Network Identity
+  id: totrans-113
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 网络身份
+- en: Network primitives like IP addresses, VPNs, firewalls, etc., have historically
+    been used as a form of identity for controlling which applications have access
+    to what services. However, in a cloud native ecosystem these methods are breaking
+    down and paradigms are changing. In our experience it is important to educate
+    teams across the organization (especially networking and security) on these changes
+    and how practices can (and should) adapt to embrace and accommodate them. Too
+    often this is met with resistance around concerns over security and/or control.
+    In reality it’s possible to achieve almost any posture if required, and time should
+    be taken to understand the *actual requirements* of the teams, rather than getting
+    stuck in implementation details.
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 网络原语，如IP地址、VPN、防火墙等，历来被用作控制应用程序对各种服务访问权限的一种形式。然而，在云原生生态系统中，这些方法正在失效，范式也在发生变化。根据我们的经验，教育整个组织的团队（尤其是网络和安全团队）了解这些变化，以及如何调整实践来适应和接纳这些变化至关重要。但往往会遇到团队对安全性和/或控制方面的担忧而产生抵制。实际上，如果有必要，几乎可以实现任何姿态，但需要花时间了解团队的*实际需求*，而不是陷入实施细节中。
+- en: In container-based environments, workloads share networking stacks and underlying
+    machines. Workloads are increasingly ephemeral and move between nodes often. This
+    results in a constant churn of IP addresses and network changes.
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在基于容器的环境中，工作负载共享网络堆栈和基础设备。工作负载日益短暂，经常在节点之间移动。这导致IP地址和网络变化的不断变动。
+- en: In a multicloud and API-driven world, the network is no longer a primary boundary.
+    Calls commonly occur to external services across multiple providers, each of which
+    may need a way to prove identity of our calling applications.
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在多云和API驱动的世界中，网络不再是主要边界。常见情况是跨多个提供商对外部服务进行调用，每个提供商可能需要一种方式来证明我们调用应用程序的身份。
+- en: Existing traditional (platform level) network primitives (host IP addresses,
+    firewalls, etc.) are no longer suitable for establishing workload identity and,
+    if used at all, should be used only as an additional layer of defense in depth.
+    This is not to say that network primitives *in general* are bad but that they
+    must have additional workload context to be effective. In this section we’ll look
+    at how CNI options provide degrees of identity for Kubernetes clusters and how
+    best to leverage them. CNI providers are able to contextualize requests and provide
+    identity by combining network primitives and metadata retrieved from the Kubernetes
+    API. We’ll take a brief look at some of the most popular CNI implementations and
+    see what capabilities can they can provide.
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现有的传统（平台级别）网络原语（主机IP地址、防火墙等）已不再适用于建立工作负载身份，如有使用，也只应作为深度防御的附加层次。这并不是说网络原语*总体上*不好，而是它们必须具有额外的工作负载上下文才能发挥作用。在本节中，我们将探讨CNI选项如何为Kubernetes集群提供身份，并如何最好地利用它们。通过结合从Kubernetes
+    API检索的网络原语和元数据，CNI提供者能够对请求进行上下文化处理并提供身份。我们将简要介绍一些最流行的CNI实现，并看看它们能提供哪些功能。
+- en: Calico
+  id: totrans-118
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: Calico
+- en: '[Calico](https://www.projectcalico.org) provides network policy enforcement
+    at layers 3 (Network) and 4 (Transport) of the OSI Model, enabling users to restrict
+    communication between Pods based on their Namespace, labels, and other metadata.
+    This enforcement is all enabled by modifying the network configuration `iptables`/`ipvs`)
+    to allow/disallow IP addresses.'
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Calico](https://www.projectcalico.org)在OSI模型的第3层（网络层）和第4层（传输层）提供网络策略强制执行，使用户能够基于它们的命名空间、标签和其他元数据限制Pod之间的通信。此强制执行是通过修改网络配置（如`iptables`/`ipvs`）来允许/禁止IP地址来实现的。'
+- en: Calico also supports making policy decisions based on Service Accounts using
+    a component called Dikastes when used in combination with [Envoy proxy](https://www.envoyproxy.io)
+    (either standalone Envoy or deployed as part of a service mesh like [Istio](https://istio.io)).
+    This approach enables enforcement at layer 7 (Application), based on attributes
+    of the application protocol (headers, etc.) and relevant cryptographic identities
+    (certificates, etc.).
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当与[Envoy代理](https://www.envoyproxy.io)（无论是独立的Envoy还是作为服务网格（如[Istio](https://istio.io)）的一部分部署）结合使用时，Calico还支持使用称为Dikastes的组件基于服务账户做出策略决策。此方法使得能够基于应用程序协议的属性（如头部等）和相关的加密身份（证书等），在第7层（应用层）执行强制执行。
+- en: 'By default, Istio (Envoy) will only perform mTLS and ensure that workloads
+    present certificates signed by the Istio CA (Citadel). Dikastes runs as a sidecar
+    alongside Envoy as a plug-in, as we can see in the architecture diagram in [Figure 10-3](#oidc_flow).
+    Envoy verifies the CA before consulting Dikastes for a decision on whether to
+    admit or reject the request. Dikastes makes this decision based on user-defined
+    Calico NetworkPolicy or GlobalNetworkPolicy objects:'
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，Istio（Envoy）只会执行 mTLS 并确保工作负载呈现由 Istio CA（Citadel）签名的证书。Dikastes 作为 Envoy
+    的插件以 sidecar 形式运行，正如我们可以在 [Figure 10-3](#oidc_flow) 中的架构图中看到的那样。Envoy 在查询 Dikastes
+    决定是否接受或拒绝请求之前会验证 CA。Dikastes 基于用户定义的 Calico NetworkPolicy 或 GlobalNetworkPolicy
+    对象作出决策：
+- en: '[PRE13]'
+  id: totrans-122
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: 'The preceding rule is specifying that the policy be applied to any Pods with
+    the label `app: summary` and restricts access to Pods calling from the `customer`
+    Service Account (in Namespaces with the label `app: bank`). This works because
+    the Calico control plane (the Felix node agent) computes rules by reconciling
+    Pods that are running under a specific Service Account with their IP addresses
+    and subsequently syncing this information to Dikastes via a Unix socket.'
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '前述规则指定该策略适用于任何带有标签 `app: summary` 的 Pod，并限制了从 `customer` Service Account 调用的
+    Pod 的访问权限（在带有标签 `app: bank` 的 Namespace 中）。这有效是因为 Calico 控制平面（Felix 节点代理）通过协调正在特定
+    Service Account 下运行的 Pod 及其 IP 地址来计算规则，随后通过 Unix 套接字将此信息同步到 Dikastes。'
+- en: This out-of-band verification is important as it mitigates a potential attack
+    vector in an Istio environment. Istio stores each Service Account’s PKI assets
+    in a Secret in the cluster. Without this additional verification, an attacker
+    who was able to steal that Secret would be able to masquerade as the asserted
+    Service Account (by presenting those PKI assets), even though it may not be running
+    as that account.
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种离线验证在 Istio 环境中尤为重要，因为它有助于减轻潜在的攻击向量。Istio 将每个 Service Account 的 PKI 资产存储在集群中的一个
+    Secret 中。如果没有这种额外验证，攻击者如果能够窃取该 Secret，就能够伪装成所断言的 Service Account（通过展示这些 PKI 资产），尽管可能并非以该账户的身份运行。
+- en: '![prku 1004](assets/prku_1004.png)'
+  id: totrans-125
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1004](assets/prku_1004.png)'
+- en: Figure 10-4\. Architecture diagram using Dikastes with Envoy.
+  id: totrans-126
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 10-4\. 使用 Envoy 的 Dikastes 架构图。
+- en: If your team is leveraging Calico already, then Dikastes can provide an extra
+    layer of defense in depth and should definitely be considered. However, it requires
+    Istio or some other mesh solution (e.g., standalone Envoy) to be available and
+    running in the environment to validate the identity presented by the workload.
+    These claims are not independently cryptographically verifiable, relying on the
+    mesh to be present with every connected Service. This in itself adds a nontrivial
+    level of complexity, and the trade-offs should be carefully evaluated. One strength
+    of this approach is that Calico and Istio are both cross-platform, so this setup
+    could be used to establish identity for applications running both on and off Kubernetes
+    within an environment (whereas some options we’ll see are Kubernetes-only).
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您的团队已经在使用 Calico，那么 Dikastes 可以在深度防御中提供额外的安全层，绝对值得考虑。然而，这需要 Istio 或其他类似的服务网格解决方案（例如独立的
+    Envoy）在环境中可用并运行，以验证工作负载所呈现的身份。这些主张无法独立进行加密验证，而是依赖于网格与每个连接的服务的存在。这本身增加了相当大的复杂性，应仔细评估其权衡。这种方法的一个优势是
+    Calico 和 Istio 都是跨平台的，因此此设置可用于在环境内运行的 Kubernetes 应用程序的身份验证（而某些选项则仅适用于 Kubernetes）。
+- en: Cilium
+  id: totrans-128
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: Cilium
+- en: Like Calico, [Cilium](https://docs.cilium.io) also provides network policy enforcement
+    at layers 3 and 4, enabling users to restrict communication between Pods based
+    on their Namespace and other metadata (labels, for example). Cilium also supports
+    (without additional tooling) the ability to apply policy at layer 7 and restrict
+    access to Services via Service Accounts.
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 像 Calico 一样，[Cilium](https://docs.cilium.io) 也提供第 3 和第 4 层的网络策略执行，使用户能够根据其 Namespace
+    和其他元数据（例如标签）限制 Pod 之间的通信。Cilium 还支持在第 7 层应用策略，并通过 Service Account 限制对服务的访问，而无需额外的工具支持。
+- en: Unlike Calico, enforcement in Cilium is not based on IP address (and updating
+    node networking configurations). Instead, Cilium calculates identities for each
+    unique Pod/endpoint (based on a number of selectors) and encodes these identities
+    into each packet. It then enforces whether packets should be allowed based on
+    these identities using [eBPF](https://oreil.ly/Jl9yw) kernel hooks at various
+    points in the datapath.
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与 Calico 不同，Cilium 中的执行并不基于 IP 地址（和更新节点网络配置）。相反，Cilium 为每个唯一的 Pod/端点（基于多个选择器）计算身份，并将这些身份编码到每个数据包中。然后，它使用
+    [eBPF](https://oreil.ly/Jl9yw) 内核钩子在数据路径的各个点上根据这些身份来执行是否允许数据包通过。
+- en: Let’s briefly explore how Cilium calculates identities for an endpoint (Pod).
+    The output of listing Cilium endpoints for an application is shown in the following
+    code. We have omitted the list of labels in the snippet but have added an additional
+    label to the last Pod in the list (`deathstar-657477f57d-zzz65`) that is not present
+    on the other four Pods. As a result of this, we can see that the last Pod is therefore
+    assigned a *different* identity to the previous four. Aside from that single differing
+    label, all the Pods in the Deployment share a Namespace, Service Account, and
+    several other arbitrary Kubernetes labels.
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们简要探讨一下 Cilium 如何计算端点（Pod）的身份。以下是列出一个应用程序的 Cilium 端点的输出代码。我们省略了片段中的标签列表，但在列表的最后一个
+    Pod (`deathstar-657477f57d-zzz65`) 中添加了一个额外的标签，这个标签在其他四个 Pod 中不存在。因此，我们可以看到最后一个
+    Pod 因此被分配了一个*不同*的身份。除了这个单一不同的标签外，部署中的所有 Pod 都共享一个命名空间、服务账户和几个其他任意的 Kubernetes
+    标签。
+- en: '[PRE14]'
+  id: totrans-132
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: If we removed the divergent label, the `deathstar-657477f57d-zzz65` Pod would
+    be reassigned the same identity as its four peers. This level of granularity gives
+    us a lot of power and flexibility when assigning identities to individual Pods.
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果我们移除了不同的标签，`deathstar-657477f57d-zzz65` Pod 将被重新分配与其四个同行相同的身份。这种粒度的控制赋予了我们在为单个
+    Pod 分配身份时的强大和灵活性。
+- en: 'Cilium implements the Kubernetes-native NetworkPolicy API, and like Calico
+    also exposes more fully featured capabilities in the form of CiliumNetworkPolicy
+    and CiliumClusterwideNetworkPolicy objects:'
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Cilium 实现了 Kubernetes 本机的 NetworkPolicy API，并像 Calico 一样以 CiliumNetworkPolicy
+    和 CiliumClusterwideNetworkPolicy 对象的形式公开了更完整的功能：
+- en: '[PRE15]'
+  id: totrans-135
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: In this example, we are using special `io.cilium.k8s.policy.*` label selectors
+    to target specific Service Accounts in the cluster. Cilium then uses its registry
+    of identities (that we saw previously) to restrict/allow access as necessary.
+    In the policy shown, we are restricting access to the path `/public` on port 80
+    for Pods with the `leia` Service Account. We are allowing access only from Pods
+    with the `luke` Service Account.
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这个例子中，我们使用特殊的 `io.cilium.k8s.policy.*` 标签选择器来定位集群中特定的 Service Account。然后，Cilium
+    使用其身份注册表（我们之前看到的）根据需要限制/允许访问。在所示的策略中，我们限制了对具有 `leia` Service Account 的 Pod 在端口
+    80 上 `/public` 路径的访问。我们只允许来自具有 `luke` Service Account 的 Pod 的访问。
+- en: Like Calico, Cilium is cross-platform so can be used across Kubernetes and non-Kubernetes
+    environments. Cilium *is* required to be present with every connected Service
+    for identities to be verifiable, so the overall complexity of your networking
+    setup can increase with this approach. However, Cilium doesn’t require a service
+    mesh component to operate.
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与 Calico 一样，Cilium 是跨平台的，因此可以在 Kubernetes 和非 Kubernetes 环境中使用。Cilium *需要* 在每个连接的服务中存在以验证身份，因此您的网络设置的整体复杂性可能会因此增加。但是，Cilium
+    不需要服务网格组件来运行。
+- en: Service Account Tokens (SAT)
+  id: totrans-138
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Service Account Tokens (SAT)
+- en: Note
+  id: totrans-139
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Service Accounts are primitives in Kubernetes that provide identity for groups
+    of Pods. Every Pod runs under a Service Account. If a Service Account is not pre-created
+    by an administrator and assigned to a Pod, they are assigned a default Service
+    Account for the Namespace they reside in.
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Service Account 是 Kubernetes 中为一组 Pod 提供身份的基元。每个 Pod 都在一个 Service Account 下运行。如果管理员没有预先创建并分配给
+    Pod 的 Service Account，则它们将被分配到所在命名空间的默认 Service Account。
+- en: Service Account tokens are JSON Web Tokens (JWT) that are created as Kubernetes
+    Secrets. Each Service Account (including the default Service Account) has a corresponding
+    Secret that contains the JWT. Unless otherwise specified, these tokens are mounted
+    into each Pod running under that Service Account and can be used to make requests
+    to the Kubernetes API (and as this section shows, other services).
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Service Account tokens 是作为 Kubernetes Secrets 创建的 JSON Web Tokens (JWT)。每个 Service
+    Account（包括默认的 Service Account）都有一个相应的 Secret，其中包含 JWT。除非另有规定，否则这些令牌被挂载到每个在该 Service
+    Account 下运行的 Pod 中，并可用于向 Kubernetes API（以及本节显示的其他服务）发出请求。
+- en: 'Kubernetes Service Accounts provide a way of assigning identity to a set of
+    workloads. Role-Based Access Control (RBAC) rules then can be applied within the
+    cluster to limit the scope of access for a specific Service Account. Service Accounts
+    are the way that Kubernetes itself usually authenticates in-cluster access to
+    the API:'
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes服务账户为一组工作负载分配身份提供了一种方式。然后，在集群内可以应用基于角色的访问控制（RBAC）规则来限制特定服务账户的访问范围。服务账户通常是Kubernetes自身在集群内部身份验证API访问的方式：
+- en: '[PRE16]'
+  id: totrans-143
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: 'When a Service Account is created, an associated Secret is also created containing
+    a unique JWT identifying the account:'
+  id: totrans-144
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当创建服务账户时，还会创建一个相关的秘密，其中包含标识该账户的唯一JWT：
+- en: '[PRE17]'
+  id: totrans-145
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: By default, Pods will automatically get the `default` Service Account token
+    for their Namespace mounted if they do not specify a specific Service Account
+    to use. This can (and should) [be disabled](https://oreil.ly/kX5mI) to ensure
+    that all Service Account tokens are explicitly mounted to Pods and their access
+    scopes are well understood and defined (rather than falling back and assuming
+    a default).
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，如果Pod未指定要使用的特定服务账户，则Pod将自动获取其命名空间中的`default`服务账户令牌挂载。为确保所有服务账户令牌都明确挂载到Pod并且其访问范围被明确定义和理解（而不是回退并假设默认值），可以（而且应该）[禁用](https://oreil.ly/kX5mI)此功能。
+- en: 'To specify a Service Account for a Pod, use the `serviceAccountName` field
+    in the Pod spec:'
+  id: totrans-147
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要为Pod指定服务账户，请在Pod规范的`serviceAccountName`字段中使用：
+- en: '[PRE18]'
+  id: totrans-148
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: This will cause the Service Account’s Secret (containing the token) to be mounted
+    into the Pod at `/var/run/secrets/kubernetes.io/serviceaccount/`. The application
+    can retrieve the token and use it in a request to other applications/services
+    in the cluster.
+  id: totrans-149
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这将导致服务账户的秘密（包含令牌）被挂载到Pod的`/var/run/secrets/kubernetes.io/serviceaccount/`目录中。应用程序可以检索令牌并在集群中向其他应用程序/服务发出请求。
+- en: 'The destination application can verify the provided token by calling the Kubernetes
+    `TokenReview` API:'
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 目标应用程序可以通过调用Kubernetes `TokenReview` API来验证提供的令牌：
+- en: '[PRE19]'
+  id: totrans-151
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: '[![1](assets/1.png)](#co_identity_CO1-1)'
+  id: totrans-152
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_identity_CO1-1)'
+- en: This token is the Secret mounted into the destination application’s Pod, allowing
+    it to communicate with the API server.
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此令牌是挂载到目标应用程序Pod中的秘密，使其能够与API服务器通信。
+- en: '[![2](assets/2.png)](#co_identity_CO1-2)'
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_identity_CO1-2)'
+- en: This token is the one the calling application has presented as proof of identity.
+  id: totrans-155
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此令牌是调用应用程序呈现作为身份证明的令牌。
+- en: 'The Kubernetes API will respond with metadata about the token to be verified,
+    in addition to whether or not it has been authenticated:'
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes API将响应关于要验证的令牌的元数据，以及是否已经验证过的信息：
+- en: '[PRE20]'
+  id: totrans-157
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: The preceding flow is shown in [Figure 10-5](#service_account_tokens_fig).
+  id: totrans-158
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 上述流程显示在[图10-5](#service_account_tokens_fig)中。
+- en: '![prku 1005](assets/prku_1005.png)'
+  id: totrans-159
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1005](assets/prku_1005.png)'
+- en: Figure 10-5\. Service Account tokens.
+  id: totrans-160
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图10-5\. 服务账户令牌。
+- en: Service Account tokens have been part of Kubernetes since very early on and
+    provide a tight integration with the platform in a consumable format (JWT). We
+    as operators also have a fairly tight control on their validity as tokens are
+    invalidated if the Service Account or Secret is deleted. However, they have some
+    features that make their use as identifiers suboptimal. Most importantly, the
+    tokens are scoped to a specific Service Account, so are unable to validate anything
+    with a more granular scope, for example a Pod or a single container. We also need
+    to add functionality to our applications if we want to use and verify tokens as
+    a form of client identity. This involves calling the TokenReview API with some
+    custom component.
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes服务账户令牌自早期以来就是Kubernetes的一部分，并以可消耗的JWT格式与平台紧密集成。作为操作员，我们对其有效性也有相当严格的控制，因为如果删除服务账户或秘密，则会使令牌无效。但是，它们有一些特性使其作为标识符的使用不够理想。最重要的是，这些令牌仅限于特定服务账户的范围，因此无法验证更精细的范围内的任何内容，例如Pod或单个容器。如果要使用和验证令牌作为客户端身份的形式，则还需要向我们的应用程序添加功能，包括使用自定义组件调用TokenReview
+    API。
+- en: Tokens are also scoped to a single cluster, so we’re not able to use Service
+    Account tokens issued by one cluster as identity documents for services calling
+    from other clusters without exposing each cluster’s TokenReview API and encoding
+    some additional metadata about the cluster where the request originated. All of
+    this adds significant complexity to the setup, so we’d recommend not going down
+    this path as a method of cross-cluster service identity/authentication.
+  id: totrans-162
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 令牌也仅限于单个集群，因此我们无法将一个集群发行的服务帐户令牌作为从其他集群调用的服务的身份文件使用，而无需暴露每个集群的TokenReview API并对请求起源集群的一些附加元数据进行编码。所有这些都会给设置增加显著的复杂性，因此我们建议不要选择这种用于跨集群服务身份验证的方法。
+- en: Note
+  id: totrans-163
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: 'To ensure that permissions can be granted to applications in an appropriately
+    granular way, unique Service Accounts should be created for each workload that
+    requires access to the Kubernetes API server. Additionally, if a workload *does
+    not* require access to the Kubernetes API server, disable the mounting of a Service
+    Account token by specifying the `automountServiceAccountToken: false` field on
+    the `ServiceAccount` object.'
+  id: totrans-164
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '为了确保权限可以以适当的细粒度方式授予应用程序，应为每个需要访问Kubernetes API服务器的工作负载创建唯一的服务帐户。此外，如果工作负载*不需要*访问Kubernetes
+    API服务器，请通过在`ServiceAccount`对象上指定`automountServiceAccountToken: false`字段来禁用服务帐户令牌的挂载。'
+- en: For example, this can be set on the default Service Account for a Namespace
+    to disable the auto-mounting of the credential token. This field can also be set
+    on the `Pod` object, but note that the `Pod` field takes precedence if it’s set
+    in both places.
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，可以在命名空间的默认服务帐户上设置此项，以禁用凭证令牌的自动挂载。此字段也可以设置在`Pod`对象上，但请注意，如果两个地方都设置了，则以`Pod`字段为准。
+- en: Projected Service Account Tokens (PSAT)
+  id: totrans-166
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 投影的服务帐户令牌（PSAT）
+- en: Beginning with Kubernetes v1.12 there is an additional method of identity available
+    that builds on the ideas in service account tokens but seeks to address some of
+    the weaknesses (such as lack of TTL, wide scoping, and persistence).
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从Kubernetes v1.12开始，还提供了一种可用的附加身份验证方法，该方法建立在服务帐户令牌的思想上，但旨在解决一些弱点（例如缺乏TTL、广泛作用域和持久性）。
+- en: 'In order for the PSAT flow to function correctly, the Kubernetes API server
+    needs to be configured with the parameter keys shown here (all are configurable,
+    though):'
+  id: totrans-168
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了使PSAT流程正常工作，Kubernetes API服务器需要配置显示的参数键（所有这些都是可配置的）：
+- en: '[PRE21]'
+  id: totrans-169
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: 'The flow for establishing and verifying identity is similar to the SAT method.
+    However, instead of having our Pod/application read the automounted Service Account
+    token, you instead mount a projected Service Account token as a Volume. This also
+    injects a token into the Pod, but you can specify a TTL and custom audience for
+    the token:'
+  id: totrans-170
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 建立和验证身份的流程与SAT方法类似。但是，不是让我们的Pod/应用程序读取自动挂载的服务帐户令牌，而是将投影的服务帐户令牌作为卷挂载。这也会向Pod注入令牌，但是您可以为令牌指定TTL和自定义受众：
+- en: '[PRE22]'
+  id: totrans-171
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: '[![1](assets/1.png)](#co_identity_CO2-1)'
+  id: totrans-172
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_identity_CO2-1)'
+- en: The `audience` field is important because it prevents destination applications
+    using the token from the calling application and attempting to masquerade as the
+    calling application. The audience should always be scoped correctly depending
+    on the destination application. In this case, we are scoping to communicate with
+    the API server itself.
+  id: totrans-173
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`audience`字段很重要，因为它防止目标应用程序使用来自调用应用程序的令牌并尝试冒充调用应用程序。根据目标应用程序的不同，受众应该始终正确范围化。在这种情况下，我们将范围限定为与API服务器本身通信。'
+- en: Note
+  id: totrans-174
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: When using PSAT, a designated Service Account must be created and used. Kubernetes
+    does not mount PSATs for Namespace default Service Accounts.
+  id: totrans-175
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当使用PSAT时，必须创建并使用指定的服务帐户。Kubernetes不会为命名空间默认服务帐户挂载PSAT。
+- en: The calling application can read the projected token and use that in requests
+    within the cluster. Destination applications can verify the token by calling the
+    `TokenReview` API and passing the received token. With the PSAT method, the review
+    will also verify that the TTL has not expired and will return additional metadata
+    about the presenting application, including specific Pod information. This provides
+    a tighter scope than regular SATs (which only assert a Service Account).
+  id: totrans-176
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 调用应用程序可以读取投影令牌，并在集群内的请求中使用它。目标应用程序可以通过调用`TokenReview` API并传递接收到的令牌来验证令牌。使用PSAT方法，审查还将验证TTL未过期，并返回关于呈现应用程序的其他元数据，包括特定的Pod信息。这提供了比普通SAT（仅断言服务帐户）更紧密的范围。
+- en: '[PRE23]'
+  id: totrans-177
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: As shown in [Figure 10-6](#projected_service_account_tokens), there is no real
+    difference between the SAT and PSAT flows themselves (aside from the server verifying
+    the `audience` field), only in the validity and granularity of the identity asserted
+    by the token. The `audience` field is important as it identifies the intended
+    recipient of the token. In keeping with the [JWT official specification](https://oreil.ly/gKlA7),
+    the API will reject a token whose audience does not match the audience specified
+    in the API server configuration.
+  id: totrans-178
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如图 [Figure 10-6](#projected_service_account_tokens) 所示，SAT 和 PSAT 流程本身没有实质性区别（除了服务器验证
+    `audience` 字段），只在于令牌所断言的身份的有效性和粒度。`audience` 字段非常重要，因为它标识了令牌的预期接收者。根据 [JWT 官方规范](https://oreil.ly/gKlA7)，API
+    将拒绝目标与 API 服务器配置中指定的不匹配的令牌。
+- en: '![prku 1006](assets/prku_1006.png)'
+  id: totrans-179
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1006](assets/prku_1006.png)'
+- en: Figure 10-6\. Projected Service Account tokens.
+  id: totrans-180
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: Figure 10-6\. 预投影服务账户令牌。
+- en: Projected Service Account tokens are a relatively recent but incredibly strong
+    addition to Kubernetes’ feature set. On their own they provide tight integration
+    with the platform itself, they provide configurable TTLs, and they have a tight
+    scope (individual Pods). They can also be used as building blocks to construct
+    even more robust patterns (as we’ll see in later sections).
+  id: totrans-181
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 预投影服务账户令牌是 Kubernetes 功能集的一个相对较新但非常强大的补充。它们本身与平台本身紧密集成，提供可配置的 TTL，并且具有紧密的范围（个别
+    Pod）。它们还可以用作构建更强大模式的基础模块（正如我们将在后面的章节中看到的）。
+- en: Platform Mediated Node Identity
+  id: totrans-182
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 平台中介节点身份
+- en: In cases where all workloads are running on a homogeneous platform (for example,
+    AWS), it is possible for the platform itself to determine and assign identities
+    to workloads because of the contextual metadata they possess about the workload.
+  id: totrans-183
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在所有工作负载均运行在同质平台（例如 AWS）的情况下，平台本身可以根据其拥有的有关工作负载的上下文元数据来确定和分配身份。
+- en: Identity is not asserted by the workload itself but is determined based on its
+    properties by an out-of-band provider. The provider returns the workload a credential
+    to prove identity that may be used to communicate with other services on the platform.
+    It then becomes trivial for the other services to verify that credential because
+    they too are on the same underlying platform.
+  id: totrans-184
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 身份不是由工作负载本身断言的，而是由一个带外提供者基于其属性确定的。该提供者返回给工作负载一个凭据来证明身份，可以用于与平台上的其他服务通信。其他服务可以轻松验证该凭据，因为它们也位于同一基础平台上。
+- en: On AWS, an EC2 instance may request credentials to connect to a different service
+    like an S3 bucket. The AWS platform inspects the metadata of the instance and
+    can provide role-specific credentials back to the instance with which to make
+    the connection, as shown in [Figure 10-7](#platform_mediated_identify).
+  id: totrans-185
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 AWS 上，EC2 实例可以请求凭据以连接到不同的服务，例如 S3 存储桶。AWS 平台检查实例的元数据，并可以向实例提供特定角色的凭据，以便进行连接，如
+    [Figure 10-7](#platform_mediated_identify) 所示。
+- en: '![prku 1007](assets/prku_1007.png)'
+  id: totrans-186
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1007](assets/prku_1007.png)'
+- en: Figure 10-7\. Platform mediated identity.
+  id: totrans-187
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: Figure 10-7\. 平台中介身份。
+- en: Note
+  id: totrans-188
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Remember that the platform still has to perform *authorization* on the request
+    to ensure that the identity being used has the appropriate permissions. This method
+    is only being used to *authenticate* the request.
+  id: totrans-189
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请记住，平台仍需对请求执行 *授权*，以确保使用的身份具有适当的权限。此方法仅用于 *认证* 请求。
+- en: Many cloud vendors expose functionality described in this section. We’re choosing
+    to focus on tooling that applies to and integrates with Amazon Web Services (AWS)
+    because it is the vendor we most commonly see in the field.
+  id: totrans-190
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 许多云供应商在本节描述的功能上提供了相似的功能。我们选择关注适用于并与 Amazon Web Services（AWS）集成的工具，因为这是我们在现场中最常见的供应商。
+- en: AWS platform authentication methods/tooling
+  id: totrans-191
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: AWS 平台认证方法/工具
+- en: AWS provides a strong identity solution at the node level via the EC2 metadata
+    API. This is an example of a platform-mediated system, whereby the platform (AWS)
+    is able to determine the identity of a calling entity based on a number of intrinsic
+    properties without the entity asserting any credentials/identity claim itself.
+    The platform can then deliver secure credentials to the instance (in the form
+    of a role, for example) that allows it to access any services defined by the relevant
+    policies. As a whole this is referred to as Identity and Access Management (IAM).
+  id: totrans-192
+  prefs: []
+  type: TYPE_NORMAL
+  zh: AWS 通过 EC2 元数据 API 在节点级别提供了强大的身份解决方案。这是一个平台介导的系统的例子，平台（AWS）能够根据多个内在属性确定调用实体的身份，而无需实体自己声明任何凭据/身份声明。然后，平台可以向实例（例如角色形式）提供安全凭据，使其能够访问由相关策略定义的任何服务。总体而言，这被称为身份和访问管理（IAM）。
+- en: This model underpins how AWS (and many other vendors) provide secure access
+    to their own cloud services. However, with the rise of containers and other multitenant
+    application models, this per-node identity/authentication system breaks down and
+    requires additional tooling and alternative approaches.
+  id: totrans-193
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此模型支撑了 AWS（以及许多其他供应商）如何向其自己的云服务提供安全访问的方式。然而，随着容器和其他多租户应用模型的兴起，这种基于每个节点的身份验证系统出现了问题，需要额外的工具和替代方法。
+- en: In this section we’ll look at the three main tooling options we encounter in
+    the field. We’ll cover kube2iam and kiam, two separate tools that share the same
+    approximate implementation model (and therefore have similar advantages and disadvantages).
+    We’ll also describe why we don’t recommend those tools today and why you should
+    consider a more integrated solution such as the final option we cover, IAM Roles
+    for Service Accounts (IRSA).
+  id: totrans-194
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本节中，我们将介绍我们在领域中遇到的三种主要工具选项。我们将涵盖 kube2iam 和 kiam，这两个独立的工具共享相似的实现模型（因此具有类似的优缺点）。我们还将描述为何今天我们不推荐使用这些工具，并且为何您应该考虑更集成的解决方案，例如我们介绍的最终选项，即服务帐户的
+    IAM 角色（IRSA）。
+- en: kube2iam
+  id: totrans-195
+  prefs:
+  - PREF_H4
+  type: TYPE_NORMAL
+  zh: kube2iam
+- en: '[kube2iam](https://github.com/jtblin/kube2iam) is an open source (OSS) tool
+    that acts as a proxy between running workloads and the AWS EC2 metadata API. The
+    architecture is shown in [Figure 10-8](#kube2iam).'
+  id: totrans-196
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[kube2iam](https://github.com/jtblin/kube2iam) 是一个充当正在运行的工作负载与 AWS EC2 元数据
+    API 之间代理的开源工具。其架构显示在 [图 10-8](#kube2iam) 中。'
+- en: Caution
+  id: totrans-197
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: kube2iam requires that every node in the cluster be able to assume a superset
+    of all the roles that Pods may require. This security model means that the scope
+    of access provided should a container breakout occur is potentially huge. For
+    this reason it is strongly advised not to use kube2iam. We are discussing it here
+    as we regularly encounter it in the field and want to ensure that you are aware
+    of the limitations of the implementation before diving in.
+  id: totrans-198
+  prefs: []
+  type: TYPE_NORMAL
+  zh: kube2iam 要求集群中的每个节点能够假定 Pods 可能需要的所有角色的超集。这种安全模型意味着，如果发生容器突破，所提供的访问范围可能会非常庞大。因此，强烈建议不要使用
+    kube2iam。我们在这里讨论它是因为我们经常在现场遇到它，并希望在深入了解实现的限制之前确保您了解它。
+- en: '![prku 1008](assets/prku_1008.png)'
+  id: totrans-199
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1008](assets/prku_1008.png)'
+- en: Figure 10-8\. kube2iam architecture and data flow.
+  id: totrans-200
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 10-8\. kube2iam 架构和数据流。
+- en: kube2iam Pods run on every node via a DaemonSet. Each Pod injects an iptables
+    rule to capture outbound traffic to the metadata API and redirect it to the running
+    instance of kube2iam on that node.
+  id: totrans-201
+  prefs: []
+  type: TYPE_NORMAL
+  zh: kube2iam Pods 通过 DaemonSet 在每个节点上运行。每个 Pod 注入一个 iptables 规则以捕获对元数据 API 的出站流量，并将其重定向到该节点上正在运行的
+    kube2iam 实例。
+- en: 'Pods that want to interact with AWS APIs should specify the role they want
+    to assume as an annotation in the spec. For example, in the following Deployment
+    spec you can see the role is specified in the `iam.amazonaws.com/role` annotation:'
+  id: totrans-202
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 希望与 AWS API 交互的 Pods 应在 spec 中的注释中指定要假定的角色。例如，在以下部署规范中，您可以看到角色在 `iam.amazonaws.com/role`
+    注释中指定：
+- en: '[PRE24]'
+  id: totrans-203
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: kiam
+  id: totrans-204
+  prefs:
+  - PREF_H4
+  type: TYPE_NORMAL
+  zh: kiam
+- en: Like kube2iam, [kiam](https://github.com/uswitch/kiam) is an open source (OSS)
+    tool that acts as a proxy to the AWS EC2 metadata API, although its architecture
+    (and as a result, its security model) are different and slightly improved, as
+    shown in [Figure 10-9](#kiam).
+  id: totrans-205
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与 kube2iam 类似，[kiam](https://github.com/uswitch/kiam) 是一个开源工具，用作 AWS EC2 元数据
+    API 的代理，尽管其架构（以及因此而得到的安全模型）有所不同并略有改进，如 [图 10-9](#kiam) 所示。
+- en: Caution
+  id: totrans-206
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: While safer than kube2iam, kiam also introduces a potentially serious security
+    flaw. This section describes a mitigation of the flaw, but you should still use
+    caution and understand the attack vector when using kiam.
+  id: totrans-207
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然比 kube2iam 更安全，kiam 也引入了一个潜在的严重安全漏洞。本节描述了对该漏洞的缓解措施，但在使用 kiam 时仍应谨慎并理解攻击向量。
+- en: '![prku 1009](assets/prku_1009.png)'
+  id: totrans-208
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1009](assets/prku_1009.png)'
+- en: Figure 10-9\. kiam architecture and data flow.
+  id: totrans-209
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 10-9\. kiam 架构和数据流。
+- en: kiam has both server and agent components. The agents run as a DaemonSet on
+    every node in the cluster. The server component can (and should) be restricted
+    to the either the control-plane nodes or a subset of cluster nodes. Agents capture
+    EC2 metadata API requests and forward them to the server components to complete
+    the appropriate authentication with AWS. Only the server nodes require access
+    to assume AWS IAM roles (again, a superset of all roles that Pods may require),
+    as shown in [Figure 10-10](#kiam_flow).
+  id: totrans-210
+  prefs: []
+  type: TYPE_NORMAL
+  zh: kiam 同时具有服务器和代理组件。代理作为 DaemonSet 运行在集群中的每个节点上。服务器组件可以（并且应该）限制为仅适用于控制平面节点或群集节点的子集。代理捕获
+    EC2 元数据 API 请求并将其转发给服务器组件，以完成与 AWS 的适当身份验证。只有服务器节点需要访问以承担 AWS IAM 角色（再次，这是可能需要的所有角色的超集），如
+    [图 10-10](#kiam_flow) 所示。
+- en: '![prku 1010](assets/prku_1010.png)'
+  id: totrans-211
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1010](assets/prku_1010.png)'
+- en: Figure 10-10\. kiam flow.
+  id: totrans-212
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 10-10\. kiam 流程。
+- en: 'In this model, there should be controls in place to ensure that no workloads
+    are able to run on the server nodes (and thereby obtain unfettered AWS API access).
+    Assumption of roles is achieved (like kube2iam) by annotating Pods with the desired
+    role:'
+  id: totrans-213
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这种模型中，应设置控制措施以确保没有工作负载能够在服务器节点上运行（从而获取无限制的 AWS API 访问）。像 kube2iam 一样，通过在 Pod
+    上注释所需的角色来实现角色的承担：
+- en: '[PRE25]'
+  id: totrans-214
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE25]'
+- en: While the security model is better than kube2iam, kiam still has a potential
+    attack vector whereby if a user is able to directly schedule a Pod onto a node
+    (by populating its `nodeName` field, bypassing the Kubernetes scheduler and any
+    potential guards) they would have unrestricted access to the EC2 metadata API.
+  id: totrans-215
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然安全模型比 kube2iam 更好，但 kiam 仍存在潜在的攻击向量，即如果用户能够直接调度 Pod 到节点（通过填充其 `nodeName` 字段，绕过
+    Kubernetes 调度器和任何潜在的防护措施），则他们将能够无限制地访问 EC2 元数据 API。
+- en: The mitigation for this issue is to run a mutating or validating admission webhook
+    that ensures the `nodeName` field is not prepopulated on Pod create and update
+    requests to the Kubernetes API.
+  id: totrans-216
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对此问题的缓解措施是运行一个变更或验证入站 Webhook，确保在向 Kubernetes API 发送 Pod 创建和更新请求时，`nodeName`
+    字段未预填充。
+- en: kiam provides a strong story for enabling individual Pods to access AWS APIs,
+    using a model that existing AWS users will be familiar with (role assumption).
+    This is a viable solution in many cases, provided the preceding mitigation is
+    put in place prior to use.
+  id: totrans-217
+  prefs: []
+  type: TYPE_NORMAL
+  zh: kiam 为使单个 Pod 能够访问 AWS API 提供了一个强大的解决方案，采用现有 AWS 用户熟悉的模型（角色承担）。在许多情况下，只要在使用前采取了前述缓解措施，这是一个可行的解决方案。
+- en: IAM Roles for Service Accounts (IRSA)
+  id: totrans-218
+  prefs:
+  - PREF_H4
+  type: TYPE_NORMAL
+  zh: IAM Roles for Service Accounts (IRSA)
+- en: Since late 2019, AWS has provided a native integration between Kubernetes and
+    IAM called [IAM Roles for Service Accounts](https://oreil.ly/dUoJJ) (IRSA).
+  id: totrans-219
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从2019年底以来，AWS 提供了 Kubernetes 和 IAM 之间的本地集成，称为 [IAM Roles for Service Accounts](https://oreil.ly/dUoJJ)
+    (IRSA)。
+- en: At a high level, IRSA exposes a similiar experience to kiam and kube2iam, in
+    that users can annotate their Pods with an AWS IAM role they want it to assume.
+    The implementation is very different, though, eliminating the security concerns
+    of the earlier approaches.
+  id: totrans-220
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在高层次上，IRSA 提供了一种类似于 kiam 和 kube2iam 的体验，用户可以使用 AWS IAM 角色对他们的 Pod 进行注解以指定其所需承担的角色。尽管实现方式有很大不同，但消除了早期方法的安全顾虑。
+- en: AWS IAM supports federating identity out to a third-party OIDC provider, in
+    this case the Kubernetes API server. As you saw already with PSATs, Kubernetes
+    is capable of creating and signing short-lived tokens on a per-Pod basis.
+  id: totrans-221
+  prefs: []
+  type: TYPE_NORMAL
+  zh: AWS IAM 支持将身份联合到第三方 OIDC 提供者，例如 Kubernetes API 服务器。正如您在 PSAT 中已经看到的那样，Kubernetes
+    能够为每个 Pod 创建和签署短期令牌。
+- en: 'AWS IRSA combines these features with an additional credential provider in
+    their SDKs that calls `sts:AssumeRoleWithWebIdentity`, passing the PSAT. The PSAT
+    and desired role need to be injected as environment variables within the Pod (there
+    is a webhook that will do this automatically based on the `serviceAccountName`
+    desired):'
+  id: totrans-222
+  prefs: []
+  type: TYPE_NORMAL
+  zh: AWS IRSA 将这些特性与在其 SDK 中的额外凭据提供程序结合起来，调用 `sts:AssumeRoleWithWebIdentity`，传递 PSAT。PSAT
+    和所需的角色需要作为 Pod 内的环境变量注入（有一个基于所需的 `serviceAccountName` 将自动执行此操作的 Webhook）：
+- en: '[PRE26]'
+  id: totrans-223
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE26]'
+- en: Kubernetes does not natively expose a `.well-known` OIDC endpoint, so there
+    is some additional work required to configure this at a public location (static
+    S3 bucket) so that AWS IAM can verify the token using Kubernetes’ public Service
+    Account signing key.
+  id: totrans-224
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 并不原生暴露`.well-known` OIDC 端点，因此需要额外的工作来配置公共位置（静态 S3 存储桶），以便 AWS IAM
+    使用 Kubernetes 的公共服务账号签名密钥验证令牌。
+- en: Once verified, AWS IAM responds to the application’s request, exchanging the
+    PSAT for the desired IAM role credentials as shown in [Figure 10-11](#iam_roles_for_service_accounts).
+  id: totrans-225
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 经验证后，AWS IAM 响应应用程序的请求，将 PSAT 交换为所需的 IAM 角色凭据，如[图 10-11](#iam_roles_for_service_accounts)所示。
+- en: '![prku 1011](assets/prku_1011.png)'
+  id: totrans-226
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1011](assets/prku_1011.png)'
+- en: Figure 10-11\. IAM roles for Service Accounts.
+  id: totrans-227
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 10-11\. 服务账号的 IAM 角色。
+- en: Although the setup for IRSA is a little clunky, it possesses the best security
+    model of all approaches to Pod IAM Role assumption.
+  id: totrans-228
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管 IRSA 的设置有些笨拙，但它具有所有 Pod IAM 角色假设方法中最佳的安全模型。
+- en: IRSA is a strong choice for organizations already leveraging AWS services as
+    it uses patterns and primitives that will be familiar with your operations and
+    development teams. The model employed (mapping Service Accounts to IAM roles)
+    is also a straightforward one to understand with a strong security model.
+  id: totrans-229
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于已经利用 AWS 服务的组织来说，IRSA 是一个强有力的选择，因为它使用的模式和基元将与您的运营和开发团队熟悉。所采用的模型（将服务账号映射到 IAM
+    角色）也是一种易于理解且具有强大安全模型的模型。
+- en: The main downside is that IRSA can be somewhat cumbersome to deploy and configure
+    if you are not utilizing the Amazon Elastic Kubernetes Service (EKS). However,
+    recent additions to Kubernetes itself will alleviate some of the technical challenges
+    here, such as exposing Kubernetes itself as an OIDC provider.
+  id: totrans-230
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 主要缺点是，如果未使用亚马逊弹性 Kubernetes 服务（EKS），则 IRSA 部署和配置起来可能有些繁琐。然而，Kubernetes 本身的最新添加将减轻部分技术挑战，比如将
+    Kubernetes 本身暴露为 OIDC 提供者。
+- en: As we saw in this section, mediating identity through a common platform (AWS
+    in this case) has many strengths. In the next section we’ll dive into tooling
+    that is aiming to implement this same model but capable of spanning *multiple*
+    underlying platforms. This brings the control of a centralized identity system
+    with the flexibility of running it for any workload across any cloud or platform.
+  id: totrans-231
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如我们在本节中看到的，通过一个通用平台（在本例中为 AWS）调解身份具有许多优点。在下一节中，我们将深入探讨旨在实现相同模型但能够跨*多个*底层平台运行的工具。
+- en: Cross-platform identity with SPIFFE and SPIRE
+  id: totrans-232
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 使用 SPIFFE 和 SPIRE 的跨平台身份
+- en: Secure Production Identity Framework for Everyone (SPIFFE) is a standard that
+    specifies a syntax for identity (SPIFFE Verifiable Identity Document, SVID) that
+    can leverage existing cryptographic formats such as x509 and JWT. It also specifies
+    a number of APIs for providing and consuming these identities. A SPIFFE ID takes
+    the form `spiffe://trust-domain/hierarchical/workload`, where all sections after
+    the `spiffe://` are arbitrary string identifiers that can be used in multiple
+    ways (although creating some kind of hierarchy is most common).
+  id: totrans-233
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安全生产身份框架（SPIFFE）是一个标准，指定了身份（SPIFFE 可验证身份文档，SVID）的语法，可以利用现有的加密格式，如 x509 和 JWT。它还指定了一些用于提供和消费这些身份的
+    API。SPIFFE ID 的形式为`spiffe://trust-domain/hierarchical/workload`，`spiffe://`后的所有部分都是可以在多种方式中使用的任意字符串标识符（尽管创建某种层次结构是最常见的）。
+- en: SPIFFE Runtime Environment (SPIRE) is the reference implementation of SPIFFE
+    and has a number of SDKs and integrations to allow applications to make use of
+    (both providing, and consuming) SVIDs.
+  id: totrans-234
+  prefs: []
+  type: TYPE_NORMAL
+  zh: SPIFFE 运行时环境（SPIRE）是 SPIFFE 的参考实现，具有多个 SDK 和集成，允许应用程序使用（提供和消费）SVID。
+- en: This section will assume use of SPIFFE and SPIRE together unless otherwise noted.
+  id: totrans-235
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本节将假设同时使用 SPIFFE 和 SPIRE，除非另有说明。
+- en: Architecture and concepts
+  id: totrans-236
+  prefs:
+  - PREF_H4
+  type: TYPE_NORMAL
+  zh: 架构和概念
+- en: SPIRE runs a server component that acts as a signing authority for identities
+    and maintains a registry of all workload identities and the conditions required
+    for an identity document to be issued.
+  id: totrans-237
+  prefs: []
+  type: TYPE_NORMAL
+  zh: SPIRE 运行一个服务器组件，作为身份签发机构，并维护所有工作负载身份及其颁发身份文档所需条件的注册表。
+- en: SPIRE agents run on every node as a DaemonSet where they expose an API for workloads
+    to request identity via a Unix socket. The agent is also configured with read-only
+    access to the kubelet to determine metadata about Pods on the node. The SPIRE
+    architecture is shown in [Figure 10-12](#spire_architecture).
+  id: totrans-238
+  prefs: []
+  type: TYPE_NORMAL
+  zh: SPIRE 代理作为 DaemonSet 在每个节点上运行，它们通过 Unix 套接字公开 API，以便工作负载通过它请求身份。代理还配置为对 kubelet
+    具有只读访问权限，以确定节点上的 Pod 的元数据。SPIRE 架构显示在[图 10-12](#spire_architecture)中。
+- en: '![prku 1012](assets/prku_1012.png)'
+  id: totrans-239
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1012](assets/prku_1012.png)'
+- en: Figure 10-12\. SPIRE Architecture. Reproduced from the [official SPIRE documentation](https://oreil.ly/6VY4A).
+  id: totrans-240
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 10-12\. SPIRE 架构。取自[官方 SPIRE 文档](https://oreil.ly/6VY4A)。
+- en: 'When agents come online they verify and register themselves to the server by
+    a process called *node attestation* (as shown in [Figure 10-13](#node_attestation)).
+    This process utilizes environmental context (for example, the AWS EC2 metadata
+    API or Kubernetes PSATs) to identify a node and assign it a SPIFFE ID. The server
+    then issues the node an identity in the form of an x509 SVID. Following is an
+    example registration for a node:'
+  id: totrans-241
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当代理上线时，它们通过一种称为*节点认证*的过程验证并向服务器注册自己（如图[10-13](#node_attestation)所示）。此过程利用环境上下文（例如，AWS
+    EC2 元数据 API 或 Kubernetes PSATs）来识别节点并为其分配 SPIFFE ID。然后服务器以 x509 SVID 的形式向节点发出身份。以下是节点的注册示例：
+- en: '[PRE27]'
+  id: totrans-242
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE27]'
+- en: This tells the SPIRE server to assign the SPIFFE ID `spiffe://production-trust-domain/nodes`
+    to any node where the agent Pod satisfies the selectors specified; in this case,
+    we are selecting when the Pod is running in the SPIRE Namespace on the `production-cluster`
+    under the `spire-agent` Service account (verified via the PSAT).
+  id: totrans-243
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这告诉 SPIRE 服务器，对于任何满足所指定选择器的代理 Pod 的节点，都要分配 SPIFFE ID `spiffe://production-trust-domain/nodes`；在这种情况下，我们选择
+    Pod 在 `production-cluster` 上在 `spire-agent` 服务账户下运行的 SPIRE 命名空间中（通过 PSAT 验证）。
+- en: '![prku 1013](assets/prku_1013.png)'
+  id: totrans-244
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1013](assets/prku_1013.png)'
+- en: Figure 10-13\. Node attestation. Reproduced from the [official SPIRE documentation](https://oreil.ly/Q5eEW).
+  id: totrans-245
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 10-13\. 节点认证。取自[官方 SPIRE 文档](https://oreil.ly/Q5eEW)。
+- en: 'When workloads come online they call the node-local workload API to request
+    an SVID. The SPIRE agent uses information available to it on the platform (from
+    the kernel, kubelet, etc.) to determine the properties of the calling workload.
+    This process is referred to as *workload attestation* (as shown in [Figure 10-14](#workload_attestation)).
+    The SPIRE server then matches the properties against known workload identities
+    based on their selectors and returns an SVID to the workload (via the agent) that
+    can be used for authentication against other systems:'
+  id: totrans-246
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当工作负载上线时，它们调用节点本地的工作负载 API 请求 SVID。SPIRE 代理使用其在平台上可用的信息（来自内核、kubelet 等）来确定调用工作负载的属性。此过程称为*工作负载认证*（如图[10-14](#workload_attestation)所示）。然后
+    SPIRE 服务器根据已知的工作负载标识基于其选择器匹配属性，并返回一个 SVID 给工作负载（通过代理），可用于对其他系统进行身份验证：
+- en: '[PRE28]'
+  id: totrans-247
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE28]'
+- en: 'This tells the SPIRE server to assign the SPIFFE ID `spiffe://production-trust-domain/service-a`
+    to any workload that:'
+  id: totrans-248
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这告诉 SPIRE 服务器，对于任何满足以下条件的工作负载，都要分配 SPIFFE ID `spiffe://production-trust-domain/service-a`：
+- en: Is running on a node with ID `spiffe://production-trust-domain/nodes`.
+  id: totrans-249
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 正在运行在 ID 为 `spiffe://production-trust-domain/nodes` 的节点上。
+- en: Is running in the `default` Namespace.
+  id: totrans-250
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 正在运行在 `default` 命名空间中。
+- en: Is running under the `service-a` Service Account.
+  id: totrans-251
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 正在 `service-a` 服务账户下运行。
+- en: 'Has the Pod label `app: frontend`.'
+  id: totrans-252
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '具有 Pod 标签 `app: frontend`。'
+- en: Was built using the `docker.io/johnharris85/service-a:v0.0.1` image.
+  id: totrans-253
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用 `docker.io/johnharris85/service-a:v0.0.1` 镜像构建。
+- en: '![prku 1014](assets/prku_1014.png)'
+  id: totrans-254
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1014](assets/prku_1014.png)'
+- en: Figure 10-14\. Workload attestation. Reproduced from the [official SPIRE documentation](https://oreil.ly/Eh7Xl).
+  id: totrans-255
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 10-14\. 工作负载认证。取自[官方 SPIRE 文档](https://oreil.ly/Eh7Xl)。
+- en: Warning
+  id: totrans-256
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Note that the workload attestor plug-in can query the kubelet (to discover workload
+    information) using its Service Account. The kubelet then uses the `TokenReview`
+    API to validate bearer tokens. This requires reachability to the Kubernetes API
+    server. Therefore, API server downtime can interrupt workload attestation.
+  id: totrans-257
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，工作负载 attestor 插件可以使用其服务账户查询 kubelet（以发现有关工作负载的信息）。然后 kubelet 使用 `TokenReview`
+    API 来验证持有者令牌。这需要连接到 Kubernetes API 服务器。因此，API 服务器停机可能会中断工作负载认证。
+- en: The `--authentication-token-webhook-cache-ttl` kubelet flag controls how long
+    the kubelet caches TokenReview responses and may help to mitigate this issue.
+    A large cache TTL value is not recommended, however, as that can impact permission
+    revocation. See the [SPIRE workload attestor documentation](https://oreil.ly/Pn1ZP)
+    for more details.
+  id: totrans-258
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`--authentication-token-webhook-cache-ttl` kubelet 标志控制 kubelet 缓存 TokenReview
+    响应的时间长度，可以帮助缓解这个问题。然而，不建议设置过长的缓存 TTL 值，因为这可能影响权限撤销。有关更多详细信息，请参阅 [SPIRE 工作负载认证者文档](https://oreil.ly/Pn1ZP)。'
+- en: The patterns described in this section have significant advantages when trying
+    to build a robust identity system for your workloads, both on and off Kubernetes.
+    The SPIFFE specification leverages well-understood and widely supported cryptographic
+    standards in x509 and JWT, and the SPIRE implementation also supports many different
+    methods of application integrations. Another key property is the ability to scope
+    identity to a very granular level by combining projected service account tokens
+    with its own selectors to identify individual Pods. This can be especially useful
+    in scenarios where sidecar containers are present in a Pod and each container
+    needs varying levels of access.
+  id: totrans-259
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本节描述的模式在尝试为工作负载构建强大的身份系统时具有显著优势，无论是在 Kubernetes 内外。SPIFFE 规范利用了在 x509 和 JWT
+    中广为人知和广泛支持的密码学标准，SPIRE 实现还支持许多不同的应用程序集成方法。另一个关键特性是通过将预期服务账户令牌与其自身的选择器结合来将身份范围化到非常细粒度的能力，以识别单个
+    Pod。这在存在边车容器的 Pod 中尤其有用，并且每个容器需要不同级别的访问时。
+- en: This approach is also undeniably the most labor-intensive and requires expertise
+    in the tooling and effort to maintain another component in the environment. There
+    may also be work required to register each workload, although this could be automated
+    (and work is already underway in the community around the area of automated registration
+    of workloads).
+  id: totrans-260
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种方法无疑是最费时的，并且需要在工具化和环境中维护另一个组件的专业知识和努力。虽然可能需要注册每个工作负载，但这可以自动化（社区已在自动注册工作负载的领域进行工作）。
+- en: SPIFFE/SPIRE have a number of integration points with workload applications.
+    Which integration point is appropriate will depend on the desired level of coupling
+    to the platform and the amount of control users have over the environment.
+  id: totrans-261
+  prefs: []
+  type: TYPE_NORMAL
+  zh: SPIFFE/SPIRE 在工作负载应用程序中有多个集成点。选择适当的集成点取决于对平台耦合程度的期望以及用户对环境的控制量。
+- en: Direct application access
+  id: totrans-262
+  prefs:
+  - PREF_H4
+  type: TYPE_NORMAL
+  zh: 直接应用访问
+- en: 'SPIRE provides SDKs for Go, C, and Java for applications to directly integrate
+    with the SPIFFE workload API. These wrap existing HTTP libraries but provide native
+    support for obtaining and verifying identities. Following is an example in Go
+    calling a Kubernetes Service `service-b` and expecting a specific SPIFFE ID to
+    be presented (through an x509 SVID):'
+  id: totrans-263
+  prefs: []
+  type: TYPE_NORMAL
+  zh: SPIRE 为 Go、C 和 Java 提供 SDK，供应用程序直接集成 SPIFFE 工作负载 API 使用。这些 SDK 封装了现有的 HTTP 库，但提供了获取和验证身份的本地支持。以下是在
+    Go 中调用 Kubernetes 服务 `service-b` 并期望特定 SPIFFE ID（通过 x509 SVID）的示例：
+- en: '[PRE29]'
+  id: totrans-264
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE29]'
+- en: The SPIRE agent also exposes a [gRPC](https://grpc.io/about) API for those users
+    who want a tighter integration with the platform but are working in a language
+    without SDK availability.
+  id: totrans-265
+  prefs: []
+  type: TYPE_NORMAL
+  zh: SPIRE 代理还为那些希望与平台紧密集成但在没有 SDK 可用的语言中工作的用户提供了 [gRPC](https://grpc.io/about) API。
+- en: 'Direct integration (as described in this subsection) is *not* a recommended
+    approach for end-user applications for the following reasons:'
+  id: totrans-266
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于最终用户应用程序，不建议直接集成（如本小节中所述）的原因如下：
+- en: It tightly couples the application with the platform/implementation.
+  id: totrans-267
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 它紧密地将应用程序与平台/实现耦合。
+- en: It requires mounting the SPIRE agent Unix socket into the Pod.
+  id: totrans-268
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 需要将 SPIRE 代理 Unix 套接字挂载到 Pod 中。
+- en: It’s not easily extensible.
+  id: totrans-269
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 它不容易扩展。
+- en: The main area where using these libraries directly is appropriate is if building
+    out some intermediate platform tooling that wraps or extends some of the existing
+    functionality of the toolset.
+  id: totrans-270
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果正在构建一些中间平台工具，直接使用这些库是合适的主要领域，它们包装或扩展了工具集的某些现有功能。
+- en: Sidecar proxy
+  id: totrans-271
+  prefs:
+  - PREF_H4
+  type: TYPE_NORMAL
+  zh: 边车代理
+- en: SPIRE natively supports the Envoy SDS API for publishing certificates to be
+    consumed by an Envoy proxy. Envoy can then use the SVID x509 certificate to establish
+    TLS connections with other Services and use the trust bundle to verify incoming
+    connections.
+  id: totrans-272
+  prefs: []
+  type: TYPE_NORMAL
+  zh: SPIRE 原生支持 Envoy SDS API，用于发布证书供 Envoy 代理消费。Envoy 然后可以使用 SVID x509 证书与其他服务建立
+    TLS 连接，并使用信任捆绑包验证传入连接。
+- en: 'Envoy also supports verifying that only specific SPIFFE IDs (encoded into the
+    SVID) should be able to connect. There are two methods to implement this verification:'
+  id: totrans-273
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Envoy 还支持验证仅特定 SPIFFE ID（编码到 SVID 中）应能够连接的功能。有两种方法实现此验证：
+- en: By specifying a list of `verify_subject_alt_name` values in the Envoy configuration.
+  id: totrans-274
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在 Envoy 配置中指定 `verify_subject_alt_name` 值的列表。
+- en: 'By utilizing Envoy’s External Authorization API to delegate admission decisions
+    to an external system (for example, Open Policy Agent). Following is an example
+    of a Rego policy to achieve this:'
+  id: totrans-275
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 通过利用 Envoy 的外部授权 API 将准入决策委托给外部系统（例如，Open Policy Agent）。以下是一个实现此目的的 Rego 策略示例：
+- en: '[PRE30]'
+  id: totrans-276
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE30]'
+- en: In this example, Envoy verifies the request’s TLS certificate against the SPIRE
+    trust bundle, then delegates authorization to Open Policy Agent (OPA). The Rego
+    policy inspects the SVID and allows the request if the SPIFFE ID matches `spiffe://production-trust-domain/frontend`.
+    The architecture for this flow is shown in [Figure 10-15](#spire_with_envoy).
+  id: totrans-277
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在此示例中，Envoy 对请求的 TLS 证书与 SPIRE 信任捆绑进行验证，然后将授权委托给 Open Policy Agent（OPA）。Rego
+    策略检查 SVID，如果 SPIFFE ID 匹配 `spiffe://production-trust-domain/frontend`，则允许请求。此流程的架构显示在
+    [图 10-15](#spire_with_envoy) 中。
+- en: Warning
+  id: totrans-278
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: This approach inserts OPA into the critical request path, so that should be
+    taken into consideration when designing the flow/ architecture.
+  id: totrans-279
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种方法将 OPA 插入关键请求路径中，因此在设计流程/架构时应考虑这一点。
+- en: '![prku 1015](assets/prku_1015.png)'
+  id: totrans-280
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1015](assets/prku_1015.png)'
+- en: Figure 10-15\. SPIRE with Envoy.
+  id: totrans-281
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 10-15\. SPIRE 与 Envoy。
+- en: Service mesh (Istio)
+  id: totrans-282
+  prefs:
+  - PREF_H4
+  type: TYPE_NORMAL
+  zh: 服务网格（Istio）
+- en: Istio’s CA creates SVIDs for all Service Accounts, encoding a SPIFFE ID in the
+    format `spiffe://cluster.local/ns/<namespace>/sa/<service_account>`. Therefore,
+    Services in an Istio mesh can leverage SPIFFE-aware endpoints.
+  id: totrans-283
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Istio 的 CA 为所有服务账户创建 SVID，将 SPIFFE ID 编码为格式 `spiffe://cluster.local/ns/<namespace>/sa/<service_account>`。因此，Istio
+    网格中的服务可以利用 SPIFFE-aware 端点。
+- en: Note
+  id: totrans-284
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: While service meshes are out of scope for this chapter, many attempt to address
+    the issue of identity and authentication. Most of these attempts include or build
+    on the methods and tooling detailed in this chapter.
+  id: totrans-285
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然服务网格不在本章的讨论范围内，但许多服务网格尝试解决身份验证和认证问题。大多数尝试包括或基于本章详细介绍的方法和工具。
+- en: Other application integration methods
+  id: totrans-286
+  prefs:
+  - PREF_H4
+  type: TYPE_NORMAL
+  zh: 其他应用程序集成方法
+- en: 'In addition to the primary methods just discussed, SPIRE also supports the
+    following:'
+  id: totrans-287
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了刚讨论的主要方法外，SPIRE 还支持以下功能：
+- en: Pulling SVIDs and trust bundles directly to a filesystem, enabling applications
+    to detect changes and reload. While this enables applications to be somewhat agnostic
+    to SPIRE, it also opens an attack vector for certificates to be stolen from the
+    filesystem.
+  id: totrans-288
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 将 SVID 和信任捆绑直接拉取到文件系统，使应用程序能够检测更改并重新加载。虽然这样可以使应用程序在某种程度上对 SPIRE 保持不可知，但也会打开从文件系统中窃取证书的攻击向量。
+- en: Nginx module that allows for certificates to be streamed from SPIRE (similiar
+    to the Envoy integration described earlier). There are custom modules for Nginx
+    that enable users to specify the SPIFFE IDs that should be allowed to connect
+    to the server.
+  id: totrans-289
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Nginx 模块允许从 SPIRE 流式传输证书（类似于之前描述的 Envoy 集成）。有定制的 Nginx 模块使用户能够指定应允许连接到服务器的 SPIFFE
+    ID。
+- en: Integration with secrets store (Vault)
+  id: totrans-290
+  prefs:
+  - PREF_H4
+  type: TYPE_NORMAL
+  zh: 与秘密存储（Vault）的集成
+- en: SPIRE can be used to solve the secure introduction problem when an application
+    needs to obtain some shared secret material from [HashiCorp Vault](https://www.vaultproject.io).
+    Vault can be configured to authenticate clients using OIDC federation with the
+    SPIRE server as an OIDC provider.
+  id: totrans-291
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当应用程序需要从 [HashiCorp Vault](https://www.vaultproject.io) 获得一些共享秘密材料时，SPIRE 可用于解决安全引入问题。可以配置
+    Vault 使用 OIDC 联合身份验证与 SPIRE 服务器作为 OIDC 提供者来对客户端进行身份验证。
+- en: Roles in Vault can be bound to specific subjects (SPIFFE IDs) so that when a
+    workload requests a JWT SVID from SPIRE, that is valid to obtain a role and therefore
+    accessor credentials to Vault.
+  id: totrans-292
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Vault 中的角色可以绑定到特定主体（SPIFFE ID），因此当工作负载从 SPIRE 请求 JWT SVID 时，可以有效地获取角色和因此访问 Vault
+    的凭证。
+- en: Integration with AWS
+  id: totrans-293
+  prefs:
+  - PREF_H4
+  type: TYPE_NORMAL
+  zh: 与 AWS 的集成
+- en: SPIRE can also be used to establish identity and authenticate to AWS services.
+    This process utilizes the same OIDC federation idea in the AWS IRSA and Vault
+    sections. Workloads request JWT SVIDs that are then verified by AWS by validating
+    against the federated OIDC provider (SPIRE server). The downside of this approach
+    is that SPIRE must be publicly accessible for AWS to discover the JSON Web Key
+    Set (JWKS) material required to validate the JWTs.
+  id: totrans-294
+  prefs: []
+  type: TYPE_NORMAL
+  zh: SPIRE还可以用于建立身份并向AWS服务进行认证。该过程利用了AWS IRSA和Vault部分中的OIDC联合身份认证思想。工作负载请求JWT SVID，然后AWS通过对联合OIDC提供程序（SPIRE服务器）验证以验证它们。这种方法的缺点是，SPIRE必须是公开可访问的，以便AWS发现验证JWT所需的JSON
+    Web Key Set（JWKS）材料。
+- en: Summary
+  id: totrans-295
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 摘要
+- en: In this chapter we have dived into the patterns and tooling that we have successfully
+    seen and implemented in the field.
+  id: totrans-296
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们深入探讨了我们在现场成功看到和实施的模式和工具。
+- en: Identity is a multilayered topic, and your approach will evolve over time as
+    you become more comfortable with the complexity of the different patterns and
+    how that fits with each individual organization’s requirements. Typically on the
+    user identity side you will already have a third-party SSO of some kind, but directly
+    integrating this into Kubernetes via OIDC might seem nontrivial. In these situations
+    we’ve seen Kubernetes sit *outside* of the main organizational identity strategy.
+    Depending on requirements this may be fine, but integrating directly will give
+    greater visibility and control over environments, especially those with multiple
+    clusters.
+  id: totrans-297
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 身份是一个多层次的主题，随着您对不同模式的复杂性以及其与每个个体组织需求的契合程度感到更加舒适，您的方法也会随之演变。通常在用户身份方面，您可能已经有某种第三方SSO，但直接通过OIDC将其集成到Kubernetes可能看起来并不简单。在这些情况下，我们看到Kubernetes通常**独立于**主要组织身份策略之外。根据需求，这可能是可以接受的，但直接集成将提供更大的环境可见性和控制，特别是对于具有多个集群的情况。
+- en: On the workload/application side we have often experienced this being treated
+    as an afterthought (beyond default Service Accounts). Again, depending on internal
+    requirements this may be fine. It’s definitely true that implementing a robust
+    solution for workload identity both in-cluster and cross-platform introduces (in
+    some cases) significant complexity and requires deeper knowledge of external tooling.
+    However, when organizations reach a level of maturity with Kubernetes, we think
+    implementing the patterns described in this chapter can significantly increase
+    the security posture of your Kubernetes environments and provide additional layers
+    of defense in depth should breaches occur.
+  id: totrans-298
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在工作负载/应用程序方面，我们经常看到这被视为事后处理（超出默认的服务账户）。同样地，根据内部需求，这可能是可以接受的。确实，对于工作负载身份的强大解决方案的实施，无论是集群内还是跨平台，有时会引入显著的复杂性，并需要深入了解外部工具。然而，当组织在Kubernetes方面达到一定成熟度时，我们认为实施本章描述的模式可以显著提升您的Kubernetes环境的安全姿态，并在发生违规事件时提供额外的深度防御层。

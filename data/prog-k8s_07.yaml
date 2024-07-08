@@ -1,0 +1,981 @@
+- en: Chapter 7\. Shipping Controllers and Operators
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第 7 章。控制器和操作符的发布
+- en: Now that you’re familiar with the development of custom controllers, let’s move
+    on to the topic of how to make your custom controllers and operators production-ready.
+    In this chapter we’ll discuss the operational aspects of controllers and operators,
+    showing you how to package them, walking you through best practices for running
+    controllers in production, and making sure that your extension points don’t break
+    your Kubernetes cluster, security, or performance-wise.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在您已经熟悉了自定义控制器的开发，让我们进入如何使您的自定义控制器和操作符达到生产就绪的话题。在本章中，我们将讨论控制器和操作符的操作方面，向您展示如何打包它们，引导您运行控制器的最佳实践，并确保您的扩展点不会破坏您的
+    Kubernetes 集群，无论是从安全性还是性能方面。
+- en: Lifecycle Management and Packaging
+  id: totrans-2
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 生命周期管理和打包
+- en: In this section we consider the lifecycle management of operators. That is,
+    we will discuss how to package and ship your controller or operator, as well as
+    how to handle upgrades. When you’re ready to ship your operator to users, you’ll
+    need a way for them to install it. For this, you need to package the respective
+    artifacts, such as YAML manifests that define the controller binary (typically
+    as a Kubernetes deployment), along with the CRDs and security-related resources,
+    such as service accounts and the necessary RBAC permissions. Once your targeted
+    users have a certain version of the operator running, you will also want to have
+    a mechanism in place for upgrading the controller, considering versioning and
+    potentially zero-downtime upgrades.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本节中，我们考虑操作符的生命周期管理。也就是说，我们将讨论如何打包和发布您的控制器或操作符，以及如何处理升级问题。当您准备将您的操作符交付给用户时，您需要一种方法让他们安装它。为此，您需要打包相应的工件，例如定义控制器二进制文件（通常作为
+    Kubernetes 部署的 YAML 清单），以及 CRD 和与安全相关的资源，如服务账户和必要的 RBAC 权限。一旦您的目标用户运行了某个版本的操作符，您还希望有一个机制来升级控制器，考虑版本控制和潜在的零停机升级。
+- en: 'Let’s start with the low-hanging fruit: packaging and delivering your controllers
+    so that a user can install it in a straightforward manner.'
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们从低 hanging 的水果开始：打包和交付您的控制器，以便用户可以以简单的方式安装它。
+- en: 'Packaging: The Challenge'
+  id: totrans-5
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 打包：挑战
+- en: While Kubernetes defines resources with manifests, typically written in YAML,
+    a low-level interface to declare the state of resources, these manifest files
+    have shortcomings. Most importantly in the context of packaging containerized
+    apps, the YAML manifests are static; that is, all values in a YAML manifest are
+    fixed. This means that if you want to change the container image in a [deployment
+    manifest](http://bit.ly/2WZ1uRD), for example, you have to create a new manifest.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然 Kubernetes 用清单定义资源，通常以 YAML 编写，声明资源状态的低级接口，但这些清单文件存在缺陷。在打包容器化应用的上下文中最重要的是，YAML
+    清单是静态的；也就是说，YAML 清单中的所有值都是固定的。这意味着，例如，如果您想在 [部署清单](http://bit.ly/2WZ1uRD) 中更改容器映像，您必须创建一个新的清单。
+- en: 'Let’s look at a concrete example. Assume you have the following Kubernetes
+    deployment encoded in a YAML manifest called *mycontroller.yaml*, representing
+    the custom controller you’d like users to install:'
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们看一个具体的例子。假设您有以下 Kubernetes 部署编码在一个名为 *mycontroller.yaml* 的 YAML 清单中，代表您希望用户安装的自定义控制器：
+- en: '[PRE0]'
+  id: totrans-8
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: Imagine the environment variable `REGION` defines certain runtime properties
+    of your controller, such as the availability of other services like a managed
+    service mesh. In other words, while the default value of `eu-west-1` might be
+    a sensible one, users can and likely will overwrite it, based on their own preferences
+    or policies.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 想象一下环境变量 `REGION` 定义了您的控制器的某些运行时属性，例如其他服务的可用性，比如托管服务网格。换句话说，虽然 `eu-west-1` 的默认值可能是合理的，但用户可以并且很可能会根据自己的偏好或政策进行覆盖。
+- en: Now, given that the YAML manifest *mycontroller.yaml* itself is a static file
+    with all values defined at the time of writing—and clients such as `kubectl` don’t
+    inherently support variable parts in the manifest—how do you enable users to supply
+    variable values or overwrite existing values at runtime? That is, how in the preceding
+    example can a user set `REGION` to, say, `us-east-2` when they’re installing it,
+    using (for example) `kubectl apply`?
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，考虑到 YAML 清单 *mycontroller.yaml* 本身是一个静态文件，在编写时定义了所有的值——而像 `kubectl` 这样的客户端并不本质上支持清单中的可变部分——那么在运行时如何让用户提供变量值或覆盖现有值呢？也就是说，在上述示例中，用户如何在安装时将
+    `REGION` 设置为比如 `us-east-2`，使用（例如）`kubectl apply`？
+- en: To overcome these limitations of build-time, static YAML manifests in Kubernetes,
+    there are a few options to templatize the manifests (Helm, for example) or otherwise
+    enable variable input (Kustomize), depending on user-provided values or runtime
+    properties.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了克服在 Kubernetes 中构建时静态 YAML 清单的限制，有几种选项可以模板化清单（例如 Helm），或者根据用户提供的值或运行时属性启用变量输入（例如
+    Kustomize）。
+- en: Helm
+  id: totrans-12
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Helm
+- en: '[Helm](https://helm.sh), which touts itself as *the* package manager for Kubernetes,
+    was originally developed by Deis and is now a Cloud Native Computing Foundation
+    ([CNCF](https://www.cncf.io)) project with major contributors from Microsoft,
+    Google, and Bitnami (now part of VMware).'
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Helm](https://helm.sh)，自称为 Kubernetes 的包管理器，最初由 Deis 开发，现在是 Cloud Native Computing
+    Foundation ([CNCF](https://www.cncf.io)) 的项目，主要贡献者包括微软、谷歌和 Bitnami（现为 VMware 的一部分）。'
+- en: 'Helm helps you to install and upgrade Kubernetes applications by defining and
+    applying so-called charts, effectively parameterized YAML manifests. Here is an
+    excerpt of an [example chart template](http://bit.ly/2XmLk3R):'
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Helm 通过定义和应用所谓的图表，有效地参数化 YAML 清单，帮助您安装和升级 Kubernetes 应用程序。以下是 [示例图表模板](http://bit.ly/2XmLk3R)
+    的摘录：
+- en: '[PRE1]'
+  id: totrans-15
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: As you can see, variables are encoded in `{{ ._Some.value.here_ }}` format,
+    which happens to be [Go templates](http://bit.ly/2N2Q3DW).
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如您所见，变量以 `{{ ._Some.value.here_ }}` 格式编码，这恰好是 [Go 模板](http://bit.ly/2N2Q3DW)。
+- en: 'To install a chart, you can run the `helm install` command. While Helm has
+    several ways to find and install charts, the easiest is to use one of the official
+    stable charts:'
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要安装图表，可以运行 `helm install` 命令。虽然 Helm 有几种查找和安装图表的方法，但最简单的方法是使用官方稳定版图表之一：
+- en: '[PRE2]'
+  id: totrans-18
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: In order to package your controller, you will need to create a Helm chart for
+    it and publish it somewhere, by default to a public repository indexed and accessible
+    through the [Helm Hub](https://hub.helm.sh), as depicted in [Figure 7-1](#helm-hub).
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要打包您的控制器，您需要为其创建一个 Helm 图表，并将其发布到某个地方，默认情况下发布到通过 [Helm Hub](https://hub.helm.sh)
+    索引和访问的公共存储库，如 [图 7-1](#helm-hub) 所示。
+- en: '![Helm Hub screen shot, showing publicly available Helm charts](assets/prku_0701.png)'
+  id: totrans-20
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Helm Hub 屏幕截图，显示公开可用的 Helm 图表](assets/prku_0701.png)'
+- en: Figure 7-1\. Helm Hub screenshot showing publicly available Helm charts
+  id: totrans-21
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 7-1\. Helm Hub 屏幕截图显示公开可用的 Helm 图表
+- en: 'For further guidance on how to create Helm charts, peruse the following resources
+    at your leisure:'
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 欲了解如何创建 Helm 图表的更多指导，请随意查阅以下资源：
+- en: Bitnami’s excellent article [“How to Create Your First Helm Chart”](http://bit.ly/2ZIlODJ).
+  id: totrans-23
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Bitnami 出色的文章 [“如何创建您的第一个 Helm 图表”](http://bit.ly/2ZIlODJ)。
+- en: '[“Using S3 as a Helm Repository”](http://bit.ly/2KzwLDY), if you want to keep
+    the charts in your own organization.'
+  id: totrans-24
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[“将 S3 用作 Helm 存储库”](http://bit.ly/2KzwLDY)，如果您希望将图表保存在自己的组织中。'
+- en: 'The official Helm docs: [“The Chart Best Practices Guide”](http://bit.ly/31GbayW).'
+  id: totrans-25
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 官方 Helm 文档：[“图表最佳实践指南”](http://bit.ly/31GbayW)。
+- en: Helm is popular, partly because of its ease of use for end users. However, some
+    argue that the current Helm architecture introduces [security risks](http://bit.ly/2WXM5vZ).
+    The good news is that the community is actively working on addressing those.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Helm 非常流行，部分原因是其对最终用户的易用性。然而，一些人认为当前的 Helm 架构存在 [安全风险](http://bit.ly/2WXM5vZ)。好消息是社区正在积极努力解决这些问题。
+- en: Kustomize
+  id: totrans-27
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Kustomize
+- en: '[Kustomize](https://kustomize.io) provides a declarative approach to configuration
+    customization of Kubernetes manifest files, adhering to the familiar Kubernetes
+    API. It was [introduced in mid-2018](http://bit.ly/2L5Ec5f) and is now a Kubernetes
+    SIG CLI project.'
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Kustomize](https://kustomize.io) 提供了一种声明性的方法来定制 Kubernetes 清单文件的配置，遵循熟悉的 Kubernetes
+    API。它于 2018 年中期 [推出](http://bit.ly/2L5Ec5f)，现在是一个 Kubernetes SIG CLI 项目。'
+- en: You can [install](http://bit.ly/2Y3JeCV) Kustomize on your machine, as a standalone,
+    or, if you have a more recent `kubectl` version (newer than 1.14), it is [shipped](http://bit.ly/2IEYqRG)
+    with `kubectl` and activated with the `-k` command-line flag.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在您的机器上 [安装](http://bit.ly/2Y3JeCV) Kustomize，作为独立工具使用，或者，如果您使用的 `kubectl`
+    版本较新（1.14 以上），可以使用 `-k` 命令行标志来激活它，它会随 `kubectl` 一起发货。
+- en: 'So, Kustomize lets you customize the raw YAML manifest files, without touching
+    the original manifest. But how does this work in practice? Let’s assume you want
+    to package our `cnat` custom controller; you’d define a file called *kustomize.yaml*
+    that looks something like:'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，Kustomize 允许您定制原始的 YAML 清单文件，而无需修改原始清单。但是实际上是如何工作的呢？假设您想打包我们的 `cnat` 自定义控制器；您将定义一个名为
+    *kustomize.yaml* 的文件，内容如下：
+- en: '[PRE3]'
+  id: totrans-31
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'Now you can apply this to the *cnat-controller.yaml* file, say, with the following
+    content:'
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在您可以将此应用于 *cnat-controller.yaml* 文件，比如以下内容：
+- en: '[PRE4]'
+  id: totrans-33
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: 'Use `kustomize build` and—leaving the *cnat-controller.yaml* file unchanged!—the
+    output is then:'
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 `kustomize build` 命令，且保持 *cnat-controller.yaml* 文件不变！输出如下：
+- en: '[PRE5]'
+  id: totrans-35
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: The output of `kustomize build` can then, for example, be used in a `kubectl
+    apply` command, with all the [customizations](http://bit.ly/2LbCDTr) applied for
+    you, automatically.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后，`kustomize build` 的输出可以例如用于 `kubectl apply` 命令中，并自动应用所有的 [自定义内容](http://bit.ly/2LbCDTr)。
+- en: 'For a more detailed walk-through of Kustomize and how to use it, check out
+    the following resources:'
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有关 Kustomize 更详细的使用方法，请查看以下资源：
+- en: Sébastien Goasguen’s blog post [“Configuring Kubernetes Applications with kustomize"](http://bit.ly/2JbgJOR).
+  id: totrans-38
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Sébastien Goasguen 的博文 [“使用 kustomize 配置 Kubernetes 应用”](http://bit.ly/2JbgJOR)。
+- en: Kevin Davin’s post [“Kustomize—The right way to do templating in Kubernetes”](http://bit.ly/2JpJgPm).
+  id: totrans-39
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Kevin Davin 的文章 [“Kustomize—在 Kubernetes 中进行模板化的正确方式”](http://bit.ly/2JpJgPm)。
+- en: 'The video [“TGI Kubernetes 072: Kustomize and friends”](http://bit.ly/2XoHm6C),
+    where you can watch Joe Beda apply it.'
+  id: totrans-40
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 观看视频 [“TGI Kubernetes 072：Kustomize 及其伙伴”](http://bit.ly/2XoHm6C)，您可以看到 Joe
+    Beda 应用它。
+- en: Given the native support of Kustomize in `kubectl`, it’s likely that an increasing
+    number of users will adopt it. Note that while it solves some problems (customization),
+    there are other areas of the lifecycle management, such as validations and upgrades,
+    that may require you to use Kustomize together with languages such as Google’s
+    [CUE](http://bit.ly/32heAZl).
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 鉴于 `kubectl` 中对 Kustomize 的原生支持，用户数量可能会不断增加。请注意，虽然它解决了一些问题（自定义），但是像验证和升级这样的生命周期管理其他领域可能需要您结合像
+    Google 的 [CUE](http://bit.ly/32heAZl) 这样的语言使用 Kustomize。
+- en: To wrap up this packaging topic, let’s review some other solutions practitioners
+    use.
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 总结这个打包主题，让我们回顾一些从业者使用的其他解决方案。
+- en: Other Packaging Options
+  id: totrans-43
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 其他打包选项
+- en: 'Some notable alternatives to the aforementioned packaging options—and the many
+    others [in the wild](http://bit.ly/2X553FE)—are:'
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一些显著的替代品，以及许多其他 [在野外](http://bit.ly/2X553FE) 的选择。
+- en: UNIX tooling
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: UNIX 工具
+- en: In order to customize values of raw Kubernetes manifests, you can use a range
+    of CLI tools such as `sed`, `awk`, or `jq` in shell scripts. This is a popular
+    solution and, at least until the arrival of Helm, likely the most widely used
+    option—not least because it minimizes dependencies and is rather portable across
+    *nix environments.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要自定义原始 Kubernetes 清单的值，可以使用一系列 CLI 工具，例如 `sed`、`awk` 或 `jq` 在 shell 脚本中。这是一个流行的解决方案，至少在
+    Helm 出现之前是最广泛使用的选项之一，因为它最大程度上减少了依赖并且在 *nix 环境中相当可移植。
+- en: Traditional configuration management systems
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 传统的配置管理系统
+- en: You can use any of the traditional configuration management systems, such as
+    Ansible, Puppet, Chef, or Salt, to package and deliver your operator.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用任何传统的配置管理系统，如 Ansible、Puppet、Chef 或 Salt，来打包和交付您的操作员。
+- en: Cloud-native languages
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 云原生语言
+- en: A new generation of so-called [cloud-native programming languages](http://bit.ly/2Rwh5lu),
+    such as Pulumi and Ballerina, allows for, among other things, packaging and lifecycle
+    management of Kubernetes-native apps.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一种被称为 [云原生编程语言](http://bit.ly/2Rwh5lu) 的新一代语言，如 Pulumi 和 Ballerina，允许在其他功能中打包和管理基于
+    Kubernetes 的应用程序的生命周期。
+- en: '[ytt](https://get-ytt.io)'
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[ytt](https://get-ytt.io)'
+- en: With `ytt` you have another option for a YAML templating tool using a language
+    that is itself a modified version of Google’s configuration language [Starlark](http://bit.ly/2NaqoJh).
+    It operates semantically on the YAML structures and focuses on reusability.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 `ytt`，你还有另一种选项，即使用一种修改版的 Google 配置语言 [Starlark](http://bit.ly/2NaqoJh) 作为
+    YAML 模板工具，它在语义上操作 YAML 结构并专注于可重用性。
+- en: '[Ksonnet](https://ksonnet.io)'
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Ksonnet](https://ksonnet.io)'
+- en: A configuration management tool for Kubernetes manifests, originally developed
+    by Heptio (now VMware), Ksonnet has been deprecated and is not actively worked
+    on anymore, so use it at your own risk.
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 清单的配置管理工具，最初由 Heptio（现在是 VMware）开发，Ksonnet 已经被弃用，并且不再积极开发，因此使用它需自担风险。
+- en: 'Read more about the options discussed here in Jesse Suen’s post [“The State
+    of Kubernetes Configuration Management: An Unsolved Problem”](http://bit.ly/2N9BkXM).'
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Jesse Suen 的文章 [“Kubernetes 配置管理的现状：一个未解之谜”](http://bit.ly/2N9BkXM) 中进一步了解这里讨论的选项。
+- en: Now that we’ve discussed the packaging options in general, let’s look at best
+    practices for packaging and shipping controllers and operators.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，我们已经总结了一般的打包选项，让我们看看打包和发布控制器和操作员的最佳实践。
+- en: Packaging Best Practices
+  id: totrans-57
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 打包最佳实践
+- en: 'When packaging and publishing your operator, make sure you are aware of the
+    following best practices. These apply regardless of which mechanism you choose
+    (Helm, Kustomize, shell scripts, etc.):'
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在打包和发布您的操作符时，请确保您了解以下最佳实践。这些适用于无论您选择哪种机制（Helm、Kustomize、shell 脚本等）：
+- en: 'Provide a proper access control setup: this means defining a dedicated service
+    account for the controller along with the RBAC permissions on a least-privileges
+    basis; see [“Getting the Permissions Right”](#crds-rbac) for further details.'
+  id: totrans-59
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 提供适当的访问控制设置：这意味着为控制器定义一个专用的服务帐户，并基于最低权限原则分配 RBAC 权限；有关详细信息，请参阅 [“正确的权限获取”](#crds-rbac)。
+- en: 'Consider the scope of your custom controller: will it look after CRs in one
+    namespace or more than one namespace? Check out [Alex Ellis’s Twitter conversation](http://bit.ly/2ZHd5S7)
+    about the pros and cons of the different approaches.'
+  id: totrans-60
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 考虑您的自定义控制器的范围：它是否将管理单个命名空间中的 CR，还是多个命名空间？查看 [Alex Ellis 的 Twitter 对话](http://bit.ly/2ZHd5S7)，了解不同方法的利弊。
+- en: Test and profile your controller so that you have an idea of its footprint and
+    scalability. For example, Red Hat has put together a detailed set of requirements
+    with instructions in the OperatorHub [contribution](http://bit.ly/2IEplx4) guide.
+  id: totrans-61
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 测试并分析您的控制器，以便了解其资源占用和可伸缩性。例如，Red Hat 在 OperatorHub 的 [贡献](http://bit.ly/2IEplx4)
+    指南中提供了详细的要求和说明。
+- en: Make sure the CRDs and controller are well documented, ideally with the inline
+    docs available on [godoc.org](https://godoc.org) and a set of usage examples;
+    see Banzai Cloud’s [bank-vaults](http://bit.ly/2XtfPVB) operator for inspiration.
+  id: totrans-62
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 确保 CRD 和控制器有良好的文档，最好包括在 [godoc.org](https://godoc.org) 上的内联文档和一组使用示例；参见 Banzai
+    Cloud 的 [bank-vaults](http://bit.ly/2XtfPVB) 操作符以获取灵感。
+- en: Lifecycle Management
+  id: totrans-63
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 生命周期管理
+- en: 'A broader and more holistic approach, compared to package/ship, is that of
+    lifecycle management. The basic idea is to consider the entire supply chain, from
+    development to shipping to upgrades, and automate as much as possible. In this
+    area, CoreOS (and later Red Hat) was again a trailblazer: applying the same logic
+    that led to operators to their lifecycle management. In other words: in order
+    to install and later upgrade the custom controller of an operator, you’d have
+    a dedicated operator that knows how to, well, handle operators. And indeed, part
+    of the Operator Framework—which also provides the Operator SDK, as discussed in
+    [“The Operator SDK”](ch06.html#operator-sdk)—is the so-called [Operator Lifecycle
+    Manager](http://bit.ly/2HIfDcR) (OLM).'
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与打包/部署相比，更广泛和全面的方法是生命周期管理。基本思想是考虑整个供应链，从开发到部署再到升级，并尽可能自动化。在这方面，CoreOS（后来是 Red
+    Hat）再次领先：将操作符的逻辑应用于其生命周期管理。换句话说：为了安装和稍后升级操作符的自定义控制器，您需要一个专门的操作符，它知道如何处理操作符。确实，操作符框架的一部分——也就是我们在
+    [“操作符 SDK”](ch06.html#operator-sdk) 中讨论过的操作符生命周期管理器（OLM）。
+- en: 'Jimmy Zelinskie, one of the main people behind OLM, [phrased](http://bit.ly/2KEfoSu)
+    it as follows:'
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Jimmy Zelinskie，OLM 背后的主要人物之一，[这样表述](http://bit.ly/2KEfoSu)：
+- en: 'OLM does a lot for Operator authors, but it also solves an important problem
+    that not many people have thought about yet: how do you effectively manage first-class
+    extensions to Kubernetes over time?'
+  id: totrans-66
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: OLM 为操作符的作者做了很多工作，但它也解决了一个重要的问题，即很多人尚未考虑过的：如何有效管理随时间推移的 Kubernetes 的一级扩展？
+- en: In a nutshell, OLM provides a declarative way to install and upgrade operators
+    and their dependencies, complementary packaging solutions such as Helm. It’s up
+    to you if you want to buy into the full-blown OLM solution or create an ad hoc
+    solution for the versioning and upgrading challenge; however, you should have
+    some strategy in place here. For certain areas—for example, the [certification
+    process](http://bit.ly/2KBlymy) for the Operator Hub by Red Hat—it’s not only
+    recommended but mandatory for any nontrivial deployment scenario, even if you
+    don’t aim at the Hub.
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 简而言之，OLM 提供了一种声明式的方法来安装和升级操作符及其依赖项，这与 Helm 等打包解决方案是互补的。您可以选择是否采用完整的 OLM 解决方案，或者为版本控制和升级挑战创建一个临时解决方案；然而，您应该在这里有一些策略。对于某些领域——例如
+    Red Hat 操作符中心的 [认证流程](http://bit.ly/2KBlymy)，即使您不打算使用该中心，对于任何非平凡的部署场景来说，这不仅是推荐的，而且是强制的。
+- en: Production-Ready Deployments
+  id: totrans-68
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 适合生产环境的部署
+- en: 'In this section we review and discuss how to make your custom controllers and
+    operators production-ready. The following is a high-level checklist:'
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这一节中，我们将讨论如何使您的自定义控制器和操作符达到生产就绪状态。以下是一个高级检查清单：
+- en: Use Kubernetes [deployments](http://bit.ly/2q7vR7Y) or DaemonSets to supervise
+    your custom controller so that they are restarted automatically when they fail—and
+    fail they will.
+  id: totrans-70
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用Kubernetes [部署](http://bit.ly/2q7vR7Y)或DaemonSets来监控您的自定义控制器，这样它们在失败时会自动重启——而它们确实会失败。
+- en: Implement health checks through dedicated endpoints for liveness and readiness
+    probes. This, together with the previous step, makes your operations more resilient.
+  id: totrans-71
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 通过专用端点实施健康检查，包括存活性和就绪性探测。这与前面的步骤结合起来，可以使您的操作更具弹性。
+- en: Consider a leader-follower/standby model to make sure that even when your controller
+    pod crashes, someone else can take over. Note, however, that synchronizing state
+    is a nontrivial task.
+  id: totrans-72
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 考虑使用主从/备用模型，以确保即使您的控制器Pod崩溃，也能有其他人接管。但请注意，同步状态是一个非常不简单的任务。
+- en: Provide access control resources, such as service account and roles, applying
+    the least-privileges principle; see [“Getting the Permissions Right”](#crds-rbac)
+    for details.
+  id: totrans-73
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 提供访问控制资源，例如服务账号和角色，应用最小权限原则；详情请参见[“权限管理最佳实践”](#crds-rbac)。
+- en: Consider automated builds, including testing. Some more tips are available in
+    [“Automated Builds and Testing”](#crds-perf).
+  id: totrans-74
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 考虑自动化构建，包括测试。更多技巧可参见[“自动化构建与测试”](#crds-perf)。
+- en: Proactively tackle monitoring and logging; see [“Custom Controllers and Observability”](#o11y)
+    for the what and how.
+  id: totrans-75
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 积极应对监控和日志记录；请参见[“自定义控制器与可观测性”](#o11y)了解具体内容及操作方法。
+- en: We also suggest that you peruse the aforementioned article [“Kubernetes Operator
+    Development Guidelines for Improved Usability”](http://bit.ly/31P7rPC) to learn
+    more.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们还建议您阅读上述文章[“Kubernetes运算符开发指南以提升可用性”](http://bit.ly/31P7rPC)以了解更多信息。
+- en: Getting the Permissions Right
+  id: totrans-77
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 权限管理最佳实践
+- en: Your custom controller is part of the Kubernetes control plane. It needs to
+    read the state of resources, create resources inside as well as (potentially)
+    outside Kubernetes, and communicate the state of its own resources. For all of
+    this, the custom controller needs the right set of permissions, expressed through
+    a set of role-based access control (RBAC)–related settings. Getting this right
+    is the topic of this section.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您的自定义控制器是Kubernetes控制平面的一部分。它需要读取资源状态，在Kubernetes内外（可能）创建资源，并且与自身资源的状态进行通信。为了实现这一切，自定义控制器需要通过一组基于角色的访问控制（RBAC）相关设置来获取适当的权限。正确设置这些是本节的主题。
+- en: 'First things first: *always* create a [dedicated service account](http://bit.ly/2RwoSQp)
+    to run your controller. In other words: *never* use the `default` service account
+    in a namespace.^([1](ch07.html#idm46336853931352))'
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先要做的是：*始终*为运行您的控制器创建一个[专用服务账号](http://bit.ly/2RwoSQp)。换句话说：*永远不要*在命名空间中使用`default`服务账号。^([1](ch07.html#idm46336853931352))
+- en: To make your life easier, you can define a `ClusterRole` with the necessary
+    RBAC rules along with a `RoleBinding` to bind it to a specific namespace, effectively
+    reusing the role across namespaces, as explained in the [Using RBAC Authorization](http://bit.ly/2LdVFsj)
+    entry.
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了使您的工作更轻松，您可以定义一个`ClusterRole`，其中包含必要的RBAC规则，并通过`RoleBinding`将其绑定到特定命名空间，有效地在命名空间之间重用该角色，如[使用RBAC授权](http://bit.ly/2LdVFsj)条目中所述。
+- en: Following the least-privileges principle, assign only the permissions necessary
+    for the controller to carry out its work. For example, if a controller only manages
+    pods, there is no need to provide it with the permissions to list or create deployments
+    or services. Also, make sure that the controller does not install the CRDs and/or
+    the admission webhooks. In other words, the controller *should not* have permissions
+    to manage CRDs and webhooks.
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 遵循最小权限原则，仅分配控制器执行其工作所需的权限。例如，如果控制器只管理Pods，则无需为其提供列出或创建部署或服务的权限。此外，请确保控制器无权安装CRD和/或入站Webhooks。换句话说，控制器*不应该*具有管理CRD和Webhooks的权限。
+- en: 'Common tooling for creating custom controllers, as discussed in [Chapter 6](ch06.html#ch_operator-solutions),
+    typically provides functionality for generating RBAC rules out-of-the-box. For
+    example, Kubebuilder generates the [following](http://bit.ly/2RRCyFO) RBAC assets,
+    along with an operator:'
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常用于创建自定义控制器的常用工具，如在[第6章](ch06.html#ch_operator-solutions)中讨论的，通常提供生成RBAC规则功能。例如，Kubebuilder生成以下[RBAC资源](http://bit.ly/2RRCyFO)，以及一个运算符：
+- en: '[PRE6]'
+  id: totrans-83
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: 'Looking at the autogenerated RBAC roles and bindings reveals a fine-grained
+    setup. In *rbac_role.yaml* you can find:'
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 查看自动生成的RBAC角色和绑定可发现细粒度的设置。在*rbac_role.yaml*文件中，您可以找到：
+- en: '[PRE7]'
+  id: totrans-85
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: 'Looking at these permissions that Kubebuilder generates in `v1`, you’ll likely
+    be a little taken aback.^([2](ch07.html#idm46336853898344)) We certainly were:
+    best practice tells us that a controller, if it does not have very good reasons
+    for doing so, should not be able to:'
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 查看 Kubebuilder 在 `v1` 中生成的这些权限，您可能会有些惊讶。^([2](ch07.html#idm46336853898344))
+    我们当然也是：最佳实践告诉我们，如果控制器没有非常好的理由，它不应能够：
+- en: Write resources that are only read in the code, generally. For example, if you
+    only watch services and deployments, do remove the `create`, `update`, `patch`,
+    and `delete` verbs in the role.
+  id: totrans-87
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 通常在代码中仅读取资源，例如，如果仅观察服务和部署，则在角色中删除 `create`、`update`、`patch` 和 `delete` 动词。
+- en: Access all secrets; that is, always restrict this to the most minimal set of
+    secrets necessary.
+  id: totrans-88
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 访问所有机密；也就是说，始终将其限制在最少量必要的机密集合上。
+- en: Write `MutatingWebhookConfigurations` or `ValidatingWebhookConfigurations`.
+    This is equivalent to getting access to any resource in the cluster.
+  id: totrans-89
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 编写 `MutatingWebhookConfigurations` 或 `ValidatingWebhookConfigurations`。这相当于获得对集群中任何资源的访问权限。
+- en: 'Write `CustomResourceDefinition`s. Note that this is not allowed in the cluster
+    role just shown, but it’s important to mention here, nevertheless: CRD creation
+    should be done by a separate process, not by the controller itself.'
+  id: totrans-90
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 编写 `CustomResourceDefinition`。请注意，刚刚显示的集群角色不允许此操作，但仍然重要的是要在这里提到：CRD 的创建应由单独的流程完成，而不是由控制器本身完成。
+- en: Write the */status* subresource (see [“Subresources”](ch04.html#crd-subresources))
+    of foreign resources that it is not managing. For example, deployments here are
+    not managed by the `cnat` controller and should not be in scope.
+  id: totrans-91
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 编写非管理的外部资源的 */status* 子资源（见 [“子资源”](ch04.html#crd-subresources)）。例如，这里的部署不由
+    `cnat` 控制器管理，不应纳入范围。
+- en: Kubebuilder, of course, is not really able to understand what your controller
+    code is actually doing. So it’s not surprising that the generated RBAC rules are
+    far too relaxed. We recommend double-checking the permissions and reducing them
+    to the absolute minimum, following the preceding checklist.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当然，Kubebuilder 实际上无法理解您的控制器代码实际在做什么。因此，生成的 RBAC 规则过于宽松并不奇怪。我们建议仔细检查权限并将其减少到绝对最小，遵循前述检查表。
+- en: Warning
+  id: totrans-93
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Having read access to all secrets in the system gives a controller access to
+    all service account tokens. This is equivalent to having access to all passwords
+    in the cluster. Having write access to `MutatingWebhookConfigurations` or `ValidatingWebhookConfigurations`
+    allows you to intercept and manipulate every API request in the system. This opens
+    the door to rootkits in a Kubernetes cluster. Both are obviously highly dangerous
+    and considered antipatterns, so it’s best to avoid them.
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 读取系统中所有机密的访问权限使控制器可以访问所有服务账户令牌。这相当于可以访问集群中所有密码。对 `MutatingWebhookConfigurations`
+    或 `ValidatingWebhookConfigurations` 具有写入权限允许您拦截和操作系统中的每个 API 请求。这打开了 Kubernetes
+    集群中 rootkit 的大门。这两者显然非常危险，并被认为是反模式，最好避免使用。
+- en: To avoid having too much power—that is, to restrict access rights to those that
+    are absolutely necessary—consider using [audit2rbac](http://bit.ly/2IDW1qm). This
+    tool uses audit logs to generate an appropriate set of permissions, leading to
+    more secure setups and fewer headaches down the road.
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要避免过多权限——即仅授予绝对必要的访问权限——可以考虑使用 [audit2rbac](http://bit.ly/2IDW1qm)。该工具利用审计日志生成适当的权限集，从而实现更安全的设置，减少未来的麻烦。
+- en: 'From *rbac_role_binding.yaml* you can learn:'
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从 *rbac_role_binding.yaml* 中可以学到：
+- en: '[PRE8]'
+  id: totrans-97
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: For more best practices on RBAC and tooling around it, check out [*RBAC.dev*](https://rbac.dev),
+    a website dedicated to RBAC in Kubernetes. Let’s move on now to testing and performance
+    considerations for custom controllers.
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有关 RBAC 和其周围工具的更多最佳实践，请查看 [*RBAC.dev*](https://rbac.dev)，这是一个专注于 Kubernetes
+    中 RBAC 的网站。现在让我们转向自定义控制器的测试和性能考虑。
+- en: Automated Builds and Testing
+  id: totrans-99
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 自动化构建和测试
+- en: As a best practice in cloud-native land, consider an automated build of your
+    custom controller. This is usually called *continuous build* or *continuous integration*
+    (CI) and comprises unit tests, integration tests, building the container image,
+    and potentially even sanity or [smoke](http://bit.ly/1Z9jXp5) tests. The Cloud
+    Native Computing Foundation (CNCF) maintains an interactive [listing](http://bit.ly/2J2vy4L)
+    of the many open source CI tools available.
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为云原生领域的最佳实践，考虑自动构建您的自定义控制器。这通常称为*持续构建*或*持续集成*（CI），包括单元测试、集成测试、构建容器镜像，甚至可能是健全或
+    [烟雾](http://bit.ly/1Z9jXp5) 测试。云原生计算基金会（CNCF）维护一个互动 [列表](http://bit.ly/2J2vy4L)，列出了许多可用的开源
+    CI 工具。
+- en: When building your controller, keep in mind that it should consume as few compute
+    resources as possible, while at the same time serving as many clients as possible.
+    Each CR, based on the CRD(s) you define, is a proxy for a client. But how do you
+    know how much it consumes, if and where it leaks memory, and how well it scales?
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在构建控制器时，请记住它应尽可能少地消耗计算资源，同时为尽可能多的客户提供服务。每个 CR（根据您定义的 CRD）都是客户的代理。但是，您如何知道它消耗了多少资源，是否存在内存泄漏，以及其扩展性如何？
+- en: 'You can and indeed should carry out a number of tests, once the development
+    of your custom controller stabilizes. These can include the following, but may
+    not be limited to them:'
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦您的自定义控制器开发稳定下来，您可以并且应该进行多项测试。这些测试可以包括以下内容，但不限于此：
+- en: Performance-related tests, as found in [Kubernetes itself](http://bit.ly/2X556g8)
+    as well as the [kboom](http://bit.ly/2Fuy4zU) tool, can provide you with data
+    around scaling and resource footprints.
+  id: totrans-103
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 与 [Kubernetes 本身](http://bit.ly/2X556g8) 以及 [kboom](http://bit.ly/2Fuy4zU) 工具中发现的性能相关测试可以为您提供有关扩展和资源占用的数据。
+- en: Soak tests—for example, the ones used [in Kubernetes](http://bit.ly/2KBZmZc)—aim
+    at long-term usage, from several hours to days, with the goal of unveiling any
+    leaking of resources, like files or main memory.
+  id: totrans-104
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 长时间使用测试（例如，[Kubernetes 中](http://bit.ly/2KBZmZc)使用的测试）旨在揭示任何资源泄漏，如文件或主内存。
+- en: As a best practice, these tests should be part of your CI pipeline. In other
+    words, automate the building of the custom controller, testing, and packaging
+    from day one. For a concrete example setup we encourage you to check out Marko
+    Mudrinić’s excellent post [“Spawning Kubernetes Clusters in CI for Integration
+    and E2E tests”](http://bit.ly/2FwN1RU).
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为最佳实践，这些测试应该成为您 CI 流水线的一部分。换句话说，从第一天开始自动化构建自定义控制器、测试和打包。为了一个具体的示例设置，我们建议您查看
+    Marko Mudrinić 的优秀文章 [“在 CI 中生成 Kubernetes 集群进行集成和端到端测试”](http://bit.ly/2FwN1RU)。
+- en: 'Next, we’ll look at best practices that provide the basis for effective troubleshooting:
+    built-in support for observability.'
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，我们将探讨提供有效故障排除基础的最佳实践：内置支持可观察性。
+- en: Custom Controllers and Observability
+  id: totrans-107
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 自定义控制器和可观察性
+- en: In this section we look at *observability* aspects of your custom controllers,
+    specifically logging and monitoring.
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本节中，我们将专注于您自定义控制器的*可观察性*方面，特别是日志记录和监控。
+- en: Logging
+  id: totrans-109
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 日志记录
+- en: Make sure you provide enough logging information to aid [troubleshooting](http://bit.ly/2WXD85D)
+    (in production). As usual in a containerized setup, log information is sent to
+    `stdout`, where it can be consumed either on a per-pod basis with the `kubectl
+    logs` command or in an aggregated form. Aggregates can be provided using cloud-provider-specific
+    solutions, such as Stackdriver in Google Cloud or CloudWatch in AWS, or bespoke
+    solutions like the Elasticsearch-Logstash-Kibana/Elasticsearch-Fluentd-Kibana
+    stack. See also [*Kubernetes Cookbook*](http://bit.ly/2FTgJzk) by Sébastien Goasguen
+    and Michael Hausenblas (O’Reilly) for recipes on this topic.
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 确保提供足够的日志信息来帮助 [故障排除](http://bit.ly/2WXD85D)（在生产环境中）。通常在容器化设置中，日志信息被发送到 `stdout`，可以使用
+    `kubectl logs` 命令以每个 Pod 的方式消费，或者以聚合形式提供。云提供商特定的解决方案，如 Google Cloud 中的 Stackdriver
+    或 AWS 中的 CloudWatch，或者像 Elasticsearch-Logstash-Kibana/Elasticsearch-Fluentd-Kibana
+    这样的定制解决方案。还可以参考 Sébastien Goasguen 和 Michael Hausenblas（O’Reilly）的 [*Kubernetes
+    Cookbook*](http://bit.ly/2FTgJzk) 来获取有关此主题的技巧。
+- en: 'Let’s look at an example excerpt of our `cnat` custom controller log:'
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们来看一下我们的 `cnat` 自定义控制器日志的一个示例摘录：
+- en: '[PRE9]'
+  id: totrans-112
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: 'The *how* of logging: in general, we prefer [structured logging](http://bit.ly/31TPRu3)
+    and adjustable log levels, at least `debug` and `info`. There are two methods
+    widely used across the Kubernetes code base, and unless you have good reasons
+    not to, you should consider using those:'
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 记录日志的方法：通常情况下，我们倾向于使用[结构化日志](http://bit.ly/31TPRu3)和可调整的日志级别，至少包括`debug`和`info`。在
+    Kubernetes 代码库中广泛使用的有两种方法，除非你有充分的理由不使用，否则应考虑使用这些方法：
+- en: The `logger` interface—for example, as found in [*httplog.go*](http://bit.ly/2WWV54w),
+    along with a concrete type (`respLogger`)—captures things like the status and
+    errors.
+  id: totrans-114
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`logger`接口，例如在[*httplog.go*](http://bit.ly/2WWV54w)中找到，以及一个具体类型(`respLogger`)，用于捕捉状态和错误。'
+- en: '[`klog`](http://bit.ly/31OJxUu), a fork of Google’s `glog`, is a structured
+    logger used throughout Kubernetes, and while it has its idiosyncrasies, it’s worth
+    knowing.'
+  id: totrans-115
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[`klog`](http://bit.ly/31OJxUu)，Google 的`glog`的分支，是 Kubernetes 中广泛使用的结构化记录器，尽管它有其特殊性，但了解它是值得的。'
+- en: 'The *what* of logging: make sure to have detailed log information for the normal
+    case of your business logic operation. For example, from our Operator SDK implementation
+    of the `cnat` controller, in [*at_controller.go*](http://bit.ly/2Fpo5Mi), set
+    up the logger like so:'
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 记录日志的内容：确保对业务逻辑操作的正常情况有详细的日志信息。例如，从我们的 Operator SDK 实现的`cnat`控制器中，在[*at_controller.go*](http://bit.ly/2Fpo5Mi)中设置日志记录如下：
+- en: '[PRE10]'
+  id: totrans-117
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: 'And then in the business logic, in the `Reconcile(request reconcile.Request)`
+    function:'
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在业务逻辑中的`Reconcile(request reconcile.Request)`函数：
+- en: '[PRE11]'
+  id: totrans-119
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: This Go snippet gives you a good idea of what to log, and especially when to
+    use `reqLogger.Info` and `reqLogger.Error`.
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这段 Go 代码片段给出了一个很好的日志记录示例，特别是何时使用`reqLogger.Info`和`reqLogger.Error`。
+- en: 'With Logging 101 out of the way, let’s move on to a related topic: metrics!'
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在处理完日志记录 101 后，让我们继续讨论一个相关主题：指标！
+- en: Monitoring, instrumentation, and auditing
+  id: totrans-122
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 监控、仪表和审计
+- en: A great open source, container-ready monitoring solution you can use across
+    environments (on-premises and in the cloud) is [Prometheus](https://prometheus.io).
+    Alerting on each event is not practical, so you might want to think about who
+    needs to be informed about what kind of event. For example, you could have a policy
+    that node-related or namespace-related events are handled by infrastructure admins,
+    and namespace admins or developers are paged for pod-level events. In this context,
+    in order to visualize the metrics you’ve gathered, the most popular solution is
+    certainly [Grafana](https://grafana.com); see [Figure 7-2](#grafana_prometheus)
+    for an example of Prometheus metrics visualized in Grafana, taken from the [Prometheus
+    documentation](http://bit.ly/2Oi4YcA).
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个优秀的开源、容器就绪的监控解决方案，您可以在各种环境（本地和云端）中使用，是[Prometheus](https://prometheus.io)。对每个事件进行警报并不实际，因此您可能需要考虑谁需要了解何种类型的事件。例如，您可以制定一个策略，由基础设施管理员处理与节点或命名空间相关的事件，并且由命名空间管理员或开发人员接收有关
+    pod 级事件的页面通知。在这种情况下，为了可视化收集的指标，最流行的解决方案肯定是[Grafana](https://grafana.com)，参见[图
+    7-2](#grafana_prometheus)，这是来自[Prometheus 文档](http://bit.ly/2Oi4YcA)的示例，展示了在 Grafana
+    中可视化的 Prometheus 指标。
+- en: If you are using a service mesh—for example, based on the [Envoy proxy](https://envoy.com)
+    (like Istio or App Mesh), or Linkerd—then instrumentation typically comes for
+    free or is achievable with minimal (configuration) effort. Otherwise, you will
+    have to use the respective libraries, such as those provided by [Prometheus](http://bit.ly/2xb2qmv),
+    to expose the relevant metrics in your code yourself. In this context, you might
+    also want to check out the fledgling Service Mesh Interface ([SMI](https://smi-spec.io))
+    project, introduced in early 2019, which aims to provide a standardized interface
+    for service meshes, based on CRs and controllers.
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您正在使用服务网格，例如基于[Envoy代理](https://envoy.com)（例如 Istio 或 App Mesh），或者 Linkerd，那么通常会自动提供监控，或者通过最少的配置努力即可实现。否则，您将需要使用相应的库，例如由[Prometheus](http://bit.ly/2xb2qmv)提供的库，自己在代码中公开相关的指标。在这种情况下，您可能还希望了解从2019年初开始引入的初创服务网格接口（[SMI](https://smi-spec.io)）项目，旨在基于CR和控制器为服务网格提供标准化接口。
+- en: '![Prometheus metrics visualized in Grafana](assets/prku_0702.png)'
+  id: totrans-125
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Prometheus metrics visualized in Grafana](assets/prku_0702.png)'
+- en: Figure 7-2\. Prometheus metrics visualized in Grafana
+  id: totrans-126
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 7-2\. Prometheus 指标在 Grafana 中的可视化
+- en: Another useful feature Kubernetes offers via the API server is [auditing](http://bit.ly/2O4WBkL),
+    which allows you to record a sequence of activities affecting the cluster. Different
+    strategies are available in the auditing policy, from no logging to logging event
+    metadata, request bodies, and response bodies. You can choose between a simple
+    log backend and using a webhook for integrating with third-party systems.
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个 Kubernetes 通过 API 服务器提供的有用功能是[审计](http://bit.ly/2O4WBkL)，它允许您记录影响集群的一系列活动。审计策略中提供了不同的策略，从不记录日志到记录事件元数据、请求体和响应体。您可以选择简单的日志后端，也可以使用
+    Webhook 与第三方系统集成。
+- en: Summary
+  id: totrans-128
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 概要
+- en: This chapter focused on how to make your operators production-ready by discussing
+    operational aspects of controllers and operators, including packaging, security,
+    and performance.
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本章重点讨论如何通过讨论控制器和操作员的操作方面使您的操作员达到生产就绪状态，包括打包、安全性和性能。
+- en: 'With this we’ve covered the basics of writing and using custom Kubernetes controllers
+    and operators, so now we move on to another way to extend Kubernetes: developing
+    a custom API server.'
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经介绍了编写和使用自定义 Kubernetes 控制器和操作员的基础知识，现在我们转向另一种扩展 Kubernetes 的方式：开发自定义 API
+    服务器。
+- en: '^([1](ch07.html#idm46336853931352-marker)) See also Luc Juggery’s post [“Kubernetes
+    Tips: Using a ServiceAccount”](http://bit.ly/2X0fjKK) for a detailed discussion
+    of service account usage.'
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '^([1](ch07.html#idm46336853931352-marker)) 另请参阅 Luc Juggery 的文章[“Kubernetes
+    Tips: 使用 ServiceAccount”](http://bit.ly/2X0fjKK)，详细讨论了服务账户的使用。'
+- en: ^([2](ch07.html#idm46336853898344-marker)) We did, however, raise [Issue 748](http://bit.ly/2J7Qys4)
+    against the Kubebuilder project.
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([2](ch07.html#idm46336853898344-marker)) 不过，我们确实对 Kubebuilder 项目提出了[Issue
+    748](http://bit.ly/2J7Qys4)。

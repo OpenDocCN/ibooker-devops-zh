@@ -1,0 +1,2015 @@
+- en: Chapter 9\. Advanced Custom Resources
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第 9 章\. 高级自定义资源
+- en: 'In this chapter we walk you through advanced topics about CRs: versioning,
+    conversion, and admission controllers.'
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们将介绍有关 CR（Custom Resources）的高级主题：版本控制、转换和准入控制器。
+- en: With multiple versions, CRDs become much more serious and are much less distinguishable
+    from Golang-based API resources. Of course, at the same time the complexity considerably
+    grows, both in development and maintenance but also operationally. We call these
+    features “advanced” because they move CRDs from being a manifest (i.e., purely
+    declarative) into the Golang world (i.e., into a real software development project).
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有了多个版本，CRD（Custom Resource Definitions）变得更加严肃，并且在开发、维护以及操作上复杂度显著增加。我们将这些功能称为“高级”，因为它们将
+    CRD 从纯粹声明式的清单转移到 Golang 的世界（即一个真正的软件开发项目）。
+- en: Even if you do not plan to build a custom API server and instead intend to directly
+    switch to CRDs, we highly recommend not skipping [Chapter 8](ch08.html#ch_custom-api-servers).
+    Many of the concepts around advanced CRDs have direct counterparts in the world
+    of custom API servers and are motivated by them. Reading [Chapter 8](ch08.html#ch_custom-api-servers)
+    will make it much easier to understand this chapter as well.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 即使您不计划构建自定义 API 服务器，而是打算直接转向 CRD，我们强烈建议不要跳过[第 8 章](ch08.html#ch_custom-api-servers)。高级
+    CRD 的许多概念都直接源于自定义 API 服务器的世界，并且受其启发。阅读[第 8 章](ch08.html#ch_custom-api-servers)将大大有助于理解本章内容。
+- en: The code for all the examples shown and discussed here is available via the
+    [GitHub repository](http://bit.ly/2RBSjAl).
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有这里展示和讨论的示例代码都可以通过[GitHub 仓库](http://bit.ly/2RBSjAl)获取。
+- en: Custom Resource Versioning
+  id: totrans-5
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 自定义资源版本控制
+- en: 'In [Chapter 8](ch08.html#ch_custom-api-servers) we saw how resources are available
+    through different API versions. In the example of the custom API server, the pizza
+    resources exist in version `v1alpha1` and `v1beta1` at the same time (see [“Example:
+    A Pizza Restaurant”](ch08.html#aggregation-example)). Inside of the custom API
+    server, each object in a request is first converted from the API endpoint version
+    to an internal version (see [“Internal Types and Conversion”](ch08.html#aggregated-apiserver-development-internal-types)
+    and [Figure 8-5](ch08.html#aggregation-conversions-figure)) and then converted
+    back to an external version for storage and to return a response. The conversion
+    mechanism is implemented by conversion functions, some of them manually written,
+    and some generated (see [“Conversions”](ch08.html#aggregated-apiserver-conversion)).'
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[第 8 章](ch08.html#ch_custom-api-servers)中，我们看到资源如何通过不同的 API 版本提供。例如，自定义 API
+    服务器的示例中，pizza 资源同时存在于版本 `v1alpha1` 和 `v1beta1` 中（参见[“示例：比萨饼餐厅”](ch08.html#aggregation-example)）。在自定义
+    API 服务器内部，请求中的每个对象首先从 API 终端版本转换为内部版本（参见[“内部类型和转换”](ch08.html#aggregated-apiserver-development-internal-types)和[图
+    8-5](ch08.html#aggregation-conversions-figure)），然后再转换回外部版本以进行存储和返回响应。转换机制由转换函数实现，其中一些是手动编写的，一些是自动生成的（参见[“转换”](ch08.html#aggregated-apiserver-conversion)）。
+- en: Versioning APIs is a powerful mechanism to adapt and improve APIs while keeping
+    compatibility for older clients. Versioning plays a central role everywhere in
+    Kubernetes to promote alpha APIs to beta and eventually to general availability
+    (GA). During this process APIs often change structure or are extended.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: API 版本控制是一种强大的机制，可以在保持与旧客户端兼容性的同时调整和改进 API。在 Kubernetes 中，版本控制无处不在，将 alpha API
+    推广到 beta，最终到普遍可用（GA）起着核心作用。在此过程中，API 经常会更改结构或进行扩展。
+- en: For a long time, versioning was a feature available only through aggregated
+    API servers as presented in [Chapter 8](ch08.html#ch_custom-api-servers). Any
+    serious API needs versioning eventually, as it is not acceptable to break compatibility
+    with consumers of the API.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 长期以来，版本控制是仅通过聚合 API 服务器作为[第 8 章](ch08.html#ch_custom-api-servers)中所示的功能。任何严肃的
+    API 最终都需要版本控制，因为与 API 的使用者断兼容性是不可接受的。
+- en: Luckily, versioning for CRDs has been added very recently to Kubernetes—as alpha
+    in Kubernetes 1.14 and promoted to beta in 1.15\. Note that conversion requires
+    OpenAPI v3 validation schemas that are *structural* (see [“Validating Custom Resources”](ch04.html#crd-validation)).
+    Structural schema are basically what tools like Kubebuilder produce anyway. We
+    will discuss the technical details in [“Structural Schemas”](#crd-structural-schema).
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 幸运的是，最近在 Kubernetes 中已经添加了 CRD 的版本控制——在 Kubernetes 1.14 中作为 alpha 版本，而在 1.15
+    中提升为 beta 版本。请注意，转换需要 OpenAPI v3 验证模式，这些模式是 *结构化的*（参见 [“验证自定义资源”](ch04.html#crd-validation)）。结构化模式基本上就是像
+    Kubebuilder 等工具产生的内容。我们将在 [“结构化模式”](#crd-structural-schema) 中讨论技术细节。
+- en: We’ll show you how versioning works here as it will play a central role in many
+    serious applications of CRs in the near future.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将展示版本控制在这里的运作方式，因为在不久的将来，它将在 CR 的许多重要应用中发挥核心作用。
+- en: Revising the Pizza Restaurant
+  id: totrans-11
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 重新审视比萨餐厅
+- en: To learn how CR conversion works, we’ll reimplement the pizza restaurant example
+    from [Chapter 8](ch08.html#ch_custom-api-servers), this time purely with CRDs—that
+    is, without the aggregated API server involved.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了了解 CR 转换的工作原理，我们将重新实现比萨餐厅示例（见 [第 8 章](ch08.html#ch_custom-api-servers)），这次完全使用
+    CRD——即不涉及聚合 API 服务器。
+- en: 'For conversion, we will concentrate on the `Pizza` resource:'
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于转换，我们将专注于 `Pizza` 资源：
+- en: '[PRE0]'
+  id: totrans-14
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'This object should have a different representation of the toppings slice in
+    the `v1beta1` version:'
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此对象在 `v1beta1` 版本中应该有不同的表示形式来表示配料片：
+- en: '[PRE1]'
+  id: totrans-16
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: While in `v1alpha1`, repetition of toppings is used to represent an extra cheese
+    pizza, we do this in `v1beta1` by using a quantity field for each topping. The
+    order of toppings does not matter.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 `v1alpha1` 中，重复的配料用于表示额外的奶酪比萨，而在 `v1beta1` 中，我们通过为每个配料使用数量字段来实现。配料的顺序并不重要。
+- en: We want to implement this translation—converting from `v1alpha1` to `v1beta1`
+    and back. Before we do so, though, let’s define the API as a CRD. Note here that
+    we cannot have an aggregated API server and CRDs of the same GroupVersion in the
+    same cluster. So make sure that the APIServices from [Chapter 8](ch08.html#ch_custom-api-servers)
+    are removed before continuing with the CRDs here.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们想要实现这个转换——从 `v1alpha1` 转换到 `v1beta1` 并反向。不过，在此之前，让我们将 API 定义为 CRD。请注意，我们不能在同一集群中同时拥有聚合的
+    API 服务器和相同 GroupVersion 的 CRD。因此，在继续进行这些 CRD 之前，请确保从 [第 8 章](ch08.html#ch_custom-api-servers)
+    中删除 APIServices。
+- en: '[PRE2]'
+  id: totrans-19
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'The CRD defines two versions: `v1alpha1` and `v1beta1`. We set the former as
+    the storage version (see [Figure 9-1](#crd-conversion-resource-versioning)), meaning
+    every object to be stored in `etcd` is first converted to `v1alpha1`.'
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CRD 定义了两个版本：`v1alpha1` 和 `v1beta1`。我们将前者设置为存储版本（参见 [图 9-1](#crd-conversion-resource-versioning)），这意味着要存储在
+    `etcd` 中的每个对象都首先转换为 `v1alpha1`。
+- en: '![Conversion and storage version](assets/prku_0901.png)'
+  id: totrans-21
+  prefs: []
+  type: TYPE_IMG
+  zh: '![转换和存储版本](assets/prku_0901.png)'
+- en: Figure 9-1\. Conversion and storage version
+  id: totrans-22
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 9-1\. 转换和存储版本
+- en: As the CRD is defined currently, we can create an object as `v1alpha1` and retrieve
+    it as `v1beta1`, but both API endpoints return the same object. This is obviously
+    not what we want. But we’ll improve this very soon.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于当前定义的 CRD，我们可以创建一个 `v1alpha1` 对象，并作为 `v1beta1` 检索它，但两个 API 端点返回相同的对象。显然，这不是我们想要的。但很快我们将改进这一点。
+- en: 'But before we do that, we’ll set up the CRD in a cluster and create a margherita
+    pizza:'
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 但在此之前，我们将在集群中设置 CRD 并创建一个玛格丽特比萨：
+- en: '[PRE3]'
+  id: totrans-25
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'We register the preceding CRD and then create the margherita object:'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们先注册前面的 CRD，然后创建玛格丽特对象：
+- en: '[PRE4]'
+  id: totrans-27
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: 'As expected, we get back the same object for both versions:'
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如预期的那样，我们得到了相同的对象来表示两个版本：
+- en: '[PRE5]'
+  id: totrans-29
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'Kubernetes uses the canonical version order; that is:'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 使用规范的版本排序方式，即：
+- en: '`v1alpha1`'
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`v1alpha1`'
+- en: 'Unstable: might go away or change any time and often disabled by default.'
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不稳定：可能随时消失或更改，并且通常默认禁用。
+- en: '`v1beta1`'
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`v1beta1`'
+- en: 'Towards stable: exists at least in one release in parallel to `v1`; contract:
+    no incompatible API changes.'
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 朝向稳定：至少在一个版本中与 `v1` 并行存在；契约：没有不兼容的 API 更改。
+- en: '`v1`'
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`v1`'
+- en: 'Stable or generally available (GA): will stay for good, and will be compatible.'
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 稳定或一般可用（GA）：将长期保留，并且兼容。
+- en: The GA versions come first in that order, then the betas, and then the alphas,
+    with the major version ordered from high to low and the same for the minor version.
+    Every CRD version not fitting into this pattern comes last, ordered alphabetically.
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: GA 版本排在前面，然后是 beta 版本，再然后是 alpha 版本，主版本高到低排序，次版本也是如此。不符合此模式的每个 CRD 版本都排在最后，按字母顺序排列。
+- en: In our case, the preceding `kubectl get pizza` therefore returns `v1beta1`,
+    although the created object was in version `v1alpha1`.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在我们的案例中，前面的 `kubectl get pizza` 返回 `v1beta1`，尽管创建的对象是版本 `v1alpha1`。
+- en: Conversion Webhook Architecture
+  id: totrans-39
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: CR 的转换 Webhook 架构
+- en: 'Now let’s add the conversion from `v1alpha1` to `v1beta1` and back. CRD conversions
+    are implemented via webhooks in Kubernetes. [Figure 9-2](#crd-conversion-webhook)
+    shows the flow:'
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在让我们添加从 `v1alpha1` 到 `v1beta1` 的转换并返回。Kubernetes 中通过 webhook 实现 CRD 转换。[图 9-2](#crd-conversion-webhook)
+    显示了流程：
+- en: The client (e.g., our `kubectl get pizza margherita`) requests a version.
+  id: totrans-41
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 客户端（例如我们的 `kubectl get pizza margherita`）请求一个版本。
+- en: '`etcd` has stored the object in some version.'
+  id: totrans-42
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: '`etcd` 已经将对象存储在某个版本中。'
+- en: If the versions do not match, the storage object is sent to the webhook server
+    for conversion. The webhook returns a response with the converted object.
+  id: totrans-43
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 如果版本不匹配，存储对象将被发送到 webhook 服务器进行转换。Webhook 返回一个包含转换后对象的响应。
+- en: The converted object is sent back to the client.
+  id: totrans-44
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 转换后的对象被发送回客户端。
+- en: '![Conversion Webhook](assets/prku_0902.png)'
+  id: totrans-45
+  prefs: []
+  type: TYPE_IMG
+  zh: '![CR 的转换 Webhook](assets/prku_0902.png)'
+- en: Figure 9-2\. Conversion webhook
+  id: totrans-46
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 9-2\. 转换 Webhook
+- en: 'We have to implement this webhook server. Before doing so, let’s look at the
+    webhook API. The Kubernetes API server sends a `ConversionReview` object in the
+    API group `apiextensions.k8s.io/v1beta1`:'
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们必须实现这个 webhook 服务器。在此之前，让我们查看一下 webhook API。Kubernetes API 服务器在 API 组 `apiextensions.k8s.io/v1beta1`
+    中发送一个 `ConversionReview` 对象：
+- en: '[PRE6]'
+  id: totrans-48
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: The request field is set in the payload sent to the webhook. The response field
+    is set in the response.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请求字段设置在发送到 webhook 的有效负载中。响应字段设置在响应中。
+- en: 'The request looks like this:'
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请求如下所示：
+- en: '[PRE7]'
+  id: totrans-51
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: 'The `DesiredAPIVersion` string has the usual `apiVersion` format we know from
+    `TypeMeta`: *`group/version`*.'
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`DesiredAPIVersion` 字符串具有我们从 `TypeMeta` 知道的通常 `apiVersion` 格式：*`group/version`*。'
+- en: The objects field has a number of objects. It is a slice because for one list
+    request for pizzas, the webhook will receive one conversion request, with this
+    slice being all objects for the list request.
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对象字段有多个对象。它是一个切片，因为对于比萨的一个列表请求，Webhook 将接收一个转换请求，此切片是列表请求的所有对象。
+- en: 'The webhook converts and sets the response:'
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Webhook 进行转换并设置响应：
+- en: '[PRE8]'
+  id: totrans-55
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: The result status tells the Kubernetes API server whether the conversion was
+    successful.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 结果状态告诉 Kubernetes API 服务器转换是否成功。
+- en: 'But when in the request pipeline is our conversion webhook actually called?
+    What kind of input object can we expect? To understand this better, take a look
+    at the general request pipeline in [Figure 9-3](#crd-conversion-crd-webhook-calls):
+    all those solid and striped circles are where conversion takes place in the *k8s.io/apiserver*
+    code.'
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 但是在请求管道中我们的转换 webhook 实际上是在什么时候被调用的？我们可以期待什么样的输入对象？为了更好地理解这一点，请看 [图 9-3](#crd-conversion-crd-webhook-calls)
+    中的一般请求管道：所有这些实心和条纹圆圈都是在 *k8s.io/apiserver* 代码中进行转换的地方。
+- en: '![Conversion webhook calls for CRs](assets/prku_0903.png)'
+  id: totrans-58
+  prefs: []
+  type: TYPE_IMG
+  zh: '![CR 的转换 Webhook 调用](assets/prku_0903.png)'
+- en: Figure 9-3\. Conversion webhook calls for CRs
+  id: totrans-59
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 9-3\. CR 的转换 Webhook 调用
+- en: 'In contrast to aggregated custom API servers (see [“Internal Types and Conversion”](ch08.html#aggregated-apiserver-development-internal-types)),
+    CRs do not use internal types but convert directly between the external API versions.
+    Hence, only those yellow circles are actually doing conversions in [Figure 9-4](#crd-conversion-crd-pipeline);
+    the solid circles are NOOPs for CRDs. In other words: CRD conversion takes place
+    only from and to `etcd`.'
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与聚合自定义 API 服务器相比（参见 [“内部类型和转换”](ch08.html#aggregated-apiserver-development-internal-types)），CR
+    不使用内部类型，而是直接在外部 API 版本之间进行转换。因此，在 [图 9-4](#crd-conversion-crd-pipeline) 中，只有那些黄色圆圈实际上在进行转换；实心圆圈对于
+    CRD 来说是 NOOP。换句话说：CRD 转换仅在 `etcd` 之间进行。
+- en: '![Where conversion takes place for CRs](assets/prku_0904.png)'
+  id: totrans-61
+  prefs: []
+  type: TYPE_IMG
+  zh: '![CR 的转换发生的位置](assets/prku_0904.png)'
+- en: Figure 9-4\. Where conversion takes place for CRs
+  id: totrans-62
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 9-4\. CR 的转换发生的位置
+- en: Therefore, we can assume our webhook will be called from those two places in
+    the request pipeline (refer to [Figure 9-3](#crd-conversion-crd-webhook-calls)).
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，我们可以假设我们的 webhook 将从请求管道中的这两个位置被调用（参见 [图 9-3](#crd-conversion-crd-webhook-calls)）。
+- en: Also note that patch requests do automatic retries on conflict (updates cannot
+    retry, and they respond with errors directly to the caller). Each retry consists
+    of a read and write to `etcd` (the yellow circles in [Figure 9-3](#crd-conversion-crd-webhook-calls))
+    and therefore leads to two calls to the webhook per iteration.
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 还要注意，对冲突的补丁请求会自动重试（更新无法重试，并直接向调用者返回错误）。每次重试都涉及对 `etcd` 进行读取和写入（图 9-3 中的黄色圆圈），因此每次迭代会导致
+    Webhook 的两次调用。
+- en: Warning
+  id: totrans-65
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: 'All the warnings about the criticality of conversion in [“Conversions”](ch08.html#aggregated-apiserver-conversion)
+    apply here as well: conversions must be correct. Bugs quickly lead to data loss
+    and inconsistent behavior of the API.'
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有关于转换“关键性”的警告也适用于此处：转换必须正确。错误会迅速导致数据丢失和 API 不一致的行为。
+- en: 'Before we start implementing the webhook, some final words about what the webhook
+    can do and must avoid:'
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在开始实现 Webhook 之前，关于 Webhook 能做什么和必须避免的最后几句话：
+- en: The order of the objects in request and response must not change.
+  id: totrans-68
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 请求和响应中对象的顺序不能改变。
+- en: '`ObjectMeta` with the exception of labels and annotation must not be mutated.'
+  id: totrans-69
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`ObjectMeta` 除了标签和注释之外，不能被改变。'
+- en: 'Conversion is all or nothing: either all objects are successfully converted
+    or all fail.'
+  id: totrans-70
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 转换要么全部成功，要么全部失败，不能部分成功。
+- en: Conversion Webhook Implementation
+  id: totrans-71
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 转换 Webhook 实现
+- en: 'With the theory behind us, we are ready to start the implementation of the
+    webhook project. You can find the source at [the repository](http://bit.ly/2IHXKLn),
+    which includes:'
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 理论已经讲述完毕，我们准备开始实现 Webhook 项目。您可以在 [仓库](http://bit.ly/2IHXKLn) 找到源代码，其中包括：
+- en: A webhook implementation as an HTTPS web server
+  id: totrans-73
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一个作为 HTTPS Web 服务器的 Webhook 实现
+- en: 'A number of endpoints:'
+  id: totrans-74
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 多个端点：
+- en: '*/convert/v1beta1/pizza* converts a pizza object between `v1alpha1` and `v1beta1`.'
+  id: totrans-75
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '*/convert/v1beta1/pizza* 在 `v1alpha1` 和 `v1beta1` 之间转换 pizza 对象。'
+- en: '*/admit/v1beta1/pizza* defaults the `spec.toppings` field to mozzarella, tomato,
+    salami.'
+  id: totrans-76
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '*/admit/v1beta1/pizza* 将 `spec.toppings` 字段默认为 mozzarella, tomato, salami。'
+- en: '*/validate/v1beta1/pizza* verifies that each specified topping has a corresponding
+    toppings object.'
+  id: totrans-77
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '*/validate/v1beta1/pizza* 验证每个指定的配料是否有对应的 toppings 对象。'
+- en: The last two endpoints are admission webhooks, which will be discussed in detail
+    in [“Admission Webhooks”](#admission-webhooks). The same webhook binary will serve
+    both admission and conversion.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后两个端点是准入 Webhook，在 [“准入 Webhook”](#admission-webhooks) 中将详细讨论。同一个 Webhook 二进制文件将同时服务于准入和转换。
+- en: The `v1beta1` in these paths should not be confused with `v1beta1` of our restaurant
+    API group, but it is meant as the `apiextensions.k8s.io` API group version we
+    support as a webhook. Someday `v1` of that webhook API will be supported,^([1](ch09.html#idm46336844085864))
+    at which time we’ll add the corresponding `v1` as another endpoint, in order to
+    support old (as of today) and new Kubernetes clusters. It is possible to specify
+    inside the CRD manifest which versions a webhook supports.
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些路径中的 `v1beta1` 不应与我们餐厅 API 组的 `v1beta1` 混淆，而是作为我们支持的 `apiextensions.k8s.io`
+    API 组版本的 Webhook。有一天，该 Webhook API 的 `v1` 版本将被支持，^([1](ch09.html#idm46336844085864))
+    届时我们将添加对应的 `v1` 作为另一个端点，以支持旧（即今天的）和新的 Kubernetes 集群。可以在 CRD 清单中指定 Webhook 支持的版本。
+- en: Let’s look into how this conversion webhook actually works. Afterwards we will
+    take a deeper dive into how to deploy the webhook into a real cluster. Note again
+    that webhook conversion is still alpha in 1.14 and must be enabled manually using
+    the `CustomResourceWebhookConversion` feature gate, but it is available as beta
+    in 1.15.
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们看看这个转换 Webhook 是如何工作的。之后，我们将深入探讨如何将 Webhook 部署到真实的集群中。再次注意，Webhook 转换在 1.14
+    版本中仍处于 alpha 阶段，必须手动启用 `CustomResourceWebhookConversion` 功能开关，但在 1.15 版本中作为 beta
+    版本可用。
+- en: Setting Up the HTTPS Server
+  id: totrans-81
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 设置 HTTPS 服务器
+- en: The first step is to start a web server with support for transport layer security,
+    or TLS (i.e., HTTPS). Webhooks in Kubernetes require HTTPS. The conversion webhook
+    even requires certificates that are successfully checked by the Kubernetes API
+    server against the CA bundle provided in the CRD object.
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 第一步是启动支持传输层安全性（TLS）的 Web 服务器（即 HTTPS）。Kubernetes 中的 Webhook 需要 HTTPS。甚至转换 Webhook
+    需要证书，这些证书由 Kubernetes API 服务器针对 CRD 对象中提供的 CA bundle 进行成功检查。
+- en: In the example project, we make use of the secure serving library that is part
+    of the *k8s.io/apiserver*. It provides all TLS flags and behavior you might be
+    used to from deploying a `kube-apiserver` or an aggregated API server binary.
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在示例项目中，我们使用了*k8s.io/apiserver*中的安全服务库。它提供了您在部署`kube-apiserver`或聚合API服务器二进制文件时可能习惯的所有TLS标志和行为。
+- en: 'The *k8s.io/apiserver* secure serving code follows the `options-config` pattern
+    (see [“Options and Config Pattern and Startup Plumbing”](ch08.html#aggregated-apiserver-development-options-config)).
+    It is very easy to embed that code into your own binary:'
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*k8s.io/apiserver*安全服务代码遵循`options-config`模式（参见[“选项和配置模式及启动管道”](ch08.html#aggregated-apiserver-development-options-config)）。将该代码轻松嵌入到您自己的二进制文件中非常简单：'
+- en: '[PRE9]'
+  id: totrans-85
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: 'In the main function of the binary, this `Options` struct is instantiated and
+    wired to a flag set:'
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在二进制的主函数中，这个`Options`结构体被实例化并连接到一个标志集：
+- en: '[PRE10]'
+  id: totrans-87
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: 'In place of the three dots, we set up the HTTP multiplexer with our three paths
+    as follows:'
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这三个路径的位置，我们使用以下方法设置HTTP多路复用器：
+- en: '[PRE11]'
+  id: totrans-89
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: As the pizza validation webhook at the path */validate/v1beta1/pizza* has to
+    know the existing topping objects in the cluster, we instantiate a shared informer
+    factory for the `restaurant.programming-kubernetes.info` API group.
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于位于*/validate/v1beta1/pizza*路径的pizza验证webhook必须知道集群中现有的topping对象，我们为`restaurant.programming-kubernetes.info`
+    API组实例化了一个共享informer工厂。
+- en: Now we’ll look at the actual conversion webhook implementation behind `conversion.Serve`.
+    It is a normal Golang HTTP handler function, meaning it gets a request and a response
+    writer as arguments.
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们来看看实际的转换webhook实现在`conversion.Serve`背后的实现。这是一个普通的Golang HTTP处理函数，意味着它会获取请求和响应写入器作为参数。
+- en: 'The request body contains a `ConversionReview` object from the API group `apiextensions.k8s.io/v1beta1`.
+    Hence, we have to first read the body from the request, and then decode the byte
+    slice. We do this by using a deserializer from API Machinery:'
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请求体包含来自API组`apiextensions.k8s.io/v1beta1`的`ConversionReview`对象。因此，我们必须首先从请求中读取主体，然后解码字节切片。我们通过使用API
+    Machinery的反序列化器来实现这一点：
+- en: '[PRE12]'
+  id: totrans-93
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: This code makes use of the codec factory `codecs`, which is derived from a scheme.
+    This scheme has to include the types of *apiextensions.k8s.io/v1beta1*. We also
+    add the types of our restaurant API group. The passed `ConversionReview` object
+    will have our pizza type embedded in a `runtime.RawExtension` type—more about
+    that in a second.
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这段代码使用了来自一个方案的编解码工厂`codecs`。这个方案必须包括*apiextensions.k8s.io/v1beta1*的类型。我们还添加了我们的餐厅API组的类型。传递的`ConversionReview`对象将会在一个`runtime.RawExtension`类型中嵌入我们的pizza类型，稍后会详细说明这一点。
+- en: 'First let’s create our scheme and the codec factory:'
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，让我们创建我们的方案和编解码工厂：
+- en: '[PRE13]'
+  id: totrans-96
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: 'A `runtime.RawExtension` is a wrapper for Kubernetes-like objects embedded
+    in a field of another object. Its structure is actually very simple:'
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`runtime.RawExtension`是包含在另一个对象字段中的类似Kubernetes的对象的包装器。其结构实际上非常简单：'
+- en: '[PRE14]'
+  id: totrans-98
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: In addition, `runtime.RawExtension` has special JSON and protobuf marshaling
+    two methods. Moreover, there is special logic around the conversion to `runtime.Object`
+    on the fly, when converting to internal types—that is, automatic encoding and
+    decoding.
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另外，`runtime.RawExtension`具有两种特殊的JSON和protobuf编组方法。此外，还存在围绕动态转换为`runtime.Object`的特殊逻辑，即在转换为内部类型时的自动编码和解码。
+- en: 'In this case of CRDs, we don’t have internal types, and therefore that conversion
+    magic does not play a role. Only `RawExtension.Raw` is filled with a JSON byte
+    slice of the pizza object sent to the webhook for conversion. Thus, we will have
+    to decode this byte slice. Note again that one `ConversionReview` potentially
+    carries a number of objects, such that we have to loop over all of them:'
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在CRD的情况下，我们没有内部类型，因此转换的魔法不起作用。只有`RawExtension.Raw`填充了发送到webhook进行转换的pizza对象的JSON字节切片。因此，我们将需要解码这个字节切片。再次注意，一个`ConversionReview`可能携带多个对象，因此我们必须循环遍历所有这些对象：
+- en: '[PRE15]'
+  id: totrans-101
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: The `convert` call does the actual conversion of `in.Object`, with the desired
+    API version as the target version. Note here that we break the loop immediately
+    when the first error occurs.
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`convert`调用实际执行了`in.Object`的转换，目标版本是所需的API版本。请注意，当第一个错误发生时，我们会立即中断循环。'
+- en: 'Finally, we set the `Response` field in the `ConversionReview` object and write
+    it back as the response body of the request using API Machinery’s response writer,
+    which again uses our codec factory to create a serializer:'
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，在`ConversionReview`对象中设置`Response`字段，并将其作为请求的响应体写回，使用API Machinery的响应写入器，再次使用我们的编解码工厂创建序列化器：
+- en: '[PRE16]'
+  id: totrans-104
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: 'Now, we have to implement the actual pizza conversion. After all this plumbing
+    above, the conversion algorithm is the easiest part. It just checks that we actually
+    got a pizza object of the known versions and then does the conversion from `v1beta1`
+    to `v1alpha1` and vice versa:'
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，我们必须实现实际的Pizza转换。在上面的所有这些管道之后，转换算法是最简单的部分。它只需检查我们是否确实获得了已知版本的Pizza对象，然后执行从`v1beta1`到`v1alpha1`和反向的转换：
+- en: '[PRE17]'
+  id: totrans-106
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: Note that in both directions of the conversion, we just copy `TypeMeta` and
+    `ObjectMeta`, change the API version to the desired one, and then convert the
+    toppings slice, which is actually the only part of the objects which structurally
+    differs.
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，在转换的两个方向上，我们只需复制`TypeMeta`和`ObjectMeta`，将API版本更改为所需的版本，然后转换配料片，这实际上是对象结构上唯一不同的部分。
+- en: If there are more versions, another two-way conversion is necessary between
+    all of them. Alternatively, of course, we could use a hub version as in aggregated
+    API servers (see [“Internal Types and Conversion”](ch08.html#aggregated-apiserver-development-internal-types)),
+    instead of implementing conversions from and to all supported external versions.
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果存在更多版本，则需要在它们之间进行双向转换。或者，当然，我们可以像聚合API服务器中那样使用中心版本（参见[“内部类型和转换”](ch08.html#aggregated-apiserver-development-internal-types)），而不是实现从所有支持的外部版本到所有支持的版本的转换。
+- en: Deploying the Conversion Webhook
+  id: totrans-109
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 部署转换Webhook
+- en: We now want to deploy the conversion webhook. You can find all the manifests
+    on [GitHub](http://bit.ly/2KEx4xo).
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们想要部署转换Webhook。您可以在[GitHub](http://bit.ly/2KEx4xo)上找到所有清单。
+- en: 'Conversion webhooks for CRDs are launched in the cluster and put behind a service
+    object, and that service object is referenced by the conversion webhook specification
+    in the CRD manifest:'
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CRD的转换Webhook在集群中启动，并放置在服务对象后面，该服务对象由CRD清单中转换Webhook规范引用：
+- en: '[PRE18]'
+  id: totrans-112
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: The CA bundle must match the serving certificate used by the webhook. In our
+    example project, we use a [Makefile](http://bit.ly/2FukVac) to generate certificates
+    using OpenSSL and plug them into the manifests using text replacement.
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CA捆绑证书必须与Webhook使用的服务证书相匹配。在我们的示例项目中，我们使用[Makefile](http://bit.ly/2FukVac)使用OpenSSL生成证书，并通过文本替换将它们插入清单中。
+- en: Note here that the Kubernetes API server assumes that the webhook supports all
+    specified versions of the CRD. There is also only one such webhook possible per
+    CRD. But as CRDs and conversion webhooks are usually owned by the same team, this
+    should be enough.
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这里请注意，Kubernetes API服务器假定Webhook支持CRD的所有指定版本。每个CRD只可能有一个这样的Webhook。但是由于CRD和转换Webhook通常由同一个团队拥有，这应该足够了。
+- en: Also note that the service port must be 443 in the current *apiextensions.k8s.io/v1beta1*
+    API. The service can map this, however, to any port used by the webhook pods.
+    In our example, we map 443 to 8443, served by the webhook binary.
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 还要注意，当前*apiextensions.k8s.io/v1beta1* API中服务端口必须为443。但是，该服务可以映射到Webhook Pod使用的任何端口。在我们的示例中，我们将443映射到由Webhook二进制服务的8443端口。
+- en: Seeing Conversion in Action
+  id: totrans-116
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 观看转换的实际操作
+- en: Now that we understand how the conversion webhook works and how it is wired
+    into the cluster, let’s see it in action.
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们理解了转换Webhook的工作原理以及它如何连接到集群，让我们看看它的实际效果。
+- en: 'We assume you’ve checked out the example project. In addition, we assume that
+    you have a cluster with webhook conversion enabled (either via feature gate in
+    a 1.14 cluster or through a 1.15+ cluster, which has webhook conversion enabled
+    by default). One way to get such a cluster is via the [kind project](http://bit.ly/2X75lvS),
+    which provides support for Kubernetes 1.14.1 and a local *kind-config.yaml* file
+    to enable the alpha feature gate for webhook conversion ([“What Does Programming
+    Kubernetes Mean?”](ch01.html#programming-kubernetes-meaning) linked a number of
+    other options for development clusters):'
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们假设您已经检出了示例项目。此外，我们假设您有一个启用Webhook转换的集群（在1.14集群中通过特性门启用，或者通过默认启用Webhook转换的1.15+集群）。获取此类集群的一种方法是通过[kind项目](http://bit.ly/2X75lvS)，该项目支持Kubernetes
+    1.14.1，并提供本地*kind-config.yaml*文件以启用Webhook转换的Alpha特性门（[“什么是编程Kubernetes？”](ch01.html#programming-kubernetes-meaning)链接了其他一些开发集群的选项）：
+- en: '[PRE19]'
+  id: totrans-119
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: 'Then we can create a cluster:'
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后我们可以创建一个集群：
+- en: '[PRE20]'
+  id: totrans-121
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: 'Now we can deploy [our manifests](http://bit.ly/2KEx4xo):'
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们可以部署[我们的清单](http://bit.ly/2KEx4xo)：
+- en: '[PRE21]'
+  id: totrans-123
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: 'These manifests contain the following files:'
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些清单包含以下文件：
+- en: '*ns.yaml*'
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*ns.yaml*'
+- en: Creates the `pizza-crd` namespace.
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建`pizza-crd`命名空间。
+- en: '*pizza-crd.yaml*'
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*pizza-crd.yaml*'
+- en: Specifies the pizza resource in the `restaurant.programming-kubernetes.info`
+    API group, with the `v1alpha1` and `v1beta1` versions, and the webhook conversion
+    configuration as shown previously.
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在`restaurant.programming-kubernetes.info` API组中指定了pizza资源，具有`v1alpha1`和`v1beta1`版本，并且像之前展示的webhook转换配置。
+- en: '*topping-crd.yaml*'
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*topping-crd.yaml*'
+- en: Specifies the toppings CR in the same API group, but only in the `v1alpha1`
+    version.
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在同一API组中指定了配料CR，但仅限于`v1alpha1`版本。
+- en: '*sa.yaml*'
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*sa.yaml*'
+- en: Introduces the `webhook` service account.
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 引入了`webhook`服务帐户。
+- en: '*rbac.yaml*'
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*rbac.yaml*'
+- en: Defines a role to read, list, and watch toppings.
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 定义了一个角色以读取、列出和监视配料。
+- en: '*rbac-bind.yaml*'
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*rbac-bind.yaml*'
+- en: Binds the earlier RBAC role to the `webhook` service account.
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将先前的RBAC角色绑定到`webhook`服务帐户。
+- en: '*service.yaml*'
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*service.yaml*'
+- en: Defines the `webhook` services, mapping port 443 to 8443 of the webhook pods.
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 定义了`webhook`服务，将webhook pod的端口443映射到8443端口。
+- en: '*serving-cert-secret.yaml*'
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*serving-cert-secret.yaml*'
+- en: Contains the serving certificate and private key to be used by the webhook pods.
+    The certificate is also used directly as the CA bundle in the preceding pizza
+    CRD manifest.
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 包含了用于webhook pod的服务证书和私钥。证书也直接用作前述pizza CRD清单中的CA捆绑。
+- en: '*deployment.yaml*'
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*deployment.yaml*'
+- en: Launches webhook pods, passing `--tls-cert-file` and `--tls-private-key` the
+    serving certificate secret.
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 启动webhook pods，传递`--tls-cert-file`和`--tls-private-key`的服务证书密钥。
+- en: 'After this we can create a margherita pizza finally:'
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 之后，我们终于可以创建一个玛格丽特披萨：
+- en: '[PRE22]'
+  id: totrans-144
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: 'Now, with the conversion webhook in place, we can retrieve the same object
+    in both versions. First explicitly in the `v1alpha1` version:'
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，通过转换webhook的设置，我们可以在两个版本中检索相同的对象。首先显式地在`v1alpha1`版本中：
+- en: '[PRE23]'
+  id: totrans-146
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: 'Then the same object as `v1beta1` shows the different toppings structure:'
+  id: totrans-147
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后`v1beta1`版本的同一个对象显示了不同的配料结构：
+- en: '[PRE24]'
+  id: totrans-148
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: 'Meanwhile, in the log of the webhook pod we see this conversion call:'
+  id: totrans-149
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与此同时，在webhook pod的日志中，我们看到了这个转换调用：
+- en: '[PRE25]'
+  id: totrans-150
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE25]'
+- en: Hence, the webhook is doing its job as expected.
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，webhook正在按预期工作。
+- en: Admission Webhooks
+  id: totrans-152
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 准入Webhooks
+- en: In [“Use Cases for Custom API Servers”](ch08.html#uc-custom-api-server) we discussed
+    the use cases in which an aggregated API server is a better choice than using
+    CRs. A lot of the reasons given are about having the freedom to implement certain
+    behavior using Golang instead of being restricted to declarative features in CRD
+    manifests.
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[“自定义API服务器用例”](ch08.html#uc-custom-api-server)中，我们讨论了在哪些场景下聚合API服务器比使用CR更好的选择。提到的许多原因是关于使用Golang实现特定行为的自由，而不是受限于CRD清单中的声明式功能。
+- en: We have seen in the previous section how Golang is used to build CRD conversion
+    webhooks. A similar mechanism is used to add custom admission to CRDs, again in
+    Golang.
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在前一节中已经看到了如何使用Golang构建CRD转换webhook。类似的机制也用于向CRD添加自定义准入，同样是在Golang中实现。
+- en: 'Basically we have the same freedom as with custom admission plug-ins in aggregated
+    API servers (see [“Admission”](ch08.html#aggregated-apiserver-development-admission)):
+    there are mutating and validating admission webhooks, and they are called at the
+    same position as for native resources, as shown in [Figure 9-5](#crd-admission-pipeline).'
+  id: totrans-155
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 基本上，我们与聚合API服务器中的自定义准入插件有着相同的自由度（参见[“准入”](ch08.html#aggregated-apiserver-development-admission)）：有变异和验证准入webhook，并且它们在与本机资源相同的位置调用，如[图 9-5](#crd-admission-pipeline)所示。
+- en: '![Admission in the CR request pipeline](assets/prku_0905.png)'
+  id: totrans-156
+  prefs: []
+  type: TYPE_IMG
+  zh: '![CR请求管道中的准入](assets/prku_0905.png)'
+- en: Figure 9-5\. Admission in the CR request pipeline
+  id: totrans-157
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 9-5\. CR请求管道中的准入
+- en: We saw CRD validation based on OpenAPI in [“Validating Custom Resources”](ch04.html#crd-validation).
+    In [Figure 9-5](#crd-admission-pipeline), validation is done in the box labeled
+    “Validation.” The validating admission webhooks are called after that, the mutating
+    admission webhooks before.
+  id: totrans-158
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在[“验证自定义资源”](ch04.html#crd-validation)中看到基于OpenAPI的CRD验证。在[图 9-5](#crd-admission-pipeline)中，“验证”框中执行验证。在此之后调用验证准入webhook，变异准入webhook在此之前调用。
+- en: The admission webhooks are put nearly at the end of the admission plug-in order,
+    before quota. Admission webhooks are beta in Kubernetes 1.14 and therefore available
+    in most clusters.
+  id: totrans-159
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 准入webhook几乎放在准入插件顺序的末尾，quota之前。准入webhook在Kubernetes 1.14中是beta版，因此在大多数集群中可用。
+- en: Tip
+  id: totrans-160
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: For v1 of the admission webhooks API, it is planned to allow up to two passes
+    through the admission chain. This means that an earlier admission plug-in or webhook
+    can depend on the output of later plug-ins or webhooks, to a certain degree. So,
+    in the future this mechanism will get even more powerful.
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于审核 webhooks API 的 v1 版本，计划允许通过审核链进行最多两次通过。这意味着更早的审核插件或 webhook 可以依赖于稍后插件或
+    webhook 的输出，到某个程度上。因此，在将来，这个机制将变得更加强大。
+- en: Admission Requirements in the Restaurant Example
+  id: totrans-162
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 餐厅示例中的审核要求
+- en: 'The restaurant example uses admission for multiple things:'
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 餐厅示例中使用审核来完成多个任务：
+- en: '`spec.toppings` defaults if it is `nil` or empty to mozzarella, tomato, and
+    salami.'
+  id: totrans-164
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如果 `spec.toppings` 为 `nil` 或为空，则默认为 mozzarella、tomato 和 salami。
+- en: Unknown fields should be dropped from the CR JSON and not persisted in `etcd`.
+  id: totrans-165
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 从 CR JSON 中删除未知字段，并且不要在 `etcd` 中持久化。
+- en: '`spec.toppings` must contain only toppings that have a corresponding topping
+    object.'
+  id: totrans-166
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`spec.toppings` 必须仅包含具有相应 topping 对象的配料。'
+- en: The first two use cases are mutating; the third use case is purely validating.
+    Therefore, we will use one mutating webhook and one validating webhook to implement
+    those steps.
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 前两个用例是变异的；第三个用例纯粹是验证的。因此，我们将使用一个变异 webhook 和一个验证 webhook 来实现这些步骤。
+- en: Note
+  id: totrans-168
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Work is in progress on [native defaulting via OpenAPI v3 validation schemas](http://bit.ly/2ZFH8JY).
+    OpenAPI has a `default` field, and the API server will apply that in the future.
+    Moreover, dropping unknown fields will become the standard behavior for every
+    resource, done by the Kubernetes API server through a [mechanism called pruning](http://bit.ly/2Xzt2wm).
+  id: totrans-169
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正在进行 [通过 OpenAPI v3 验证模式进行本地默认值设置](http://bit.ly/2ZFH8JY) 的工作。OpenAPI 有一个 `default`
+    字段，API 服务器将来会应用它。此外，通过一个称为修剪的机制，未知字段的删除将成为每个资源的标准行为，由 Kubernetes API 服务器执行（http://bit.ly/2Xzt2wm）。
+- en: Pruning is available as beta in Kubernetes 1.15\. Defaulting is planned to be
+    available as beta in 1.16\. When both features are available in the target cluster,
+    the two use cases from the preceding list can be implemented without any webhook
+    at all.
+  id: totrans-170
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 1.15 中，修剪作为 beta 版本提供。默认值计划在 1.16 的 beta 版本中可用。当目标集群中同时可用这两个功能时，可以完全不需要任何
+    webhook 来实现前述列表中的两个用例。
+- en: Admission Webhook Architecture
+  id: totrans-171
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 审核 Webhook 架构
+- en: Admission webhooks are structurally very similar to the conversion webhooks
+    we saw earlier in the chapter.
+  id: totrans-172
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 审核 webhooks 在结构上与我们在本章前面看到的转换 webhooks 非常相似。
+- en: 'They are deployed in the cluster, put behind a service mapping port 443 to
+    some port of the pods, and called using a review object, `AdmissionReview` in
+    the API group `admission.k8s.io/v1beta1`:'
+  id: totrans-173
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 它们被部署在集群中，在服务映射端口 443 的背后，映射到一些 pod 的端口，并且通过 API 组 `admission.k8s.io/v1beta1`
+    中的审核对象 `AdmissionReview` 进行调用：
+- en: '[PRE26]'
+  id: totrans-174
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE26]'
+- en: 'The `AdmissionRequest` contains all the information we are used to from the
+    admission attributes (see [“Implementation”](ch08.html#admission-plug-in-implementation)):'
+  id: totrans-175
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`AdmissionRequest` 包含我们从审核属性（参见 [“实施”](ch08.html#admission-plug-in-implementation)）中熟悉的所有信息：'
+- en: '[PRE27]'
+  id: totrans-176
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE27]'
+- en: The same `AdmissionReview` object is used for both mutating and validating admission
+    webhooks. The only difference is that in the mutating case, the `AdmissionResponse`
+    can have a field `patch` and `patchType`, to be applied inside the Kubernetes
+    API server after the webhook response has been received there. In the validating
+    case, these two fields are kept empty on response.
+  id: totrans-177
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 相同的 `AdmissionReview` 对象用于变异和验证审核 webhooks。唯一的区别在于，在变异情况下，`AdmissionResponse`
+    可以有一个 `patch` 字段和 `patchType` 字段，在 webhook 响应后在 Kubernetes API 服务器内应用。在验证情况下，这两个字段在响应时保持空白。
+- en: The most important field for our purposes here is the `Object` field, which—as
+    in the preceding conversion webhook—uses the `runtime.RawExtension` type to store
+    a pizza object.
+  id: totrans-178
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于我们这里的目的，最重要的字段是 `Object` 字段，与前面的转换 webhook 一样，使用 `runtime.RawExtension` 类型来存储
+    pizza 对象。
+- en: We also get the old object for update requests and could, say, check for fields
+    that are meant to be read-only but are changed in a request. We don’t do this
+    here in our example. But you will encounter many cases in Kubernetes where such
+    logic is implemented—for example, for most fields of a pod, as you can’t change
+    the command of a pod after it is created.
+  id: totrans-179
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于更新请求，我们还会获取旧对象，并且可以检查那些本应为只读但在请求中被更改的字段。在我们的示例中，我们并未这样做。但是在 Kubernetes 中，您会遇到许多这样实现逻辑的情况，例如对于
+    pod 的大多数字段，一旦创建后就无法更改 pod 的命令。
+- en: The patch returned by the mutating webhook must be of type JSON `Patch` (see
+    RFC 6902) in Kubernetes 1.14\. This patch describes how the object should be modified
+    to fulfill the required invariant.
+  id: totrans-180
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 1.14 中，由变异 Webhook 返回的补丁必须是 JSON `Patch` 类型（参见 RFC 6902）。此补丁描述了如何修改对象以满足所需的不变性。
+- en: Note that it is best practice to validate every mutating webhook change in a
+    validating webhook at the very end, at least if those enforced properties are
+    significant for the behavior. Imagine some other mutating webhook touches the
+    same fields in an object. Then you cannot be sure that the mutating changes will
+    survive until the end of the mutating admission chain.
+  id: totrans-181
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注意，在验证每个变异 Webhook 更改时，最佳做法是在验证 Webhook 的最后验证，至少如果这些强制属性对行为至关重要的话。想象一下，某个其他变异
+    Webhook 触及对象中的相同字段。然后，您不能确定变异更改是否会在变异准入链的末尾生效。
+- en: There is no order currently in mutating webhooks other than alphabetic order.
+    There are ongoing discussions to change this in one way or another in the future.
+  id: totrans-182
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 目前变异 Webhook 中除了字母顺序外没有顺序。未来可能会有讨论改变这一点。
+- en: For validating webhooks the order does not matter, obviously, and the Kubernetes
+    API server even calls validating webhooks in parallel to reduce latency. In contrast,
+    mutating webhooks add latency to every request that passes through them, as they
+    are called sequentially.
+  id: totrans-183
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于验证 Webhook，顺序显然无关紧要，Kubernetes API 服务器甚至并行调用验证 Webhook 以减少延迟。相比之下，变异 Webhook
+    会给通过它们的每个请求增加延迟，因为它们是顺序调用的。
+- en: Common latencies—of course heavily depending on the environment—are around 100ms.
+    So running many webhooks in sequence leads to considerable latencies that the
+    user will experience when creating or updating objects.
+  id: totrans-184
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 常见的延迟（当然，这严重依赖于环境）大约在 100 毫秒左右。因此，依次运行许多 Webhook 会导致用户在创建或更新对象时经历相当的延迟。
+- en: Registering Admission Webhooks
+  id: totrans-185
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 注册准入 Webhook
+- en: Admission webhooks are not registered in the CRD manifest. The reason is that
+    they apply not only to CRDs, but to any kind of resource. You can even add custom
+    admission webhooks to standard Kubernetes resources.
+  id: totrans-186
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 准入 Webhook 并未在 CRD 清单中注册。原因是它们不仅适用于 CRD，还适用于任何类型的资源。您甚至可以向标准 Kubernetes 资源添加自定义准入
+    Webhook。
+- en: 'Instead there are registration objects: `MutatingWebhookRegistration` and `ValidatingWebhookRegistration`.
+    They differ only in the kind name:'
+  id: totrans-187
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 只有注册对象：`MutatingWebhookRegistration` 和 `ValidatingWebhookRegistration`。它们仅在种类名称上有所不同：
+- en: '[PRE28]'
+  id: totrans-188
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE28]'
+- en: This registers our `pizza-crd` webhook from the beginning of the chapter for
+    mutating admission for our two versions of the resource `pizza`, the API group
+    `restaurant.programming-kubernetes.info`, and the HTTP verbs `CREATE` and `UPDATE`
+    (which includes patches as well).
+  id: totrans-189
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这在本章开头为我们的 `pizza-crd` Webhook 注册了变异准入，用于我们的两个版本的资源 `pizza`，API 组 `restaurant.programming-kubernetes.info`，以及
+    HTTP 动词 `CREATE` 和 `UPDATE`（也包括补丁）。
+- en: There are further ways in webhook configurations to restrict the matching resources—for
+    example, a namespace selector (to exclude, e.g., a control plane namespace to
+    avoid bootstrapping issues) and more advanced resource patterns with wildcards
+    and subresources.
+  id: totrans-190
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Webhook 配置中有进一步的方式来限制匹配的资源，例如命名空间选择器（例如，排除控制平面命名空间以避免引导问题）以及带有通配符和子资源的更高级资源模式。
+- en: Last but not least is a failure mode, which can be either `Fail` or `Ignore`.
+    It specifies what to do if the webhook cannot be reached or fails for other reasons.
+  id: totrans-191
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后但同样重要的是失败模式，它可以是 `Fail` 或 `Ignore`。它指定了如果无法访问 Webhook 或因其他原因失败时该怎么做。
+- en: Warning
+  id: totrans-192
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Admission webhooks can break clusters if they are deployed in the wrong way.
+    Admission webhook matching core types can make the whole cluster inoperable. Special
+    care must be taken to call admission webhooks for non-CRD resources.
+  id: totrans-193
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果错误部署，准入 Webhook 可能会破坏集群。准入 Webhook 匹配核心类型可能使整个集群无法操作。必须特别注意为非 CRD 资源调用准入 Webhook。
+- en: Specifically, it is good practice to exclude the control plane and the webhook
+    resources themselves from the webhook.
+  id: totrans-194
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 特别是，最好的做法是排除控制平面和 Webhook 资源本身的 Webhook。
+- en: Implementing an Admission Webhook
+  id: totrans-195
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 实施准入 Webhook
+- en: 'With the work we’ve done on the conversion webhook in the beginning of the
+    chapter, it is not hard to add admission capabilities. We also saw that the paths
+    */admit/v1beta1/pizza* and */validate/v1beta1/pizza* are registered in the main
+    function of the `pizza-crd-webhook` binary:'
+  id: totrans-196
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过我们在本章开头对转换 Webhook 的工作，添加准入能力并不困难。我们还看到了路径 */admit/v1beta1/pizza* 和 */validate/v1beta1/pizza*
+    在 `pizza-crd-webhook` 二进制文件的主函数中注册：
+- en: '[PRE29]'
+  id: totrans-197
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE29]'
+- en: 'The first part of the two HTTP handler implementations looks nearly the same
+    as for the conversion webhook:'
+  id: totrans-198
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 两个 HTTP 处理程序实现的第一部分看起来几乎与转换 Webhook 相同：
+- en: '[PRE30]'
+  id: totrans-199
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE30]'
+- en: 'In the case of the validating webhook, we have to wire the informer (used to
+    check that toppings exist in the cluster). We return an internal error as long
+    as the informer is not synced. An informer that is not synced has incomplete data,
+    so the toppings might not be known and the pizza would be rejected although they
+    are valid:'
+  id: totrans-200
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在验证 Webhook 的情况下，我们必须连接通知器（用于检查集群中的配料是否存在）。只要通知器未同步，我们就返回内部错误。未同步的通知器具有不完整的数据，因此可能不知道配料并且可能会拒绝比萨，尽管它们是有效的：
+- en: '[PRE31]'
+  id: totrans-201
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE31]'
+- en: 'As in the webhook conversion case, we have set up the scheme and the codec
+    factory with the admission API group and our restaurant API group:'
+  id: totrans-202
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 就像在 Webhook 转换案例中一样，我们设置了方案和编解码器工厂，其中包括准入 API 组和我们的餐厅 API 组：
+- en: '[PRE32]'
+  id: totrans-203
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE32]'
+- en: 'With these two, we decode the embedded pizza object (this time only one, no
+    slice) from the `AdmissionReview`:'
+  id: totrans-204
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过这两个，我们从 `AdmissionReview` 中解码嵌入的比萨对象（这次只有一个，没有切片）：
+- en: '[PRE33]'
+  id: totrans-205
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE33]'
+- en: 'Then we can do the actual mutating admission (the defaulting of `spec.toppings`
+    for both API versions):'
+  id: totrans-206
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后我们可以执行实际的突变准入（两个 API 版本的 `spec.toppings` 默认值）：
+- en: '[PRE34]'
+  id: totrans-207
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE34]'
+- en: Alternatively, we could use the conversion algorithms from the conversion webhook
+    and then implement defaulting only for one of the versions. Both approaches are
+    possible, and which one makes more sense depends on the context. Here, the defaulting
+    is simple enough to implement it twice.
+  id: totrans-208
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 或者，我们可以使用转换 Webhook 中的转换算法，然后仅为其中一个版本实现默认值。两种方法都可行，哪种更合理取决于上下文。在这里，默认值足够简单，可以实现两次。
+- en: 'The final step is to compute the patch—the difference between the original
+    object (stored in `orig` as JSON) and the new defaulted one:'
+  id: totrans-209
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后一步是计算补丁——原始对象（存储在 `orig` 中作为 JSON）与新的默认对象之间的差异：
+- en: '[PRE35]'
+  id: totrans-210
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE35]'
+- en: We use the [JSON-Patch library](http://bit.ly/2IKxwIk) (a fork of [Matt Baird’s](http://bit.ly/2xfBIsN)
+    with [critical fixes](http://bit.ly/2XxKfWP)) to derive the patch from the original
+    object `orig` and the modified object `bs`, both passed as JSON byte slices. Alternatively,
+    we could operate directly on untyped JSON data and create the JSON-Patch manually.
+    Again, it depends on the context. Using a diff library is convenient.
+  id: totrans-211
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们使用 [JSON-Patch 库](http://bit.ly/2IKxwIk)（Matt Baird 的一个分支，具有 [关键修复](http://bit.ly/2XxKfWP)）从原始对象
+    `orig` 和修改后的对象 `bs` 中提取补丁，两者都作为 JSON 字节切片传递。或者，我们可以直接操作未类型化的 JSON 数据并手动创建 JSON-Patch。同样，这取决于上下文。使用差异库很方便。
+- en: 'Then, as in the webhook conversion, we conclude by writing the response to
+    the response writer, using the codec factory created previously:'
+  id: totrans-212
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后，就像在 Webhook 转换中一样，我们通过使用之前创建的编解码器工厂向响应编写器写入响应来结束：
+- en: '[PRE36]'
+  id: totrans-213
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE36]'
+- en: 'The validating webhook is very similar, but it uses the toppings lister from
+    the shared informer to check for the existence of the topping objects:'
+  id: totrans-214
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 验证 Webhook 非常相似，但它使用共享通知器中的配料列表器来检查配料对象的存在：
+- en: '[PRE37]'
+  id: totrans-215
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE37]'
+- en: Admission Webhook in Action
+  id: totrans-216
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 准入 Webhook 正在起作用
+- en: 'We deploy the two admission webhooks by creating the two registration objects
+    in the cluster:'
+  id: totrans-217
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们通过在集群中创建两个注册对象来部署两个准入 Webhook：
+- en: '[PRE38]'
+  id: totrans-218
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE38]'
+- en: 'After this, we can’t create pizzas with unknown toppings anymore:'
+  id: totrans-219
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 之后，我们不能再创建具有未知配料的比萨了。
+- en: '[PRE39]'
+  id: totrans-220
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE39]'
+- en: 'Meanwhile, in the webhook log we see:'
+  id: totrans-221
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与此同时，在 Webhook 日志中我们看到：
+- en: '[PRE40]'
+  id: totrans-222
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE40]'
+- en: 'After creating the toppings in the example folder, we can create the margherita
+    pizza again:'
+  id: totrans-223
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在创建示例文件夹中的配料后，我们可以再次创建马格里塔比萨：
+- en: '[PRE41]'
+  id: totrans-224
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE41]'
+- en: 'Last but not least, let’s check that defaulting works as expected. We want
+    to create an empty pizza:'
+  id: totrans-225
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后但同样重要的是，让我们检查默认值是否按预期工作。我们想要创建一个空的比萨：
+- en: '[PRE42]'
+  id: totrans-226
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE42]'
+- en: 'This is supposed to be defaulted to a salami pizza, and it is:'
+  id: totrans-227
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这应该默认为一份萨拉米比萨，而且确实是：
+- en: '[PRE43]'
+  id: totrans-228
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE43]'
+- en: Voilà, a salami pizza with all the toppings that we expect. Enjoy!
+  id: totrans-229
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 啊，这里有一份所有我们期望的配料的萨拉米比萨。享受吧！
+- en: Before concluding the chapter, we want to look toward an `apiextensions.k8s.io/v1`
+    API group version (i.e., nonbeta, general availability) of CRDs—namely, the introduction
+    of structural schemas.
+  id: totrans-230
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在结束本章之前，我们希望关注一个 `apiextensions.k8s.io/v1` API 组版本（即非测试版，普遍可用版）的 CRDs —— 也就是结构模式的引入。
+- en: Structural Schemas and the Future of CustomResourceDefinitions
+  id: totrans-231
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 结构模式与自定义资源定义的未来
+- en: 'From Kubernetes 1.15 on, the OpenAPI v3 validation schema (see [“Validating
+    Custom Resources”](ch04.html#crd-validation)) is getting a more central role for
+    CRDs in the sense that it will be mandatory to specify a schema if any of these
+    new features is used:'
+  id: totrans-232
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从 Kubernetes 1.15 开始，OpenAPI v3 验证模式（参见[“验证自定义资源”](ch04.html#crd-validation)）在
+    CRD 中将扮演更加核心的角色，因为如果使用了这些新特性中的任何一个，指定模式将成为强制要求。
+- en: CRD conversion (see [Figure 9-2](#crd-conversion-webhook))
+  id: totrans-233
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: CRD 转换（参见[图 9-2](#crd-conversion-webhook)）
+- en: Pruning (see [“Pruning Versus Preserving Unknown Fields”](#crd-pruning))
+  id: totrans-234
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 修剪（参见[“对比修剪与保留未知字段”](#crd-pruning)）
+- en: Defaulting (see [“Default Values”](#crd-defaulting))
+  id: totrans-235
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 默认值（参见[“默认值”](#crd-defaulting)）
+- en: OpenAPI Schema [Publishing](http://bit.ly/2RzeA1O)
+  id: totrans-236
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: OpenAPI 模式 [发布](http://bit.ly/2RzeA1O)
+- en: Strictly speaking, the definition of a schema is still optional and every existing
+    CRD will keep working, but without a schema your CRD is excluded from any new
+    feature.
+  id: totrans-237
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 严格来说，模式的定义仍然是可选的，每个现有的 CRD 都将继续工作，但没有模式的 CRD 将被排除在任何新特性之外。
+- en: In addition, the specified schema must follow certain rules to enforce that
+    the specified types are actually sane in the sense of adhering to the [Kubernetes
+    API conventions](http://bit.ly/2Nfd9Hn). We call these *structural schema*.
+  id: totrans-238
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此外，指定的模式必须遵循某些规则，以确保指定的类型确实符合 [Kubernetes API 约定](http://bit.ly/2Nfd9Hn) 的理念。我们称之为
+    *结构模式*。
+- en: Structural Schemas
+  id: totrans-239
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 结构模式
+- en: 'A structural schema is an OpenAPI v3 validation schema (see [“Validating Custom
+    Resources”](ch04.html#crd-validation)) that obeys the following rules:'
+  id: totrans-240
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 结构模式是符合以下规则的 OpenAPI v3 验证模式（参见[“验证自定义资源”](ch04.html#crd-validation)）：
+- en: 'The schema specifies a nonempty type (via `type` in OpenAPI) for the root,
+    for each specified field of an object node (via `properties` or `additionalProperties`
+    in OpenAPI), and for each item in an array node (via `items` in OpenAPI), with
+    the exception of:'
+  id: totrans-241
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 指定模式为根、对象节点的每个指定字段（通过 OpenAPI 中的 `properties` 或 `additionalProperties`）以及数组节点中的每个项目（通过
+    OpenAPI 中的 `items`），要求非空类型（通过 `type` 在 OpenAPI 中），但有以下例外情况：
+- en: 'A node with `x-kubernetes-int-or-string: true`'
+  id: totrans-242
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '带有 `x-kubernetes-int-or-string: true` 的节点'
+- en: 'A node with `x-kubernetes-preserve-unknown-fields: true`'
+  id: totrans-243
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '带有 `x-kubernetes-preserve-unknown-fields: true` 的节点'
+- en: For each field in an object and each item in an array, which is set within an
+    `allOf`, `anyOf`, `oneOf`, or `not`, the schema also specifies the field/item
+    outside of those logical junctors.
+  id: totrans-244
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 对于对象中的每个字段和数组中的每个项目，它在 `allOf`、`anyOf`、`oneOf` 或 `not` 中设置，模式还指定了那些逻辑结合点之外的字段/项目。
+- en: 'The schema does not set `description`, `type`, `default`, `additionProperties`,
+    or `nullable` within an `allOf`, `anyOf`, `oneOf`, or `not`, with the exception
+    of the two patterns for `x-kubernetes-int-or-string: true` (see [“IntOrString
+    and RawExtensions”](#intorstring-section)).'
+  id: totrans-245
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: '模式未在 `allOf`、`anyOf`、`oneOf` 或 `not` 中设置 `description`、`type`、`default`、`additionProperties`
+    或 `nullable`，但对于 `x-kubernetes-int-or-string: true` 的两种模式有例外情况（参见[“IntOrString
+    和 RawExtensions”](#intorstring-section)）。'
+- en: If `metadata` is specified, then only restrictions on `metadata.name` and `metadata.generateName`
+    are allowed.
+  id: totrans-246
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 如果指定了 `metadata`，则只允许对 `metadata.name` 和 `metadata.generateName` 的限制。
+- en: 'Here is an example that is not structural:'
+  id: totrans-247
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是一个非结构化示例：
+- en: '[PRE44]'
+  id: totrans-248
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE44]'
+- en: 'It is not a structural schema because of the following violations:'
+  id: totrans-249
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于以下违规，它不是结构模式：
+- en: The type at the root is missing (rule 1).
+  id: totrans-250
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 根处的类型缺失（规则 1）。
+- en: The type of `foo` is missing (rule 1).
+  id: totrans-251
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 缺少 `foo` 的类型（规则 1）。
+- en: '`bar` inside of `anyOf` is not specified outside (rule 2).'
+  id: totrans-252
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`anyOf` 内部的 `bar` 在外部未指定（规则 2）。'
+- en: '`bar`’s `type` is within `anyOf` (rule 3).'
+  id: totrans-253
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`anyOf` 中 `bar` 的 `type`（规则 3）。'
+- en: The description is set within `anyOf` (rule 3).
+  id: totrans-254
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 描述在 `anyOf` 中设置（规则 3）。
+- en: '`metadata.finalizer` might not be restricted (rule 4).'
+  id: totrans-255
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 可能不会限制 `metadata.finalizer`（规则 4）。
+- en: 'In contrast, the following, corresponding schema is structural:'
+  id: totrans-256
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 相反，以下对应的模式是结构化的：
+- en: '[PRE45]'
+  id: totrans-257
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE45]'
+- en: Violations of the structural schema rules are reported in the `NonStructural`
+    condition in the CRD.
+  id: totrans-258
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 违反结构模式规则将在 CRD 的 `NonStructural` 条件中报告。
+- en: Verify for yourself that the schema of the `cnat` example in [“Validating Custom
+    Resources”](ch04.html#crd-validation) and the schemas in the [pizza CRD example](http://bit.ly/31MrFcO)
+    are indeed structural.
+  id: totrans-259
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请自行验证 [“验证自定义资源”](ch04.html#crd-validation) 中的 `cnat` 示例的模式以及 [pizza CRD 示例](http://bit.ly/31MrFcO)
+    中的模式是否确实是结构化的。
+- en: Pruning Versus Preserving Unknown Fields
+  id: totrans-260
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 对比修剪与保留未知字段
+- en: CRDs traditionally store any (possibly validated) JSON as is in `etcd`. This
+    means that unspecified fields (if there is an OpenAPI v3 validation schema at
+    all) will be persisted. This is in contrast to native Kubernetes resources like
+    a pod. If the user specifies a field `spec.randomField`, this will be accepted
+    by the API server HTTPS endpoint but dropped (we call this *pruning*) before writing
+    that pod to `etcd`.
+  id: totrans-261
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CRD传统上会将任何（可能已验证的）JSON存储为`etcd`中的原样。这意味着未指定的字段（如果有OpenAPI v3验证模式）将被持久化。这与像pod这样的本机Kubernetes资源形成对比。如果用户指定了一个字段`spec.randomField`，这将被API服务器HTTPS端点接受，但在将该pod写入`etcd`之前会被丢弃（我们称之为*修剪*）。
+- en: If a structural OpenAPI v3 validation schema is defined (either in the global
+    `spec.validation.openAPIV3Schema` or for each version), we can enable pruning
+    (which drops unspecified fields on creation and on update) by setting `spec.preserveUnknownFields`
+    to `false`.
+  id: totrans-262
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果定义了结构化的OpenAPI v3验证模式（在全局`spec.validation.openAPIV3Schema`或每个版本中），我们可以通过将`spec.preserveUnknownFields`设置为`false`来启用修剪（在创建和更新时丢弃未指定的字段）。
+- en: 'Let’s look at the `cnat` example.^([2](ch09.html#idm46336839329896)) With a
+    Kubernetes 1.15 cluster at hand, we enable pruning:'
+  id: totrans-263
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们看看`cnat`示例。^([2](ch09.html#idm46336839329896)) 有一个Kubernetes 1.15集群，我们启用修剪：
+- en: '[PRE46]'
+  id: totrans-264
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE46]'
+- en: 'Then we try to create an instance with an unknown field:'
+  id: totrans-265
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后我们尝试创建一个具有未知字段的实例：
+- en: '[PRE47]'
+  id: totrans-266
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE47]'
+- en: 'If we retrieve this object with `kubectl get at example-at`, we see that the
+    `someGarbage` value is dropped:'
+  id: totrans-267
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果我们使用`kubectl get at example-at`检索此对象，我们会看到`someGarbage`值被丢弃：
+- en: '[PRE48]'
+  id: totrans-268
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE48]'
+- en: We say that `someGarbage` has been *pruned*.
+  id: totrans-269
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们说`someGarbage`已经被*修剪*了。
+- en: 'As of Kubernetes 1.15, pruning is available in *apiextensions/v1beta1*, but
+    it defaults to off; that is, `spec.preserveUnknownFields` defaults to `true`.
+    In *apiextensions/v1*, no new CRD with `spec.preserveUnknownFields: true` will
+    be allowed to be created.'
+  id: totrans-270
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '从Kubernetes 1.15开始，*apiextensions/v1beta1*中提供了修剪功能，但默认为关闭；也就是说，`spec.preserveUnknownFields`默认为`true`。在*apiextensions/v1*中，不允许创建具有`spec.preserveUnknownFields:
+    true`的新CRD。'
+- en: Controlling Pruning
+  id: totrans-271
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 控制修剪
+- en: 'With `spec.preserveUnknownField: false` in the CRD, pruning is enabled for
+    all CRs of that type and in all versions. It is possible, though, to opt out of
+    pruning for a JSON subtree via `x-kubernetes-preserve-unknown-fields: true` in
+    the OpenAPI v3 validation schema:'
+  id: totrans-272
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '在CRD中使用`spec.preserveUnknownField: false`，这将启用该类型和所有版本的所有CR的修剪。但是，可以通过在OpenAPI
+    v3验证模式中使用`x-kubernetes-preserve-unknown-fields: true`来选择退出对JSON子树的修剪：'
+- en: '[PRE49]'
+  id: totrans-273
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE49]'
+- en: The field `json` can store any JSON value, without anything being pruned.
+  id: totrans-274
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 字段`json`可以存储任何JSON值，而不会被修剪。
+- en: 'It is possible to partially specify the permitted JSON:'
+  id: totrans-275
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以部分指定允许的JSON：
+- en: '[PRE50]'
+  id: totrans-276
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE50]'
+- en: With this approach, only object type values are allowed.
+  id: totrans-277
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 采用这种方法，仅允许对象类型值。
+- en: 'Pruning is enabled again for each specified property (or `additionalProperties`):'
+  id: totrans-278
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 启用每个指定属性（或`additionalProperties`）的修剪：
+- en: '[PRE51]'
+  id: totrans-279
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE51]'
+- en: 'With this, the value:'
+  id: totrans-280
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有了这个，值是：
+- en: '[PRE52]'
+  id: totrans-281
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE52]'
+- en: 'will be pruned to:'
+  id: totrans-282
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将被修剪为：
+- en: '[PRE53]'
+  id: totrans-283
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE53]'
+- en: This means that the *`something`* field in the specified `spec` object is pruned
+    (because “spec” is specified), but everything outside is not. `status` is not
+    specified such that `status.*something*` is not pruned.
+  id: totrans-284
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这意味着在指定的`spec`对象中，*`something`*字段被修剪了（因为指定了“spec”），但外部的所有内容都没有。`status`未指定，因此`status.*something*`不会被修剪。
+- en: IntOrString and RawExtensions
+  id: totrans-285
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: IntOrString和RawExtensions
+- en: There are situations where structural schemas are not expressive enough. One
+    of those is a *polymorphic* field—one that can be of different types. We know
+    `IntOrString` from native Kubernetes API types.
+  id: totrans-286
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有些情况下，结构模式表达力不够。其中之一是*多态*字段，即可以是不同类型的字段。我们从本机Kubernetes API类型中知道`IntOrString`。
+- en: 'It is possible to have `IntOrString` in CRDs using the `x-kubernetes-int-or-string:
+    true` directive inside the schema. Similarly, `runtime.RawExtensions` can be declared
+    using the `x-kubernetes-embedded-object: true`.'
+  id: totrans-287
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '可以使用`x-kubernetes-int-or-string: true`指令在CRDs中有`IntOrString`。类似地，可以使用`x-kubernetes-embedded-object:
+    true`声明`runtime.RawExtensions`。'
+- en: 'For example:'
+  id: totrans-288
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如：
+- en: '[PRE54]'
+  id: totrans-289
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE54]'
+- en: 'This declares:'
+  id: totrans-290
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这声明了：
+- en: A field called `intorstr` that holds either an integer or a string
+  id: totrans-291
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一个名为`intorstr`的字段，其中包含整数或字符串
+- en: A field called `embedded` that holds a Kubernetes-like object such as a complete
+    pod specification
+  id: totrans-292
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一个名为`embedded`的字段，其中包含类似于完整的pod规范的Kubernetes对象
+- en: Refer to the [official CRD documentation](http://bit.ly/2Lnmw61) for all the
+    details about these directives.
+  id: totrans-293
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有关这些指令的所有详细信息，请参阅[官方CRD文档](http://bit.ly/2Lnmw61)。
+- en: The last topic we want to talk about that depends on structural schemas is defaulting.
+  id: totrans-294
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们想讨论的最后一个依赖于结构模式的主题是默认值。
+- en: Default Values
+  id: totrans-295
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 默认值
+- en: In native Kubernetes types, it is common to default certain values. Defaulting
+    used to be possible for CRDs only by way of mutating admission webhooks (see [“Admission
+    Webhooks”](#admission-webhooks)). As of Kubernetes 1.15, however, defaulting support
+    is added (see the [design document](http://bit.ly/2ZFH8JY)) to CRDs directly via
+    the OpenAPI v3 schema described in the previous section.
+  id: totrans-296
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在原生 Kubernetes 类型中，默认某些值是常见的。在 Kubernetes 1.15之前，CRDs的默认设置只能通过变更接受 Webhooks
+    实现（参见[“Admission Webhooks”](#admission-webhooks)）。然而，从 Kubernetes 1.15 开始，通过前一节中描述的
+    OpenAPI v3 模式直接向 CRDs 添加了默认支持（请参阅[设计文档](http://bit.ly/2ZFH8JY)）。
+- en: Note
+  id: totrans-297
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: As of 1.15 this is still an alpha feature, meaning it’s disabled by default
+    behind the feature gate `CustomResourceDefaulting`. But with promotion to beta,
+    probably in 1.16, it will become ubiquitous in CRDs.
+  id: totrans-298
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到1.15版本为止，这仍然是一个alpha功能，默认情况下在特性门控`CustomResourceDefaulting`后面是禁用的。但是随着在1.16中晋升为beta，它将在CRDs中变得普遍。
+- en: In order to default certain fields, just specify the default value via the `default`
+    keyword in the OpenAPI v3 schema. This is very useful when you are adding new
+    fields to a type.
+  id: totrans-299
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了默认某些字段，只需在 OpenAPI v3 模式中使用 `default` 关键字指定默认值。当您向类型添加新字段时，这非常有用。
+- en: 'Starting with the schema of the `cnat` example from [“Validating Custom Resources”](ch04.html#crd-validation),
+    let’s assume we want to make the container image customizable, but default to
+    a `busybox` image. For that we add the `image` field of string type to the OpenAPI
+    v3 schema and set the default to `busybox`:'
+  id: totrans-300
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从[“验证自定义资源”](ch04.html#crd-validation)的`cnat`示例的模式开始，假设我们想要使容器镜像可自定义，但默认为`busybox`镜像。为此，我们向OpenAPI
+    v3模式添加了string类型的`image`字段，并将其默认设置为`busybox`：
+- en: '[PRE55]'
+  id: totrans-301
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE55]'
+- en: 'If the user creates an instance without specifying the image, the value is
+    automatically set:'
+  id: totrans-302
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果用户创建实例而没有指定镜像，该值会自动设置：
+- en: '[PRE56]'
+  id: totrans-303
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE56]'
+- en: 'On creation, this turns automatically into:'
+  id: totrans-304
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在创建时，这将自动转换为：
+- en: '[PRE57]'
+  id: totrans-305
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE57]'
+- en: This looks super convenient and significantly improves the user experience of
+    CRDs. What’s more, all old objects persisted in `etcd` will automatically inherit
+    the new field when read from the API server.^([3](ch09.html#idm46336838744152))
+  id: totrans-306
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这看起来非常方便，显著提升了CRDs的用户体验。更重要的是，所有存储在`etcd`中的旧对象在从API服务器读取时将自动继承新字段^([3](ch09.html#idm46336838744152))。
+- en: Note that persisted objects in `etcd` will not be rewritten (i.e., migrated
+    automatically). In other words, on read the default values are only added on the
+    fly and are only persisted when the object is updated for another reason.
+  id: totrans-307
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，`etcd`中持久化的对象不会被重写（即不会自动迁移）。换句话说，读取时默认值仅在需要更新对象的另一原因时添加，并且仅在对象被更新时持久化。
+- en: Summary
+  id: totrans-308
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 概述
+- en: Admission and conversion webhooks take CRDs to a completely different level.
+    Before these features, CRs were mostly used for small, not-so-serious use cases,
+    often for configuration and for in-house applications where API compatibility
+    was not that important.
+  id: totrans-309
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Admission和conversion webhooks将CRDs带入了一个完全不同的层次。在这些功能之前，CRs主要用于小型、不那么严肃的用例，通常用于配置和内部应用程序，API兼容性并不那么重要。
+- en: With webhooks CRs look much more like native resources, with a long lifecycle
+    and powerful semantics. We have seen how to implement dependencies between different
+    resources and how to set defaulting of fields.
+  id: totrans-310
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 Webhooks 后，CRs看起来更像是本地资源，具有长寿命周期和强大的语义。我们已经看到了如何在不同资源之间实现依赖关系以及如何设置字段的默认值。
+- en: At this point you probably have a lot of ideas about where these features can
+    be used in existing CRDs. We are curious to see the innovations of the community
+    based on these features in the future.
+  id: totrans-311
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到这一步，您可能已经对这些功能在现有CRDs中的应用场景有了很多想法。我们很想看到社区基于这些功能未来的创新。
+- en: ^([1](ch09.html#idm46336844085864-marker)) `apiextensions.k8s.io` and `admissionregistration.k8s.io`
+    are both scheduled to be promoted to v1 in Kubernetes 1.16.
+  id: totrans-312
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([1](ch09.html#idm46336844085864-marker)) `apiextensions.k8s.io` 和 `admissionregistration.k8s.io`
+    都计划在 Kubernetes 1.16 中晋升为 v1。
+- en: ^([2](ch09.html#idm46336839329896-marker)) We use the `cnat` example instead
+    of the pizza example due to the simple structure of the former—for example, there’s
+    only one version. Of course, all of this scales to multiple versions (i.e., one
+    schema version).
+  id: totrans-313
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([2](ch09.html#idm46336839329896-marker)) 我们使用`cnat`示例而不是披萨示例，因为前者的结构简单—例如，只有一个版本。当然，所有这些都可以扩展到多个版本（即一个模式版本）。
+- en: ^([3](ch09.html#idm46336838744152-marker)) For example, via `kubectl get ats
+    -o yaml`.
+  id: totrans-314
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([3](ch09.html#idm46336838744152-marker)) 例如，通过`kubectl get ats -o yaml`。

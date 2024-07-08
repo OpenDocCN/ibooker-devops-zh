@@ -1,0 +1,3525 @@
+- en: Chapter 2\. Linux Networking
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第2章\. Linux网络
+- en: To understand the implementation of networking in Kubernetes, we will need to
+    understand the fundamentals of networking in Linux. Ultimately, Kubernetes is
+    a complex management tool for Linux (or Windows!) machines, and this is hard to
+    ignore while working with the Kubernetes network stack. This chapter will provide
+    an overview of the Linux networking stack, with a focus on areas of note in Kubernetes.
+    If you are highly familiar with Linux networking and network management, you may
+    want to skim or skip this chapter.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要理解Kubernetes中网络实现的实施，我们需要了解Linux网络的基础知识。最终，Kubernetes是Linux（或Windows！）机器的复杂管理工具，这在处理Kubernetes网络堆栈时是不可忽视的。本章将概述Linux网络堆栈，重点关注在Kubernetes中值得注意的领域。如果您对Linux网络和网络管理非常熟悉，您可以快速浏览或跳过本章。
+- en: Tip
+  id: totrans-2
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: This chapter introduces many Linux programs. Manual, or *man*, pages, accessible
+    with `man <program>`, will provide more detail.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本章介绍了许多Linux程序。可以通过`man <program>`访问手册页，以获取更多详细信息。
+- en: Basics
+  id: totrans-4
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 基础知识
+- en: Let’s revisit our Go web server, which we used in [Chapter 1](ch01.xhtml#networking_introduction).
+    This web server listens on port 8080 and returns “Hello” for HTTP requests to
+    / (see [Example 2-1](#EX1_Ch02)).
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们重新审视我们的Go Web服务器，在[第1章](ch01.xhtml#networking_introduction)中使用过。该Web服务器监听端口8080，并对HTTP请求返回“Hello”至
+    / （参见[示例2-1](#EX1_Ch02)）。
+- en: Example 2-1\. Minimal web server in Go
+  id: totrans-6
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例2-1\. Go中的最小Web服务器
+- en: '[PRE0]'
+  id: totrans-7
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: Warning
+  id: totrans-8
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Ports 1–1023 (also known as *well-known ports*) require root permission to bind
+    to.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 端口1-1023（也称为*众所周知的端口*）需要root权限才能绑定。
+- en: Programs should always be given the least permissions necessary to function,
+    which means that a typical web service should not be run as the root user. Because
+    of this, many programs will listen on port 1024 or higher (in particular, port
+    8080 is a common choice for HTTP services). When possible, listen on a nonprivileged
+    port, and use infrastructure redirects (load balancer forwarding, Kubernetes services,
+    etc.) to forward an externally visible privileged port to a program listening
+    on a nonprivileged port.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 程序应该始终以最低权限运行，这意味着典型的Web服务不应该以root用户身份运行。因此，许多程序会监听1024或更高端口（特别是端口8080是HTTP服务的常见选择）。在可能的情况下，监听非特权端口，并使用基础设施重定向（负载均衡器转发、Kubernetes服务等）将外部可见的特权端口转发到监听非特权端口的程序上。
+- en: This way, an attacker exploiting a possible vulnerability in your service will
+    not have overly broad permissions available to them.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这样，攻击者利用服务中可能存在的漏洞时，无法获得过于广泛的权限。
+- en: Suppose this program is running on a Linux server machine and an external client
+    makes a request to `/`. What happens on the server? To start off, our program
+    needs to listen to an address and port. Our program creates a socket for that
+    address and port and binds to it. The socket will receive requests addressed to
+    both the specified address and port - `8080` with any IP address in our case.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设该程序正在运行在Linux服务器上，并且外部客户端向 `/` 发起请求。服务器会发生什么？首先，我们的程序需要监听一个地址和端口。程序会为该地址和端口创建一个套接字并绑定到它。该套接字将接收发往指定地址和端口的请求
+    - 在我们的案例中是端口 `8080` 和任意IP地址。
+- en: Note
+  id: totrans-13
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: '`0.0.0.0` in IPv4 and `[::]` in IPv6 are wildcard addresses. They match all
+    addresses of their respective protocol and, as such, listen on all available IP
+    addresses when used for a socket binding.'
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: IPv4中的 `0.0.0.0` 和IPv6中的 `[::]` 是通配地址。它们匹配其各自协议的所有地址，因此在套接字绑定时监听所有可用IP地址。
+- en: This is useful to expose a service, without prior knowledge of what IP addresses
+    the machines running it will have. Most network-exposed services bind this way.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这对于暴露服务非常有用，而无需预先知道运行服务的机器将具有哪些IP地址。大多数网络暴露的服务都会绑定在这种方式上。
+- en: There are multiple ways to inspect sockets. For example, `ls -lah /proc/<server
+    proc>/fd` will list the sockets. We will discuss some programs that can inspect
+    sockets at the end of this chapter.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有多种方法可以检查套接字。例如，`ls -lah /proc/<server proc>/fd` 将列出套接字。本章末尾我们将讨论一些可以检查套接字的程序。
+- en: The kernel maps a given packet to a specific connection and uses an internal
+    state machine to manage the connection state. Like sockets, connections can be
+    inspected through various tools, which we will discuss later in this chapter.
+    Linux represents each connection with a file. Accepting a connection entails a
+    notification from the kernel to our program, which is then able to stream content
+    to and from the file.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 内核将给定的数据包映射到特定的连接，并使用内部状态机来管理连接状态。与套接字类似，连接可以通过各种工具进行检查，我们将在本章后面讨论。Linux用文件表示每个连接。接受连接涉及内核向我们的程序发送的通知，然后我们能够流式传输文件中的内容。
+- en: 'Going back to our Golang web server, we can use `strace` to show what the server
+    is doing:'
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 回到我们的Golang Web服务器，我们可以使用`strace`来显示服务器正在执行的操作：
+- en: '[PRE1]'
+  id: totrans-19
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: 'Because `strace` captures all the system calls made by our server, there is
+    a *lot* of output. Let’s reduce it somewhat to the relevant network syscalls.
+    Key points are highlighted, as the Go HTTP server performs many syscalls during
+    startup:'
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因为`strace`捕获了服务器所做的所有系统调用，输出非常多。让我们将其减少到相关的网络系统调用。关键点已经突出显示，因为Go HTTP服务器在启动期间执行了许多系统调用：
+- en: '[PRE2]'
+  id: totrans-21
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: '[![1](Images/1.png)](#co_linux_networking_CO1-1)'
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](Images/1.png)](#co_linux_networking_CO1-1)'
+- en: Open a file descriptor.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 打开文件描述符。
+- en: '[![2](Images/2.png)](#co_linux_networking_CO1-2)'
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](Images/2.png)](#co_linux_networking_CO1-2)'
+- en: Create a TCP socket for IPv6 connections.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为IPv6连接创建TCP套接字。
+- en: '[![3](Images/3.png)](#co_linux_networking_CO1-3)'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](Images/3.png)](#co_linux_networking_CO1-3)'
+- en: Disable `IPV6_V6ONLY` on the socket. Now, it can listen on IPv4 and IPv6.
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在套接字上禁用`IPV6_V6ONLY`。现在，它可以同时监听IPv4和IPv6。
+- en: '[![4](Images/4.png)](#co_linux_networking_CO1-4)'
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](Images/4.png)](#co_linux_networking_CO1-4)'
+- en: Bind the IPv6 socket to listen on port 8080 (all addresses).
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将IPv6套接字绑定到监听端口8080（所有地址）。
+- en: '[![5](Images/5.png)](#co_linux_networking_CO1-5)'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](Images/5.png)](#co_linux_networking_CO1-5)'
+- en: Wait for a request.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 等待请求。
+- en: Once the server has started, we see the output from `strace` pause on `epoll_wait`.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦服务器启动，我们看到`strace`输出在`epoll_wait`上暂停。
+- en: 'At this point, the server is listening on its socket and waiting for the kernel
+    to notify it about packets. When we make a request to our listening server, we
+    see the “Hello” message:'
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此时，服务器正在监听其套接字，并等待内核通知其有数据包。当我们向我们的监听服务器发出请求时，我们看到“Hello”消息：
+- en: '[PRE3]'
+  id: totrans-34
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: Tip
+  id: totrans-35
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: If you are trying to debug the fundamentals of a web server with `strace`, you
+    will probably not want to use a web browser. Additional requests or metadata sent
+    to the server may result in additional work for the server, or the browser may
+    not make expected requests. For example, many browsers try to request a favicon
+    file automatically. They will also attempt to cache files, reuse connections,
+    and do other things that make it harder to predict the exact network interaction.
+    When simple or minimal reproduction matters, try using a tool like `curl` or `telnet`.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您试图使用`strace`调试Web服务器的基础知识，您可能不想使用Web浏览器。对服务器发送的额外请求或元数据可能会导致服务器执行额外的工作，或者浏览器可能不会发出预期的请求。例如，许多浏览器会自动请求favicon文件。它们还会尝试缓存文件，重用连接，以及执行其他使得准确预测网络交互变得更加困难的操作。在需要简单或最小复制场景时，尝试使用诸如`curl`或`telnet`等工具。
+- en: 'In `strace`, we see the following from our server process:'
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在`strace`中，我们从我们的服务器进程看到以下内容：
+- en: '[PRE4]'
+  id: totrans-38
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: After inspecting the socket, our server writes response data (“Hello” wrapped
+    in the HTTP protocol) to the file descriptor. From there, the Linux kernel (and
+    some other userspace systems) translates the request into packets and transmits
+    those packets back to our cURL client.
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 检查完套接字后，我们的服务器向文件描述符写入响应数据（在HTTP协议中包装的“Hello”）。然后，Linux内核（以及其他一些用户空间系统）将请求转换为数据包，并将这些数据包传输回我们的cURL客户端。
+- en: 'To summarize what the server is doing when it receives a request:'
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 总结一下服务器在收到请求时的操作：
+- en: Epoll returns and causes the program to resume.
+  id: totrans-41
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: Epoll返回并导致程序恢复。
+- en: The server sees a connection from `::ffff:10.0.0.57`, the client IP address
+    in this example.
+  id: totrans-42
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 服务器在本示例中看到来自`::ffff:10.0.0.57`的连接IP地址。
+- en: The server inspects the socket.
+  id: totrans-43
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 服务器检查套接字。
+- en: 'The server changes `KEEPALIVE` options: it turns `KEEPALIVE` on, and sets a
+    180-second interval between `KEEPALIVE` probes.'
+  id: totrans-44
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 服务器更改了`KEEPALIVE`选项：打开了`KEEPALIVE`，并设置了180秒的间隔来进行`KEEPALIVE`探测。
+- en: This is a bird’s-eye view of networking in Linux, from an application developer’s
+    point of view. There’s a lot more going on to make everything work. We’ll look
+    in more detail at parts of the networking stack that are particularly relevant
+    for Kubernetes users.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是从应用开发者角度来看 Linux 网络的鸟瞰图。要让所有内容正常工作，还有很多工作要做。我们将更详细地查看对 Kubernetes 用户特别相关的网络堆栈部分。
+- en: The Network Interface
+  id: totrans-46
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 网络接口
+- en: Computers use a *network interface* to communicate with the outside world. Network
+    interfaces can be physical (e.g., an Ethernet network controller) or virtual.
+    Virtual network interfaces do not correspond to physical hardware; they are abstract
+    interfaces provided by the host or hypervisor.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 计算机使用*网络接口*与外部世界通信。网络接口可以是物理的（例如，以太网网络控制器）或虚拟的。虚拟网络接口不对应物理硬件；它们是主机或虚拟机监视器提供的抽象接口。
+- en: IP addresses are assigned to network interfaces. A typical interface may have
+    one IPv4 address and one IPv6 address, but multiple addresses can be assigned
+    to the same interface.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: IP 地址分配给网络接口。典型接口可能具有一个 IPv4 地址和一个 IPv6 地址，但可以将多个地址分配给同一接口。
+- en: Linux itself has a concept of a network interface, which can be physical (such
+    as an Ethernet card and port) or virtual. If you run `ifconfig`, you will see
+    a list of all network interfaces and their configurations (including IP addresses).
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linux 本身具有网络接口的概念，可以是物理的（如以太网卡和端口）或虚拟的。如果运行`ifconfig`，您将看到所有网络接口及其配置（包括 IP 地址）的列表。
+- en: The *loopback interface* is a special interface for same-host communication.
+    `127.0.0.1` is the standard IP address for the loopback interface. Packets sent
+    to the loopback interface will not leave the host, and processes listening on
+    `127.0.0.1` will be accessible only to other processes on the same host. Note
+    that making a process listen on `127.0.0.1` is not a security boundary. CVE-2020-8558
+    was a past Kubernetes vulnerability, in which `kube-proxy` rules allowed some
+    remote systems to reach `127.0.0.1`. The loopback interface is commonly abbreviated
+    as `lo`.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*回环接口*是用于同主机通信的特殊接口。`127.0.0.1`是回环接口的标准 IP 地址。发送到回环接口的数据包将不会离开主机，而在`127.0.0.1`上监听的进程只能由同一主机上的其他进程访问。请注意，使进程在`127.0.0.1`上监听不是安全边界。CVE-2020-8558
+    是过去 Kubernetes 的一个漏洞，在此漏洞中，`kube-proxy`规则允许某些远程系统访问`127.0.0.1`。回环接口通常缩写为`lo`。'
+- en: Tip
+  id: totrans-51
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: The `ip` command can also be used to inspect network interfaces.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`ip`命令也可用于检查网络接口。'
+- en: Let’s look at a typical `ifconfig` output; see [Example 2-2](#EX0202).
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们看一个典型的`ifconfig`输出；参见[示例 2-2](#EX0202)。
+- en: Example 2-2\. Output from `ifconfig` on a machine with one pysical network interface
+    (ens4), and the loopback interface
+  id: totrans-54
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 2-2\. 一个带有一个物理网络接口（ens4）和回环接口的机器上的`ifconfig`输出
+- en: '[PRE5]'
+  id: totrans-55
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: Container runtimes create a virtual network interface for each pod on a host,
+    so the list would be much longer on a typical Kubernetes node. We’ll cover container
+    networking in more detail in [Chapter 3](ch03.xhtml#container_networking_basics).
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器运行时在主机上为每个 pod 创建一个虚拟网络接口，因此在典型的 Kubernetes 节点上，列表会更长。我们将在[第 3 章](ch03.xhtml#container_networking_basics)详细讨论容器网络。
+- en: The Bridge Interface
+  id: totrans-57
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 桥接接口
+- en: The bridge interface (shown in [Figure 2-1](#img-bridge)) allows system administrators
+    to create multiple layer 2 networks on a single host. In other words, the bridge
+    functions like a network switch between network interfaces on a host, seamlessly
+    connecting them. Bridges allow pods, with their individual network interfaces,
+    to interact with the broader network via the node’s network interface.
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 桥接接口（如[图 2-1](#img-bridge)所示）允许系统管理员在单个主机上创建多个二层网络。换句话说，桥接功能类似于将主机上的网络接口连接起来的网络交换机，无缝连接它们。桥接允许具有各自网络接口的
+    pod 通过节点的网络接口与更广泛的网络交互。
+- en: '![Bridge](Images/neku_0201.png)'
+  id: totrans-59
+  prefs: []
+  type: TYPE_IMG
+  zh: '![桥接](Images/neku_0201.png)'
+- en: Figure 2-1\. Bridge interface
+  id: totrans-60
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-1\. 桥接口
+- en: Note
+  id: totrans-61
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: You can read more about Linux bridging in the [documentation](https://oreil.ly/4BRsA).
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在[文档](https://oreil.ly/4BRsA)中了解有关 Linux 桥接的更多信息。
+- en: In [Example 2-3](#Veth), we demonstrate how to create a bridge device named
+    `br0` and attach a virtual Ethernet (veth) device, `veth`, and a physical device,
+    `eth0`, using `ip`.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[示例 2-3](#Veth)中，我们演示如何使用`ip`创建一个名为`br0`的桥接设备，并连接一个虚拟以太网（veth）设备`veth`和一个物理设备`eth0`。
+- en: Example 2-3\. Creating bridge interface and connecting veth pair
+  id: totrans-64
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 2-3\. 创建桥接口并连接veth对
+- en: '[PRE6]'
+  id: totrans-65
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: Bridges can also be managed and created using the `brctl` command. [Example 2-4](#Brctl)
+    shows some options available with `brctl`.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 桥接也可以使用 `brctl` 命令来管理和创建。[示例 2-4](#Brctl)展示了一些可用的 `brctl` 选项。
+- en: Example 2-4\. `brctl` options
+  id: totrans-67
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 2-4\. `brctl` 选项
+- en: '[PRE7]'
+  id: totrans-68
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: The veth device is a local Ethernet tunnel. Veth devices are created in pairs,
+    as shown in [Figure 2-1](#img-bridge), where the pod sees an `eth0` interface
+    from the veth. Packets transmitted on one device in the pair are immediately received
+    on the other device. When either device is down, the link state of the pair is
+    down. Adding a bridge to Linux can be done with using the `brctl` commands or
+    `ip`. Use a veth configuration when namespaces need to communicate to the main
+    host namespace or between each other.
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: veth 设备是本地以太网隧道。Veth 设备成对创建，如[图 2-1](#img-bridge)所示，其中 pod 从 veth 看到 `eth0`
+    接口。在一对设备中传输的数据包会立即在另一对设备上接收到。如果任何一个设备关闭，该对的链接状态也会关闭。在 Linux 中添加桥接可以通过使用 `brctl`
+    命令或 `ip` 命令来完成。当命名空间需要与主机命名空间或彼此之间通信时，请使用 veth 配置。
+- en: '[Example 2-5](#Veth-Create) shows how to set up a veth configuration.'
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[示例 2-5](#Veth-Create) 展示了如何设置 veth 配置。'
+- en: Example 2-5\. Veth creation
+  id: totrans-71
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 2-5\. 创建 veth
+- en: '[PRE8]'
+  id: totrans-72
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: In [Example 2-5](#Veth-Create), we show the steps to create two network namespaces
+    (not to be confused with Kubernetes namespaces), `net1` and `net2`, and a pair
+    of veth devices, with `veth1` assigned to namespace `net1` and `veth2` assigned
+    to namespace `net2`. These two namespaces are connected with this veth pair. Assign
+    a pair of IP addresses, and you can ping and communicate between the two namespaces.
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 [示例 2-5](#Veth-Create) 中，我们展示了创建两个网络命名空间（与 Kubernetes 命名空间不同），`net1` 和 `net2`，以及一对
+    veth 设备的步骤，其中 `veth1` 分配给命名空间 `net1`，`veth2` 分配给命名空间 `net2`。这两个命名空间通过这对 veth 设备连接。分配一对
+    IP 地址后，您可以在两个命名空间之间进行 ping 和通信。
+- en: Kubernetes uses this in concert with the CNI project to manage container network
+    namespaces, interfaces, and IP addresses. We will cover more of this in [Chapter 3](ch03.xhtml#container_networking_basics).
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 与 CNI 项目协同使用此功能来管理容器网络命名空间、接口和 IP 地址。我们将在 [第 3 章](ch03.xhtml#container_networking_basics)
+    中进一步探讨这一点。
+- en: Packet Handling in the Kernel
+  id: totrans-75
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 内核中的数据包处理
+- en: The Linux kernel is responsible for translating between packets, and a coherent
+    stream of data for programs. In particular, we will look at how the kernel handles
+    connections because routing and firewalling, key things in Kubernetes, rely heavily
+    on Linux’s underlying packet management.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linux 内核负责在程序之间翻译数据包和一致的数据流。特别是，我们将关注内核如何处理连接，因为在 Kubernetes 中，路由和防火墙是非常依赖 Linux
+    底层数据包管理的关键部分。
+- en: Netfilter
+  id: totrans-77
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Netfilter
+- en: Netfilter, included in Linux since 2.3, is a critical component of packet handling.
+    Netfilter is a framework of kernel hooks, which allow userspace programs to handle
+    packets on behalf of the kernel. In short, a program registers to a specific Netfilter
+    hook, and the kernel calls that program on applicable packets. That program could
+    tell the kernel to do something with the packet (like drop it), or it could send
+    back a modified packet to the kernel. With this, developers can build normal programs
+    that run in userspace and handle packets. Netfilter was created jointly with `iptables`,
+    to separate kernel and userspace code.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Netfilter 自 Linux 2.3 起被包括在内，是数据包处理的关键组件。Netfilter 是一个内核钩子的框架，允许用户空间程序代表内核处理数据包。简而言之，程序注册到特定的
+    Netfilter 钩子，并且内核调用该程序来处理适用的数据包。该程序可以告诉内核对数据包做某些操作（如丢弃），或者修改后返回给内核。借助此功能，开发人员可以构建在用户空间运行的正常程序来处理数据包。Netfilter
+    与 `iptables` 共同创建，以分离内核和用户空间代码。
+- en: Tip
+  id: totrans-79
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: '[*netfilter.org*](https://netfilter.org) contains some excellent documentation
+    on the design and use of both Netfilter and `iptables`.'
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[*netfilter.org*](https://netfilter.org) 包含了关于 Netfilter 和 `iptables` 设计和使用的优秀文档。'
+- en: Netfilter has five hooks, shown in [Table 2-1](#webfilter_hooks).
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Netfilter 有五个钩子，在 [表 2-1](#webfilter_hooks) 中展示。
+- en: Netfilter triggers each hook under specific stages in a packet’s journey through
+    the kernel. Understanding Netfilter’s hooks is key to understanding `iptables`
+    later in this chapter, as `iptables` directly maps its concept of *chains* to
+    Netfilter hooks.
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Netfilter 在数据包通过内核的旅程中的特定阶段触发每个钩子。理解 Netfilter 的钩子是理解本章后面 `iptables` 的关键，因为
+    `iptables` 直接将其 *chains* 的概念映射到 Netfilter 钩子。
+- en: Table 2-1\. Netfilter hooks
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 2-1\. Netfilter 钩子
+- en: '| Netfilter hook | Iptables chain name | Description |'
+  id: totrans-84
+  prefs: []
+  type: TYPE_TB
+  zh: '| Netfilter 钩子 | Iptables 链名称 | 描述 |'
+- en: '| --- | --- | --- |'
+  id: totrans-85
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- |'
+- en: '| NF_IP_PRE_ROUTING | PREROUTING | Triggers when a packet arrives from an external
+    system. |'
+  id: totrans-86
+  prefs: []
+  type: TYPE_TB
+  zh: '| NF_IP_PRE_ROUTING | PREROUTING | 触发条件：数据包从外部系统到达时。 |'
+- en: '| NF_IP_LOCAL_IN | INPUT | Triggers when a packet’s destination IP address
+    matches this machine. |'
+  id: totrans-87
+  prefs: []
+  type: TYPE_TB
+  zh: '| NF_IP_LOCAL_IN | INPUT | 触发条件：数据包的目标 IP 地址与此主机匹配时。 |'
+- en: '| NF_IP_FORWARD | NAT | Triggers for packets where neither source nor destination
+    matches the machine’s IP addresses (in other words, packets that this machine
+    is routing on behalf of other machines). |'
+  id: totrans-88
+  prefs: []
+  type: TYPE_TB
+  zh: '| NF_IP_FORWARD | NAT | 触发条件：数据包中源地址和目标地址均不匹配机器的 IP 地址（换句话说，这些数据包是此机器代表其他机器进行路由的）。
+    |'
+- en: '| NF_IP_LOCAL_OUT | OUTPUT | Triggers when a packet, originating from the machine,
+    is leaving the machine. |'
+  id: totrans-89
+  prefs: []
+  type: TYPE_TB
+  zh: '| NF_IP_LOCAL_OUT | OUTPUT | 触发条件：数据包由主机发起，并离开主机时。 |'
+- en: '| NF_IP_POST_ROUTING | POSTROUTING | Triggers when any packet (regardless of
+    origin) is leaving the machine. |'
+  id: totrans-90
+  prefs: []
+  type: TYPE_TB
+  zh: '| NF_IP_POST_ROUTING | POSTROUTING | 触发条件：任何数据包（无论源）离开主机时。 |'
+- en: Netfilter triggers each hook during a specific phase of packet handling, and
+    under specific conditions, we can visualize Netfilter hooks with a flow diagram,
+    as shown in [Figure 2-2](#img-nftables-packet-flow).
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Netfilter 在数据包处理的特定阶段触发每个钩子，并且在特定条件下，我们可以通过流程图可视化 Netfilter 钩子，如[图 2-2](#img-nftables-packet-flow)所示。
+- en: '![neku 0202](Images/neku_0202.png)'
+  id: totrans-92
+  prefs: []
+  type: TYPE_IMG
+  zh: '![neku 0202](Images/neku_0202.png)'
+- en: Figure 2-2\. The possible flows of a packet through Netfilter hooks
+  id: totrans-93
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-2\. 数据包通过 Netfilter 钩子的可能流向
+- en: 'We can infer from our flow diagram that only certain permutations of Netfilter
+    hook calls are possible for any given packet. For example, a packet originating
+    from a local process will always trigger `NF_IP_LOCAL_OUT` hooks and then `NF_IP_POST_ROUTING`
+    hooks. In particular, the flow of Netfilter hooks for a packet depends on two
+    things: if the packet source is the host and if the packet destination is the
+    host. Note that if a process sends a packet destined for the same host, it triggers
+    the `NF_IP_LOCAL_OUT` and then the `NF_IP_POST_ROUTING` hooks before “reentering”
+    the system and triggering the `NF_IP_PRE_ROUTING` and `NF_IP_LOCAL_IN` hooks.'
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以从我们的流程图中推断，对于任何给定的数据包，只有特定的 Netfilter 钩子调用排列组合是可能的。例如，从本地进程发起的数据包总是会触发 `NF_IP_LOCAL_OUT`
+    钩子，然后是 `NF_IP_POST_ROUTING` 钩子。具体来说，数据包的 Netfilter 钩子流程取决于两个因素：数据包的源是否为主机，以及数据包的目标是否为主机。请注意，如果一个进程发送一个目标地址为相同主机的数据包，它会在“重新进入”系统之前触发
+    `NF_IP_LOCAL_OUT` 和 `NF_IP_POST_ROUTING` 钩子，然后触发 `NF_IP_PRE_ROUTING` 和 `NF_IP_LOCAL_IN`
+    钩子。
+- en: In some systems, it is possible to spoof such a packet by writing a fake source
+    address (i.e., spoofing that a packet has a source and destination address of
+    `127.0.0.1`). Linux will normally filter such a packet when it arrives at an external
+    interface. More broadly, Linux filters packets when a packet arrives at an interface
+    and the packet’s source address does not exist on that network. A packet with
+    an “impossible” source IP address is called a *Martian packet*. It is possible
+    to disable filtering of Martian packets in Linux. However, doing so poses substantial
+    risk if any services on the host assume that traffic from localhost is “more trustworthy”
+    than external traffic. This can be a common assumption, such as when exposing
+    an API or database to the host without strong authentication.
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在某些系统中，可以通过写入虚假的源地址（即伪造数据包具有源地址和目标地址为 `127.0.0.1`）来伪造此类数据包。当这样的数据包到达外部接口时，Linux
+    通常会对其进行过滤。更广泛地说，当数据包到达接口时，如果数据包的源地址在该网络上不存在，则 Linux 会过滤这些数据包。具有“不可能的”源 IP 地址的数据包被称为*火星数据包*。在
+    Linux 中，可以禁用火星数据包的过滤。但是，如果主机上的任何服务假定来自本地主机的流量比外部流量更“可信”，这可能带来重大风险。这可能是一个常见的假设，例如在向主机公开
+    API 或数据库时不使用强认证。
+- en: Note
+  id: totrans-96
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Kubernetes has had at least one CVE, CVE-2020-8558, in which packets from another
+    host, with the source IP address falsely set to `127.0.0.1`, could access ports
+    that should be accessible only locally. Among other things, this means that if
+    a node in the Kubernetes control plane ran `kube-proxy`, other machines on the
+    node’s network could use “trust authentication” to connect to the API server,
+    effectively owning the cluster.
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 至少有一个 CVE，即 CVE-2020-8558，其中来自另一台主机的数据包，源 IP 地址错误地设置为 `127.0.0.1`，可以访问本应仅本地可访问的端口。这意味着如果
+    Kubernetes 控制平面中的节点运行 `kube-proxy`，则该节点网络中的其他机器可以使用“信任认证”连接到 API 服务器，从而有效地控制整个集群。
+- en: This was not technically a case of Martian packets not being filtered, as offending
+    packets would come from the loopback device, which *is* on the same network as
+    `127.0.0.1`. You can read the reported issue on [GitHub](https://oreil.ly/A5HtN).
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这并不是火星包未被过滤的技术问题，因为有问题的包会来自回环设备，这与`127.0.0.1`处于同一网络。你可以在[GitHub](https://oreil.ly/A5HtN)上查看报告的问题。
+- en: '[Table 2-2](#table0202) shows the Netfilter hook order for various packet sources
+    and destinations.'
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[表 2-2](#table0202)展示了不同数据包来源和目的地的Netfilter钩子顺序。'
+- en: Table 2-2\. Key netfilter packet flows
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 2-2\. 关键Netfilter数据包流
+- en: '| Packet source | Packet destination | Hooks (in order) |'
+  id: totrans-101
+  prefs: []
+  type: TYPE_TB
+  zh: '| 数据包来源 | 数据包目的地 | 钩子（顺序） |'
+- en: '| --- | --- | --- |'
+  id: totrans-102
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- |'
+- en: '| Local machine | Local machine | `NF_IP_LOCAL_OUT`, `NF_IP_LOCAL_IN` |'
+  id: totrans-103
+  prefs: []
+  type: TYPE_TB
+  zh: '| 本地机器 | 本地机器 | `NF_IP_LOCAL_OUT`, `NF_IP_LOCAL_IN` |'
+- en: '| Local machine | External machine | `NF_IP_LOCAL_OUT`, `NF_IP_POST_ROUTING`
+    |'
+  id: totrans-104
+  prefs: []
+  type: TYPE_TB
+  zh: '| 本地机器 | 外部机器 | `NF_IP_LOCAL_OUT`, `NF_IP_POST_ROUTING` |'
+- en: '| External machine | Local machine | `NF_IP_PRE_ROUTING`, `NF_IP_LOCAL_IN`
+    |'
+  id: totrans-105
+  prefs: []
+  type: TYPE_TB
+  zh: '| 外部机器 | 本地机器 | `NF_IP_PRE_ROUTING`, `NF_IP_LOCAL_IN` |'
+- en: '| External machine | External machine | `NF_IP_PRE_ROUTING`, `NF_IP_FORWARD`,
+    `NF_IP_POST_ROUTING` |'
+  id: totrans-106
+  prefs: []
+  type: TYPE_TB
+  zh: '| 外部机器 | 外部机器 | `NF_IP_PRE_ROUTING`, `NF_IP_FORWARD`, `NF_IP_POST_ROUTING`
+    |'
+- en: Note that packets from the machine to itself will trigger `NF_IP_LOCAL_OUT`
+    and `NF_IP_POST_ROUTING` and then “leave” the network interface. They will “reenter”
+    and be treated like packets from any other source.
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注意，来自机器自身的数据包将触发`NF_IP_LOCAL_OUT`和`NF_IP_POST_ROUTING`，然后“离开”网络接口。它们将“重新进入”并像来自任何其他来源的数据包一样处理。
+- en: Network address translation (NAT) only impacts local routing decisions in the
+    `NF_IP_PRE_ROUTING` and `NF_IP_LOCAL_OUT` hooks (e.g., the kernel makes no routing
+    decisions after a packet reaches the `NF_IP_LOCAL_IN` hook). We see this reflected
+    in the design of `iptables`, where source and destination NAT can be performed
+    only in specific hooks/chains.
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 网络地址转换（NAT）仅在`NF_IP_PRE_ROUTING`和`NF_IP_LOCAL_OUT`钩子中影响本地路由决策（例如，一旦数据包到达`NF_IP_LOCAL_IN`钩子后，内核不再进行路由决策）。我们在`iptables`的设计中看到这一点，其中只能在特定的钩子/链中执行源和目标NAT。
+- en: Programs can register a hook by calling `NF_REGISTER_NET_HOOK` (`NF_REGISTER_HOOK`
+    prior to Linux 4.13) with a handling function. The hook will be called every time
+    a packet matches. This is how programs like `iptables` integrate with Netfilter,
+    though you will likely never need to do this yourself.
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 程序可以通过调用`NF_REGISTER_NET_HOOK`（Linux 4.13之前的版本为`NF_REGISTER_HOOK`）注册一个钩子处理函数。每次数据包匹配时，钩子都会被调用。这就是像`iptables`这样的程序如何与Netfilter集成的方式，尽管你可能永远不需要自己这样做。
+- en: 'There are several actions that a Netfilter hook can trigger, based on the return
+    value:'
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Netfilter钩子可以触发几种操作，具体取决于返回值：
+- en: Accept
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接受
+- en: Continue packet handling.
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 继续处理数据包。
+- en: Drop
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 丢弃
+- en: Drop the packet, without further processing.
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 丢弃数据包，不进行进一步处理。
+- en: Queue
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 排队
+- en: Pass the packet to a userspace program.
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将数据包传递给用户空间程序。
+- en: Stolen
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 偷窃
+- en: Doesn’t execute further hooks, and allows the userspace program to take ownership
+    of the packet.
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不再执行进一步的钩子，并允许用户空间程序接管数据包。
+- en: Repeat
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 重复
+- en: Make the packet “reenter” the hook and be reprocessed.
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使数据包“重新进入”钩子并重新处理。
+- en: Hooks can also return mutated packets. This allows programs to do things such
+    as reroute or masquerade packets, adjust packet TTLs, etc.
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 钩子还可以返回变异的数据包。这允许程序执行诸如重新路由或伪装数据包、调整数据包TTL等操作。
+- en: Conntrack
+  id: totrans-122
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Conntrack
+- en: Conntrack is a component of Netfilter used to track the state of connections
+    to (and from) the machine. Connection tracking directly associates packets with
+    a particular connection. Without connection tracking, the flow of packets is much
+    more opaque. Conntrack can be a liability or a valuable tool, or both, depending
+    on how it is used. In general, Conntrack is important on systems that handle firewalling
+    or NAT.
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Conntrack是Netfilter的一个组件，用于跟踪（到达和离开）机器的连接状态。连接跟踪直接将数据包与特定连接关联起来。没有连接跟踪，数据包的流动将更加不透明。Conntrack可以是一种责任，也可以是一种有价值的工具，或者两者兼而有之，这取决于它的使用方式。总体而言，对于处理防火墙或NAT的系统，Conntrack至关重要。
+- en: Connection tracking allows firewalls to distinguish between responses and arbitrary
+    packets. A firewall can be configured to allow inbound packets that are part of
+    an existing connection but disallow inbound packets that are not part of a connection.
+    To give an example, a program could be allowed to make an outbound connection
+    and perform an HTTP request, without the remote server being otherwise able to
+    send data or initiate connections inbound.
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 连接跟踪允许防火墙区分响应和任意数据包。防火墙可以配置为允许作为现有连接一部分的入站数据包，但不允许不是连接一部分的入站数据包。例如，程序可以允许建立出站连接并执行HTTP请求，而远程服务器则不能通过其他方式发送数据或发起入站连接。
+- en: 'NAT relies on Conntrack to function. `iptables` exposes NAT as two types: SNAT
+    (source NAT, where `iptables` rewrites the source address) and DNAT (destination
+    NAT, where `iptables` rewrites the destination address). NAT is extremely common;
+    the odds are overwhelming that your home router uses SNAT and DNAT to fan traffic
+    between your public IPv4 address and the local address of each device on the network.
+    With connection tracking, packets are automatically associated with their connection
+    and easily modified with the same SNAT/DNAT change. This enables consistent routing
+    decisions, such as “pinning” a connection in a load balancer to a specific backend
+    or machine. The latter example is highly relevant in Kubernetes, due to `kube-proxy`’s
+    implementation of service load balancing via `iptables`. Without connection tracking,
+    every packet would need to be *deterministically* remapped to the same destination,
+    which isn’t doable (suppose the list of possible destinations could change…).'
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: NAT依赖于Conntrack来运行。`iptables`将NAT公开为两种类型：SNAT（源地址转换，其中`iptables`重新编写源地址）和DNAT（目标地址转换，其中`iptables`重新编写目标地址）。NAT非常普遍；你家中路由器使用SNAT和DNAT将流量从公共IPv4地址转发到网络上每个设备的本地地址的可能性极高。使用连接跟踪，数据包会自动与其连接关联，并且可以轻松地通过相同的SNAT/DNAT更改进行修改。这使得可以进行一致的路由决策，例如在负载均衡器中将连接“固定”到特定的后端或机器上。后一种示例在Kubernetes中非常相关，这是因为`kube-proxy`通过`iptables`实现了服务负载均衡。如果没有连接跟踪，每个数据包都需要*确定性*地重新映射到相同的目标，这是不可行的（假设可能的目标列表可能会改变…）。
+- en: Conntrack identifies connections by a tuple, composed of source address, source
+    port, destination address, destination port, and L4 protocol. These five pieces
+    of information are the minimal identifiers needed to identify any given L4 connection.
+    All L4 connections have an address and port on each side of the connection; after
+    all, the internet uses addresses for routing, and computers use port numbers for
+    application mapping. The final piece, the L4 protocol, is present because a program
+    will bind to a port in TCP *or* UDP mode (and binding to one does not preclude
+    binding to the other). Conntrack refers to these connections as *flows*. A flow
+    contains metadata about the connection and its state.
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Conntrack通过一个由源地址、源端口、目标地址、目标端口和L4协议组成的元组来识别连接。这五个信息是识别任何给定L4连接所需的最小标识符。所有L4连接在连接的每一侧都有地址和端口；毕竟，互联网使用地址进行路由，计算机使用端口号进行应用映射。最后一个部分，L4协议，存在是因为程序将在TCP
+    *或* UDP模式下绑定到端口（在一个模式下绑定并不排除在另一个模式下绑定）。Conntrack称这些连接为*流*。流包含有关连接及其状态的元数据。
+- en: Conntrack stores flows in a hash table, shown in [Figure 2-3](#img-conntrack-hashtable),
+    using the connection tuple as a key. The size of the keyspace is configurable.
+    A larger keyspace requires more memory to hold the underlying array but will result
+    in fewer flows hashing to the same key and being chained in a linked list, leading
+    to faster flow lookup times. The maximum number of flows is also configurable.
+    A severe issue that can happen is when Conntrack runs out of space for connection
+    tracking, and new connections cannot be made. There are other configuration options
+    too, such as the timeout for a connection. On a typical system, default settings
+    will suffice. However, a system that experiences a huge number of connections
+    will run out of space. If your host runs directly exposed to the internet, overwhelming
+    Conntrack with short-lived or incomplete connections is an easy way to cause a
+    denial of service (DOS).
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Conntrack 将流存储在哈希表中，显示在[图 2-3](#img-conntrack-hashtable)，使用连接元组作为键。键空间的大小是可配置的。更大的键空间需要更多内存来保存底层数组，但会导致较少的流哈希到相同的键并链接在链表中，从而实现更快的流查找时间。流的最大数量也是可配置的。一个严重的问题是当
+    Conntrack 的连接跟踪空间耗尽时，无法建立新的连接。还有其他的配置选项，如连接的超时时间。在典型系统上，默认设置通常就够用了。然而，一个经历大量连接的系统会耗尽空间。如果您的主机直接暴露在互联网上，用短暂或不完整的连接压倒
+    Conntrack 是导致拒绝服务（DOS）的简单方法。
+- en: '![Conntrack Hashtable](Images/neku_0203.png)'
+  id: totrans-128
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Conntrack 哈希表](Images/neku_0203.png)'
+- en: Figure 2-3\. The structure of Conntrack flows
+  id: totrans-129
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-3\. Conntrack 流的结构
+- en: Conntrack’s max size is normally set in `/proc/sys/net/nf_conntrack_max`, and
+    the hash table size is normally set in `/sys/module/nf_conntrack/parameters/hashsize`.
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Conntrack 的最大大小通常在 `/proc/sys/net/nf_conntrack_max` 中设置，哈希表大小通常在 `/sys/module/nf_conntrack/parameters/hashsize`
+    中设置。
+- en: Conntrack entries contain a connection state, which is one of four states. It
+    is important to note that, as a layer 3 (Network layer) tool, Conntrack states
+    are distinct from layer 4 (Protocol layer) states. [Table 2-3](#conntrack_states)
+    details the four states.
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Conntrack 条目包含连接状态，其中一个是四个状态之一。需要注意的是，作为第 3 层（网络层）工具，Conntrack 状态与第 4 层（协议层）的状态是不同的。[表 2-3](#conntrack_states)详细描述了这四种状态。
+- en: Table 2-3\. Conntrack states
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 2-3\. Conntrack 状态
+- en: '| State | Description | Example |'
+  id: totrans-133
+  prefs: []
+  type: TYPE_TB
+  zh: '| 状态 | 描述 | 示例 |'
+- en: '| --- | --- | --- |'
+  id: totrans-134
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- |'
+- en: '| NEW | A valid packet is sent or received, with no response seen. | TCP SYN
+    received. |'
+  id: totrans-135
+  prefs: []
+  type: TYPE_TB
+  zh: '| NEW | 发送或接收到一个有效的数据包，但没有看到响应。 | 收到 TCP SYN 数据包。 |'
+- en: '| ESTABLISHED | Packets observed in both directions. | TCP SYN received, and
+    TCP SYN/ACK sent. |'
+  id: totrans-136
+  prefs: []
+  type: TYPE_TB
+  zh: '| ESTABLISHED | 在两个方向上观察到数据包。 | 收到 TCP SYN 数据包，并发送了 TCP SYN/ACK 数据包。 |'
+- en: '| RELATED | An additional connection is opened, where metadata indicates that
+    it is “related” to an original connection. Related connection handling is complex.
+    | An FTP program, with an ESTABLISHED connection, opens additional data connections.
+    |'
+  id: totrans-137
+  prefs: []
+  type: TYPE_TB
+  zh: '| RELATED | 打开了一个附加连接，元数据表明它与原始连接“相关”。相关连接处理比较复杂。 | 一个 FTP 程序，有一个已建立的连接，打开了额外的数据连接。
+    |'
+- en: '| INVALID | The packet itself is invalid, or does not properly match another
+    Conntrack connection state. | TCP RST received, with no prior connection. |'
+  id: totrans-138
+  prefs: []
+  type: TYPE_TB
+  zh: '| INVALID | 数据包本身无效，或者不正确匹配另一个 Conntrack 连接状态。 | 收到 TCP RST 数据包，没有先前的连接。 |'
+- en: Although Conntrack is built into the kernel, it may not be active on your system.
+    Certain kernel modules must be loaded, and you must have relevant `iptables` rules
+    (essentially, Conntrack is normally not active if nothing needs it to be). Conntrack
+    requires the kernel module `nf_conntrack_ipv4` to be active. `lsmod | grep nf_conntrack`
+    will show if the module is loaded, and `sudo modprobe nf_conntrack` will load
+    it. You may also need to install the `conntrack` command-line interface (CLI)
+    in order to view Conntrack’s state.
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管 Conntrack 是内核中的一部分，但它可能未在您的系统上激活。必须加载特定的内核模块，并且必须有相关的 `iptables` 规则（基本上，如果没有任何需要
+    Conntrack 的东西，它通常不会激活）。Conntrack 需要内核模块 `nf_conntrack_ipv4` 处于激活状态。`lsmod | grep
+    nf_conntrack` 将显示模块是否已加载，`sudo modprobe nf_conntrack` 将加载它。您可能还需要安装 `conntrack`
+    命令行界面（CLI）以查看 Conntrack 的状态。
+- en: When Conntrack is active, `conntrack -L` shows all current flows. Additional
+    Conntrack flags will filter which flows are shown.
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当 Conntrack 处于活动状态时，`conntrack -L` 显示所有当前流。额外的 Conntrack 标志将过滤要显示的流。
+- en: 'Let’s look at the anatomy of a Conntrack flow, as displayed here:'
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们来看看 Conntrack 流的解剖，如下所示：
+- en: '[PRE9]'
+  id: totrans-142
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: The expected return packet is of the form `<source ip> <dest ip> <source port>
+    <dest port>`. This is the identifier that we expect to see when the remote system
+    sends a packet. Note that in our example, the source and destination values are
+    in reverse for address and ports. This is often, but not always, the case. For
+    example, if a machine is behind a router, packets destined to that machine will
+    be addressed to the router, whereas packets from the machine will have the machine
+    address, not the router address, as the source.
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 预期的返回数据包的形式为`<源 IP> <目标 IP> <源端口> <目标端口>`。这是我们期望在远程系统发送数据包时看到的标识符。请注意，在我们的例子中，源和目标值在地址和端口方面是相反的。这通常是这样，但并非总是如此。例如，如果一台机器在路由器后面，发送到该机器的数据包将寻址到路由器，而来自该机器的数据包将具有机器地址，而不是路由器地址，作为源。
+- en: In the previous example from machine `10.0.0.2`, `10.0.0.1` has established
+    a TCP connection from port 49431 to port 22 on `10.0.0.2`. You may recognize this
+    as being an SSH connection, although Conntrack is unable to show application-level
+    behavior.
+  id: totrans-144
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在来自机器`10.0.0.2`的前一个例子中，`10.0.0.1`已经建立了从端口 49431 到`10.0.0.2`端口 22的 TCP 连接。您可能会认出这是一个
+    SSH 连接，尽管 Conntrack 无法显示应用级行为。
+- en: 'Tools like `grep` can be useful for examining Conntrack state and ad hoc statistics:'
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 像`grep`这样的工具对于检查 Conntrack 状态和临时统计非常有用：
+- en: '[PRE10]'
+  id: totrans-146
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: Routing
+  id: totrans-147
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 路由
+- en: When handling any packet, the kernel must decide where to send that packet.
+    In most cases, the destination machine will not be within the same network. For
+    example, suppose you are attempting to connect to `1.2.3.4` from your personal
+    computer. `1.2.3.4` is not on your network; the best your computer can do is pass
+    it to another host that is closer to being able to reach `1.2.3.4`. The route
+    table serves this purpose by mapping known subnets to a gateway IP address and
+    interface. You can list known routes with `route` (or `route -n` to show raw IP
+    addresses instead of hostnames). A typical machine will have a route for the local
+    network and a route for `0.0.0.0/0`. Recall that subnets can be expressed as a
+    CIDR (e.g., `10.0.0.0/24`) or an IP address and a mask (e.g., `10.0.0.0` and `255.255.255.0`).
+  id: totrans-148
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在处理任何数据包时，内核必须决定将该数据包发送到哪里。在大多数情况下，目标机器不会在同一网络中。例如，假设您正在尝试从个人计算机连接到`1.2.3.4`。`1.2.3.4`不在您的网络上；您的计算机最好的做法是将其传递给另一台更接近能够到达`1.2.3.4`的主机。路由表通过将已知子网映射到网关
+    IP 地址和接口来实现此目的。您可以使用`route`（或`route -n`以显示原始 IP 地址而不是主机名）列出已知路由。典型的机器将具有本地网络的路由和`0.0.0.0/0`的路由。请记住，子网可以表示为
+    CIDR（例如，`10.0.0.0/24`）或一个 IP 地址和一个掩码（例如，`10.0.0.0`和`255.255.255.0`）。
+- en: 'This is a typical routing table for a machine on a local network with access
+    to the internet:'
+  id: totrans-149
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是一台连接到互联网的本地网络上的机器的典型路由表：
+- en: '[PRE11]'
+  id: totrans-150
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: In the previous example, a request to `1.2.3.4` would be sent to `10.0.0.1`,
+    on the `eth0` interface, because `1.2.3.4` is in the subnet described by the first
+    rule (`0.0.0.0/0`) and not in the subnet described by the second rule (`10.0.0.0/24`).
+    Subnets are specified by the destination and `genmask` values.
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在前面的例子中，对`1.2.3.4`的请求将被发送到`10.0.0.1`，通过`eth0`接口，因为`1.2.3.4`在第一条规则描述的子网中（`0.0.0.0/0`），而不在第二条规则描述的子网中（`10.0.0.0/24`）。子网由目标和`genmask`值指定。
+- en: Linux prefers to route packets by *specificity* (how “small” a matching subnet
+    is) and then by weight (“metric” in `route` output). Given our example, a packet
+    addressed to `10.0.0.1` will always be sent to gateway `0.0.0.0` because that
+    route matches a smaller set of addresses. If we had two routes with the same specificity,
+    then the route with a lower metric wiould be preferred.
+  id: totrans-152
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linux 更喜欢按照*特定性*（匹配子网有多“小”）和然后按照权重（`route`输出中的“metric”）来路由数据包。根据我们的例子，寻址到`10.0.0.1`的数据包将始终被发送到网关`0.0.0.0`，因为该路由匹配了一个更小的地址集。如果我们有两个具有相同特定性的路由，则较低度量的路由将被优先选择。
+- en: Some CNI plugins make heavy use of the route table.
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一些 CNI 插件大量使用路由表。
+- en: Now that we’ve covered some key concepts in how the Linux kernel handles packets,
+    we can look at how higher-level packet and connection routing works.
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经介绍了 Linux 内核处理数据包的一些关键概念，我们可以看看更高级别的数据包和连接路由是如何工作的。
+- en: High-Level Routing
+  id: totrans-155
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 高级路由
+- en: Linux has complex packet management abilities. Such tools allow Linux users
+    to create firewalls, log traffic, route packets, and even implement load balancing.
+    Kubernetes makes use of some of these tools to handle node and pod connectivity,
+    as well as manage Kubernetes services. In this book, we will cover the three tools
+    that are most commonly seen in Kubernetes. All Kubernetes setups will make some
+    use of `iptables`, but there are many ways that services can be managed. We will
+    also cover IPVS (which has built-in support in `kube-proxy`), and eBPF, which
+    is used by Cilium (a `kube-proxy` alternative).
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linux具有复杂的数据包管理能力。此类工具允许Linux用户创建防火墙、记录流量、路由数据包，甚至实现负载均衡。Kubernetes利用这些工具之一来处理节点和Pod的连接性，以及管理Kubernetes服务。在本书中，我们将介绍在Kubernetes中最常见的三种工具。所有Kubernetes设置都将使用`iptables`的某些功能，但是有许多管理服务的方法。我们还将介绍IPVS（在`kube-proxy`中具有内置支持）和eBPF，后者被Cilium（一种`kube-proxy`替代方案）使用。
+- en: We will reference this section in [Chapter 4](ch04.xhtml#kubernetes_networking_introduction),
+    when we cover services and `kube-proxy`.
+  id: totrans-157
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[第4章](ch04.xhtml#kubernetes_networking_introduction)中我们将引用本节内容，讨论服务和`kube-proxy`。
+- en: iptables
+  id: totrans-158
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: iptables
+- en: '`iptables` is staple of Linux sysadmins and has been for many years. `iptables`
+    can be used to create firewalls and audit logs, mutate and reroute packets, and
+    even implement crude connection fan-out. `iptables` uses Netfilter, which allows
+    `iptables` to intercept and mutate packets.'
+  id: totrans-159
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`iptables`是Linux系统管理员的重要工具，已经使用多年。`iptables`可用于创建防火墙和审计日志，修改和重定向数据包，甚至实现粗糙的连接分流。`iptables`使用Netfilter，允许`iptables`拦截和修改数据包。'
+- en: '`iptables` rules can become extremely complex. There are many tools that provide
+    a simpler interface for managing `iptables` rules; for example, firewalls like
+    `ufw` and `firewalld`. Kubernetes components (specifically, `kubelet` and `kube-proxy`)
+    generate `iptables` rules in this fashion. Understanding `iptables` is important
+    to understand access and routing for pods and nodes in most clusters.'
+  id: totrans-160
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`iptables`规则可能变得非常复杂。有许多工具提供了更简单的界面来管理`iptables`规则；例如，像`ufw`和`firewalld`这样的防火墙。Kubernetes组件（特别是`kubelet`和`kube-proxy`）以这种方式生成`iptables`规则。理解`iptables`对于了解大多数集群中Pod和节点的访问和路由至关重要。'
+- en: Note
+  id: totrans-161
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Most Linux distributions are replacing `iptables` with `nftables`, a similar
+    but more performant tool built atop Netfilter. Some distros already ship with
+    a version of `iptables` that is powered by `nftables`.
+  id: totrans-162
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大多数Linux发行版正在用`nftables`替换`iptables`，这是一个类似但性能更好的工具，建立在Netfilter之上。一些发行版已经使用由`nftables`驱动的`iptables`版本。
+- en: Kubernetes has many known issues with the `iptables`/`nftables` transition.
+    We highly recommend not using a `nftables`-backed version of `iptables` for the
+    foreseeable future.
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes在`iptables`/`nftables`过渡中存在许多已知问题。我们强烈建议在可预见的未来不要使用基于`nftables`的`iptables`版本。
+- en: 'There are three key concepts in `iptables`: tables, chains, and rules. They
+    are considered hierarchical in nature: a table contains chains, and a chain contains
+    rules.'
+  id: totrans-164
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`iptables`有三个关键概念：表、链和规则。它们被认为具有层次结构：表包含链，链包含规则。'
+- en: 'Tables organize rules according to the type of effect they have. `iptables`
+    has a broad range of functionality, which tables group together. The three most
+    commonly applicable tables are: Filter (for firewall-related rules), NAT (for
+    NAT-related rules), and Mangle (for non-NAT packet-mutating rules). `iptables`
+    executes tables in a specific order, which we’ll cover later.'
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表根据其影响类型组织规则。`iptables`具有广泛的功能，这些功能被分组到表中。最常用的三个适用表是：Filter（用于防火墙相关规则）、NAT（用于NAT相关规则）和Mangle（用于非NAT数据包修改规则）。`iptables`按特定顺序执行表，我们稍后会详细介绍。
+- en: Chains contain a list of rules. When a packet executes a chain, the rules in
+    the chain are evaluated in order. Chains exist within a table and organize rules
+    according to Netfilter hooks. There are five built-in, top-level chains, each
+    of which corresponds to a Netfilter hook (recall that Netfilter was designed jointly
+    with `iptables`). Therefore, the choice of which chain to insert a rule dictates
+    if/when the rule will be evaluated for a given packet.
+  id: totrans-166
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 链包含一系列规则。当数据包执行链时，按顺序评估链中的规则。链存在于表中，并根据Netfilter钩子组织规则。有五个内置的顶级链，每个链对应一个Netfilter钩子（回顾Netfilter与`iptables`的联合设计）。因此，选择在哪个链中插入规则决定了是否/何时对给定数据包评估规则。
+- en: Rules are a combination condition and action (referred to as a *target*). For
+    example, “if a packet is addressed to port 22, drop it.” `iptables` evaluates
+    individual packets, although chains and tables dictate which packets a rule will
+    be evaluated against.
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 规则是条件和操作的组合（称为*目标*）。例如，“如果数据包地址为端口22，则丢弃它。” `iptables` 评估单个数据包，尽管链和表决定了规则将针对哪些数据包进行评估。
+- en: The specifics of table → chain → target execution are complex, and there is
+    no end of fiendish diagrams available to describe the full state machine. Next,
+    we’ll examine each portion in more detail.
+  id: totrans-168
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 → 链 → 目标执行的具体细节很复杂，有无数复杂的图表可描述完整的状态机。接下来，我们将更详细地检查每个部分。
+- en: Tip
+  id: totrans-169
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: It may help to refer to earlier material as you progress through this section.
+    The designs of tables, chains, and rules are tightly intertwined, and it is hard
+    to properly understand one without understanding the others.
+  id: totrans-170
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本节中继续时，参考之前的材料可能会有所帮助。表、链和规则的设计紧密相连，了解其中一个而不了解其他的是很难的。
+- en: iptables tables
+  id: totrans-171
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: iptables 表
+- en: A table in `iptables` maps to a particular *capability set*, where each table
+    is “responsible” for a specific type of action. In more concrete terms, a table
+    can contain only specific target types, and many target types can be used only
+    in specific tables. `iptables` has five tables, which are listed in [Table 2-4](#iptables_tables).
+  id: totrans-172
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`iptables` 中的表映射到特定的*功能集*，每个表“负责”特定类型的操作。更具体地说，一个表只能包含特定的目标类型，而许多目标类型只能在特定的表中使用。`iptables`
+    有五个表，列在[表 2-4](#iptables_tables)中。'
+- en: Table 2-4\. `iptables` tables
+  id: totrans-173
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 2-4\. `iptables` 表
+- en: '| Table | Purpose |'
+  id: totrans-174
+  prefs: []
+  type: TYPE_TB
+  zh: '| 表 | 用途 |'
+- en: '| --- | --- |'
+  id: totrans-175
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| Filter | The Filter table handles acceptance and rejection of packets. |'
+  id: totrans-176
+  prefs: []
+  type: TYPE_TB
+  zh: '| Filter | Filter 表处理数据包的接受和拒绝。 |'
+- en: '| NAT | The NAT table is used to modify the source or destination IP addresses.
+    |'
+  id: totrans-177
+  prefs: []
+  type: TYPE_TB
+  zh: '| NAT | NAT 表用于修改源或目标IP地址。 |'
+- en: '| Mangle | The Mangle table can perform general-purpose editing of packet headers,
+    but it is not intended for NAT. It can also “mark” the packet with `iptables`-only
+    metadata. |'
+  id: totrans-178
+  prefs: []
+  type: TYPE_TB
+  zh: '| Mangle | Mangle 表可对数据包头部进行通用编辑，但不适用于NAT。它还可以使用 `iptables` 的元数据对数据包进行“标记”。
+    |'
+- en: '| Raw | The Raw table allows for packet mutation before connection tracking
+    and other tables are handled. Its most common use is to disable connection tracking
+    for some packets. |'
+  id: totrans-179
+  prefs: []
+  type: TYPE_TB
+  zh: '| Raw | Raw 表允许在连接跟踪和其他表处理之前进行数据包变异。它最常见的用途是为某些数据包禁用连接跟踪。 |'
+- en: '| Security | SELinux uses the Security table for packet handling. It is not
+    applicable on a machine that is not using SELinux. |'
+  id: totrans-180
+  prefs: []
+  type: TYPE_TB
+  zh: '| 安全 | SELinux 使用安全表处理数据包。这在不使用SELinux的机器上不适用。 |'
+- en: We will not discuss the Security table in more detail in this book; however,
+    if you use SELinux, you should be aware of its use.
+  id: totrans-181
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本书不会详细讨论安全表；但是，如果您使用SELinux，您应该了解其用法。
+- en: '`iptables` executes tables in a particular order: Raw, Mangle, NAT, Filter.
+    However, this order of execution is broken up by chains. Linux users generally
+    accept the mantra of “tables contains chains,” but this may feel misleading. The
+    order of execution is chains, *then* tables. So, for example, a packet will trigger
+    `Raw PREROUTING`, `Mangle PREROUTING`, `NAT PREROUTING`, and then trigger the
+    Mangle table in either the `INPUT` or `FORWARD` chain (depending on the packet).
+    We’ll cover this in more detail in the next section on chains, as we put more
+    pieces together.'
+  id: totrans-182
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`iptables` 按特定顺序执行表：Raw、Mangle、NAT、Filter。但是，执行顺序被链打破。Linux用户通常接受“表包含链”的信条，但这可能会感到误导。执行顺序是链，*然后*是表。因此，例如，数据包将触发
+    `Raw PREROUTING`、`Mangle PREROUTING`、`NAT PREROUTING`，然后触发 `INPUT` 或 `FORWARD`
+    链中的Mangle表（取决于数据包）。我们将在下一节关于链的更详细部分中详细介绍这一点，以便更好地理解。'
+- en: iptables chains
+  id: totrans-183
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: iptables 链
+- en: '`iptables` chains are a list of rules. When a packet triggers or passes through
+    a chain, each rule is sequentially evaluated, until the packet matches a “terminating
+    target” (such as `DROP`), or the packet reaches the end of the chain.'
+  id: totrans-184
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`iptables` 链是一组规则。当数据包触发或通过链时，每条规则会依次评估，直到数据包与“终止目标”（如`DROP`）匹配，或数据包达到链的末尾。'
+- en: The built-in, “top-level” chains are `PREROUTING`, `INPUT`, `NAT`, `OUTPUT`,
+    and `POSTROUTING`. These are powered by Netfilter hooks. Each chain corresponds
+    to a hook. [Table 2-5](#iptables_chains_and_corresponding_netfilter_hooks) shows
+    the chain and hook pairs. There are also user-defined subchains that exist to
+    help organize rules.
+  id: totrans-185
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 内建的“顶层”链包括 `PREROUTING`、`INPUT`、`NAT`、`OUTPUT` 和 `POSTROUTING`。这些链由 Netfilter
+    钩子支持。每个链对应一个钩子。 [表 2-5](#iptables_chains_and_corresponding_netfilter_hooks) 显示了链和钩子的对应关系。还有用户定义的子链用于帮助组织规则。
+- en: Table 2-5\. `iptables` chains and corresponding Netfilter hooks
+  id: totrans-186
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 2-5\. `iptables` 链和对应的 Netfilter 钩子
+- en: '| iptables chain | Netfilter hook |'
+  id: totrans-187
+  prefs: []
+  type: TYPE_TB
+  zh: '| iptables 链 | Netfilter 钩子 |'
+- en: '| --- | --- |'
+  id: totrans-188
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| `PREROUTIN` | `NF_IP_PRE_ROUTING` |'
+  id: totrans-189
+  prefs: []
+  type: TYPE_TB
+  zh: '| `PREROUTIN` | `NF_IP_PRE_ROUTING` |'
+- en: '| `INPUT` | `NF_IP_LOCAL_IN` |'
+  id: totrans-190
+  prefs: []
+  type: TYPE_TB
+  zh: '| `INPUT` | `NF_IP_LOCAL_IN` |'
+- en: '| `NAT` | `NF_IP_FORWARD` |'
+  id: totrans-191
+  prefs: []
+  type: TYPE_TB
+  zh: '| `NAT` | `NF_IP_FORWARD` |'
+- en: '| `OUTPUT` | `NF_IP_LOCAL_OUT` |'
+  id: totrans-192
+  prefs: []
+  type: TYPE_TB
+  zh: '| `OUTPUT` | `NF_IP_LOCAL_OUT` |'
+- en: '| `POSTROUTING` | `NF_IP_POST_ROUTING` |'
+  id: totrans-193
+  prefs: []
+  type: TYPE_TB
+  zh: '| `POSTROUTING` | `NF_IP_POST_ROUTING` |'
+- en: Returning to our diagram of Netfilter hook ordering, we can infer the equivalent
+    diagram of `iptables` chain execution and ordering for a given packet (see [Figure 2-4](#img-iptables-packet-flow)).
+  id: totrans-194
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 回到我们的 Netfilter 钩子顺序图，我们可以推断出特定数据包的 `iptables` 链执行和顺序图表（参见 [图 2-4](#img-iptables-packet-flow)）。
+- en: '![neku 0204](Images/neku_0204.png)'
+  id: totrans-195
+  prefs: []
+  type: TYPE_IMG
+  zh: '![neku 0204](Images/neku_0204.png)'
+- en: Figure 2-4\. The possible flows of a packet through `iptables` chains
+  id: totrans-196
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-4\. 数据包通过 `iptables` 链的可能流程
+- en: Again, like Netfilter, there are only a handful of ways that a packet can traverse
+    these chains (assuming the packet is not rejected or dropped along the way). Let’s
+    use an example with three machines, with IP addresses `10.0.0.1`, `10.0.0.2`,
+    and `10.0.0.3`, respectively. We will show some routing scenarios from the perspective
+    of machine 1 (with IP address `10.0.0.1`). We examine them in [Table 2-6](#table0206).
+  id: totrans-197
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 再次，类似于 Netfilter，数据包穿越这些链的方式极少（假设数据包不会在途中被拒绝或丢弃）。我们以三台机器为例，它们的 IP 地址分别是 `10.0.0.1`、`10.0.0.2`
+    和 `10.0.0.3`。我们将从机器 1（IP 地址为 `10.0.0.1`）的视角来展示一些路由场景。我们在 [表 2-6](#table0206) 中进行了详细的讨论。
+- en: Table 2-6\. `iptables` chains executed in various scenarios
+  id: totrans-198
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 2-6\. 不同场景下执行的 `iptables` 链
+- en: '| Packet description | Packet source | Packet destination | Tables processed
+    |'
+  id: totrans-199
+  prefs: []
+  type: TYPE_TB
+  zh: '| 数据包描述 | 数据包源 | 数据包目标 | 处理的表格 |'
+- en: '| --- | --- | --- | --- |'
+  id: totrans-200
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- | --- |'
+- en: '| An inbound packet, from another machine. | `10.0.0.2` | `10.0.0.1` | `PREROUTING`,
+    `INPUT` |'
+  id: totrans-201
+  prefs: []
+  type: TYPE_TB
+  zh: '| 来自另一台机器的入站数据包。 | `10.0.0.2` | `10.0.0.1` | `PREROUTING`、`INPUT` |'
+- en: '| An inbound packet, not destined for this machine. | `10.0.0.2` | `10.0.0.3`
+    | `PREROUTING`, `NAT`, `POSTROUTING` |'
+  id: totrans-202
+  prefs: []
+  type: TYPE_TB
+  zh: '| 来自其他机器的入站数据包，目标不是本机。 | `10.0.0.2` | `10.0.0.3` | `PREROUTING`、`NAT`、`POSTROUTING`
+    |'
+- en: '| An outbound packet, originating locally, destined for another machine. |
+    `10.0.0.1` | `10.0.0.2` | `OUTPUT`, `POSTROUTING` |'
+  id: totrans-203
+  prefs: []
+  type: TYPE_TB
+  zh: '| 本地发起的出站数据包，目标是另一台机器。 | `10.0.0.1` | `10.0.0.2` | `OUTPUT`、`POSTROUTING` |'
+- en: '| A packet from a local program, destined for the same machine. | `127.0.0.1`
+    | `127.0.0.1` | `OUTPUT`, `POSTROUTING` (then `PREROUTING`, `INPUT` as the packet
+    re-enters via the loopback interface) |'
+  id: totrans-204
+  prefs: []
+  type: TYPE_TB
+  zh: '| 来自本地程序的数据包，目标是同一台机器。 | `127.0.0.1` | `127.0.0.1` | `OUTPUT`、`POSTROUTING`（然后通过回环接口再次进入时为
+    `PREROUTING`、`INPUT`） |'
+- en: Tip
+  id: totrans-205
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: 'You can experiment with chain execution behavior on your own using `LOG` rules.
+    For example:'
+  id: totrans-206
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用 `LOG` 规则自行测试链的执行行为。例如：
+- en: '[PRE12]'
+  id: totrans-207
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: will log TCP packets to port 22 when they are processed by the `OUTPUT` chain,
+    with the log prefix "`ssh-output`“. Be aware that log size can quickly become
+    unwieldy. Log on important hosts with care.
+  id: totrans-208
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将在数据包通过 `OUTPUT` 链时记录 TCP 数据包到端口 22，日志前缀为 "`ssh-output`"。请注意，日志大小可能迅速变得难以管理。在重要主机上谨慎记录。
+- en: 'Recall that when a packet triggers a chain, `iptables` executes tables within
+    that chain (specifically, the rules within each table) in the following order:'
+  id: totrans-209
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请记住，当数据包触发链时，`iptables` 按照以下顺序执行该链中的表格（具体是每个表格内的规则）：
+- en: Raw
+  id: totrans-210
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 原始
+- en: Mangle
+  id: totrans-211
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 管理
+- en: NAT
+  id: totrans-212
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 网络地址转换（NAT）
+- en: Filter
+  id: totrans-213
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 过滤
+- en: Most chains do not contain all tables; however, the relative execution order
+    remains the same. This is a design decision to reduce redundancy. For example,
+    the Raw table exists to manipulate packets “entering” `iptables`, and therefore
+    has only `PREROUTING` and `OUTPUT` chains, in accordance with Netfilter’s packet
+    flow. The tables that contain each chain are laid out in [Table 2-7](#table0207).
+  id: totrans-214
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大多数链不包含所有表格；但是，相对执行顺序保持不变。这是为了减少冗余的设计决策。例如，原始表格用于操作“进入” `iptables` 的数据包，因此只有
+    `PREROUTING` 和 `OUTPUT` 链，符合 Netfilter 的数据包流程。每个链包含的表格详见 [表 2-7](#table0207)。
+- en: Table 2-7\. Which `iptables` tables (rows) contain which chains (columns)
+  id: totrans-215
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 2-7\. 哪些 `iptables` 表（行）包含哪些链（列）
+- en: '|  | Raw | Mangle | NAT | Filter |'
+  id: totrans-216
+  prefs: []
+  type: TYPE_TB
+  zh: '|  | Raw | Mangle | NAT | Filter |'
+- en: '| --- | --- | --- | --- | --- |'
+  id: totrans-217
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- | --- | --- |'
+- en: '| `PREROUTING` | ✓ | ✓ | ✓ |  |'
+  id: totrans-218
+  prefs: []
+  type: TYPE_TB
+  zh: '| `PREROUTING` | ✓ | ✓ | ✓ |  |'
+- en: '| `INPUT` |  | ✓ | ✓ | ✓ |'
+  id: totrans-219
+  prefs: []
+  type: TYPE_TB
+  zh: '| `INPUT` |  | ✓ | ✓ | ✓ |'
+- en: '| `FORWARD` |  | ✓ |  | ✓ |'
+  id: totrans-220
+  prefs: []
+  type: TYPE_TB
+  zh: '| `FORWARD` |  | ✓ |  | ✓ |'
+- en: '| `OUTPUT` | ✓ | ✓ | ✓ | ✓ |'
+  id: totrans-221
+  prefs: []
+  type: TYPE_TB
+  zh: '| `OUTPUT` | ✓ | ✓ | ✓ | ✓ |'
+- en: '| `POSTROUTING` |  | ✓ | ✓ |  |'
+  id: totrans-222
+  prefs: []
+  type: TYPE_TB
+  zh: '| `POSTROUTING` |  | ✓ | ✓ |  |'
+- en: 'You can list the chains that correspond to a table yourself, with `iptables
+    -L -t <table>`:'
+  id: totrans-223
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以自行列出与特定表相对应的链，使用`iptables -L -t <table>`命令：
+- en: '[PRE13]'
+  id: totrans-224
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: 'There is a small caveat for the NAT table: DNAT can be performed in `PREROUTING`
+    or `` OUTPUT` ``, and SNAT can be performed in only `INPUT` or `POSTROUTING`.'
+  id: totrans-225
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于NAT表有一个小注意事项：DNAT可以在`PREROUTING`或`OUTPUT`中执行，而SNAT只能在`INPUT`或`POSTROUTING`中执行。
+- en: 'To give an example, suppose we have an inbound packet destined for our host.
+    The order of execution would be:'
+  id: totrans-226
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 举个例子，假设我们有一个传入的数据包要发送到我们的主机。执行顺序如下：
+- en: '`PREROUTING`'
+  id: totrans-227
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: '`PREROUTING`'
+- en: Raw
+  id: totrans-228
+  prefs:
+  - PREF_IND
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: Raw
+- en: Mangle
+  id: totrans-229
+  prefs:
+  - PREF_IND
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: Mangle
+- en: NAT
+  id: totrans-230
+  prefs:
+  - PREF_IND
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: NAT
+- en: '`INPUT`'
+  id: totrans-231
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: '`INPUT`'
+- en: Mangle
+  id: totrans-232
+  prefs:
+  - PREF_IND
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: Mangle
+- en: NAT
+  id: totrans-233
+  prefs:
+  - PREF_IND
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: NAT
+- en: Filter
+  id: totrans-234
+  prefs:
+  - PREF_IND
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: Filter
+- en: Now that we’ve learned about Netfilter hooks, tables, and chains, let’s take
+    one last look at the flow of a packet through `iptables`, shown in [Figure 2-5](#img-iptables-flow).
+  id: totrans-235
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经了解了Netfilter钩子、表和链的相关内容，让我们最后再看一下数据包通过`iptables`的流程，如图[2-5](#img-iptables-flow)所示。
+- en: '![Iptables packet](Images/neku_0205.png)'
+  id: totrans-236
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Iptables packet](Images/neku_0205.png)'
+- en: Figure 2-5\. The flow of a packet through `iptables` tables and chains. A circle
+    denotes a table/hook combination that exists in `iptables`.
+  id: totrans-237
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-5。数据包通过`iptables`表和链的流程。一个圆圈表示`iptables`中存在的表/钩子组合。
+- en: 'All `iptables` rules belong to a table and chain, the possible combinations
+    of which are represented as dots in our flow chart. `iptables` evaluates chains
+    (and the rules in them, in order) based on the order of Netfilter hooks that a
+    packet triggers. For the given chain, `iptables` evaluates that chain in each
+    table that it is present in (note that some chain/table combinations do not exist,
+    such as Filter/`POSTROUTING`). If we trace the flow of a packet originating from
+    the local host, we see the following table/chains pairs evaluated, in order:'
+  id: totrans-238
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有`iptables`规则都属于一个表和链，其可能的组合在我们的流程图中表示为点。`iptables`根据数据包触发的Netfilter钩子的顺序评估链（及其中的规则），基于链表中的顺序进行评估。对于给定的链，`iptables`在每个存在的表中评估该链（请注意，某些链/表组合不存在，如Filter/`POSTROUTING`）。如果我们追踪从本地主机起始的数据包的流程，则按以下顺序评估表/链对：
+- en: Raw/`OUTPUT`
+  id: totrans-239
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: Raw/`OUTPUT`
+- en: Mangle/`OUTPUT`
+  id: totrans-240
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: Mangle/`OUTPUT`
+- en: NAT/`OUTPUT`
+  id: totrans-241
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: NAT/`OUTPUT`
+- en: Filter/`OUTPUT`
+  id: totrans-242
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: Filter/`OUTPUT`
+- en: Mangle/`POSTROUTING`
+  id: totrans-243
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: Mangle/`POSTROUTING`
+- en: NAT/`POSTROUTING`
+  id: totrans-244
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: NAT/`POSTROUTING`
+- en: Subchains
+  id: totrans-245
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 子链
+- en: The aforementioned chains are the top-level, or entry-point, chains. However,
+    users can define their own subchains and execute them with the JUMP target. `iptables`
+    executes such a chain in the same manner, target by target, until a terminating
+    target matches. This can be useful for logical separation or reusing a series
+    of targets that can be executed in more than one context (i.e., a similar motivation
+    to why we might organize code into a function). Such organization of rules across
+    chains can have a substantial impact on performance. `iptables` is, effectively,
+    running tens or hundreds or thousands of `if` statements against every single
+    packet that goes in or out of your system. That has measurable impact on packet
+    latency, CPU use, and network throughput. A well-organized set of chains reduces
+    this overhead by eliminating effectively redundant checks or actions. However,
+    `iptables`’s performance given a service with many pods is still a problem in
+    Kubernetes, which makes other solutions with less or no `iptables` use, such as
+    IPVS or eBPF, more appealing.
+  id: totrans-246
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 上述链是顶级或入口点链。然而，用户可以定义自己的子链，并使用JUMP目标执行它们。`iptables`以相同的方式执行这样的链，逐个目标地执行，直到匹配到终止目标为止。这对于逻辑分离或重用可以在多个上下文中执行的一系列目标非常有用（即，与将代码组织成函数的动机类似）。这样在链之间组织规则可以对性能产生重大影响。`iptables`实际上会对每个进出系统的数据包运行成十几甚至上百个`if`语句。这对数据包延迟、CPU使用率和网络吞吐量都有可测量的影响。一个良好组织的链集合通过消除有效冗余的检查或操作来减少这种开销。然而，在具有许多pod的服务中，`iptables`的性能仍然是Kubernetes中的一个问题，这使得其他少量或不使用`iptables`的解决方案，如IPVS或eBPF，更具吸引力。
+- en: Let’s look at creating new chains in [Example 2-6](#SSH-IPtables).
+  id: totrans-247
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们来看一下如何在[示例 2-6](#SSH-IPtables)中创建新的链。
+- en: Example 2-6\. Sample `iptables` chain for SSH firewalling
+  id: totrans-248
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 2-6。用于SSH防火墙的`iptables`链样本
+- en: '[PRE14]'
+  id: totrans-249
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: This example creates a new chain, `incoming-ssh`, which is evaluated for any
+    TCP packets inbound on port 22. The chain allows packets from two specific IP
+    addresses, and packets from other addresses are logged and dropped.
+  id: totrans-250
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此示例创建一个名为`incoming-ssh`的新链路，用于评估进入端口22的TCP数据包。该链路允许来自两个特定IP地址的数据包通过，其他地址的数据包则被记录并丢弃。
+- en: Filter chains end in a default action, such as dropping the packet if no prior
+    target matched. Chains will default to `ACCEPT` if no default is specified. `iptables
+    -P <chain> <target>` sets the default.
+  id: totrans-251
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 链路过滤结束于默认操作，例如如果没有匹配到前面的目标，则丢弃数据包。如果没有指定默认值，链路将默认为`ACCEPT`。`iptables -P <chain>
+    <target>`设置默认操作。
+- en: iptables rules
+  id: totrans-252
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: iptables规则
+- en: 'Rules have two parts: a match condition and an action (called a *target*).
+    The match condition describes a packet attribute. If the packet matches, the action
+    will be executed. If the packet does not match, `iptables` will move to check
+    the next rule.'
+  id: totrans-253
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 规则有两部分：匹配条件和动作（称为*目标*）。匹配条件描述数据包属性。如果数据包匹配，则执行动作。如果数据包不匹配，则`iptables`将移动到下一条规则。
+- en: Match conditions check if a given packet meets some criteria, for example, if
+    the packet has a specific source address. The order of operations from tables/chains
+    is important to remember, as prior operations can impact the packet by mutating
+    it, dropping it, or rejecting it. [Table 2-8](#some_common_iptables_match_types)
+    shows some common match types.
+  id: totrans-254
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 匹配条件检查给定数据包是否满足某些条件，例如，数据包是否具有特定的源地址。记住表/链路的操作顺序非常重要，因为先前的操作可以通过变异、丢弃或拒绝数据包来影响数据包。[表2-8](#some_common_iptables_match_types)显示了一些常见的匹配类型。
+- en: Table 2-8\. Some common `iptables` match types
+  id: totrans-255
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表2-8\. 一些常见的`iptables`匹配类型
+- en: '| Match type | Flag(s) | Description |'
+  id: totrans-256
+  prefs: []
+  type: TYPE_TB
+  zh: '| 匹配类型 | 标志 | 描述 |'
+- en: '| --- | --- | --- |'
+  id: totrans-257
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- |'
+- en: '| Source | `-s`, `--src`, `--source` | Matches packets with the specified source
+    address. |'
+  id: totrans-258
+  prefs: []
+  type: TYPE_TB
+  zh: '| 源 | `-s`, `--src`, `--source` | 匹配具有指定源地址的数据包。 |'
+- en: '| Destination | `-d`, `--dest`, `--destination` | Matches packets with the
+    destination source address. |'
+  id: totrans-259
+  prefs: []
+  type: TYPE_TB
+  zh: '| 目的地 | `-d`, `--dest`, `--destination` | 匹配具有指定目标源地址的数据包。 |'
+- en: '| Protocol | `-p`, `--protocol` | Matches packets with the specified protocol.
+    |'
+  id: totrans-260
+  prefs: []
+  type: TYPE_TB
+  zh: '| 协议 | `-p`, `--protocol` | 匹配具有指定协议的数据包。 |'
+- en: '| In interface | `-i`, `--in-interface` | Matches packets that entered via
+    the specified interface. |'
+  id: totrans-261
+  prefs: []
+  type: TYPE_TB
+  zh: '| 输入接口 | `-i`, `--in-interface` | 匹配通过指定接口输入的数据包。 |'
+- en: '| Out interface | `-o`, `--out-interface` | Matches packets that are leaving
+    the specified interface. |'
+  id: totrans-262
+  prefs: []
+  type: TYPE_TB
+  zh: '| 输出接口 | `-o`, `--out-interface` | 匹配正在离开指定接口的数据包。 |'
+- en: '| State | `-m state --state <states>` | Matches packets from connections that
+    are in one of the comma-separated states. This uses the Conntrack states (NEW,
+    ESTABLISHED, RELATED, INVALID). |'
+  id: totrans-263
+  prefs: []
+  type: TYPE_TB
+  zh: '| 状态 | `-m state --state <states>` | 匹配处于指定逗号分隔状态的连接的数据包。这使用Conntrack状态（NEW，ESTABLISHED，RELATED，INVALID）。
+    |'
+- en: Note
+  id: totrans-264
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Using `-m` or `--match`, `iptables` can use extensions for match criteria. Extensions
+    range from nice-to-haves, such as specifying multiple ports in a single rule (multiport),
+    to more complex features such as eBPF interactions. `man iptables-extensions`
+    contains more information.
+  id: totrans-265
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用`-m`或`--match`，`iptables`可以使用扩展来进行匹配条件。扩展包括诸如在单个规则中指定多个端口（multiport）等便利功能，以及诸如eBPF交互等更复杂的功能。`man
+    iptables-extensions`包含更多信息。
+- en: 'There are two kinds of target actions: terminating and nonterminating. A terminating
+    target will stop `iptables` from checking subsequent targets in the chain, essentially
+    acting as a final decision. A nonterminating target will allow `iptables` to continue
+    checking subsequent targets in the chain. `ACCEPT`, `DROP`, `REJECT`, and `RETURN`
+    are all terminating targets. Note that `ACCEPT` and `RETURN` are terminating only
+    *within their chain*. That is to say, if a packet hits an `ACCEPT` target in a
+    subchain, the parent chain will resume processing and could potentially drop or
+    reject the target. [Example 2-7](#IPTABLEs-REJECT) shows a set of rules that would
+    reject packets to port 80, despite matching an `ACCEPT` at one point. Some command
+    output has been removed for simplicity.'
+  id: totrans-266
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 目标动作有两种类型：终止和非终止。终止目标将阻止`iptables`继续检查链路中的后续目标，实际上起到最终决定作用。非终止目标将允许`iptables`继续检查链路中的后续目标。`ACCEPT`，`DROP`，`REJECT`和`RETURN`都是终止目标。注意，`ACCEPT`和`RETURN`仅在其链路内为终止目标。也就是说，如果数据包在子链中击中了`ACCEPT`目标，则父链将继续处理，并可能丢弃或拒绝目标。[示例2-7](#IPTABLEs-REJECT)显示了一组规则，这些规则将拒绝到端口80的数据包，尽管在某个时刻匹配到了`ACCEPT`。为简化起见，已删除某些命令输出。
+- en: Example 2-7\. Rule sequence which would reject some previously accepted packets
+  id: totrans-267
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例2-7\. 会拒绝之前接受的一些数据包的规则序列
+- en: '[PRE15]'
+  id: totrans-268
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: $ iptables -L --line-numbers
+  id: totrans-269
+  prefs: []
+  type: TYPE_NORMAL
+  zh: $ iptables -L --line-numbers
+- en: Chain INPUT (policy ACCEPT)
+  id: totrans-270
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 链 INPUT (策略 ACCEPT)
+- en: num  target     prot opt source destination
+  id: totrans-271
+  prefs: []
+  type: TYPE_NORMAL
+  zh: num  目标     协议  选项 源 目的地
+- en: 1    accept-all  all  --  anywhere             anywhere
+  id: totrans-272
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 1    接受所有  所有  --  任意地方             任意地方
+- en: 2    REJECT     tcp  --  anywhere             anywhere
+  id: totrans-273
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 2    拒绝     tcp  --  任意地方             任意地方
+- en: tcp dpt:80 reject-with icmp-port-unreachable
+  id: totrans-274
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: tcp dpt:80 reject-with icmp-port-unreachable
+- en: Chain accept-all (1 references)
+  id: totrans-275
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 链 accept-all (1 references)
+- en: num  target     prot opt source destination
+  id: totrans-276
+  prefs: []
+  type: TYPE_NORMAL
+  zh: num  目标     协议  选项 源 目的地
+- en: 1               all  --  anywhere             anywhere
+  id: totrans-277
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 1               所有  --  任意地方             任意地方
+- en: '[PRE16]'
+  id: totrans-278
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: '[Table 2-9](#common_iptables_target_types_and_behavior) summarizes common target
+    types and their behavior.'
+  id: totrans-279
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[表 2-9](#common_iptables_target_types_and_behavior) 总结了常见的目标类型及其行为。'
+- en: Table 2-9\. Common `iptables` target types and behavior
+  id: totrans-280
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 2-9\. 常见的`iptables`目标类型及其行为
+- en: '| Target type | Applicable tables | Description |'
+  id: totrans-281
+  prefs: []
+  type: TYPE_TB
+  zh: '| 目标类型 | 适用表格 | 描述 |'
+- en: '| --- | --- | --- |'
+  id: totrans-282
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- |'
+- en: '| `AUDIT` | All | Records data about accepted, dropped, or rejected packets.
+    |'
+  id: totrans-283
+  prefs: []
+  type: TYPE_TB
+  zh: '| `AUDIT` | 所有 | 记录有关接受、丢弃或拒绝的数据包的数据。 |'
+- en: '| `ACCEPT` | Filter | Allows the packet to continue unimpeded and without further
+    modification. |'
+  id: totrans-284
+  prefs: []
+  type: TYPE_TB
+  zh: '| `ACCEPT` | 过滤 | 允许数据包继续传输，无需进一步修改。 |'
+- en: '| `DNAT` | NAT | Modifies the destination address. |'
+  id: totrans-285
+  prefs: []
+  type: TYPE_TB
+  zh: '| `DNAT` | NAT | 修改目标地址。 |'
+- en: '| `DROPs` | Filter | Discards the packet. To an external observer, it will
+    appear as though the packet was never received. |'
+  id: totrans-286
+  prefs: []
+  type: TYPE_TB
+  zh: '| `DROPs` | 过滤 | 丢弃数据包。对外部观察者来说，看起来就像从未接收到数据包一样。 |'
+- en: '| `JUMP` | All | Executes another chain. Once that chain finishes executing,
+    execution of the parent chain will continue. |'
+  id: totrans-287
+  prefs: []
+  type: TYPE_TB
+  zh: '| `JUMP` | 所有 | 执行另一个链。一旦那个链执行完毕，父链的执行将继续。 |'
+- en: '| `LOG` | All | Logs the packet contents, via the kernel log. |'
+  id: totrans-288
+  prefs: []
+  type: TYPE_TB
+  zh: '| `LOG` | 所有 | 记录数据包内容到内核日志中。 |'
+- en: '| `MARK` | All | Sets a special integer for the packet, used as an identifier
+    by Netfilter. The integer can be used in other `iptables` decisions and is not
+    written to the packet itself. |'
+  id: totrans-289
+  prefs: []
+  type: TYPE_TB
+  zh: '| `MARK` | 所有 | 为数据包设置一个特殊整数，被Netfilter用作标识符。该整数可以在其他`iptables`决策中使用，但不会写入数据包本身。
+    |'
+- en: '| `MASQUERADE` | NAT | Modifies the source address of the packet, replacing
+    it with the address of a specified network interface. This is similar to SNAT,
+    but does not require the machine’s IP address to be known in advance. |'
+  id: totrans-290
+  prefs: []
+  type: TYPE_TB
+  zh: '| `MASQUERADE` | NAT | 修改数据包的源地址，用指定网络接口的地址替换。这类似于SNAT，但不需要提前知道机器的IP地址。 |'
+- en: '| `REJECT` | Filter | Discards the packet and sends a rejection reason. |'
+  id: totrans-291
+  prefs: []
+  type: TYPE_TB
+  zh: '| `REJECT` | 过滤 | 丢弃数据包并发送拒绝原因。 |'
+- en: '| `RETURN` | All | Stops processing the current chain (or subchain). Note that
+    this is *not* a terminating target, and if there is a parent chain, that chain
+    will continue to be processed. |'
+  id: totrans-292
+  prefs: []
+  type: TYPE_TB
+  zh: '| `RETURN` | 所有 | 停止处理当前链（或子链）。请注意，这不是一个终止目标，如果有父链，那个链将继续处理。 |'
+- en: '| `SNAT` | NAT | Modifies the source address of the packet, replacing it with
+    a fixed address. See also: `MASQUERADE`. |'
+  id: totrans-293
+  prefs: []
+  type: TYPE_TB
+  zh: '| `SNAT` | NAT | 修改数据包的源地址，用固定地址替换。参见：`MASQUERADE`。 |'
+- en: Each target type may have specific options, such as ports or log strings, that
+    apply to the rule. [Table 2-10](#iptables_target_command_examples) shows some
+    example commands and explanations.
+  id: totrans-294
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每种目标类型可能具有特定的选项，如端口或日志字符串，适用于规则。[表 2-10](#iptables_target_command_examples)
+    显示了一些示例命令及其解释。
+- en: Table 2-10\. `iptables` target command examples
+  id: totrans-295
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 2-10\. `iptables`目标命令示例
+- en: '| Command | Explanation |'
+  id: totrans-296
+  prefs: []
+  type: TYPE_TB
+  zh: '| 命令 | 解释 |'
+- en: '| --- | --- |'
+  id: totrans-297
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| iptables -A INPUT -s 10.0.0.1 | Accepts an inbound packet if the source address
+    is `10.0.0.1`. |'
+  id: totrans-298
+  prefs: []
+  type: TYPE_TB
+  zh: '| iptables -A INPUT -s 10.0.0.1 | 如果源地址是`10.0.0.1`，则接受进入的数据包。 |'
+- en: '| iptables -A INPUT -p ICMP | Accepts all inbound ICMP packets. |'
+  id: totrans-299
+  prefs: []
+  type: TYPE_TB
+  zh: '| iptables -A INPUT -p ICMP | 允许所有进入的ICMP数据包。 |'
+- en: '| iptables -A INPUT -p tcp --dport 443 | Accepts all inbound TCP packets to
+    port 443. |'
+  id: totrans-300
+  prefs: []
+  type: TYPE_TB
+  zh: '| iptables -A INPUT -p tcp --dport 443 | 允许所有进入的TCP数据包到443端口。 |'
+- en: '| iptables -A INPUT -p tcp --dport 22 -j DROP | Drops all inbound TCP ports
+    to port 22. |'
+  id: totrans-301
+  prefs: []
+  type: TYPE_TB
+  zh: '| iptables -A INPUT -p tcp --dport 22 -j DROP | 拒绝所有进入的TCP数据包到22端口。 |'
+- en: A target belongs to both a table and a chain, which control when (if at all)
+    `iptables` executes the aforementioned target for a given packet. Next, we’ll
+    put together what we’ve learned and look at `iptables` commands in practice.
+  id: totrans-302
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个目标同时属于一个表和一个链，它控制`iptables`在给定数据包时（如果有的话）执行上述目标的时机。接下来，我们将总结所学内容，并实际查看`iptables`命令。
+- en: Practical iptables
+  id: totrans-303
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 实际的iptables
+- en: 'You can show `iptables` chains with `iptables -L`:'
+  id: totrans-304
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用`iptables -L`显示`iptables`链：
+- en: '[PRE17]'
+  id: totrans-305
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: Warning
+  id: totrans-306
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: There is a distinct but nearly identical program, `ip6tables`, for managing
+    IPv6 rules. `iptables` and `ip6tables` rules are completely separate. For example,
+    dropping all packets to TCP `0.0.0.0:22` with `iptables` will not prevent connections
+    to TCP `[::]:22`, and vice versa for `ip6tables`.
+  id: totrans-307
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 还有一个完全独立但几乎相同的程序 `ip6tables`，用于管理 IPv6 规则。`iptables` 和 `ip6tables` 规则是完全独立的。例如，使用
+    `iptables` 拒绝所有到 TCP `0.0.0.0:22` 的数据包不会阻止 TCP `[::]:22` 的连接，反之亦然。
+- en: For simplicity, we will refer only to `iptables` and IPv4 addresses in this
+    section.
+  id: totrans-308
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为简单起见，在本节中我们将仅提到 `iptables` 和 IPv4 地址。
+- en: '`--line-numbers` shows numbers for each rule in a chain. This can be helpful
+    when inserting or deleting rules. `-I <chain> <line>` inserts a rule at the specified
+    line number, before the previous rule at that line.'
+  id: totrans-309
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`--line-numbers` 在链中为每条规则显示编号。这在插入或删除规则时非常有用。`-I <chain> <line>` 在指定的行号之前插入规则，之前的规则在该行上。'
+- en: 'The typical format of a command to interact with `iptables` rules is:'
+  id: totrans-310
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与 `iptables` 规则交互的典型命令格式为：
+- en: '[PRE18]'
+  id: totrans-311
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: where `-A` is for *append*, `-C` is for *check*, and `-D` is for *delete*.
+  id: totrans-312
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`-A` 是 *追加*，`-C` 是 *检查*，`-D` 是 *删除*。'
+- en: Warning
+  id: totrans-313
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: '`iptables` rules aren’t persisted across restarts. `iptables` provides `iptables-save`
+    and `iptables-restore` tools, which can be used manually or with simple automation
+    to capture or reload rules. This is something that most firewall tools paper over
+    by automatically creating their own `iptables` rules every time the system starts.'
+  id: totrans-314
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`iptables` 规则在重新启动后不会持久保存。`iptables` 提供了 `iptables-save` 和 `iptables-restore`
+    工具，可以手动使用或简单自动化捕获或重新加载规则。大多数防火墙工具在系统启动时都会自动创建自己的 `iptables` 规则，因此这一点并不突出。'
+- en: '`iptables` can masquerade connections, making it appear as if the packets came
+    from their own IP address. This is useful to provide a simplified exterior to
+    the outside world. A common use case is to provide a known host for traffic, as
+    a security bastion, or to provide a predictable set of IP addresses to third parties.
+    In Kubernetes, masquerading can make pods use their node’s IP address, despite
+    the fact that pods have unique IP addresses. This is necessary to communicate
+    outside the cluster in many setups, where pods have internal IP addresses that
+    cannot communicate directly with the internet. The `MASQUERADE` target is similar
+    to SNAT; however, it does not require a `--source-address` to be known and specified
+    in advance. Instead, it uses the address of a specified interface. This is slightly
+    less performant than SNAT in cases where the new source address is static, as
+    `iptables` must continuously fetch the address:'
+  id: totrans-315
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`iptables` 可以伪装连接，使数据包看起来像是来自它们自己的 IP 地址。这对于向外界提供简化的外观非常有用。常见用例是为流量提供已知的主机，作为安全堡垒，或向第三方提供可预测的
+    IP 地址集合。在 Kubernetes 中，伪装可以使得 Pod 使用它们所在节点的 IP 地址，尽管 Pod 具有独特的 IP 地址。这在许多设置中是必要的，其中
+    Pod 具有内部 IP 地址，无法直接与互联网通信。`MASQUERADE` 目标类似于 SNAT；但不需要事先知道和指定 `--source-address`。而是使用指定接口的地址。在新源地址是静态的情况下，这比
+    SNAT 稍微低效，因为 `iptables` 必须不断获取地址：'
+- en: '[PRE19]'
+  id: totrans-316
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: '`iptables` can perform connection-level load balancing or more accurately,
+    connection fan-out. This technique relies on DNAT rules and random selection (to
+    prevent every connection from being routed to the first DNAT target):'
+  id: totrans-317
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`iptables` 可以执行连接级负载均衡，或更准确地说是连接分流。该技术依赖于 DNAT 规则和随机选择（以防止每个连接都被路由到第一个 DNAT
+    目标）：'
+- en: '[PRE20]'
+  id: totrans-318
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: 'In the previous example, there is a 50% chance of routing to the first backend.
+    Otherwise, the packet proceeds to the next rule, which is guaranteed to route
+    the connection to the second backend. The math gets a little tedious for adding
+    more backends. To have an equal chance of routing to any backend, the nth backend
+    must have a 1/n chance of being routed to. If there were three backends, the probabilities
+    would need to be 0.3 (repeating), 0.5, and 1:'
+  id: totrans-319
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在前面的例子中，有50% 的几率路由到第一个后端。否则，数据包会继续到下一个规则，该规则保证将连接路由到第二个后端。当增加更多后端时，数学计算会变得有些繁琐。要使路由到任何后端的概率相等，第n个后端必须有1/n的概率被路由到。如果有三个后端，概率分别为0.3（重复）、0.5
+    和 1：
+- en: '[PRE21]'
+  id: totrans-320
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: When Kubernetes uses `iptables` load balancing for a service, it creates a chain
+    as shown previously. If you look closely, you can see rounding errors in one of
+    the probability numbers.
+  id: totrans-321
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当 Kubernetes 使用 `iptables` 负载均衡服务时，会创建一个如上所示的链。仔细观察可以看到一个概率数字中的四舍五入误差。
+- en: Using DNAT fan-out for load balancing has several caveats. It has no feedback
+    for the load of a given backend and will always map application-level queries
+    on the same connection to the same backend. Because the DNAT result lasts the
+    lifetime of the connection, if long-lived connections are common, many downstream
+    clients may stick to the same upstream backend if that backend is longer lived
+    than others. To give a Kubernetes example, suppose a gRPC service has only two
+    replicas and then additional replicas scale up. gRPC reuses the same HTTP/2 connection,
+    so existing downstream clients (using the Kubernetes service and not gRPC load
+    balancing) will stay connected to the initial two replicas, skewing the load profile
+    among gRPC backends. Because of this, many developers use a smarter client (such
+    as making use of gRPC’s client-side load balancing), force periodic reconnects
+    at the server and/or client, or use service meshes to externalize the problem.
+    We’ll discuss load balancing in more detail in Chapters [4](ch04.xhtml#kubernetes_networking_introduction)
+    and [5](ch05.xhtml#kubernetes_networking_abstractions).
+  id: totrans-322
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 DNAT fan-out 进行负载均衡有几个注意事项。它对于给定后端的负载没有反馈，并且总是将应用层查询映射到相同的后端连接。由于 DNAT 结果持续连接的生命周期，如果长连接很常见，许多下游客户端可能会粘附到相同的上游后端，如果该后端的生命周期比其他后端长。以
+    Kubernetes 为例，假设一个 gRPC 服务只有两个副本，然后额外的副本进行了扩展。gRPC 会重用相同的 HTTP/2 连接，因此现有的下游客户端（使用
+    Kubernetes 服务而不是 gRPC 负载均衡）将保持连接到最初的两个副本，使 gRPC 后端之间的负载配置不均。因此，许多开发人员使用更智能的客户端（例如利用
+    gRPC 的客户端负载均衡），在服务器端和/或客户端强制定期重新连接，或者使用服务网格来外部化问题。我们将在第 [4](ch04.xhtml#kubernetes_networking_introduction)
+    和 [5](ch05.xhtml#kubernetes_networking_abstractions) 章节中更详细地讨论负载均衡。
+- en: Although `iptables` is widely used in Linux, it can become slow in the presence
+    of a huge number of rules and offers limited load balancing functionality. Next
+    we’ll look at IPVS, an alternative that is more purpose-built for load balancing.
+  id: totrans-323
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管 `iptables` 在 Linux 中被广泛使用，但在存在大量规则时可能变得缓慢，并且提供有限的负载均衡功能。接下来我们将看一下 IPVS，这是一个更适用于负载均衡的替代方案。
+- en: IPVS
+  id: totrans-324
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: IPVS
+- en: IP Virtual Server (IPVS) is a Linux connection (L4) load balancer. [Figure 2-6](#img-ipvs)
+    shows a simple diagram of IPVS’s role in routing packets.
+  id: totrans-325
+  prefs: []
+  type: TYPE_NORMAL
+  zh: IP 虚拟服务器（IPVS）是一个 Linux 连接（L4）负载均衡器。[图 2-6](#img-ipvs) 显示了 IPVS 在路由数据包中的作用的简单图示。
+- en: '![IPVS](Images/neku_0206.png)'
+  id: totrans-326
+  prefs: []
+  type: TYPE_IMG
+  zh: '![IPVS](Images/neku_0206.png)'
+- en: Figure 2-6\. IPVS
+  id: totrans-327
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-6\. IPVS
+- en: '`iptables` can do simple L4 load balancing by randomly routing connections,
+    with the randomness shaped by the weights on individual DNAT rules. IPVS supports
+    multiple load balancing modes (in contrast with the `iptables` one), which are
+    outlined in [Table 2-11](#ipvs_modes_supported_in_kubernetes). This allows IPVS
+    to spread load more effectively than `iptables`, depending on IPVS configuration
+    and traffic patterns.'
+  id: totrans-328
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`iptables` 可以通过随机路由连接来进行简单的 L4 负载均衡，随机性由各个 DNAT 规则上的权重塑造。IPVS 支持多种负载均衡模式（与
+    `iptables` 不同），这些模式在 [表 2-11](#ipvs_modes_supported_in_kubernetes) 中概述。这使得 IPVS
+    可以根据 IPVS 配置和流量模式更有效地分散负载，而不同于 `iptables`。'
+- en: Table 2-11\. IPVS modes supported in Kubernetes
+  id: totrans-329
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 2-11\. Kubernetes 中支持的 IPVS 模式
+- en: '| Name | Shortcode | Description |'
+  id: totrans-330
+  prefs: []
+  type: TYPE_TB
+  zh: '| 名称 | 简码 | 描述 |'
+- en: '| --- | --- | --- |'
+  id: totrans-331
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- |'
+- en: '| Round-robin | `rr` | Sends subsequent connections to the “next” host in a
+    cycle. This increases the time between subsequent connections sent to a given
+    host, compared to random routing like `iptables` enables. |'
+  id: totrans-332
+  prefs: []
+  type: TYPE_TB
+  zh: '| 轮询 | `rr` | 将后续连接发送到循环中的“下一个”主机。与 `iptables` 启用的随机路由相比，这会增加发送到给定主机的后续连接之间的时间。
+    |'
+- en: '| Least connection | `lc` | Sends connections to the host that currently has
+    the least open connections. |'
+  id: totrans-333
+  prefs: []
+  type: TYPE_TB
+  zh: '| 最少连接 | `lc` | 将连接发送到当前具有最少打开连接的主机。 |'
+- en: '| Destination hashing | `dh` | Sends connections deterministically to a specific
+    host, based on the connections’ destination addresses. |'
+  id: totrans-334
+  prefs: []
+  type: TYPE_TB
+  zh: '| 目标哈希 | `dh` | 根据连接的目标地址确定性地将连接发送到特定主机。 |'
+- en: '| Source hashing | `sh` | Sends connections deterministically to a specific
+    host, based on the connections’ source addresses. |'
+  id: totrans-335
+  prefs: []
+  type: TYPE_TB
+  zh: '| 源哈希 | `sh` | 根据连接的源地址确定性地将连接发送到特定主机。 |'
+- en: '| Shortest expected delay | `sed` | Sends connections to the host with the
+    lowest connections to weight ratio. |'
+  id: totrans-336
+  prefs: []
+  type: TYPE_TB
+  zh: '| 最短预期延迟 | `sed` | 将连接发送到具有最低连接权重比的主机。 |'
+- en: '| Never queue | `nq` | Sends connections to any host with no existing connections,
+    otherwise uses “shortest expected delay” strategy. |'
+  id: totrans-337
+  prefs: []
+  type: TYPE_TB
+  zh: '| 永不排队 | `nq` | 将连接发送到任何没有现有连接的主机，否则使用“最短预期延迟”策略。 |'
+- en: 'IPVS supports packet forwarding modes:'
+  id: totrans-338
+  prefs: []
+  type: TYPE_NORMAL
+  zh: IPVS 支持数据包转发模式：
+- en: NAT rewrites source and destination addresses.
+  id: totrans-339
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: NAT 重写源和目的地地址。
+- en: DR encapsulates IP datagrams within IP datagrams.
+  id: totrans-340
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: DR 将 IP 数据报封装在 IP 数据报中。
+- en: IP tunneling directly routes packets to the backend server by rewriting the
+    MAC address of the data frame with the MAC address of the selected backend server.
+  id: totrans-341
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: IP 隧道直接通过重写数据帧的 MAC 地址将数据包路由到后端服务器。
+- en: 'There are three aspects to look at when it comes to issues with `iptables`
+    as a load balancer:'
+  id: totrans-342
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当涉及 `iptables` 作为负载均衡器的问题时，有三个方面需要考虑：
+- en: Number of nodes in the cluster
+  id: totrans-343
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 集群中的节点数
+- en: Even though Kubernetes already supports 5,000 nodes in release v1.6, `kube-proxy`
+    with `iptables` is a bottleneck to scale the cluster to 5,000 nodes. One example
+    is that with a NodePort service in a 5,000-node cluster, if we have 2,000 services
+    and each service has 10 pods, this will cause at least 20,000 `iptables` records
+    on each worker node, which can make the kernel pretty busy.
+  id: totrans-344
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 即使 Kubernetes 在版本 v1.6 中已经支持 5,000 个节点，`kube-proxy` 配合 `iptables` 作为一个瓶颈限制了将集群扩展到
+    5,000 个节点。例如，在一个 5,000 个节点的集群中，如果我们有 2,000 个服务，每个服务有 10 个 Pod，这将导致每个工作节点上至少有 20,000
+    条 `iptables` 记录，这可能会使内核非常繁忙。
+- en: Time
+  id: totrans-345
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 时间
+- en: The time spent to add one rule when there are 5,000 services (40,000 rules)
+    is 11 minutes. For 20,000 services (160,000 rules), it’s 5 hours.
+  id: totrans-346
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在有 5,000 个服务（40,000 条规则）时，添加一条规则的时间为 11 分钟。对于 20,000 个服务（160,000 条规则），需要 5 小时。
+- en: Latency
+  id: totrans-347
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 延迟
+- en: There is latency to access a service (routing latency); each packet must traverse
+    the `iptables` list until a match is made. There is latency to add/remove rules,
+    inserting and removing from an extensive list is an intensive operation at scale.
+  id: totrans-348
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 访问服务的延迟（路由延迟）；每个数据包必须遍历 `iptables` 列表直到匹配为止。添加/删除规则的延迟，插入和移除大量规则是一个大规模的繁重操作。
+- en: IPVS also supports session affinity, which is exposed as an option in services
+    (`Service.spec.sessionAffinity` and `Service.spec.sessionAffinityConfig`). Repeated
+    connections, within the session affinity time window, will route to the same host.
+    This can be useful for scenarios such as minimizing cache misses. It can also
+    make routing in any mode effectively stateful (by indefinitely routing connections
+    from the same address to the same host), but the routing stickiness is less absolute
+    in Kubernetes, where individual pods come and go.
+  id: totrans-349
+  prefs: []
+  type: TYPE_NORMAL
+  zh: IPVS 还支持会话亲和性，这在服务中作为一个选项公开（`Service.spec.sessionAffinity` 和 `Service.spec.sessionAffinityConfig`）。在会话亲和时间窗口内的重复连接将路由到同一主机。这对于减少缓存未命中等场景很有用。在
+    Kubernetes 中，这也可以使任何模式下的路由实际上是有状态的（通过将来自同一地址的连接无限期地路由到同一主机），但在路由的粘性上不太绝对。
+- en: 'To create a basic load balancer with two equally weighted destinations, run
+    `ipvsadm -A -t <address> -s <mode>`. `-A`, `-E`, and `-D` are used to add, edit,
+    and delete virtual services, respectively. The lowercase counterparts, `-a`, `-e`,
+    and `-d`, are used to add, edit, and delete host backends, respectively:'
+  id: totrans-350
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要创建一个基本的负载均衡器，使用两个权重相等的目的地，运行`ipvsadm -A -t <address> -s <mode>`。`-A`、`-E` 和
+    `-D` 分别用于添加、编辑和删除虚拟服务。小写形式 `-a`、`-e` 和 `-d` 分别用于添加、编辑和删除主机后端：
+- en: '[PRE22]'
+  id: totrans-351
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: 'You can list the IPVS hosts with `-L`. Each virtual server (a unique IP address
+    and port combination) is shown, with its backends:'
+  id: totrans-352
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用 `-L` 列出 IPVS 主机。显示每个虚拟服务器（唯一的 IP 地址和端口组合）及其后端：
+- en: '[PRE23]'
+  id: totrans-353
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: '`-L` supports multiple options, such as `--stats`, to show additional connection
+    statistics.'
+  id: totrans-354
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`-L` 支持多个选项，如`--stats`，以显示额外的连接统计信息。'
+- en: eBPF
+  id: totrans-355
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: eBPF
+- en: eBPF is a programming system that allows special sandboxed programs to run in
+    the kernel without passing back and forth between kernel and user space, like
+    we saw with Netfilter and `iptables`.
+  id: totrans-356
+  prefs: []
+  type: TYPE_NORMAL
+  zh: eBPF 是一种允许在内核中运行特殊沙箱程序的编程系统，不像我们在 Netfilter 和`iptables` 中看到的那样需要在内核和用户空间之间来回传递。
+- en: Before eBPF, there was the Berkeley Packet Filter (BPF). BPF is a technology
+    used in the kernel, among other things, to analyze network traffic. BPF supports
+    filtering packets, which allows a userspace process to supply a filter that specifies
+    which packets it wants to inspect. One of BPF’s use cases is `tcpdump`, shown
+    in [Figure 2-7](#img-epbf). When you specify a filter on `tcpdump`, it compiles
+    it as a BPF program and passes it to BPF. The techniques in BPF have been extended
+    to other processes and kernel operations.
+  id: totrans-357
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 eBPF 之前，有 Berkeley Packet Filter（BPF）。BPF 是一种在内核中使用的技术，用于分析网络流量等内容。BPF 支持过滤数据包，允许用户空间进程提供一个过滤器，指定要检查的数据包。其中一个
+    BPF 的用例是`tcpdump`，如图[2-7](#img-epbf)所示。当您在`tcpdump`上指定过滤器时，它会将其编译为一个 BPF 程序并传递给
+    BPF。BPF 中的技术已扩展到其他进程和内核操作中。
+- en: '![tcpdump-ebpf](Images/neku_0207.png)'
+  id: totrans-358
+  prefs: []
+  type: TYPE_IMG
+  zh: '![tcpdump-ebpf](Images/neku_0207.png)'
+- en: Figure 2-7\. `tcpdump`
+  id: totrans-359
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-7\. `tcpdump`
+- en: An eBPF program has direct access to syscalls. eBPF programs can directly watch
+    and block syscalls, without the usual approach of adding kernel hooks to a userspace
+    program. Because of its performance characteristics, it is well suited for writing
+    networking software.
+  id: totrans-360
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个 eBPF 程序可以直接访问系统调用。eBPF 程序可以直接监视和阻止系统调用，而无需通常的向用户空间程序添加内核钩子的方法。由于其性能特征，它非常适合编写网络软件。
+- en: Tip
+  id: totrans-361
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: Tip
+- en: You can learn more about eBPF on its [website](http://ebpf.io).
+  id: totrans-362
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在其 [网站](http://ebpf.io) 上了解更多关于 eBPF 的信息。
+- en: 'In addition to socket filtering, other supported attach points in the kernel
+    are as follows:'
+  id: totrans-363
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了套接字过滤外，内核中支持的其他附加点如下：
+- en: Kprobes
+  id: totrans-364
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kprobes
+- en: Dynamic kernel tracing of internal kernel components.
+  id: totrans-365
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 内核组件的动态跟踪。
+- en: Uprobes
+  id: totrans-366
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Uprobes
+- en: User-space tracing.
+  id: totrans-367
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用户空间跟踪。
+- en: Tracepoints
+  id: totrans-368
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Tracepoints
+- en: Kernel static tracing. These are programed into the kernel by developers and
+    are more stable as compared to kprobes, which may change between kernel versions.
+  id: totrans-369
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 内核静态跟踪。这些由开发人员编程到内核中，比 kprobes 更稳定，后者可能在内核版本之间变化。
+- en: perf_events
+  id: totrans-370
+  prefs: []
+  type: TYPE_NORMAL
+  zh: perf_events
+- en: Timed sampling of data and events.
+  id: totrans-371
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 数据和事件的定时采样。
+- en: XDP
+  id: totrans-372
+  prefs: []
+  type: TYPE_NORMAL
+  zh: XDP
+- en: Specialized eBPF programs that can go lower than kernel space to access driver
+    space to act directly on packets.
+  id: totrans-373
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 特殊的 eBPF 程序可以低于内核空间，访问驱动程序空间，直接处理数据包。
+- en: Let’s return to `tcpdump` as an example. [Figure 2-8](#img-epbf-example) shows
+    a simplified rendition of `tcpdump`’s interactions with eBPF.
+  id: totrans-374
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们以 `tcpdump` 为例。[图 2-8](#img-epbf-example) 显示了 `tcpdump` 与 eBPF 的简化互动。
+- en: '![ebpf](Images/neku_0208.png)'
+  id: totrans-375
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ebpf](Images/neku_0208.png)'
+- en: Figure 2-8\. eBPF example
+  id: totrans-376
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-8\. eBPF 示例
+- en: Suppose we run `tcpdump -i any`.
+  id: totrans-377
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设我们运行 `tcpdump -i any`。
+- en: The string is compiled by `pcap_compile` into a BPF program. The kernel will
+    then use this BPF program to filter all packets that go through all the network
+    devices we specified, any with the `-I` in our case.
+  id: totrans-378
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 字符串通过 `pcap_compile` 编译为 BPF 程序。然后内核将使用此 BPF 程序过滤我们指定的所有网络设备上通过的所有数据包，例如我们的
+    `-I`。
+- en: It will make this data available to `tcpdump` via a map. Maps are a data structure
+    consisting of key-value pairs used by the BPF programs to exchange data.
+  id: totrans-379
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 它将通过一个映射使这些数据可用于 `tcpdump`。映射是一种由 BPF 程序用于交换数据的键值对数据结构。
+- en: 'There are many reasons to use eBPF with Kubernetes:'
+  id: totrans-380
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 eBPF 与 Kubernetes 的许多原因：
+- en: Performance (hashing table versus `iptables` list)
+  id: totrans-381
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 性能（哈希表与 `iptables` 列表）
+- en: For every service added to Kubernetes, the list of `iptables` rules that have
+    to be traversed grows exponentially. Because of the lack of incremental updates,
+    the entire list of rules has to be replaced each time a new rule is added. This
+    leads to a total duration of 5 hours to install the 160,000 `iptables` rules representing
+    20,000 Kubernetes services.
+  id: totrans-382
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于每个添加到 Kubernetes 的服务，必须遍历的 `iptables` 规则列表呈指数增长。由于缺乏增量更新，每次添加新规则时都必须替换整个规则列表。这导致安装代表
+    20,000 个 Kubernetes 服务的 160,000 个 `iptables` 规则的总时长达到 5 小时。
+- en: Tracing
+  id: totrans-383
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 跟踪
+- en: Using BPF, we can gather pod and container-level network statistics. The BPF
+    socket filter is nothing new, but the BPF socket filter per cgroup is. Introduced
+    in Linux 4.10, `cgroup-bpf` allows attaching eBPF programs to cgroups. Once attached,
+    the program is executed for all packets entering or exiting any process in the
+    cgroup.
+  id: totrans-384
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 BPF，我们可以收集 pod 和容器级网络统计信息。BPF 套接字过滤器并不新鲜，但 cgroup 中的 BPF 套接字过滤器是新的。引入于 Linux
+    4.10 的 `cgroup-bpf` 允许将 eBPF 程序附加到 cgroup。一旦附加，该程序将为进入或退出 cgroup 中任何进程的所有数据包执行。
+- en: Auditing `kubectl exec` with eBPF
+  id: totrans-385
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 eBPF 对 `kubectl exec` 进行审计
+- en: With eBPF, you can attach a program that will record any commands executed in
+    the `kubectl exec` session and pass those commands to a userspace program that
+    logs those events.
+  id: totrans-386
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 eBPF，您可以附加一个程序，记录在 `kubectl exec` 会话中执行的任何命令，并将这些命令传递给一个用户空间程序，记录这些事件。
+- en: Security
+  id: totrans-387
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安全性
+- en: Seccomp
+  id: totrans-388
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Seccomp
+- en: Secured computing that restricts what syscalls are allowed. Seccomp filters
+    can be written in eBPF.
+  id: totrans-389
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安全计算，限制允许的系统调用。Seccomp 过滤器可以在 eBPF 中编写。
+- en: Falco
+  id: totrans-390
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco
+- en: Open source container-native runtime security that uses eBPF.
+  id: totrans-391
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 eBPF 的开源容器本地运行时安全性。
+- en: The most common use of eBPF in Kubernetes is Cilium, CNI and service implementation.
+    Cilium replaces `kube-proxy`, which writes `iptables` rules to map a service’s
+    IP address to its corresponding pods.
+  id: totrans-392
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 中 eBPF 最常见的用途是 Cilium、CNI 和服务实现。Cilium 取代了 `kube-proxy`，后者写入 `iptables`
+    规则以将服务的 IP 地址映射到相应的 pod。
+- en: Through eBPF, Cilium can intercept and route all packets directly in the kernel,
+    which is faster and allows for application-level (layer 7) load balancing. We
+    will cover `kube-proxy` in [Chapter 4](ch04.xhtml#kubernetes_networking_introduction).
+  id: totrans-393
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过 eBPF，Cilium 可以在内核中直接拦截和路由所有数据包，这样做更快，并允许应用级别（第 7 层）的负载均衡。我们将在 [第 4 章](ch04.xhtml#kubernetes_networking_introduction)
+    中讨论 `kube-proxy`。
+- en: Network Troubleshooting Tools
+  id: totrans-394
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 网络故障排除工具
+- en: Troubleshooting network-related issues with Linux is a complex topic and could
+    easily fill its own book. In this section, we will introduce some key troubleshooting
+    tools and the basics of their use ([Table 2-12](#cheatsheet_of_common_debugging_cases_and_tools)
+    is provided as a simple cheat sheet of tools and applicable use cases). Think
+    of this section as a jumping-off point for common Kubernetes-related tool uses.
+    Man pages, `--help`, and the internet can guide you further. There is substantial
+    overlap in the tools that we describe, so you may find learning about some tools
+    (or tool features) redundant. Some are better suited to a given task than others
+    (for example, multiple tools will catch TLS errors, but OpenSSL provides the richest
+    debugging information). Exact tool use may come down to preference, familiarity,
+    and availability.
+  id: totrans-395
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用 Linux 解决与网络相关的问题是一个复杂的主题，甚至可以轻松填写一本书。在本节中，我们将介绍一些关键的故障排除工具及其基本用法（[表 2-12](#cheatsheet_of_common_debugging_cases_and_tools)提供了一个简单的工具和适用用例的备忘单）。把这一节看作是常见
+    Kubernetes 相关工具使用的起点。手册页、`--help` 和互联网可以进一步指导你。我们描述的工具之间存在重叠，因此你可能会发现学习某些工具（或工具功能）会有重复。某些工具更适合特定任务（例如，多个工具可以捕获
+    TLS 错误，但 OpenSSL 提供了最丰富的调试信息）。具体的工具使用可能取决于个人偏好、熟悉程度和可用性。
+- en: Table 2-12\. Cheat sheet of common debugging cases and tools
+  id: totrans-396
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 2-12\. 常见故障排除案例和工具备忘单
+- en: '| Case | Tools |'
+  id: totrans-397
+  prefs: []
+  type: TYPE_TB
+  zh: '| 情况 | 工具 |'
+- en: '| --- | --- |'
+  id: totrans-398
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| Checking connectivity | `traceroute`, `ping`, `telnet`, `netcat` |'
+  id: totrans-399
+  prefs: []
+  type: TYPE_TB
+  zh: '| 检查连接性 | `traceroute`，`ping`，`telnet`，`netcat` |'
+- en: '| Port scanning | `nmap` |'
+  id: totrans-400
+  prefs: []
+  type: TYPE_TB
+  zh: '| 端口扫描 | `nmap` |'
+- en: '| Checking DNS records | `dig`, commands mentioned in “Checking Connectivity”
+    |'
+  id: totrans-401
+  prefs: []
+  type: TYPE_TB
+  zh: '| 检查 DNS 记录 | `dig`，在“检查连接性”中提到的命令 |'
+- en: '| Checking HTTP/1 | cURL, `telnet`, `netcat` |'
+  id: totrans-402
+  prefs: []
+  type: TYPE_TB
+  zh: '| 检查 HTTP/1 | cURL，`telnet`，`netcat` |'
+- en: '| Checking HTTPS | OpenSSL, cURL |'
+  id: totrans-403
+  prefs: []
+  type: TYPE_TB
+  zh: '| 检查 HTTPS | OpenSSL，cURL |'
+- en: '| Checking listening programs | `netstat` |'
+  id: totrans-404
+  prefs: []
+  type: TYPE_TB
+  zh: '| 检查监听程序 | `netstat` |'
+- en: Some networking tools that we describe likely won’t be preinstalled in your
+    distro of choice, but all should be available through your distro’s package manager.
+    We will sometimes use `# Truncated` in command output where we have omitted text
+    to avoid examples becoming repetitive or overly long.
+  id: totrans-405
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们描述的一些网络工具可能不会预装在你选择的发行版中，但所有这些工具应该都可以通过你发行版的软件包管理器获得。在命令输出中，有时我们会使用 `# Truncated`
+    来表示我们已经省略了文本，以避免示例变得重复或过长。
+- en: Security Warning
+  id: totrans-406
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 安全警告
+- en: Before we get into tooling details, we need to talk about security. An attacker
+    can utilize any tool listed here in order to explore and access additional systems.
+    There are many strong opinions on this topic, but we consider it best practice
+    to leave the fewest possible networking tools installed on a given machine.
+  id: totrans-407
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在深入工具细节之前，我们需要讨论安全性。攻击者可以利用此处列出的任何工具来探索和访问其他系统。关于此话题有很多强烈的意见，但我们认为最佳实践是在给定的机器上留下尽可能少的网络工具。
+- en: An attacker may still be able to download tools themselves (e.g., by downloading
+    a binary from the internet) or use the standard package manager (if they have
+    sufficient permission). In most cases, you are simply introducing some additional
+    friction prior to exploring and exploiting. However, in some cases you can reduce
+    an attacker’s capabilities by not preinstalling networking tools.
+  id: totrans-408
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 攻击者仍然可以下载工具本身（例如，通过从互联网下载二进制文件）或使用标准软件包管理器（如果他们具有足够的权限）。在大多数情况下，你只是在探索和利用之前引入了一些额外的摩擦。但是，在某些情况下，通过不预安装网络工具，你可以减少攻击者的能力。
+- en: 'Linux file permissions include something called the *setuid bit* that is sometimes
+    used by networking tools. If a file has the setuid bit set, executing said file
+    causes the file to be executed *as the user who owns the file*, rather than the
+    current user. You can observe this by looking for an `s` rather than an `x` in
+    the permission readout of a file:'
+  id: totrans-409
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linux 文件权限包括一个称为*setuid位*的内容，有时被网络工具使用。如果文件设置了 setuid 位，执行该文件将导致文件作为文件所有者而不是当前用户执行。你可以通过查看文件权限输出中的`s`而不是`x`来观察到这一点：
+- en: '[PRE24]'
+  id: totrans-410
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: This allows programs to expose limited, privileged capabilities (for example,
+    `passwd` uses this ability to allow a user to update their password, without allowing
+    arbitrary writes to the password file). A number of networking tools (`ping`,
+    `nmap`, etc.) may use the setuid bit on some systems to send raw packets, sniff
+    packets, etc. If an attacker downloads their own copy of a tool and cannot gain
+    root privileges, they will be able to do less with said tool than if it was installed
+    by the system with the setuid bit set.
+  id: totrans-411
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这允许程序暴露有限的特权功能（例如，`passwd` 使用此功能允许用户更新其密码，而不允许对密码文件进行任意写入）。许多网络工具（如 `ping`、`nmap`
+    等）可能会在某些系统上使用 setuid 位来发送原始数据包、嗅探数据包等。如果攻击者下载自己的工具副本且无法获得 root 权限，则他们将无法像系统安装的具有设置
+    setuid 位的工具那样进行更多操作。
+- en: ping
+  id: totrans-412
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: ping
+- en: '`ping` is a simple program that sends ICMP `ECHO_REQUEST` packets to networked
+    devices. It is a common, simple way to test network connectivity from one host
+    to another.'
+  id: totrans-413
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`ping` 是一个简单的程序，用于向网络设备发送 ICMP `ECHO_REQUEST` 数据包。它是一种常见且简单的方式，用于从一个主机向另一个主机测试网络连通性。'
+- en: ICMP is a layer 4 protocol, like TCP and UDP. Kubernetes services support TCP
+    and UDP, but not ICMP. This means that pings to a Kubernetes service will always
+    fail. Instead, you will need to use `telnet` or a higher-level tool such as cURL
+    to check connectivity to a service. Individual pods may still be reachable by
+    `ping`, depending on your network configuration.
+  id: totrans-414
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ICMP 是一个第四层协议，类似于 TCP 和 UDP。Kubernetes 服务支持 TCP 和 UDP，但不支持 ICMP。这意味着对 Kubernetes
+    服务的 ping 测试将始终失败。相反，您需要使用 `telnet` 或更高级的工具如 cURL 来检查与服务的连通性。根据您的网络配置，个别的 pod 可能仍可通过
+    `ping` 访问。
+- en: Warning
+  id: totrans-415
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Firewalls and routing software are aware of ICMP packets and can be configured
+    to filter or route specific ICMP packets. It is common, but not guaranteed (or
+    necessarily advisable), to have permissive rules for ICMP packets. Some network
+    administrators, network software, or cloud providers will allow ICMP packets by
+    default.
+  id: totrans-416
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 防火墙和路由软件可感知 ICMP 数据包，并可配置以过滤或路由特定 ICMP 数据包。通常而言，允许 ICMP 数据包有宽松规则是常见的，但不一定是必须的（或建议的）。一些网络管理员、网络软件或云服务提供商会默认允许
+    ICMP 数据包。
+- en: The basic use of `ping` is simply `ping <address>`. The address can be an IP
+    address or a domain. `ping` will send a packet, wait, and report the status of
+    that request when a response or timeout happens.
+  id: totrans-417
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`ping` 的基本用法是简单的 `ping <address>`。地址可以是 IP 地址或域名。`ping` 将发送一个数据包，并在响应或超时时报告请求的状态。'
+- en: 'By default, `ping` will send packets forever, and must be manually stopped
+    (e.g., with Ctrl-C). `-c <count>` will make `ping` perform a fixed number before
+    shutting down. On shutdown, `ping` also prints a summary:'
+  id: totrans-418
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，`ping` 将无限发送数据包，并需要手动停止（例如，使用 Ctrl-C）。`-c <count>` 将使 `ping` 在关闭之前执行指定数量的数据包。关闭时，`ping`
+    还会打印汇总信息：
+- en: '[PRE25]'
+  id: totrans-419
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE25]'
+- en: '[Table 2-13](#useful_ping_options) shows common `ping` options.'
+  id: totrans-420
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[表 2-13](#useful_ping_options) 显示了常见的 `ping` 选项。'
+- en: Table 2-13\. Useful `ping` options
+  id: totrans-421
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 2-13\. 有用的 `ping` 选项
+- en: '| Option | Description |'
+  id: totrans-422
+  prefs: []
+  type: TYPE_TB
+  zh: '| 选项 | 描述 |'
+- en: '| --- | --- |'
+  id: totrans-423
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| -c <count> | Sends the specified number of packets. Exits after the final
+    packet is received or times out. |'
+  id: totrans-424
+  prefs: []
+  type: TYPE_TB
+  zh: '| -c <count> | 发送指定数量的数据包。在接收到最后一个数据包或超时后退出。 |'
+- en: '| -i <seconds> | Sets the wait interval between sending packets. Defaults to
+    1 second. Extremely low values are not recommended, as `ping` can flood the network.
+    |'
+  id: totrans-425
+  prefs: []
+  type: TYPE_TB
+  zh: '| -i <seconds> | 设置发送数据包之间的等待间隔，默认为 1 秒。不推荐设置过低的值，因为 `ping` 可能会导致网络洪泛。 |'
+- en: '| -o | Exit after receiving 1 packet. Equivalent to `-c 1`. |'
+  id: totrans-426
+  prefs: []
+  type: TYPE_TB
+  zh: '| -o | 收到 1 个数据包后退出。相当于 `-c 1`。 |'
+- en: '| -S <source address> | Uses the specified source address for the packet. |'
+  id: totrans-427
+  prefs: []
+  type: TYPE_TB
+  zh: '| -S <source address> | 使用指定的源地址发送数据包。 |'
+- en: '| -W <milliseconds> | Sets the wait interval to receive a packet. If `ping`
+    receives the packet later than the wait time, it will still count toward the final
+    summary. |'
+  id: totrans-428
+  prefs: []
+  type: TYPE_TB
+  zh: '| -W <milliseconds> | 设置接收数据包的等待间隔。如果 `ping` 在等待时间之后接收到数据包，它仍将计入最终的汇总信息。 |'
+- en: traceroute
+  id: totrans-429
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: traceroute
+- en: '`traceroute` shows the network route taken from one host to another. This allows
+    users to easily validate and debug the route taken (or where routing fails) from
+    one machine to another.'
+  id: totrans-430
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`traceroute` 显示从一个主机到另一个主机所采取的网络路径。这允许用户轻松验证和调试从一台机器到另一台机器的路径（或路由失败的位置）。'
+- en: '`traceroute` sends packets with specific IP time-to-live values. Recall from
+    [Chapter 1](ch01.xhtml#networking_introduction) that each host that handles a
+    packet decrements the time-to-live (TTL) value on packets by 1, therefore limiting
+    the number of hosts that a request can be handled by. When a host receives a packet
+    and decrements the TTL to 0, it sends a `TIME_EXCEEDED` packet and discards the
+    original packet. The `TIME_EXCEEDED` response packet contains the source address
+    of the machine where the packet timed out. By starting with a TTL of 1 and raising
+    the TTL by 1 for each packet, `traceroute` is able to get a response from each
+    host along the route to the destination address.'
+  id: totrans-431
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`traceroute` 发送具有特定 IP 生存时间值的数据包。回顾来自 [第1章](ch01.xhtml#networking_introduction)
+    的信息，每个处理数据包的主机都会将数据包的生存时间（TTL）减少1，从而限制请求可以经过的主机数量。当主机接收到一个数据包并将 TTL 减少到0时，它会发送一个
+    `TIME_EXCEEDED` 包并丢弃原始数据包。`TIME_EXCEEDED` 响应包含数据包超时的机器的源地址。通过从 TTL 为1开始并为每个数据包增加1的方式，`traceroute`
+    能够从源地址到目的地址的每个主机获得响应。'
+- en: '`traceroute` displays hosts line by line, starting with the first external
+    machine. Each line contains the hostname (if available), IP address, and response
+    time:'
+  id: totrans-432
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`traceroute` 按行显示主机，从第一个外部机器开始。每行包含主机名（如果可用）、IP 地址和响应时间：'
+- en: '[PRE26]'
+  id: totrans-433
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE26]'
+- en: If `traceroute` receives no response from a given hop before timing out, it
+    prints a ***. Some hosts may refuse to send a `TIME_EXCEEDED` packet, or a firewall
+    along the way may prevent successful delivery.
+  id: totrans-434
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果 `traceroute` 在超时之前从某一跳收不到响应，它会打印一个***。一些主机可能拒绝发送 `TIME_EXCEEDED` 包，或者沿途的防火墙可能阻止成功传递。
+- en: '[Table 2-14](#useful_traceroute_options) shows common `traceroute` options.'
+  id: totrans-435
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[表2-14](#useful_traceroute_options) 展示了常见的 `traceroute` 选项。'
+- en: Table 2-14\. Useful `traceroute` options
+  id: totrans-436
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表2-14\. 有用的 `traceroute` 选项
+- en: '| Option | Syntax | Description |'
+  id: totrans-437
+  prefs: []
+  type: TYPE_TB
+  zh: '| 选项 | 语法 | 描述 |'
+- en: '| --- | --- | --- |'
+  id: totrans-438
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- |'
+- en: '| First TTL | `-f <TTL>`, `-M <TTL>` | Set the starting IP TTL (default value:
+    1). Setting the TTL to `n` will cause `traceroute` to not report the first `n-1`
+    hosts en route to the destination. |'
+  id: totrans-439
+  prefs: []
+  type: TYPE_TB
+  zh: '| 初始 TTL | `-f <TTL>`, `-M <TTL>` | 设置起始 IP TTL（默认值：1）。将 TTL 设置为 `n` 将导致 `traceroute`
+    不报告前 `n-1` 个路由到目的地的主机。 |'
+- en: '| Max TTL | `-m <TTL>` | Set the maximum TTL, i.e., the maximum number of hosts
+    that `traceroute` will attempt to route through. |'
+  id: totrans-440
+  prefs: []
+  type: TYPE_TB
+  zh: '| 最大 TTL | `-m <TTL>` | 设置最大 TTL，即 `traceroute` 将尝试通过的最大主机数量。 |'
+- en: '| Protocol | `-P <protocol>` | Send packets of the specified protocol (TCP,
+    UDP, ICMP, and sometimes other options). UDP is default. |'
+  id: totrans-441
+  prefs: []
+  type: TYPE_TB
+  zh: '| 协议 | `-P <protocol>` | 发送指定协议的数据包（TCP、UDP、ICMP，有时还有其他选项）。UDP 是默认协议。 |'
+- en: '| Source address | `-s <address>` | Specify the source IP address of outgoing
+    packets. |'
+  id: totrans-442
+  prefs: []
+  type: TYPE_TB
+  zh: '| 源地址 | `-s <address>` | 指定出站数据包的源 IP 地址。 |'
+- en: '| Wait | `-w <seconds>` | Set the time to wait for a probe response. |'
+  id: totrans-443
+  prefs: []
+  type: TYPE_TB
+  zh: '| 等待时间 | `-w <seconds>` | 设置等待探测响应的时间。 |'
+- en: dig
+  id: totrans-444
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: dig
+- en: '`dig` is a DNS lookup tool. You can use it to make DNS queries from the command
+    line and display the results.'
+  id: totrans-445
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`dig` 是一个 DNS 查询工具。您可以使用它从命令行进行 DNS 查询并显示结果。'
+- en: 'The general form of a `dig` command is `dig [options] <domain>`. By default,
+    `dig` will display the CNAME, A, and AAAA records:'
+  id: totrans-446
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`dig` 命令的一般形式是 `dig [options] <domain>`。默认情况下，`dig` 将显示 CNAME、A 和 AAAA 记录：'
+- en: '[PRE27]'
+  id: totrans-447
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE27]'
+- en: 'To display a particular type of DNS record, run `dig <domain> <type>` (or `dig
+    -t <type> <domain>`). This is overwhelmingly the main use case for `dig`:'
+  id: totrans-448
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要显示特定类型的 DNS 记录，运行 `dig <domain> <type>`（或 `dig -t <type> <domain>`）。这绝大多数是
+    `dig` 的主要用例：
+- en: '[PRE28]'
+  id: totrans-449
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE28]'
+- en: '[Table 2-15](#useful_dig_options) shows common `dig` options.'
+  id: totrans-450
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[表2-15](#useful_dig_options) 展示了常见的 `dig` 选项。'
+- en: Table 2-15\. Useful `dig` options
+  id: totrans-451
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表2-15\. 有用的 `dig` 选项
+- en: '| Option | Syntax | Description |'
+  id: totrans-452
+  prefs: []
+  type: TYPE_TB
+  zh: '| 选项 | 语法 | 描述 |'
+- en: '| --- | --- | --- |'
+  id: totrans-453
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- |'
+- en: '| IPv4 | `-4` | Use IPv4 only. |'
+  id: totrans-454
+  prefs: []
+  type: TYPE_TB
+  zh: '| IPv4 | `-4` | 仅使用 IPv4。 |'
+- en: '| IPv6 | `-6` | Use IPv6 only. |'
+  id: totrans-455
+  prefs: []
+  type: TYPE_TB
+  zh: '| IPv6 | `-6` | 仅使用 IPv6。 |'
+- en: '| Address | `-b <address>[#<port>]` | Specify the address to make a DNS query
+    to. Port can optionally be included, preceded by *#*. |'
+  id: totrans-456
+  prefs: []
+  type: TYPE_TB
+  zh: '| 地址 | `-b <address>[#<port>]` | 指定要进行 DNS 查询的地址。端口可以选择包括，前面带有 *#*。 |'
+- en: '| Port | `-p <port>` | Specify the port to query, in case DNS is exposed on
+    a nonstandard port. The default is 53, the DNS standard. |'
+  id: totrans-457
+  prefs: []
+  type: TYPE_TB
+  zh: '| 端口 | `-p <port>` | 指定要查询的端口，如果 DNS 暴露在非标准端口上。默认为 53，DNS 标准端口。 |'
+- en: '| Domain | `-q <domain>` | The domain name to query. The domain name is usually
+    specified as a positional argument. |'
+  id: totrans-458
+  prefs: []
+  type: TYPE_TB
+  zh: '| 域名 | `-q <domain>` | 要查询的域名。域名通常作为位置参数指定。 |'
+- en: '| Record Type | `-t <type>` | The DNS record type to query. The record type
+    can alternatively be specified as a positional argument. |'
+  id: totrans-459
+  prefs: []
+  type: TYPE_TB
+  zh: '| 记录类型 | `-t <type>` | 要查询的 DNS 记录类型。也可以将记录类型指定为位置参数。 |'
+- en: telnet
+  id: totrans-460
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: telnet
+- en: '`telnet` is both a network protocol and a tool for using said protocol. `telnet`
+    was once used for remote login, in a manner similar to SSH. SSH has become dominant
+    due to having better security, but `telnet` is still extremely useful for debugging
+    servers that use a text-based protocol. For example, with `telnet`, you can connect
+    to an HTTP/1 server and manually make requests against it.'
+  id: totrans-461
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`telnet` 既是一种网络协议，也是使用该协议的工具。`telnet` 曾用于远程登录，类似于 SSH。由于 SSH 具有更好的安全性，因此 SSH
+    已成为主流，但 `telnet` 仍然非常适用于调试使用基于文本的协议的服务器。例如，使用 `telnet`，您可以连接到 HTTP/1 服务器并手动发出请求。'
+- en: 'The basic syntax of `telnet` is `telnet <address> <port>`. This establishes
+    a connection and provides an interactive command-line interface. Pressing Enter
+    twice will send a command, which easily allows multiline commands to be written.
+    Press Ctrl-J to exit the session:'
+  id: totrans-462
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`telnet` 的基本语法是 `telnet <address> <port>`。这将建立连接并提供一个交互式命令行界面。按两次 Enter 将发送一个命令，这样可以轻松编写多行命令。按
+    Ctrl-J 退出会话：'
+- en: '[PRE29]'
+  id: totrans-463
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE29]'
+- en: To make full use of `telnet`, you will need to understand how the application
+    protocol that you are using works. `telnet` is a classic tool to debug servers
+    running HTTP, HTTPS, POP3, IMAP, and so on.
+  id: totrans-464
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要充分利用 `telnet`，您需要了解您使用的应用程序协议的工作方式。`telnet` 是一个经典的工具，用于调试运行 HTTP、HTTPS、POP3、IMAP
+    等服务器。
+- en: nmap
+  id: totrans-465
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: nmap
+- en: '`nmap` is a port scanner, which allows you to explore and examine services
+    on your network.'
+  id: totrans-466
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`nmap` 是一个端口扫描程序，允许您探索和检查网络上的服务。'
+- en: 'The general syntax of `nmap` is `nmap [options] <target>`, where target is
+    a domain, IP address, or IP CIDR. `nmap`’s default options will give a fast and
+    brief summary of open ports on a host:'
+  id: totrans-467
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`nmap` 的一般语法是 `nmap [选项] <目标>`，其中目标可以是域、IP 地址或 IP CIDR。`nmap` 的默认选项将快速而简要地总结主机上开放的端口：'
+- en: '[PRE30]'
+  id: totrans-468
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE30]'
+- en: In the previous example, `nmap` detects three open ports and guesses which service
+    is running on each port.
+  id: totrans-469
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '在前面的例子中，`nmap` 检测到三个开放的端口，并猜测每个端口上运行的服务。 '
+- en: Tip
+  id: totrans-470
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: Because `nmap` can quickly show you which services are accessible from a remote
+    machine, it can be a quick and easy way to spot services that should *not* be
+    exposed. `nmap` is a favorite tool for attackers for this reason.
+  id: totrans-471
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因为 `nmap` 可以快速显示远程机器上可访问的服务，它可以快速而轻松地发现不应该暴露的服务。出于这个原因，`nmap` 是攻击者的最爱工具。
+- en: '`nmap` has a dizzying number of options, which change the scan behavior and
+    level of detail provided. As with other commands, we will summarize some key options,
+    but we *highly* recommend reading `nmap`’s help/man pages.'
+  id: totrans-472
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`nmap` 有大量的选项，可以改变扫描行为和提供的详细级别。与其他命令一样，我们将总结一些关键选项，但我们*强烈建议*阅读 `nmap` 的帮助/手册页面。'
+- en: '[Table 2-16](#useful_nmap_options) shows common `nmap` options.'
+  id: totrans-473
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[表 2-16](#useful_nmap_options) 显示常见的 `nmap` 选项。'
+- en: Table 2-16\. Useful `nmap` options
+  id: totrans-474
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 2-16\. 有用的 `nmap` 选项
+- en: '| Option | Syntax | Description |'
+  id: totrans-475
+  prefs: []
+  type: TYPE_TB
+  zh: '| 选项 | 语法 | 描述 |'
+- en: '| --- | --- | --- |'
+  id: totrans-476
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- |'
+- en: '| Additional detection | `-A` | Enable OS detection, version detection, and
+    more. |'
+  id: totrans-477
+  prefs: []
+  type: TYPE_TB
+  zh: '| 附加检测 | `-A` | 启用操作系统检测、版本检测等功能。 '
+- en: '| Decrease verbosity | `-d` | Decrease the command verbosity. Using multiple
+    `d`’s (e.g., `-dd`) increases the effect. |'
+  id: totrans-478
+  prefs: []
+  type: TYPE_TB
+  zh: '| 减少详细程度 | `-d` | 减少命令的详细程度。使用多个 `d`（例如 `-dd`）会增加效果。 |'
+- en: '| Increase verbosity | `-v` | Increase the command verbosity. Using multiple
+    `v`’s (e.g., `-vv`) increases the effect. |'
+  id: totrans-479
+  prefs: []
+  type: TYPE_TB
+  zh: '| 增加详细程度 | `-v` | 增加命令的详细程度。使用多个 `v`（例如 `-vv`）会增加效果。 |'
+- en: netstat
+  id: totrans-480
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: netstat
+- en: '`netstat` can display a wide range of information about a machine’s network
+    stack and connections:'
+  id: totrans-481
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`netstat` 可以显示关于机器网络堆栈和连接的广泛信息：'
+- en: '[PRE31]'
+  id: totrans-482
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE31]'
+- en: Invoking `netstat` with no additional arguments will display all *connected*
+    sockets on the machine. In our example, we see three TCP sockets, one UDP socket,
+    and a multitude of UNIX sockets. The output includes the address (IP address and
+    port) on both sides of a connection.
+  id: totrans-483
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不带任何附加参数调用 `netstat` 将显示机器上所有*连接*的套接字。在我们的例子中，我们看到三个 TCP 套接字，一个 UDP 套接字和大量的
+    UNIX 套接字。输出包括连接的两端的地址（IP 地址和端口）。
+- en: 'We can use the `-a` flag to show all connections or `-l` to show only listening
+    connections:'
+  id: totrans-484
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以使用 `-a` 标志来显示所有连接，或者使用 `-l` 来仅显示监听连接：
+- en: '[PRE32]'
+  id: totrans-485
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE32]'
+- en: A common use of `netstat` is to check which process is listening on a specific
+    port. To do that, we run `sudo netstat -lp` - `l` for “listening” and `p` for
+    “program.” `sudo` may be necessary for `netstat` to view all program information.
+    The output for `-l` shows which address a service is listening on (e.g., `0.0.0.0`
+    or `127.0.0.1`).
+  id: totrans-486
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`netstat` 的常见用途是检查哪个进程正在监听特定端口。为此，我们运行 `sudo netstat -lp` - `-l` 表示“监听”，`-p`
+    表示“程序”。可能需要使用 `sudo` 来查看 `netstat` 的所有程序信息。对于 `-l` 的输出显示服务正在监听的地址（例如 `0.0.0.0`
+    或 `127.0.0.1`）。'
+- en: 'We can use simple tools like `grep` to get a clear output from `netstat` when
+    we are looking for a specific result:'
+  id: totrans-487
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当我们寻找特定结果时，可以使用像 `grep` 这样的简单工具从 `netstat` 中获取清晰的输出：
+- en: '[PRE33]'
+  id: totrans-488
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE33]'
+- en: '[Table 2-17](#useful_netstat_commands) shows common `netstat` options.'
+  id: totrans-489
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[表 2-17](#useful_netstat_commands) 展示了常见的 `netstat` 选项。'
+- en: Table 2-17\. Useful `netstat` commands
+  id: totrans-490
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 2-17\. 有用的 `netstat` 命令
+- en: '| Option | Syntax | Description |'
+  id: totrans-491
+  prefs: []
+  type: TYPE_TB
+  zh: '| 选项 | 语法 | 描述 |'
+- en: '| --- | --- | --- |'
+  id: totrans-492
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- |'
+- en: '| Show all sockets | `netstat -a` | Shows all sockets, not only open connections.
+    |'
+  id: totrans-493
+  prefs: []
+  type: TYPE_TB
+  zh: '| 显示所有套接字 | `netstat -a` | 显示所有套接字，而不仅仅是打开的连接。'
+- en: '| Show statistics | `netstat -s` | Shows networking statistics. By default,
+    `netstat` shows stats from all protocols. |'
+  id: totrans-494
+  prefs: []
+  type: TYPE_TB
+  zh: '| 显示统计信息 | `netstat -s` | 显示网络统计信息。默认情况下，`netstat` 显示所有协议的统计信息。'
+- en: '| Show listening sockets | `netstat -l` | Shows sockets that are listening.
+    This is an easy way to find running services. |'
+  id: totrans-495
+  prefs: []
+  type: TYPE_TB
+  zh: '| 显示监听套接字 | `netstat -l` | 显示正在监听的套接字。这是查找运行服务的简便方法。'
+- en: '| TCP | `netstat -t` | The `-t` flag shows only TCP data. It can be used with
+    other flags, e.g., `-lt` (show sockets listening with TCP). |'
+  id: totrans-496
+  prefs: []
+  type: TYPE_TB
+  zh: '| TCP | `netstat -t` | `-t` 标志仅显示 TCP 数据。它可以与其他标志一起使用，例如 `-lt`（显示监听 TCP 的套接字）。'
+- en: '| UDP | `netstat -u` | The `-u` flag shows only UDP data. It can be used with
+    other flags, e.g., `-lu` (show sockets listening with UDP). |'
+  id: totrans-497
+  prefs: []
+  type: TYPE_TB
+  zh: '| UDP | `netstat -u` | `-u` 标志仅显示 UDP 数据。它可以与其他标志一起使用，例如 `-lu`（显示监听 UDP 的套接字）。'
+- en: netcat
+  id: totrans-498
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: netcat
+- en: '`netcat` is a multipurpose tool for making connections, sending data, or listening
+    on a socket. It can be helpful as a way to “manually” run a server or client to
+    inspect what happens in greater detail. `netcat` is arguably similar to `telnet`
+    in this regard, though `netcat` is capable of many more things.'
+  id: totrans-499
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`netcat` 是一个多功能工具，用于建立连接、发送数据或在套接字上侦听。作为一种“手动”运行服务器或客户端以详细检查发生情况的方式，`netcat`
+    可能与 `telnet` 类似，尽管 `netcat` 能够做更多事情。'
+- en: Tip
+  id: totrans-500
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: '`nc` is an alias for `netcat` on most systems.'
+  id: totrans-501
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`nc` 在大多数系统上是 `netcat` 的别名。'
+- en: '`netcat` can connect to a server when invoked as `netcat <address> <port>`.
+    `netcat` has an interactive `stdin`, which allows you to manually type data or
+    pipe data to `netcat`. It’s very `telnet`-esque so far:'
+  id: totrans-502
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`netcat` 可以作为 `netcat <地址> <端口>` 被调用以连接服务器。`netcat` 具有交互式的 `stdin`，允许您手动输入数据或将数据管道传输到
+    `netcat`。到目前为止，它非常类似于 `telnet`。'
+- en: '[PRE34]'
+  id: totrans-503
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE34]'
+- en: Openssl
+  id: totrans-504
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Openssl
+- en: The OpenSSL technology powers a substantial chunk of the world’s HTTPS connections.
+    Most heavy lifting with OpenSSL is done with language bindings, but it also has
+    a CLI for operational tasks and debugging. `openssl` can do things such as creating
+    keys and certificates, signing certificates, and, most relevant to us, testing
+    TLS/SSL connections. Many other tools, including ones outlined in this chapter,
+    can test TLS/SSL connections. However, `openssl` stands out for its feature-richness
+    and level of detail.
+  id: totrans-505
+  prefs: []
+  type: TYPE_NORMAL
+  zh: OpenSSL 技术支持世界上大部分 HTTPS 连接。大部分 OpenSSL 的重要工作是通过语言绑定完成的，但它也有用于操作任务和调试的命令行界面。`openssl`
+    能够执行诸如创建密钥和证书、签署证书以及最相关于我们的测试 TLS/SSL 连接的操作。许多其他工具，包括本章中介绍的工具，都可以测试 TLS/SSL 连接。然而，`openssl`
+    以其丰富的功能和详细程度脱颖而出。
+- en: Commands usually take the form `openssl [sub-command] [arguments] [options]`.
+    `openssl` has a vast number of subcommands (for example, `openssl rand` allows
+    you to generate pseudo random data). The `list` subcommand allows you to list
+    capabilities, with some search options (e.g., `openssl list --commands` for commands).
+    To learn more about individual sub commands, you can check `openssl <subcommand>
+    --help` or its man page (`man openssl-<subcommand>` or just `man <subcommand>`).
+  id: totrans-506
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 命令通常采用 `openssl [子命令] [参数] [选项]` 的形式。`openssl` 拥有大量的子命令（例如，`openssl rand` 允许您生成伪随机数据）。`list`
+    子命令允许您列出功能，具有一些搜索选项（例如，`openssl list --commands` 用于列出命令）。要了解有关单个子命令的更多信息，可以检查
+    `openssl <子命令> --help` 或其 man 页面（`man openssl-<子命令>` 或仅 `man <子命令>`）。
+- en: '`openssl s_client -connect` will connect to a server and display detailed information
+    about the server’s certificate. Here is the default invocation:'
+  id: totrans-507
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`openssl s_client -connect` 将连接到服务器并显示有关服务器证书的详细信息。以下是默认调用方式：'
+- en: '[PRE35]'
+  id: totrans-508
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE35]'
+- en: If you are using a self-signed CA, you can use `-CAfile <path>` to use that
+    CA. This will allow you to establish and verify connections against a self-signed
+    certificate.
+  id: totrans-509
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你在使用自签名的 CA 证书，可以使用 `-CAfile <path>` 来指定该 CA。这将允许你建立和验证针对自签名证书的连接。
+- en: cURL
+  id: totrans-510
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: cURL
+- en: cURL is a data transfer tool that supports multiple protocols, notably HTTP
+    and HTTPS.
+  id: totrans-511
+  prefs: []
+  type: TYPE_NORMAL
+  zh: cURL 是一个支持多种协议（尤其是 HTTP 和 HTTPS）的数据传输工具。
+- en: Tip
+  id: totrans-512
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: '`wget` is a similar tool to the command `curl`. Some distros or administrators
+    may install it instead of `curl`.'
+  id: totrans-513
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`wget` 是一个与 `curl` 类似的工具。一些发行版或管理员可能会安装它，而不是 `curl`。'
+- en: 'cURL commands are of the form `curl [options] <URL>`. cURL prints the URL’s
+    contents and sometimes cURL-specific messages to `stdout`. The default behavior
+    is to make an HTTP GET request:'
+  id: totrans-514
+  prefs: []
+  type: TYPE_NORMAL
+  zh: cURL 命令的形式为 `curl [options] <URL>`。cURL 将 URL 的内容打印到标准输出，有时还会打印 cURL 特定的消息。默认行为是发起
+    HTTP GET 请求：
+- en: '[PRE36]'
+  id: totrans-515
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE36]'
+- en: 'By default, cURL does not follow redirects, such as HTTP 301s or protocol upgrades.
+    The `-L` flag (or `--location`) will enable redirect following:'
+  id: totrans-516
+  prefs: []
+  type: TYPE_NORMAL
+  zh: cURL 默认不会自动遵循重定向，比如 HTTP 301 或协议升级。使用 `-L` 标志（或 `--location`）将启用重定向跟随功能：
+- en: '[PRE37]'
+  id: totrans-517
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE37]'
+- en: Use the `-X` option to perform a specific HTTP verb; e.g., use `curl -X DELETE
+    foo/bar` to make a `DELETE` request.
+  id: totrans-518
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 `-X` 选项执行特定的 HTTP 动词；例如，使用 `curl -X DELETE foo/bar` 进行 `DELETE` 请求。
+- en: 'You can supply data (for a POST, PUT, etc.) in a few ways:'
+  id: totrans-519
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可以通过几种方式提供数据（用于 POST、PUT 等请求）：
+- en: 'URL encoded: `-d "key1=value1&key2=value2"`'
+  id: totrans-520
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: URL 编码格式：`-d "key1=value1&key2=value2"`
+- en: 'JSON: `-d ''{"key1":"value1", "key2":"value2"}''`'
+  id: totrans-521
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: JSON 格式：`-d '{"key1":"value1", "key2":"value2"}'`
+- en: 'As a file in either format: `-d @data.txt`'
+  id: totrans-522
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 作为文件：`-d @data.txt`
+- en: 'The `-H` option adds an explicit header, although basic headers such as `Content-Type`
+    are added automatically:'
+  id: totrans-523
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`-H` 选项添加显式头信息，尽管基本的头信息如 `Content-Type` 会自动添加：'
+- en: '`-H "Content-Type: application/x-www-form-urlencoded"`'
+  id: totrans-524
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`-H "Content-Type: application/x-www-form-urlencoded"`'
+- en: 'Here are some examples:'
+  id: totrans-525
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下面是一些示例：
+- en: '[PRE38]'
+  id: totrans-526
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE38]'
+- en: Tip
+  id: totrans-527
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: cURL can be of some help when debugging TLS issues, but more specialized tools
+    such as `openssl` may be more helpful.
+  id: totrans-528
+  prefs: []
+  type: TYPE_NORMAL
+  zh: cURL 在调试 TLS 问题时可能会有所帮助，但像 `openssl` 这样的更专业的工具可能更有帮助。
+- en: 'cURL can help diagnose TLS issues. Just like a reputable browser, cURL validates
+    the certificate chain returned by HTTP sites and checks against the host’s CA
+    certs:'
+  id: totrans-529
+  prefs: []
+  type: TYPE_NORMAL
+  zh: cURL 可以帮助诊断 TLS 问题。与可靠的浏览器一样，cURL 验证 HTTP 站点返回的证书链，并与主机的 CA 证书进行检查：
+- en: '[PRE39]'
+  id: totrans-530
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE39]'
+- en: 'Like many programs, cURL has a verbose flag, `-v`, which will print more information
+    about the request and response. This is extremely valuable when debugging a layer
+    7 protocol such as HTTP:'
+  id: totrans-531
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 类似于许多程序，cURL 具有详细输出标志 `-v`，在调试 HTTP 等第 7 层协议时非常有价值：
+- en: '[PRE40]'
+  id: totrans-532
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE40]'
+- en: cURL has many additional features that we have not covered, such as the ability
+    to use timeouts, custom CA certs, custom DNS, and so on.
+  id: totrans-533
+  prefs: []
+  type: TYPE_NORMAL
+  zh: cURL 还有许多未涉及的其他功能，例如超时设置、自定义 CA 证书、自定义 DNS 等。
+- en: Conclusion
+  id: totrans-534
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 结论
+- en: This chapter has provided you with a whirlwind tour of networking in Linux.
+    We focused primarily on concepts that are required to understand Kubernetes’ implementation,
+    cluster setup constraints, and debugging Kubernetes-related networking problems
+    (in workloads on Kubernetes, or Kubernetes itself). This chapter was by no means
+    exhaustive, and you may find it valuable to learn more.
+  id: totrans-535
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本章为你提供了 Linux 网络的一个快速概览。我们主要关注了理解 Kubernetes 实现、集群设置限制以及调试与 Kubernetes 相关的网络问题所需的概念（无论是在
+    Kubernetes 上的工作负载还是 Kubernetes 本身）。本章内容并非详尽无遗，你可能会发现进一步学习是很有价值的。
+- en: Next, we will start to look at containers in Linux and how containers interact
+    with the network.
+  id: totrans-536
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，我们将开始查看 Linux 中的容器及其与网络的交互。

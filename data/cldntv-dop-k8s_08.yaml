@@ -1,0 +1,1261 @@
+- en: Chapter 6\. Operating Clusters
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第 6 章。操作集群
+- en: If Tetris has taught me anything, it’s that errors pile up and accomplishments
+    disappear.
+  id: totrans-1
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 如果俄罗斯方块教会了我什么，那就是错误会积累起来，成就却会消失。
+- en: ''
+  id: totrans-2
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+- en: Andrew Clay Shafer
+  id: totrans-3
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: Andrew Clay Shafer
+- en: Once you have a Kubernetes cluster, how do you know it’s in good shape and running
+    properly? How do you scale to cope with demand, but keep cloud costs to a minimum?
+    In this chapter, we’ll look at the issues involved in operating Kubernetes clusters
+    for production workloads, and some of the tools that can help you.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦您拥有了一个 Kubernetes 集群，如何确保它运行良好并且在需求增加时进行扩展，同时保持云成本最低？在本章中，我们将探讨运行 Kubernetes
+    集群以处理生产工作负载所涉及的问题，以及一些可以帮助您的工具。
+- en: 'As we’ve seen in [Chapter 3](ch03.html#gettingk8s), there are many important
+    things to consider about your Kubernetes cluster: availability, authentication,
+    upgrades, and so on. If you’re using a good managed Kubernetes service, as we
+    recommend, most of these issues should be taken care of for you.'
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如我们在[第三章](ch03.html#gettingk8s)中看到的，关于您的 Kubernetes 集群有许多重要事项需要考虑：可用性、认证、升级等等。如果您正在使用我们推荐的良好托管的
+    Kubernetes 服务，大部分这些问题应该已经为您解决了。
+- en: However, what you actually do with the cluster is up to you. In this chapter,
+    you’ll learn how to size and scale the cluster, check it for *conformance*, and
+    test the resilience of your infrastructure with *Chaos Monkeys*.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，您对集群实际做什么取决于您。在本章中，您将学习如何确定集群的大小和扩展，检查它的*符合性*，以及使用*混沌猴*测试基础设施的弹性。
+- en: Cluster Sizing and Scaling
+  id: totrans-7
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 集群大小和扩展
+- en: How big does your cluster need to be? With self-hosted Kubernetes clusters,
+    and almost all managed services, the ongoing cost of your cluster depends directly
+    on the number and size of its nodes. If the capacity of the cluster is too small,
+    your workloads won’t run properly, or will fail under heavy traffic. If the capacity
+    is too large, you’re wasting money.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您的集群需要多大？对于自托管的 Kubernetes 集群和几乎所有托管服务来说，集群的持续成本直接取决于其节点的数量和大小。如果集群的容量过小，您的工作负载将无法正常运行，或在高负载下失败。如果容量过大，您将浪费金钱。
+- en: Sizing and scaling your cluster appropriately is very important, so let’s look
+    at some of the decisions involved.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 适当地确定集群的大小和扩展非常重要，所以让我们看看涉及到的一些决策。
+- en: Capacity Planning
+  id: totrans-10
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 容量规划
+- en: One way to make an initial estimate of the capacity you need is to think about
+    how many traditional servers you would need to run the same applications. For
+    example, if your current architecture runs on 10 separate cloud virtual machine
+    instances, you probably won’t need more than 10 nodes of similar sizes in your
+    Kubernetes cluster to run the same workload, plus another 1 or 2 for redundancy.
+    In fact, you might not even need that many because Kubernetes will balance containers
+    evenly across all machines, and can therefore achieve higher utilization than
+    with traditional servers. But it may take some time and practical experience to
+    tune your cluster for optimal capacity.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 估算您需要的容量的一种方法是考虑运行相同应用程序所需的传统服务器数量。例如，如果您当前的架构在 10 个独立的云虚拟机实例上运行，您可能不需要超过 10
+    个类似大小的节点在您的 Kubernetes 集群中运行相同的工作负载，再加上另外 1 或 2 个用于冗余。事实上，您可能甚至不需要那么多，因为 Kubernetes
+    将均匀地在所有机器上平衡容器，因此可以实现比传统服务器更高的利用率。但是，要为优化容量调整您的集群可能需要一些时间和实际经验。
+- en: The smallest cluster
+  id: totrans-12
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 最小的集群
+- en: When you’re first setting up a cluster, you will probably be using it to play
+    around and experiment, and figure out how to run your application. So you probably
+    don’t need to burn money on a large cluster until you have some idea what capacity
+    you’re going to need.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您首次设置一个集群时，您可能会用它来玩耍、实验，并弄清楚如何运行您的应用程序。因此，在您确定需要多少容量之前，您可能不需要在大型集群上花费大量资金。
+- en: The smallest possible Kubernetes cluster is a single node. This will allow you
+    to try out Kubernetes and run small workloads for development, as we saw in [Chapter 2](ch02.html#firststeps).
+    However, a single-node cluster has no resilience against the failure of the node
+    hardware, or of the Kubernetes API server or the kubelet (the agent daemon that
+    is responsible for running workloads on each node).
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最小可能的 Kubernetes 集群是单节点。这将允许您尝试 Kubernetes 并运行开发中的小工作负载，就像我们在[第二章](ch02.html#firststeps)中看到的那样。然而，单节点集群在节点硬件故障或
+    Kubernetes API 服务器或 kubelet（负责在每个节点上运行工作负载的代理守护进程）失败时没有恢复能力。
+- en: 'If you’re using a managed Kubernetes service like GKE, EKS, or AKS (see [“Managed
+    Kubernetes Services”](ch03.html#managedclusters)), then you don’t need to worry
+    about provisioning control plane nodes: this is done for you. If, on the other
+    hand, you’re building your own cluster, you’ll need to decide how to lay out the
+    control plane.'
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你正在使用像GKE、EKS或AKS这样的托管Kubernetes服务（参见[“托管的Kubernetes服务”](ch03.html#managedclusters)），那么你不需要担心控制平面节点的预配问题：这些已经为你完成了。另一方面，如果你正在构建自己的集群，你需要决定如何布置控制平面。
+- en: The minimum number of control plane nodes for a resilient Kubernetes cluster
+    is three. One wouldn’t be resilient, and two could disagree about which was the
+    leader, so at least three nodes are needed.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 构建一个具有弹性的Kubernetes集群的最低控制平面节点数量为三个。一个不够弹性，两个可能在哪个是领导者上发生分歧，因此至少需要三个节点。
+- en: While you can do useful work on a Kubernetes cluster this small, it’s not recommended.
+    A better idea is to add some worker nodes so that your own workloads aren’t competing
+    for resources with the Kubernetes control plane.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然你可以在这样小的Kubernetes集群上进行有用的工作，但并不推荐这样做。更好的做法是增加一些工作节点，以便你自己的工作负载不会与Kubernetes控制平面竞争资源。
+- en: Provided your cluster control plane is highly available, you *can* get by with
+    a single worker node, but two nodes is the sensible minimum to protect against
+    node failure and to allow Kubernetes to run at least two replicas of every Pod.
+    The more nodes there are the better, especially as the Kubernetes scheduler cannot
+    always ensure that workloads are fully balanced across available nodes (see [“Keeping
+    Your Workloads Balanced”](ch05.html#balanced)).
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 只要你的集群控制平面高度可用，你可以只用一个工作节点，但至少两个节点是合理的最低要求，以保护节点故障并允许Kubernetes运行每个Pod的至少两个副本。节点数量越多越好，尤其是因为Kubernetes调度程序不能始终确保工作负载在所有可用节点上完全平衡（参见[“保持你的工作负载平衡”](ch05.html#balanced)）。
+- en: K3S
+  id: totrans-19
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: K3S
+- en: When it comes to lightweight clusters, a tool like [K3s](https://k3s.io) is
+    worth checking out. It packages all Kubernetes components into a single binary,
+    making it great for environments that are isolated and/or resource constrained.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当涉及到轻量级集群时，像[K3s](https://k3s.io)这样的工具是值得一试的。它将所有的Kubernetes组件打包到一个单一的二进制文件中，非常适合在隔离或资源受限的环境中使用。
+- en: Best Practice
+  id: totrans-21
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: Kubernetes clusters need at least three nodes running the control plane components
+    in order to be highly available, and you may need more to handle the work of larger
+    clusters. Two worker nodes is the minimum required to make your workloads fault
+    tolerant to the failure of a single node, and three worker nodes is even better.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes集群至少需要三个节点来运行控制平面组件，以实现高可用性，对于处理更大的集群工作负载，可能需要更多节点。两个工作节点是确保你的工作负载对单个节点故障具有容错能力的最低要求，而三个工作节点则更好。
+- en: The biggest cluster
+  id: totrans-23
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 最大的集群
+- en: Is there a limit to how large Kubernetes clusters can be? The short answer is
+    yes, but you almost certainly won’t have to worry about it; Kubernetes version
+    1.22 officially supports clusters of up to 5,000 nodes.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes集群的规模是否有限制？简短的回答是有，但你几乎肯定不必担心；Kubernetes 1.22版本正式支持多达5,000个节点的集群。
+- en: Because clustering requires communication between nodes, the number of possible
+    communication paths, and the cumulative load on the underlying database, grows
+    exponentially with the size of the cluster. While Kubernetes *may* still function
+    with more than 5,000 nodes, it’s not *guaranteed* to work, or at least to be responsive
+    enough to deal with production workloads.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因为集群需要节点之间的通信，可能的通信路径数量以及基础数据库的累积负载随集群大小呈指数增长。虽然Kubernetes在超过5,000个节点时可能仍然能够正常工作，但不能保证能够处理生产工作负载或响应足够快。
+- en: The Kubernetes documentation advises that [supported cluster configurations](https://oreil.ly/NapFi)
+    must have no more than 5,000 nodes, no more than 150,000 total Pods, no more than
+    300,000 total containers, and no more than 100 Pods per node. It’s worth bearing
+    in mind that the larger the cluster, the bigger the load on the control plane
+    nodes; if you’re responsible for running your own control plane, they’ll need
+    to be pretty powerful machines to cope with a cluster of thousands of nodes.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes文档建议，[支持的集群配置](https://oreil.ly/NapFi)最多不超过5,000个节点，总共不超过150,000个Pods，总共不超过300,000个容器，并且每个节点最多不超过100个Pods。值得注意的是，集群越大，对控制平面节点的负载就越大；如果你负责运行自己的控制平面，它们需要非常强大的机器来应对数千个节点的集群。
+- en: Best Practice
+  id: totrans-27
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: For maximum reliability, keep your Kubernetes clusters smaller than 5,000 nodes
+    and 150,000 Pods (this isn’t an issue for most users). If you need more resources,
+    run multiple clusters.
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了最大可靠性，请确保您的 Kubernetes 集群小于 5,000 个节点和 150,000 个 Pod（对大多数用户来说并非问题）。如果您需要更多资源，请运行多个集群。
+- en: Federated clusters
+  id: totrans-29
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 联邦集群
+- en: If you have extremely demanding workloads or need to operate at huge scale,
+    these limits may become a practical problem for you. In this case, you can run
+    multiple Kubernetes clusters, and, if necessary, *federate* them so that workloads
+    can be replicated across clusters.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您有极具挑战性的工作负载或需要在大规模运行，这些限制可能会成为您的实际问题。在这种情况下，您可以运行多个 Kubernetes 集群，并在必要时*联邦*它们，以便工作负载可以在集群之间复制。
+- en: Federation provides the ability to keep two or more clusters synchronized, running
+    identical workloads. This can be useful if you need Kubernetes clusters in different
+    cloud providers, for resilience, or in different geographical locations, to reduce
+    latency for your users. A group of federated clusters can keep running even if
+    an individual cluster fails.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 联邦提供了在两个或多个集群之间保持同步运行相同工作负载的能力。如果您需要在不同的云提供商、为了弹性或在不同的地理位置使用 Kubernetes 集群，则此功能可能非常有用，以减少用户的延迟。即使单个集群失败，联邦集群组也可以继续运行。
+- en: You can read more about *cluster federation* in the Kubernetes [documentation](https://oreil.ly/QdAB2).
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在 Kubernetes [文档](https://oreil.ly/QdAB2)中详细了解*集群联邦*。
+- en: For most Kubernetes users, federation isn’t something they need to be concerned
+    with, and, in practice, most users at very large scale are able to handle their
+    workloads with multiple unfederated clusters of a few hundred to a few thousand
+    nodes each. Often, provisioning smaller separated clusters across team or application
+    boundaries ends up being easier to manage compared to large, centralized federated
+    clusters.
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于大多数 Kubernetes 用户来说，联邦不是他们需要关注的事项，在实践中，大多数非常大规模的用户能够通过多个未联邦的每个几百到几千个节点的集群来处理他们的工作负载。通常，与大型集中式联邦集群相比，为团队或应用程序边界提供更容易管理的较小分隔集群是更好的选择。
+- en: Best Practice
+  id: totrans-34
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: If you need to replicate workloads across multiple clusters, perhaps for geographical
+    redundancy or latency reasons, use federation. Most users don’t need to federate
+    their clusters, though.
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您需要在多个集群之间复制工作负载，可能是为了地理冗余或延迟原因，请使用联邦。然而，大多数用户不需要将他们的集群联合起来。
+- en: Do I need multiple clusters?
+  id: totrans-36
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 我需要多个集群吗？
+- en: 'Unless you’re operating at very large scale, as we mentioned in the previous
+    section and in [“Multicloud Kubernetes Clusters”](ch03.html#multicloud), you probably
+    don’t need more than one or two clusters: maybe one for production, and one for
+    staging and testing.'
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除非您在非常大规模上运作，如我们在前一节和[“多云 Kubernetes 集群”](ch03.html#multicloud)中提到的，您可能不需要超过一个或两个集群：也许一个用于生产，一个用于暂存和测试。
+- en: For convenience and ease of resource management, you can divide your cluster
+    into logical partitions using namespaces, which we covered in more detail in [“Using
+    Namespaces”](ch05.html#namespaces). With a few exceptions, it’s not usually worth
+    the administration overhead of managing multiple clusters.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了便利和资源管理的简易性，您可以使用命名空间将您的集群划分为逻辑分区，我们在[“使用命名空间”](ch05.html#namespaces)中详细介绍了这一点。除了少数情况外，管理多个集群通常不值得管理开销。
+- en: There are some specific situations, such as security and regulatory compliance,
+    where you might want to ensure that services in one cluster are absolutely isolated
+    from those in another (for example, when dealing with protected health information,
+    or when data can’t be transmitted from one geographical location to another for
+    legal reasons). In those cases, you need to create separate clusters. For most
+    Kubernetes users, this won’t be an issue.
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在某些特定情况下，例如安全性和法规合规性，您可能希望确保一个集群中的服务绝对与另一个集群中的服务隔离（例如处理受保护健康信息时，或由于法律原因无法从一个地理位置传输数据到另一个地理位置）。在这些情况下，您需要创建单独的集群。对于大多数
+    Kubernetes 用户来说，这不会成为问题。
+- en: Best Practice
+  id: totrans-40
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: Use a single production and a single staging cluster, unless you really need
+    complete isolation of one set of workloads or teams from another. If you just
+    want to partition your cluster for ease of management, use namespaces instead.
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除非您真正需要完全隔离一个工作负载或团队的另一个工作负载或团队，否则请使用单个生产和单个暂存集群。如果您只是想要将集群分区以便管理，请改用命名空间。
+- en: Nodes and Instances
+  id: totrans-42
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 节点和实例
+- en: The more capacity a given node has, the more work it can do, where capacity
+    is expressed in terms of the number of CPU cores (virtual or otherwise), available
+    memory, and to a lesser extent, disk space. But is it better to run 10 very large
+    nodes, for example, rather than 100 much smaller ones?
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 给定节点的容量越大，它可以执行的工作就越多，容量以可用的 CPU 核心数（虚拟或其他方式）、可用内存和较少的磁盘空间来表达。但例如，是否更好地运行 10
+    个非常大的节点，而不是 100 个较小的节点？
+- en: Picking the right node size
+  id: totrans-44
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 选择正确的节点大小
+- en: There’s no universally correct node size for Kubernetes clusters. The answer
+    depends on your cloud or hardware provider, and on your specific workloads.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 集群的节点大小没有普遍适用的标准。答案取决于您的云或硬件提供商以及您特定的工作负载。
+- en: The cost per capacity of different instance sizes can have an effect on the
+    way you decide to size your nodes. For example, some cloud providers may offer
+    a slight discount on larger instance sizes so that if your workloads are very
+    compute intensive, it may be cheaper to run them on a few very large nodes instead
+    of many smaller ones.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不同实例大小的每单位容量成本可能会影响您决定节点大小的方式。例如，一些云提供商可能会为较大的实例大小提供轻微折扣，因此如果您的工作负载非常计算密集，可能比在许多较小的节点上运行它们更便宜。
+- en: The number of nodes required in the cluster also affects the choice of node
+    size. To get the advantages that Kubernetes offers, such as Pod replication and
+    high availability, you need to spread work across several nodes. But if nodes
+    have too much spare capacity, that’s a waste of money.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 集群中所需的节点数量也会影响节点大小的选择。要获得 Kubernetes 提供的诸如 Pod 复制和高可用性等优势，您需要将工作分布在多个节点上。但如果节点有太多空闲容量，那将是浪费金钱。
+- en: If you need, say, at least 10 nodes for high availability, but each node only
+    needs to run a couple of Pods, the node instances can be very small. On the other
+    hand, if you only need two nodes, you can make them quite large and potentially
+    save money with more favorable instance pricing.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您需要至少 10 个节点以实现高可用性，但每个节点只需要运行几个 Pod，则节点实例可以非常小。另一方面，如果您只需要两个节点，您可以使它们非常大，并且可能通过更有利的实例定价节省金钱。
+- en: Best Practice
+  id: totrans-49
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: Use the most cost-effective node type that your provider offers. Often, larger
+    nodes work out cheaper, but if you only have a handful of nodes, you might want
+    to add some smaller ones, to help with redundancy.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用提供商提供的最经济节点类型。通常，更大的节点会更便宜，但如果您只有少数节点，您可能希望添加一些较小的节点，以增加冗余性。
+- en: Cloud instance types
+  id: totrans-51
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 云实例类型
+- en: Because the Kubernetes components themselves, such as the kubelet, use a given
+    amount of resources, and you will need some spare capacity to do useful work,
+    the smallest instance sizes offered by your cloud provider will probably not be
+    suitable for Kubernetes.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因为 Kubernetes 组件本身（例如 kubelet）使用了一定量的资源，并且您需要一些备用容量来执行有用的工作，所以您的云提供商提供的最小实例大小可能不适合
+    Kubernetes。
+- en: A control plane for small clusters (up to around five total nodes) should have
+    at least two CPUs and two GiB of memory, with larger clusters requiring more memory
+    and CPUs for each control plane node.
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于小型集群（总节点数约为五个以内），控制平面应至少具有两个 CPU 和两个 GiB 内存，较大的集群则需要更多的内存和 CPU 以供每个控制平面节点使用。
+- en: For larger clusters, with perhaps a few tens of nodes, it may make sense for
+    you to provision a mix of two or three different instance sizes. This means that
+    Pods with compute-intensive workloads requiring a lot of memory can be scheduled
+    by Kubernetes on large nodes, leaving smaller nodes free to handle smaller Pods
+    (see [“Node Affinities”](ch09.html#nodeaffinities)). This gives the Kubernetes
+    scheduler the maximum freedom of choice when deciding where to run a given Pod.
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于较大的集群，可能有几十个节点，为您配置两到三种不同的实例大小可能是有意义的。这意味着 Kubernetes 可以在大节点上安排需要大量内存的计算密集工作负载的
+    Pod，从而使较小的节点可以处理较小的 Pod（见[“节点亲和性”](ch09.html#nodeaffinities)）。这样做可以使 Kubernetes
+    调度程序在决定在哪里运行给定的 Pod 时具有最大的自由选择。
+- en: Heterogeneous nodes
+  id: totrans-55
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 异构节点
+- en: Not all nodes are created equal. You may need some nodes with special properties,
+    such as a graphics processing unit (GPU). GPUs are high-performance parallel processors
+    that are widely used for compute-intensive problems that have nothing to do with
+    graphics, such as machine learning or data analysis.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 并非所有节点都是相同的。您可能需要一些具有特殊属性的节点，比如图形处理单元（GPU）。GPU 是高性能的并行处理器，广泛用于计算密集型问题，与图形无关，比如机器学习或数据分析。
+- en: You can use the *resource limits* functionality in Kubernetes (see [“Resource
+    Limits”](ch05.html#resourcelimits)) to specify that a given Pod needs at least
+    one GPU, for example. This will ensure that those Pods will run only on GPU-enabled
+    nodes, and get priority over Pods that can run on any node.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用 Kubernetes 中的*资源限制*功能（参见[“资源限制”](ch05.html#resourcelimits)）指定某个 Pod 至少需要一个
+    GPU，例如。这将确保这些 Pod 仅在启用 GPU 的节点上运行，并优先于可以在任何节点上运行的 Pod。
+- en: Most Kubernetes nodes probably run Linux of one kind or another, which is suitable
+    for almost all applications. Recall that containers are *not* virtual machines,
+    so the process inside a container runs directly on the kernel of the operating
+    system on the underlying node. A Windows binary will not run on a Linux Kubernetes
+    node, for example, so if you need to run Windows containers, you will have to
+    provision Windows nodes for them.
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大多数 Kubernetes 节点可能运行各种 Linux，适用于几乎所有应用程序。请记住，容器不是虚拟机，因此容器内部的进程直接在底层节点的操作系统内核上运行。例如，Windows
+    二进制文件无法在 Linux Kubernetes 节点上运行，因此如果需要运行 Windows 容器，必须为其提供 Windows 节点。
+- en: Best Practice
+  id: totrans-59
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: Most containers are built for Linux, so you’ll probably want to run mostly Linux-based
+    nodes. You may need to add one or two special types of nodes for specific requirements,
+    such as GPUs or Windows.
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大多数容器都是为 Linux 构建的，因此您可能希望主要运行基于 Linux 的节点。您可能需要添加一两种特殊类型的节点来满足特定的需求，例如 GPU
+    或 Windows。
+- en: Bare-metal servers
+  id: totrans-61
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 裸金属服务器
+- en: One of the most useful properties of Kubernetes is its ability to connect all
+    sorts of machines of different sizes, architectures, and capabilities to provide
+    a single, unified, logical machine on which workloads can run. While Kubernetes
+    is usually associated with cloud servers, many organizations have large numbers
+    of physical, bare-metal machines in datacenters that can potentially be harnessed
+    into Kubernetes clusters.
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 最有用的一个特性之一是其能力，即连接各种大小、架构和能力不同的机器，提供一个统一的、逻辑的机器，可以在其上运行工作负载。虽然 Kubernetes
+    通常与云服务器相关联，但许多组织在数据中心拥有大量物理裸金属机器，这些机器可能潜在地被整合成 Kubernetes 集群中。
+- en: 'We saw in [Chapter 1](ch01.html#revolution) that cloud technology transforms
+    *capex* infrastructure (purchasing machines as a capital expense) to *opex* infrastructure
+    (leasing compute capacity as an operating expense), and this makes financial sense.
+    However, if your business already owns a large number of bare-metal servers, you
+    don’t need to write them off just yet: instead, consider joining them into a Kubernetes
+    cluster (see [“Bare-Metal and On-Prem”](ch03.html#baremetal)).'
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在[第1章](ch01.html#revolution)中看到，云技术将资本支出基础设施（作为资本支出购买机器）转变为运营支出基础设施（作为运营支出租用计算能力），这在财务上是合理的。但是，如果你的企业已经拥有大量裸金属服务器，你不需要立刻将它们写下：相反，考虑将它们加入到
+    Kubernetes 集群中（参见[“裸金属和本地”](ch03.html#baremetal)）。
+- en: Best Practice
+  id: totrans-64
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: If you have hardware servers with spare capacity, or you’re not ready to migrate
+    completely to the cloud yet, use Kubernetes to run container workloads on your
+    existing machines.
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您有硬件服务器有空余容量，或者您尚未完全准备好完全迁移到云上，可以使用 Kubernetes 在现有机器上运行容器工作负载。
+- en: Scaling the Cluster
+  id: totrans-66
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 扩展集群
+- en: 'Having chosen a sensible starting size for your cluster, and picked the right
+    mix of instance sizes for your worker nodes, is that the end of the story? Almost
+    certainly not: over time, you may need to grow or shrink the cluster to match
+    changes in demand, or in business requirements.'
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 选择合理的集群初始大小，并选择合适的工作节点实例大小的正确组合，这就是结局了吗？几乎肯定不是：随着时间的推移，您可能需要根据需求变化或业务需求来扩展或缩小集群。
+- en: Instance groups
+  id: totrans-68
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 实例组
+- en: It’s easy to add nodes to a Kubernetes cluster. If you’re running a self-hosted
+    cluster, a cluster management tool such as kops (see [“kops”](ch03.html#kops))
+    can do it for you. kops has the concept of an *instance group*, which is a set
+    of nodes of a given instance type (for example, `m5.large`). Managed services,
+    such as GKE, have the same facility, called *node pools*. The Elastic Kubernetes
+    Service (EKS) tool `eksctl` refers to this concept as a [*nodegroup*](https://oreil.ly/mRr0j).
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 向 Kubernetes 集群添加节点非常容易。如果您运行的是自托管集群，可以使用 kops 等集群管理工具（参见[“kops”](ch03.html#kops)）来执行此操作。kops
+    具有*实例组*的概念，这是一组特定实例类型的节点（例如，`m5.large`）。托管服务如 GKE 也具有相同的功能，称为*节点池*。Elastic Kubernetes
+    Service (EKS) 工具 `eksctl` 将此概念称为[*nodegroup*](https://oreil.ly/mRr0j)。
+- en: You can scale instance groups or node pools either by changing the minimum and
+    maximum size for the group, or by changing the specified instance type, or both.
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以通过更改组的最小和最大大小，或更改指定的实例类型，或同时更改两者来缩放实例组或节点池。
+- en: Scaling down
+  id: totrans-71
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 缩减
+- en: In principle, there’s no problem with scaling down a Kubernetes cluster either.
+    You can tell Kubernetes to *drain* the nodes you want to remove, which will gradually
+    shut down or move any running Pods on those nodes elsewhere.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 原则上，缩减Kubernetes集群也没有问题。你可以告诉Kubernetes*排空*你想要移除的节点，这将逐渐关闭或将运行中的Pods移动到其他地方。
+- en: Most cluster management tools will do the node draining for you automatically,
+    or you can use the `kubectl drain` command to do it yourself. Provided there is
+    enough spare capacity in the rest of the cluster to reschedule the doomed Pods,
+    once the nodes have been successfully drained, you can terminate them.
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大多数集群管理工具将会自动为您执行节点排空，或者您可以使用`kubectl drain`命令自行执行。一旦成功排空节点并且在集群的其他部分有足够的空闲容量来重新调度被注定的Pods，您可以终止它们。
+- en: To avoid overly reducing the number of Pod replicas for a given service, you
+    can use PodDisruptionBudgets to specify a minimum number of available Pods, or
+    the maximum number of Pods that can be *unavailable* at any time (see [“Pod Disruption
+    Budgets”](ch05.html#poddisruptionbudgets)).
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了避免过度减少给定服务的Pod副本数，您可以使用PodDisruptionBudgets指定可用Pod的最小数量，或者任何时候可以*不可用*的最大Pod数（参见[“Pod
+    Disruption Budgets”](ch05.html#poddisruptionbudgets)）。
+- en: If draining a node would cause Kubernetes to exceed these limits, the drain
+    operation will block until you change the limits or free up some more resources
+    in the cluster.
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果排空节点会导致Kubernetes超出这些限制，排空操作将阻塞，直到您更改限制或在集群中释放更多资源。
+- en: Draining allows Pods to shut down gracefully, cleaning up after themselves and
+    saving any necessary state. For most applications, this is preferable to simply
+    shutting down the node, which will terminate the Pods immediately.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 排空允许Pods优雅地关闭，清理自身并保存必要的状态。对于大多数应用程序来说，这比简单关闭节点更可取，后者会立即终止Pods。
+- en: Best Practice
+  id: totrans-77
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: Don’t just shut down nodes when you don’t need them anymore. Drain them first
+    to ensure their workloads are migrated to other nodes, and to make sure you have
+    enough spare capacity remaining in the cluster.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您不再需要节点时，请不要直接关闭它们。首先进行排空以确保它们的工作负载迁移到其他节点，并确保集群中仍有足够的剩余容量。
+- en: Autoscaling
+  id: totrans-79
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 自动缩放
+- en: 'Most cloud providers support autoscaling: automatically increasing or reducing
+    the number of instances in a group according to some metric or schedule. For example,
+    AWS autoscaling groups (ASGs) can maintain a minimum and maximum number of instances
+    so that if one instance fails, another will be started to take its place, or if
+    too many instances are running, some will be shut down.'
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大多数云服务提供商支持自动缩放：根据某些度量标准或时间表自动增加或减少实例的数量。例如，AWS自动缩放组（ASG）可以维护一定数量的最小和最大实例，以便如果一个实例失败，将启动另一个实例来替代它，或者如果运行的实例过多，则关闭一些实例。
+- en: 'Alternatively, if your demand fluctuates according to the time of day, you
+    can schedule the group to grow and shrink at specified times. You can also configure
+    the scaling group to grow or shrink dynamically on demand: if the average CPU
+    utilization exceeds 90% over a 15-minute period, for example, instances can be
+    added automatically until the CPU usage falls below the threshold. When demand
+    falls again, the group can be scaled down to save money.'
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 或者，如果您的需求根据时间的不同波动，您可以安排组在指定的时间增长和收缩。您还可以根据需要动态配置扩展组的缩放：例如，如果平均CPU利用率在15分钟内超过90％，则可以自动添加实例，直到CPU使用率低于阈值。需求再次降低时，可以缩小组来节省成本。
+- en: Kubernetes has a Cluster Autoscaler add-on that cluster management tools like
+    kops can take advantage of to enable cloud autoscaling, and managed clusters such
+    as AKS also offer autoscaling.
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes有一个Cluster Autoscaler附加组件，像kops这样的集群管理工具可以利用它来实现云自动缩放，而像AKS这样的托管集群也提供自动缩放的功能。
+- en: However, it can take some time and experimentation to get your autoscaling settings
+    right, and for many users it may not be necessary at all. Most Kubernetes clusters
+    start small and grow gradually and monotonically by adding a node here and there
+    as resource usage grows.
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，要正确设置自动缩放的参数可能需要一些时间和实验，并且对许多用户来说可能根本不需要。大多数Kubernetes集群从小规模开始，并逐渐通过在资源使用增长时逐个添加节点来单调增长。
+- en: For large-scale users, though, or applications where demand is highly variable,
+    cluster autoscaling is a very useful feature.
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于大规模用户或需求高度变化的应用程序来说，集群自动缩放是一个非常有用的功能。
+- en: Best Practice
+  id: totrans-85
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: Don’t enable cluster autoscaling just because it’s there unless you already
+    know you need it. You probably won’t need it unless your demands or workloads
+    are extremely variable. Start by scaling your cluster manually and getting comfortable
+    monitoring usage as you get a sense of how your scale requirements are changing
+    over time.
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不要因为功能存在就启用集群自动缩放，除非你已经确定你需要它。除非你的需求或工作负载非常变化，否则你可能不需要它。首先通过手动缩放你的集群，并且在了解你的规模需求随时间变化的感觉时逐渐习惯于监控使用情况。
+- en: Conformance Checking
+  id: totrans-87
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 一致性检查
+- en: When is Kubernetes not Kubernetes? The flexibility of Kubernetes means there
+    are lots of different ways to set up Kubernetes clusters, and this presents a
+    potential problem. If Kubernetes is to be a universal platform, you should be
+    able to take a workload and run it on any Kubernetes cluster and have it work
+    the way you expect. That means the same API calls and Kubernetes objects have
+    to be available, they have to have the same behavior, they have to work as advertised,
+    and so on.
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 不是 Kubernetes？Kubernetes 的灵活性意味着有许多不同的方法来设置 Kubernetes 集群，这可能会导致潜在问题。如果
+    Kubernetes 要成为一个通用平台，你应该能够将工作负载在任何 Kubernetes 集群上运行，并且它应该按照你期望的方式工作。这意味着相同的 API
+    调用和 Kubernetes 对象必须可用，它们必须具有相同的行为，它们必须按照广告的方式工作，等等。
+- en: Fortunately, Kubernetes itself includes a test suite that verifies that a given
+    Kubernetes cluster is *conformant*; that is, it satisfies a core set of requirements
+    for a given Kubernetes version. These conformance tests are very useful for Kubernetes
+    administrators.
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 幸运的是，Kubernetes 本身包含一个测试套件，用于验证给定 Kubernetes 集群是否 *符合规范*；也就是说，它满足了给定 Kubernetes
+    版本的一组核心要求。这些一致性测试对于 Kubernetes 管理员非常有用。
+- en: If your cluster doesn’t pass them, then there is a problem with your setup that
+    needs to be addressed. If it does pass, knowing that it’s conformant gives you
+    confidence that applications designed for Kubernetes will work with your cluster,
+    and that things you build on your cluster will work elsewhere too.
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你的集群未通过这些测试，那么你的设置中存在问题需要解决。如果它通过了测试，知道它是符合规范的可以让你确信为 Kubernetes 设计的应用程序将与你的集群一起工作，并且你在集群上构建的东西也将在其他地方正常工作。
+- en: CNCF Certification
+  id: totrans-91
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: CNCF 认证
+- en: The Cloud Native Computing Foundation (CNCF) is the official owner of the Kubernetes
+    project and trademark (see [“Cloud Native”](ch01.html#cloudnative)), and it provides
+    various kinds of certifications for Kubernetes-related products, engineers, and
+    vendors.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 云原生计算基金会（CNCF）是 Kubernetes 项目和商标的官方所有者（见 [“云原生”](ch01.html#cloudnative)），并且为与
+    Kubernetes 相关的产品、工程师和供应商提供各种认证。
+- en: Certified Kubernetes
+  id: totrans-93
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: Certified Kubernetes
+- en: If you use a managed, or partially managed, Kubernetes service, check whether
+    it carries the Certified Kubernetes mark and logo (see [Figure 6-1](#img-certifiedk8s)).
+    This indicates that the vendor and service meet the [Certified Kubernetes standard](https://oreil.ly/NKgpp),
+    as specified by the CNCF.
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你使用托管或部分托管的 Kubernetes 服务，请检查它是否带有 Certified Kubernetes 标志和标志（见[图 6-1](#img-certifiedk8s)）。这表示供应商和服务符合
+    CNCF 规定的 [Certified Kubernetes 标准](https://oreil.ly/NKgpp)。
+- en: '![The Certified Kubernetes logo](assets/cnd2_0601.png)'
+  id: totrans-95
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Certified Kubernetes 标志](assets/cnd2_0601.png)'
+- en: Figure 6-1\. The Certified Kubernetes mark means that the product or service
+    is approved by the CNCF
+  id: totrans-96
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-1\. Certified Kubernetes 标志表示产品或服务经 CNCF 批准。
+- en: If the product has *Kubernetes* in the name, it must be [certified by the CNCF](https://oreil.ly/A5Mku).
+    This means customers know exactly what they’re getting and can be satisfied that
+    it will be interoperable with other conformant Kubernetes services. Vendors can
+    self-certify their products by running the Sonobuoy conformance checking tool
+    (see [“Conformance Testing with Sonobuoy”](#sonobuoy)).
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果产品名称中含有 *Kubernetes*，它必须经过 [CNCF 的认证](https://oreil.ly/A5Mku)。这意味着客户清楚地知道他们得到了什么，并且可以确信它与其他符合规范的
+    Kubernetes 服务可以互操作。供应商可以通过运行 Sonobuoy 一致性检查工具（见 [“使用 Sonobuoy 进行一致性测试”](#sonobuoy)）进行自我认证。
+- en: Certified Kubernetes products also have to track the latest version of Kubernetes,
+    providing updates at least annually. It’s not just managed services that can carry
+    the Certified Kubernetes mark; distributions and installer tools can, too.
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Certified Kubernetes 产品还必须跟踪 Kubernetes 的最新版本，至少每年提供更新。不仅托管服务可以带有 Certified
+    Kubernetes 标志，分发版和安装工具也可以。
+- en: Certified Kubernetes Administrator (CKA)
+  id: totrans-99
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: Certified Kubernetes 管理员（CKA）
+- en: To become a Certified Kubernetes Administrator (CKA), you need to demonstrate
+    that you have the key skills to manage Kubernetes clusters in production, including
+    installation and configuration, networking, maintenance, knowledge of the API,
+    security, and troubleshooting. Anyone can take the CKA exam, which is administered
+    online and includes a series of challenging practical tests. The [CNCF website](https://oreil.ly/810Ot)
+    has more info about how to train and how to register to take the exam.
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要成为认证的Kubernetes管理员（CKA），您需要证明自己具备管理生产环境中的Kubernetes集群的关键技能，包括安装和配置、网络、维护、API知识、安全性和故障排除。任何人都可以参加CKA考试，该考试在线进行，包括一系列具有挑战性的实际测试。有关如何培训和注册参加考试的更多信息，请访问[CNCF网站](https://oreil.ly/810Ot)。
+- en: The CKA exam has a reputation as a tough, comprehensive exam that really tests
+    your skills and knowledge. You can be confident that any engineer who is CKA certified
+    really knows Kubernetes. If you run your business on Kubernetes, consider putting
+    some of your staff through the CKA program, especially those directly responsible
+    for managing clusters.
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CKA考试以其全面、具有挑战性的声誉而闻名。您可以确信，任何获得CKA认证的工程师确实了解Kubernetes。如果您在Kubernetes上运行业务，请考虑将一些员工通过CKA项目，特别是直接负责管理集群的人员。
+- en: Kubernetes Certified Service Provider (KCSP)
+  id: totrans-102
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: Kubernetes认证服务提供商（KCSP）
+- en: Vendors themselves can apply for the Kubernetes Certified Service Provider (KCSP)
+    program. To be eligible, the vendor has to be a CNCF member, provide enterprise
+    support (for example by supplying field engineers to a customer site), contribute
+    actively to the Kubernetes community, and employ three or more CKA-certified engineers.
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 供应商可以申请成为Kubernetes认证服务提供商（KCSP）程序的一部分。供应商必须是CNCF会员，提供企业支持（例如通过向客户现场提供现场工程师），积极参与Kubernetes社区，并雇用三名或更多CKA认证工程师才有资格。
+- en: Best Practice
+  id: totrans-104
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: Look for the Certified Kubernetes mark to make sure that a product meets CNCF
+    standards. Look for vendors to be KCSP-certified, and if you’re hiring Kubernetes
+    administrators, look for a CKA qualification.
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 查找Certified Kubernetes标记以确保产品符合CNCF标准。寻找KCSP认证供应商，如果您正在招聘Kubernetes管理员，请寻找CKA资格。
+- en: Conformance Testing with Sonobuoy
+  id: totrans-106
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用Sonobuoy进行符合性测试
+- en: If you’re managing your own cluster, or even if you’re using a managed service
+    but want to double-check that it’s configured properly and up-to-date, you can
+    run the Kubernetes conformance tests to prove it. The standard tool for running
+    these tests is [*Sonobuoy*](https://oreil.ly/dS40G).
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您管理自己的集群，或者即使使用托管服务但想要确保它配置正确且更新到最新，您可以运行Kubernetes符合性测试来证明它。运行这些测试的标准工具是[*Sonobuoy*](https://oreil.ly/dS40G)。
+- en: 'Sonobuoy uses a CLI tool and your `kubectl` authentication to run tests inside
+    of your cluster. Once installed, you can run the test suite using:'
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Sonobuoy使用CLI工具和您的`kubectl`认证来在集群内运行测试。安装完成后，您可以使用以下命令运行测试套件：
+- en: '[PRE0]'
+  id: totrans-109
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'A new namespace is created, the Sonobuoy pods are launched, and they start
+    running the tests. You can see this with `kubectl`:'
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建一个新的命名空间，启动Sonobuoy pods，并开始运行测试。您可以使用`kubectl`查看：
+- en: '[PRE1]'
+  id: totrans-111
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: The full test suite can take an hour or more to complete! You can add the `--mode
+    quick` flag to the `sonobuoy run` command to run a single test to verify connectivity.
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 完整的测试套件可能需要一个小时或更长时间才能完成！您可以在`sonobuoy run`命令中添加`--mode quick`标志来运行单个测试以验证连接性。
+- en: 'Once the conformance tests are complete, you can view the results using the
+    `retrieve` command, which saves the output locally to a file. You can then inspect
+    that output using the `results` command:'
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦符合性测试完成，您可以使用`retrieve`命令查看结果，该命令将结果保存到本地文件中。然后，您可以使用`results`命令检查该输出：
+- en: '[PRE2]'
+  id: totrans-114
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: Later, in [“Cluster Security Scanning”](ch11.html#cluster-security-scanning),
+    we will cover similar tools that are focused on scanning your clusters for potential
+    security issues. When used alongside Sonobuoy, these tools can give you a better
+    picture of where your clusters may be out of line with current industry best practices
+    for Kubernetes compliance.
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 后来，在[“集群安全扫描”](ch11.html#cluster-security-scanning)中，我们将涵盖专注于扫描集群潜在安全问题的类似工具。与Sonobuoy一起使用时，这些工具可以更好地展示您的集群可能与当前Kubernetes合规性最佳实践不符的地方。
+- en: Best Practice
+  id: totrans-116
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: Run Sonobuoy once your cluster is set up for the first time, to verify that
+    it’s standards compliant and that everything works. Run it again every so often
+    to make sure there are no conformance problems.
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在首次设置集群后运行Sonobuoy，以验证其是否符合标准并且一切正常。定期再次运行以确保没有符合性问题。
+- en: Kubernetes Audit Logging
+  id: totrans-118
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Kubernetes审计日志记录
+- en: Suppose you find a problem on your cluster, such as a Pod you don’t recognize,
+    and you want to know where it came from. How do you find out who did what on the
+    cluster when? The [Kubernetes audit log](https://oreil.ly/3NS5l) will tell you.
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设您在集群上发现了问题，比如一个您不认识的Pod，您想知道它来自哪里。如何查明谁在集群上做了什么？[Kubernetes审计日志](https://oreil.ly/3NS5l)会告诉您。
+- en: With audit logging enabled, all requests to the cluster API will be recorded,
+    with a timestamp, saying who made the request (which service account), the details
+    of the request (such as the resources it queried), and what the response was.
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 启用审计日志记录后，所有对集群API的请求将被记录，包括时间戳，请求者（服务帐户）、请求详细信息（如查询的资源）以及响应内容。
+- en: The audit events can be sent to your central logging system, where you can filter
+    and alert on them as you would for other log data (see [Chapter 15](ch15.html#observability)).
+    A good managed service such as GKE will include audit logging by default, but
+    otherwise you may need to configure the cluster yourself to enable it.
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 审计事件可以发送到您的中央日志系统，您可以像处理其他日志数据一样对其进行过滤和警报（参见[第15章](ch15.html#observability)）。一个良好的托管服务，如GKE，默认情况下将包括审计日志记录，但否则您可能需要自行配置集群以启用它。
+- en: Chaos Testing
+  id: totrans-122
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 混沌测试
+- en: We pointed out in [“Trust, but verify”](ch03.html#trustbutverify) that the only
+    real way to verify high availability is to kill one or more of your cluster nodes
+    and see what happens. The same applies to the high availability of your Kubernetes
+    Pods and applications. You could pick a Pod at random, for example, terminate
+    it, and check that Kubernetes restarts it, and that your error rate is unaffected.
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在[“信任，但要验证”](ch03.html#trustbutverify)中指出，验证高可用性的唯一真实方法是关闭一个或多个集群节点，看看会发生什么。同样适用于您的Kubernetes
+    Pod和应用程序的高可用性。例如，您可以随机选择一个Pod，终止它，然后检查Kubernetes是否重新启动它，并且您的错误率不受影响。
+- en: Doing this manually is time-consuming, and, without realizing it, you may be
+    unconsciously sparing resources that you know are application-critical. To make
+    it a fair test, the process must be automated.
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 手动执行这项工作耗时且您可能会不自觉地保留那些您知道对应用至关重要的资源。为了进行公正的测试，必须自动化该过程。
+- en: 'This kind of automated, random interference with production services is sometimes
+    known as *Chaos Monkey* testing, after the tool of the same name developed by
+    Netflix to test its infrastructure:'
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种对生产服务的自动化、随机干扰有时被称为*混沌猴子*测试，以Netflix开发的同名工具命名，用于测试其基础架构：
+- en: Imagine a monkey entering a data center, these farms of servers that host all
+    the critical functions of our online activities. The monkey randomly rips cables,
+    destroys devices...
+  id: totrans-126
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 想象一只猴子进入数据中心，这些托管我们在线活动所有关键功能的服务器农场。猴子随机地拔掉电缆，摧毁设备...
+- en: ''
+  id: totrans-127
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+- en: The challenge for IT managers is to design the information system they are responsible
+    for so that it can work despite these monkeys, which no one ever knows when they
+    arrive and what they will destroy.
+  id: totrans-128
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: IT经理面临的挑战是设计他们负责的信息系统，使其能够在这些猴子到来时仍然正常工作，而谁也不知道它们何时到来以及它们将摧毁什么。
+- en: ''
+  id: totrans-129
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+- en: Antonio Garcia Martinez, *Chaos Monkeys*
+  id: totrans-130
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 安东尼奥·加西亚·马丁内斯，《混沌猴子》
+- en: Apart from Chaos Monkey itself, which terminates random cloud servers, the Netflix
+    *Simian Army* also includes other *chaos engineering* tools such as Latency Monkey,
+    which introduces communication delays to simulate network issues, Security Monkey,
+    which looks for known vulnerabilities, and Chaos Gorilla, which drops a whole
+    AWS availability zone.
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了**混沌猴子**本身会随机终止云服务器外，Netflix的*猴子军团*还包括其他*混沌工程*工具，如Latency Monkey，引入通信延迟以模拟网络问题，Security
+    Monkey，查找已知漏洞，以及Chaos Gorilla，将整个AWS可用区关闭。
+- en: Only Production Is Production
+  id: totrans-132
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 只有生产才是真正的生产
+- en: 'You can apply the Chaos Monkey idea to Kubernetes applications, too. While
+    you can run chaos engineering tools on a staging cluster to avoid disrupting production,
+    that can only tell you so much. To learn about your production environment, you
+    need to test production:'
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您也可以将混沌猴子的想法应用于Kubernetes应用程序。虽然您可以在预发布集群上运行混沌工程工具以避免干扰生产环境，但这只能告诉您有限的信息。要了解您的生产环境，您需要在生产中进行测试：
+- en: Many systems are too big, complex, and cost-prohibitive to clone. Imagine trying
+    to spin up a copy of Facebook for testing (with its multiple, globally distributed
+    data centers).
+  id: totrans-134
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 许多系统过于庞大、复杂和成本高昂，难以克隆。想象一下尝试为测试复制Facebook（带有其多个全球分布的数据中心）。
+- en: ''
+  id: totrans-135
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+- en: The unpredictability of user traffic makes it impossible to mock; even if you
+    could perfectly reproduce yesterday’s traffic, you still can’t predict tomorrow’s.
+    Only production is production.
+  id: totrans-136
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 用户流量的不可预测性使得模拟变得不可能；即使您可以完美重现昨天的流量，您仍无法预测明天的流量。只有生产环境才是真正的生产环境。
+- en: ''
+  id: totrans-137
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+- en: '[Charity Majors](https://oreil.ly/88wsu)'
+  id: totrans-138
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: '[Charity Majors](https://oreil.ly/88wsu)'
+- en: 'It’s also important to note that your chaos experiments, to be most useful,
+    need to be automated and continuous. It’s no good doing it once and deciding that
+    your system is reliable for evermore:'
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此外，需要注意的是，为了使您的混沌实验最有用，需要进行自动化和持续的。仅仅运行一次并决定您的系统从此可靠是不够的：
+- en: The whole point of automating your chaos experiments is so that you can run
+    them again and again to build trust and confidence in your system. Not just surfacing
+    new weaknesses, but also ensuring that you’ve overcome a weakness in the first
+    place.
+  id: totrans-140
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 自动化混沌实验的整个目的是，您可以一遍又一遍地运行它们，以建立对系统的信任和信心。不仅要展现新的弱点，还要确保您已经克服了首次出现的弱点。
+- en: ''
+  id: totrans-141
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+- en: '[Russ Miles (ChaosIQ)](https://oreil.ly/dq0Ij)'
+  id: totrans-142
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: '[Russ Miles（ChaosIQ）](https://oreil.ly/dq0Ij)'
+- en: There are several tools you can use for automatically chaos engineering your
+    cluster. Here are a few options.
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用几种工具来自动执行集群的混沌工程。以下是几个选项。
+- en: chaoskube
+  id: totrans-144
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: chaoskube
+- en: '[*chaoskube*](https://oreil.ly/ffcdM) randomly kills Pods in your cluster.
+    By default it operates in dry-run mode, which shows you what it would have done,
+    but doesn’t actually terminate anything.'
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[*chaoskube*](https://oreil.ly/ffcdM) 在您的集群中随机杀死 Pod。默认情况下，它以干预运行模式操作，显示它将要执行的操作，但实际上不终止任何内容。'
+- en: You can configure chaoskube to include or exclude Pods based on labels (see
+    [“Labels”](ch09.html#labels)), annotations, and namespaces, and to avoid certain
+    time periods or dates (for example, don’t kill anything on Christmas Eve). By
+    default, though, it will potentially kill any Pod in any namespace, including
+    Kubernetes system Pods, and even chaoskube itself.
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以根据标签（参见 [“标签”](ch09.html#labels)）、注释和命名空间配置 chaoskube，以包括或排除 Pod，并避免特定的时间段或日期（例如，不要在平安夜杀死任何内容）。默认情况下，它可能会杀死任何命名空间中的任何
+    Pod，包括 Kubernetes 系统 Pod，甚至 chaoskube 本身。
+- en: Once you’re happy with your chaoskube filter configuration, you can disable
+    dry-run mode and let it do its work.
+  id: totrans-147
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦您满意 chaoskube 的筛选配置，您可以禁用干预运行模式并让其运行。
+- en: chaoskube is simple to install and set up, and it’s an ideal tool for getting
+    started with chaos engineering.
+  id: totrans-148
+  prefs: []
+  type: TYPE_NORMAL
+  zh: chaoskube 安装和设置简单，是开始混沌工程的理想工具。
+- en: kube-monkey
+  id: totrans-149
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: kube-monkey
+- en: '[*kube-monkey*](https://oreil.ly/HGmrb) runs at a preset time (by default,
+    8 a.m. on weekdays), and builds a schedule of Deployments that will be targeted
+    during the rest of the day (by default, 10 a.m. to 4 p.m.). Unlike some other
+    tools, kube-monkey works on an opt-in basis: only those Pods that specifically
+    enable kube-monkey using annotations will be targeted.'
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[*kube-monkey*](https://oreil.ly/HGmrb) 在预设时间运行（默认为工作日上午 8 点），并创建一个部署计划表，将在当天的其余时间段内（默认为上午
+    10 点到下午 4 点）进行目标部署。与其他一些工具不同，kube-monkey 是基于选择加入的方式工作：只有通过注释明确启用 kube-monkey 的
+    Pod 将被目标化。'
+- en: 'This means that you can add kube-monkey testing to specific apps or services
+    during their development, and set different levels of frequency and aggression
+    depending on the service. For example, the following annotation on a Pod will
+    set a mean time between failures (MTBF) of two days:'
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这意味着在开发特定应用程序或服务过程中，您可以添加 kube-monkey 测试，并根据服务设置不同的频率和攻击级别。例如，以下 Pod 上的注释将设置平均故障间隔（MTBF）为两天：
+- en: '[PRE3]'
+  id: totrans-152
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'The `kill-mode` annotation lets you specify how many of a Deployment’s Pods
+    will be killed, or a maximum percentage. The following annotations will kill up
+    to 50% of the Pods in the targeted Deployment:'
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kill-mode` 注释允许您指定将在部署的 Pod 中杀死多少个，或者最大百分比。以下注释将杀死目标部署中最多 50% 的 Pod：'
+- en: '[PRE4]'
+  id: totrans-154
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: PowerfulSeal
+  id: totrans-155
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: PowerfulSeal
+- en: '[*PowerfulSeal*](https://oreil.ly/Wwe31) is an open source Kubernetes chaos
+    engineering tool that works in two modes: interactive and autonomous. Interactive
+    mode lets you explore your cluster and manually break things to see what happens.
+    It can terminate nodes, namespaces, Deployments, and individual Pods.'
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[*PowerfulSeal*](https://oreil.ly/Wwe31) 是一个开源的 Kubernetes 混沌工程工具，可以以交互和自主两种模式工作。交互模式允许您探索集群并手动破坏以查看发生了什么。它可以终止节点、命名空间、部署和单个
+    Pod。'
+- en: 'Autonomous mode uses a set of policies specified by you: which resources to
+    operate on, which to avoid, when to run (you can configure it to only operate
+    during working hours Monday–Friday, for example), and how aggressive to be (kill
+    a given percentage of all matching Deployments, for example). PowerfulSeal’s policy
+    files are very flexible and let you set up almost any imaginable chaos engineering
+    scenario.'
+  id: totrans-157
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 自动模式使用一组由您指定的策略：操作哪些资源，避免哪些资源，何时运行（例如，您可以配置仅在工作时间内，例如周一至周五运行），以及采取多大程度的侵略性（例如，杀死所有匹配的部署的一定百分比）。PowerfulSeal的策略文件非常灵活，几乎可以设置任何可以想象到的混沌工程场景。
+- en: Best Practice
+  id: totrans-158
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: If your applications require high availability, run a chaos testing tool such
+    as chaoskube regularly to make sure that unexpected node or Pod failures don’t
+    cause problems. Make sure you clear this first with the people responsible for
+    operating the cluster and the applications under test.
+  id: totrans-159
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您的应用程序需要高可用性，请定期运行诸如chaoskube之类的混沌测试工具，以确保意外的节点或Pod故障不会引起问题。确保事先与负责操作集群和受测应用程序的人员进行清晰沟通。
+- en: Summary
+  id: totrans-160
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 概要
+- en: It can be really difficult to know how to size and configure your first Kubernetes
+    clusters. There are a lot of choices you can make, and you don’t really know what
+    you’ll need until you’ve actually gained some production experience.
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 确定如何规模化和配置您的第一个 Kubernetes 集群可能非常困难。您可以做出许多选择，但实际获得生产经验之前，您不会真正知道您将需要什么。
+- en: 'We can’t make those decisions for you, but we hope we’ve at least given you
+    some helpful things to think about when making them:'
+  id: totrans-162
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们不能为您做出这些决策，但希望我们至少给了您在做出决策时一些有用的思考方向：
+- en: Before provisioning your production Kubernetes cluster, think about how many
+    nodes you’ll need, and of what size.
+  id: totrans-163
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在配置生产 Kubernetes 集群之前，请考虑需要多少节点以及节点的大小。
+- en: You need at least three control plane nodes (unless you’re using a managed service)
+    and at least two (ideally three) worker nodes. This can make Kubernetes clusters
+    seem a little expensive at first when you’re only running a few small workloads,
+    but don’t forget the advantages of built-in resilience and scaling.
+  id: totrans-164
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 您至少需要三个控制平面节点（除非您使用托管服务），至少需要两个（理想情况下是三个）工作节点。当您只运行少量小工作负载时，这可能使 Kubernetes
+    集群显得有点昂贵，但不要忘记内置的弹性和扩展的优势。
+- en: Kubernetes clusters can scale to many thousands of nodes and hundreds of thousands
+    of containers.
+  id: totrans-165
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Kubernetes 集群可以扩展到成千上万个节点和数十万个容器。
+- en: If you need to scale beyond that, use multiple clusters (sometimes you need
+    to do this for security or compliance reasons too). You can join clusters together
+    using federation if you need to replicate workloads across clusters.
+  id: totrans-166
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如果您需要超出此范围，请使用多个集群（有时也需要出于安全或合规性原因）。如果需要在集群之间复制工作负载，可以使用联合。
+- en: Kubernetes isn’t just for the cloud; it runs on bare-metal servers too. If you’ve
+    got metal sitting around, why not use it?
+  id: totrans-167
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Kubernetes 不仅适用于云端，它也可以在裸金属服务器上运行。如果您有空置的服务器，为什么不使用呢？
+- en: You can scale your cluster up and down manually without too much trouble, and
+    you probably won’t have to do it very often. Autoscaling is nice to have when
+    your workloads grow and shrink.
+  id: totrans-168
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 您可以手动扩展和缩小集群，而不会遇到太多麻烦，而且您可能不必经常这样做。当工作负载增长和缩小时，自动缩放功能非常有用。
+- en: 'There’s a well-defined standard for Kubernetes vendors and products: the CNCF
+    Certified Kubernetes mark. If you don’t see this, ask why not.'
+  id: totrans-169
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Kubernetes 供应商和产品有一个明确定义的标准：CNCF 认证的 Kubernetes 标志。如果您没有看到这个标志，请问原因。
+- en: Chaos testing is a process of knocking out Pods at random and seeing if your
+    application still works. It’s useful, but the cloud also has a way of doing its
+    own chaos testing anyway, without you asking for it.
+  id: totrans-170
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 混沌测试是一个随机关闭 Pod 并查看您的应用程序是否仍在运行的过程。这是有用的，但云端也有自己的混沌测试方式，而无需您要求。

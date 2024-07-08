@@ -1,0 +1,3649 @@
+- en: Chapter 4\. Kubernetes Networking Introduction
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第四章 Kubernetes 网络介绍
+- en: Now that we have covered Linux and container networking’s critical components,
+    we are ready to discuss Kubernetes networking in greater detail. In this chapter,
+    we will discuss how pods connect internally and externally to the cluster. We
+    will also cover how the internal components of Kubernetes connect. Higher-level
+    network abstractions around discovery and load balancing, such as services and
+    ingresses, will be covered in the next chapter.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经涵盖了 Linux 和容器网络的关键组成部分，我们准备更详细地讨论 Kubernetes 网络。在本章中，我们将讨论 pod 如何在集群内外部连接。我们还将涵盖
+    Kubernetes 内部组件如何连接。在下一章节中，将讨论更高级别的网络抽象，如服务和入口的发现和负载均衡。
+- en: 'Kubernetes networking looks to solve these four networking issues:'
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 网络致力于解决这四个网络问题：
+- en: Highly coupled container-to-container communications
+  id: totrans-3
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 高度耦合的容器到容器通信
+- en: Pod-to-pod communications
+  id: totrans-4
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Pod 到 Pod 的通信
+- en: Pod-to-service communications
+  id: totrans-5
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Pod 到服务的通信
+- en: External-to-service communications
+  id: totrans-6
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 外部到服务的通信
+- en: The Docker networking model uses a virtual bridge network by default, which
+    is defined per host and is a private network where containers attach. The container’s
+    IP address is allocated a private IP address, which implies containers running
+    on different machines cannot communicate with each other. Developers will have
+    to map host ports to container ports and then proxy the traffic to reach across
+    nodes with Docker. In this scenario, it is up to the Docker administrators to
+    avoid port clashes between containers; usually, this is the system administrators.
+    The Kubernetes networking handles this differently.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Docker 网络模型默认使用虚拟桥接网络，每台主机定义一个私有网络，容器连接到这个网络。容器的 IP 地址分配为私有 IP 地址，这意味着运行在不同机器上的容器无法相互通信。开发者必须映射主机端口到容器端口，然后通过
+    Docker 代理流量以跨节点到达。在这种情况下，避免容器之间端口冲突由 Docker 管理员负责；通常这是系统管理员的职责。Kubernetes 网络处理方式不同。
+- en: The Kubernetes Networking Model
+  id: totrans-8
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Kubernetes 网络模型
+- en: 'The Kubernetes networking model natively supports multihost cluster networking.
+    Pods can communicate with each other by default, regardless of which host they
+    are deployed on. Kubernetes relies on the CNI project to comply with the following
+    requirements:'
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 网络模型原生支持多主机集群网络。pod 默认可以与彼此通信，无论它们部署在哪个主机上。Kubernetes 依赖于 CNI 项目来遵守以下要求：
+- en: All containers must communicate with each other without NAT.
+  id: totrans-10
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 所有容器必须在没有 NAT 的情况下相互通信。
+- en: Nodes can communicate with containers without NAT.
+  id: totrans-11
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 节点可以在没有 NAT 的情况下与容器通信。
+- en: A container’s IP address is the same as those outside the container that it
+    sees itself as.
+  id: totrans-12
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 容器的 IP 地址与其所看到的容器外部相同。
+- en: The unit of work in Kubernetes is called a *pod*. A pod contains one or more
+    containers, which are always scheduled and run “together” on the same node. This
+    connectivity allows individual instances of a service to be separated into distinct
+    containers. For example, a developer may choose to run a service in one container
+    and a log forwarder in another container. Running processes in distinct containers
+    allows them to have separate resource quotas (e.g., “the log forwarder cannot
+    use more than 512 MB of memory”). It also allows container build and deployment
+    machinery to be separated by reducing the scope necessary to build a container.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 中的工作单位称为 *pod*。一个 pod 包含一个或多个容器，它们总是在同一个节点上调度和运行。“一起”运行的连接允许将服务的单个实例分开成不同的容器。例如，开发者可以选择在一个容器中运行一个服务，在另一个容器中运行日志转发器。在不同的容器中运行进程允许它们有单独的资源配额（例如，“日志转发器不能使用超过
+    512 MB 的内存”）。它还通过减少构建容器所需的范围，允许容器的构建和部署机制分离。
+- en: 'The following is a minimal pod definition. We have omitted many options. Kubernetes
+    manages various fields, such as the status of the pods, that are read-only:'
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下面是一个最小化的 Pod 定义。我们省略了许多选项。Kubernetes 管理各种字段，例如 pod 的状态，这些字段是只读的：
+- en: '[PRE0]'
+  id: totrans-15
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: Kubernetes users typically do not create pods directly. Instead, users create
+    a high-level workload, such as a deployment, which manages pods according to some
+    intended spec. In the case of a deployment, as shown in [Figure 4-1](#img-deployment),
+    users specify a *template* for pods, along with how many pods (often called *replicas*)
+    that they want to exist. There are several other ways to manage workloads such
+    as ReplicaSets and StatefulSets that we will review in the next chapter. Some
+    provide abstractions over an intermediate type, while others manage pods directly.
+    There are also third-party workload types, in the form of custom resource definitions
+    (CRDs). Workloads in Kubernetes are a complex topic, and we will only attempt
+    to cover the very basics and the parts applicable to the networking stack.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 用户通常不直接创建 Pod。相反，用户创建高级工作负载，如部署，根据某些预期的规范管理 Pod。在部署的情况下，如图[4-1](#img-deployment)所示，用户指定了
+    Pod 的*模板*，以及希望存在的 Pod 数量（通常称为*副本*）。还有几种其他管理工作负载的方式，如 ReplicaSets 和 StatefulSets，我们将在下一章中进行审查。一些提供对中间类型的抽象，而其他一些直接管理
+    Pod。还有第三方工作负载类型，以自定义资源定义（CRDs）的形式存在。Kubernetes 中的工作负载是一个复杂的话题，我们只会尝试涵盖非常基础和适用于网络堆栈的部分。
+- en: '![neku 0401](Images/neku_0401.png)'
+  id: totrans-17
+  prefs: []
+  type: TYPE_IMG
+  zh: '![neku 0401](Images/neku_0401.png)'
+- en: Figure 4-1\. The relationship between a deployment and pods
+  id: totrans-18
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 4-1\. 部署与 Pod 的关系
+- en: Pods themselves are ephemeral, meaning they are deleted and replaced with new
+    versions of themselves. The short life span of pods is one of the main surprises
+    and challenges to developers and operators familiar with more semipermanent, traditional
+    physical or virtual machines. Local disk state, node scheduling, and IP addresses
+    will all be replaced regularly during a pod’s life cycle.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod 本身是临时的，意味着它们会被删除并替换为新版本。Pod 的短寿命是对开发人员和操作员的主要意外和挑战，他们熟悉更半永久、传统物理或虚拟机的情况。本地磁盘状态、节点调度和
+    IP 地址在 Pod 生命周期中都会定期更换。
+- en: A pod has a unique IP address, which is shared by all containers in the pod.
+    The primary motivation behind giving every pod an IP address is to remove constraints
+    around port numbers. In Linux, only one program can listen on a given address,
+    port, and protocol. If pods did not have unique IP addresses, then two pods on
+    a node could contend for the same port (such as two web servers, both trying to
+    listen on port 80). If they were the same, it would require a runtime configuration
+    to fix, such as a `--port` flag. Alternatively, it would take an ugly script to
+    update a config file in the case of third-party software.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个 Pod 拥有独特的 IP 地址，该 IP 地址被 Pod 内所有容器共享。赋予每个 Pod 一个 IP 地址的主要动机是消除端口号的约束。在 Linux
+    中，每个地址、端口和协议只能由一个程序监听。如果 Pod 没有独特的 IP 地址，那么同一节点上的两个 Pod 可能会竞争相同的端口（例如两个 Web 服务器，都试图监听端口
+    80）。如果它们相同，就需要运行时配置来修复，比如 `--port` 标志。或者，需要通过丑陋的脚本更新配置文件以适应第三方软件的情况。
+- en: In some cases, third-party software could not run on custom ports at all, which
+    would require more complex workarounds, such as `iptables` DNAT rules on the node.
+    Web servers have the additional problem of expecting conventional port numbers
+    in their software, such as 80 for HTTP and 443 for HTTPS. Breaking from these
+    conventions requires reverse-proxying through a load balancer or making downstream
+    consumers aware of the various ports (which is much easier for internal systems
+    than external ones). Some systems, such as Google’s Borg, use this model. Kubernetes
+    chose the IP per pod model to be more comfortable for developers to adopt and
+    make it easier to run third-party workloads. Unfortunately for us, allocating
+    and routing an IP address for every pod adds *substantial* complexity to a Kubernetes
+    cluster.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在某些情况下，第三方软件根本无法在自定义端口上运行，这将需要更复杂的解决方案，例如节点上的 `iptables` DNAT 规则。Web 服务器还存在一个额外问题，即期望在其软件中使用传统端口号，如
+    HTTP 的 80 和 HTTPS 的 443。偏离这些惯例需要通过负载均衡器进行反向代理或使下游使用者了解各种端口（对内部系统比对外系统更容易）。一些系统，如
+    Google 的 Borg，使用这种模型。Kubernetes 选择了每个 Pod 分配 IP 地址的模型，以便开发人员更容易接受并更轻松地运行第三方工作负载。不幸的是，为每个
+    Pod 分配和路由 IP 地址增加了 Kubernetes 集群的*相当复杂性*。
+- en: Warning
+  id: totrans-22
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: By default, Kubernetes will allow any traffic to or from any pod. This passive
+    connectivity means, among other things, that any pod in a cluster can connect
+    to any other pod in that same cluster. That can easily lead to abuse, especially
+    if services do not use authentication or if an attacker obtains credentials.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，Kubernetes 将允许任何 Pod 之间的任何流量。这种被动的连接性意味着，在集群中的任何 Pod 都可以连接到同一集群中的任何其他
+    Pod。这可能很容易被滥用，特别是如果服务未使用身份验证或攻击者获取了凭证。
+- en: See [“Popular CNI Plugins”](#pCNIp) for more.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 更多信息，请参阅[“流行的 CNI 插件”](#pCNIp)。
+- en: Pods created and deleted with their own IP addresses can cause issues for beginners
+    who do not understand this behavior. Suppose we have a small service running on
+    Kubernetes, in the form of a deployment with three pod replicas. When someone
+    updates a container image in the deployment, Kubernetes performs a *rolling upgrade*,
+    deleting old pods and creating new pods using the new container image. These new
+    pods will likely have new IP addresses, making the old IP addresses unreachable.
+    It can be a common beginner’s mistake to reference pod IPs in config or DNS records
+    manually, only to have them fail to resolve. This error is what services and endpoints
+    attempt to solve, and this is discussed in the next chapter.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用其自身 IP 地址创建和删除的 Pod 可能会对不理解此行为的初学者造成问题。假设我们在 Kubernetes 上运行一个小型服务，形式为具有三个
+    Pod 副本的部署。当有人更新部署中的容器映像时，Kubernetes 执行*滚动升级*，删除旧的 Pod 并使用新容器映像创建新的 Pod。这些新的 Pod
+    可能会有新的 IP 地址，导致旧的 IP 地址无法访问。手动在配置或 DNS 记录中引用 Pod IP 并使其无法解析可能是初学者的常见错误。这是服务和端点试图解决的错误，并将在下一章讨论。
+- en: When explicitly creating a pod, it is possible to specify the IP address. StatefulSets
+    are a built-in workload type intended for workloads such as databases, which maintain
+    a pod identity concept and give a new pod the same name and IP address as the
+    pod it replaces. There are other examples in the form of third-party CRDs, and
+    it is possible to write a CRD for specific networking purposes.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在显式创建 Pod 时，可以指定 IP 地址。StatefulSets 是一种内置的工作负载类型，旨在处理诸如数据库等工作负载，它们保持 Pod 身份概念，并使新
+    Pod 具有与其替换的 Pod 相同的名称和 IP 地址。还有第三方 CRD 的其他示例形式，可以编写用于特定网络目的的 CRD。
+- en: Note
+  id: totrans-27
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Custom resources are extensions of the Kubernetes API defined by the writer.
+    It allows software developers to customize the installation of their software
+    in a Kubernetes environment. You can find more information on writing a CRD in
+    the [documentation](https://oreil.ly/vVcrE).
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 自定义资源是由编写者定义的 Kubernetes API 扩展。它允许软件开发人员在 Kubernetes 环境中定制其软件的安装方式。您可以在[文档](https://oreil.ly/vVcrE)中找到有关编写
+    CRD 的更多信息。
+- en: Every Kubernetes node runs a component called the *Kubelet*, which manages pods
+    on the node. The networking functionality in the Kubelet comes from API interactions
+    with a CNI plugin on the node. The CNI plugin is what manages pod IP addresses
+    and individual container network provisioning. We mentioned the eponymous interface
+    portion of the CNI in the previous chapter; the CNI defines a standard interface
+    to manage a container’s network. The reason for making the CNI an interface is
+    to have an interoperable standard, where there are multiple CNI plugin implementations.
+    The CNI plugin is responsible for assigning pod IP addresses and maintaining a
+    route between all (applicable) pods. Kubernetes does not ship with a default CNI
+    plugin, which means that in a standard installation of Kubernetes, pods cannot
+    use the network.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个 Kubernetes 节点都运行一个名为*Kubelet*的组件，它管理节点上的 Pod。Kubelet 中的网络功能来自节点上 CNI 插件的
+    API 交互。CNI 插件负责管理 Pod IP 地址和单个容器网络的配置。在前一章中，我们提到了 CNI 的名义接口部分；CNI 定义了管理容器网络的标准接口。将
+    CNI 设计为接口的原因是为了拥有可互操作的标准，在其中存在多个 CNI 插件实现。CNI 插件负责分配 Pod IP 地址并维护所有（适用的）Pod 之间的路由。Kubernetes
+    并未随附默认的 CNI 插件，这意味着在标准的 Kubernetes 安装中，Pod 无法使用网络。
+- en: Let’s begin the discussion on how the pod network is enabled by the CNI and
+    the different network layouts.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们开始讨论通过 CNI 启用 Pod 网络以及不同的网络布局。
+- en: Node and Pod Network Layout
+  id: totrans-31
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 节点和 Pod 网络布局
+- en: The cluster must have a group of IP addresses that it controls to assign an
+    IP address to a pod, for example, `10.1.0.0/16`. Nodes and pods must have L3 connectivity
+    in this IP address space. Recall from [Chapter 1](ch01.xhtml#networking_introduction)
+    that in L3, the Internet layer, connectivity means packets with an IP address
+    can route to a host with that IP address. It is important to note that the ability
+    to deliver *packets* is more fundamental than creating connections (an L4 concept).
+    In L4, firewalls may choose to allow connections from host A to B but reject connections
+    initiating from host B to A. L4 connections from A to B, connections at L3, A
+    to B and B to A, must be allowed. Without L3 connectivity, TCP handshakes would
+    not be possible, as the SYN-ACK could not be delivered.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 集群必须有一组 IP 地址来控制分配给 pod 的 IP 地址，例如 `10.1.0.0/16`。节点和 pod 必须在此 IP 地址空间中具有 L3
+    连通性。从 [第 1 章](ch01.xhtml#networking_introduction) 中回忆，在 L3 中，互联网层的连通性意味着带有 IP
+    地址的数据包可以路由到具有该 IP 地址的主机。重要的是要注意，传递 *数据包* 的能力比创建连接（L4 概念）更为基础。在 L4 中，防火墙可以选择允许从主机
+    A 到 B 的连接，但拒绝从主机 B 到 A 发起的连接。必须允许 A 到 B 和 B 到 A 的 L4 连接，在 L3 中，A 到 B 的连接。没有 L3
+    连通性，TCP 握手将不可能进行，因为 SYN-ACK 无法传递。
+- en: Generally, pods do not have MAC addresses. Therefore, L2 connectivity to pods
+    is not possible. The CNI will determine this for pods.
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一般情况下，pod 没有 MAC 地址。因此，无法与 pod 建立 L2 连接。CNI 将为 pod 确定这一点。
+- en: There are no requirements in Kubernetes about L3 connectivity to the outside
+    world. Although the majority of clusters have internet connectivity, some are
+    more isolated for security reasons.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 对外部世界的 L3 连通性没有任何要求。尽管大多数集群具有互联网连接，但出于安全原因，有些集群更加孤立。
+- en: We will broadly discuss both ingress (traffic leaving a host or cluster) and
+    egress (traffic entering a host or cluster). Our use of “ingress” here shouldn’t
+    be confused with the Kubernetes ingress resource, which is a specific HTTP mechanism
+    to route traffic to Kubernetes services.
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将广泛讨论入口（离开主机或集群的流量）和出口（进入主机或集群的流量）。在这里使用的“入口”不应与 Kubernetes 入口资源混淆，后者是一种特定的
+    HTTP 机制，用于将流量路由到 Kubernetes 服务。
+- en: 'There are broadly three approaches, with many variations, to structuring a
+    cluster’s network: isolated, flat, and island networks. We will discuss the general
+    approaches here and then get more in-depth into specific implementation details
+    when covering CNI plugins later this chapter.'
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于构建集群网络，一般有三种方法，以及许多变体：孤立、扁平和岛屿网络。我们将在此处讨论一般方法，然后在后面的章节中讨论 CNI 插件的具体实现细节。
+- en: Isolated Networks
+  id: totrans-37
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 孤立网络
+- en: In an isolated cluster network, nodes are routable on the broader network (i.e.,
+    hosts that are not part of the cluster can reach nodes in the cluster), but pods
+    are not. [Figure 4-2](#img-isolated-clusters) shows such a cluster. Note that
+    pods cannot reach other pods (or any other hosts) outside the cluster.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在孤立的集群网络中，节点在更广泛的网络上是可路由的（即，不属于集群的主机可以访问集群中的节点），但是 pod 不可以。[图 4-2](#img-isolated-clusters)
+    显示了这样一个集群。请注意，pod 不能访问集群外的其他 pod（或任何其他主机）。
+- en: Because the cluster is not routable from the broader network, multiple clusters
+    can even use the same IP address space. Note that the Kubernetes API server will
+    need to be routable from the broader network, if external systems or users should
+    be able to access the Kubernetes API. Many managed Kubernetes providers have a
+    “secure cluster” option like this, where no direct traffic is possible between
+    the cluster and the internet.
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因为集群不能从更广泛的网络路由，多个集群甚至可以使用相同的 IP 地址空间。请注意，如果外部系统或用户需要访问 Kubernetes API，则 Kubernetes
+    API 服务器必须从更广泛的网络可路由。许多托管 Kubernetes 的提供者都有这样的“安全集群”选项，其中集群与互联网之间没有直接的流量。
+- en: That isolation to the local cluster can be splendid for security if the cluster’s
+    workloads permit/require such a setup, such as clusters for batch processing.
+    However, it is not reasonable for all clusters. The majority of clusters will
+    need to reach and/or be reached by external systems, such as clusters that must
+    support services that have dependencies on the broader internet. Load balancers
+    and proxies can be used to breach this barrier and allow internet traffic into
+    or out of an isolated cluster.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果集群的工作负载允许/需要这样的设置，例如批处理集群，那么将该集群与本地集群隔离对安全性来说可能是很好的。然而，并不是所有的集群都适合这种方式。大多数集群需要访问和/或被外部系统访问，例如必须支持对更广泛互联网有依赖的服务的集群。负载均衡器和代理可以用来突破这一障碍，并允许互联网流量进入或离开孤立的集群。
+- en: '![neku 0402](Images/neku_0402.png)'
+  id: totrans-41
+  prefs: []
+  type: TYPE_IMG
+  zh: '![neku 0402](Images/neku_0402.png)'
+- en: Figure 4-2\. Two isolated clusters in the same network
+  id: totrans-42
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图4-2\. 同一网络中的两个隔离集群
+- en: Flat Networks
+  id: totrans-43
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 扁平网络
+- en: In a flat network, all pods have an IP address that is routable from the broader
+    network. Barring firewall rules, any host on the network can route to any pod
+    inside or outside the cluster. This configuration has numerous upsides around
+    network simplicity and performance. Pods can connect directly to arbitrary hosts
+    in the network.
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在扁平网络中，所有的Pod都有一个IP地址，可以从更广泛的网络路由到达。除非有防火墙规则，网络上的任何主机都可以路由到集群内外的任何Pod。这种配置在网络简单性和性能方面有许多优势。Pod可以直接连接网络中的任意主机。
+- en: Note in [Figure 4-3](#img-flat-clusters) that no two nodes’ pod CIDRs overlap
+    between the two clusters, and therefore no two pods will be assigned the same
+    IP address. Because the broader network can route every pod IP address to that
+    pod’s node, any host on the network is reachable to and from any pod.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意在[图4-3](#img-flat-clusters)中，两个集群之间没有两个节点的Pod CIDR重叠，因此不会有两个Pod被分配相同的IP地址。由于更广泛的网络可以路由到每个Pod
+    IP地址到该Pod的节点，因此网络上的任何主机都可以与任何Pod通信。
+- en: This openness allows any host with sufficient service discovery data to decide
+    which pod will receive those packets. A load balancer outside the cluster can
+    load balance pods, such as a gRPC client in another cluster.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种开放性允许具有足够服务发现数据的任何主机决定哪个Pod将接收这些数据包。集群外的负载均衡器可以负载均衡Pod，例如另一个集群中的gRPC客户端。
+- en: '![neku 0403](Images/neku_0403.png)'
+  id: totrans-47
+  prefs: []
+  type: TYPE_IMG
+  zh: '![neku 0403](Images/neku_0403.png)'
+- en: Figure 4-3\. Two clusters in the same flat network
+  id: totrans-48
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图4-3\. 同一扁平网络中的两个集群
+- en: External pod traffic (and incoming pod traffic, when the connection’s destination
+    is a specific pod IP address) has low latency and low overhead. Any form of proxying
+    or packet rewriting incurs a latency and processing cost, which is small but nontrivial
+    (especially in an application architecture that involves many backend services,
+    where each delay adds up).
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 外部Pod流量（以及当连接的目的地是特定Pod IP地址时的传入Pod流量）具有低延迟和低开销。任何形式的代理或数据包重写都会带来延迟和处理成本，这些成本虽小但不可忽视（尤其是在涉及多个后端服务的应用架构中，每次延迟都会累积）。
+- en: Unfortunately, this model requires a large, contiguous IP address space for
+    each cluster (i.e., a range of IP addresses where every IP address in the range
+    is under your control). Kubernetes requires a single CIDR for pod IP addresses
+    (for each IP family). This model is achievable with a private subnet (such as
+    10.0.0.0/8 or 172.16.0.0/12); however, it is much harder and more expensive to
+    do with public IP addresses, especially IPv4 addresses. Administrators will need
+    to use NAT to connect a cluster running in a private IP address space to the internet.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不幸的是，这种模型要求每个集群都有一个大且连续的IP地址空间（即IP地址范围内的每个IP地址都在您的控制之下）。Kubernetes对于Pod IP地址（每个IP系列）需要一个单一的CIDR。这种模型可以通过私有子网（如10.0.0.0/8或172.16.0.0/12）来实现；然而，如果使用公共IP地址，特别是IPv4地址，那就要困难得多且更加昂贵。管理员需要使用NAT来连接运行在私有IP地址空间中的集群与互联网。
+- en: Aside from needing a large IP address space, administrators also need an easily
+    programmable network. The CNI plugin must allocate pod IP addresses and ensure
+    a route exists to a given pod’s node.
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了需要大量的IP地址空间外，管理员还需要一个易于编程的网络。CNI插件必须分配Pod IP地址，并确保存在到特定Pod节点的路由。
+- en: Flat networks, on a private subnet, are easy to achieve in a cloud provider
+    environment. The vast majority of cloud provider networks will provide large private
+    subnets and have an API (or even preexisting CNI plugins) for IP address allocation
+    and route management.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在云服务提供商环境中，私有子网上的扁平网络很容易实现。绝大多数云服务提供商网络都提供大型私有子网，并具有用于IP地址分配和路由管理的API（甚至预先存在的CNI插件）。
+- en: Island Networks
+  id: totrans-53
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 岛屿网络
+- en: Island cluster networks are, at a high level, a combination of isolated and
+    flat networks.
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 岛屿集群网络在高层次上是隔离和扁平网络的结合体。
+- en: In an island cluster setup, as shown in [Figure 4-4](#img-island-clusters),
+    nodes have L3 connectivity with the broader network, but pods do not. Traffic
+    to and from pods must pass through some form of proxy, through nodes. Most often,
+    this is achieved by `iptables` source NAT on a pod’s packets leaving the node.
+    This setup, called *masquerading*, uses SNAT to rewrite packet sources from the
+    pod’s IP address to the node’s IP address (refer to [Chapter 2](ch02.xhtml#linux_networking)
+    for a refresher on SNAT). In other words, packets appear to be “from” the node,
+    rather than the pod.
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在孤岛集群设置中，如 [图 4-4](#img-island-clusters) 所示，节点与更广泛的网络具有L3连接，但是Pod没有。来自和发往Pod的流量必须通过某种形式的代理经过节点。这通常是通过Pod离开节点时的`iptables`源NAT来实现的。这种设置被称为*伪装*，使用SNAT将包的源地址从Pod的IP地址重写为节点的IP地址（有关SNAT的复习，请参考[第 2 章](ch02.xhtml#linux_networking)）。换句话说，数据包看起来是从节点发出的，而不是从Pod发出的。
+- en: Sharing an IP address while also using NAT hides the individual pod IP addresses.
+    IP address–based firewalling and recognition becomes difficult across the cluster
+    boundary. Within a cluster, it is still apparent which IP address is which pod
+    (and, therefore, which application). Pods in other clusters, or other hosts on
+    the broader network, will no longer have that mapping. IP address-based firewalling
+    and allow lists are not sufficient security on their own but are a valuable and
+    sometimes required layer.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 共享IP地址同时使用NAT会隐藏各个Pod的IP地址。在集群边界上基于IP地址的防火墙和识别变得困难。在集群内部，仍然可以明确哪个IP地址对应哪个Pod（因此也是哪个应用程序）。在其他集群中的Pod或更广泛网络上的其他主机将不再具有该映射关系。基于IP地址的防火墙和白名单本身并不足以提供安全性，但它们是一层有价值且有时是必需的保护层。
+- en: Now let’s see how we configure any of these network layouts with the `kube-controller-manager`.
+    *Control plane* refers to all the functions and processes that determine which
+    path to use to send the packet or frame. *Data plane* refers to all the functions
+    and processes that forward packets/frames from one interface to another based
+    on control plane logic.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在让我们看看如何使用`kube-controller-manager`配置任何这些网络布局。*控制平面* 指确定发送数据包或帧所使用路径的所有功能和过程。*数据平面*
+    指根据控制平面逻辑从一个接口转发数据包/帧的所有功能和过程。
+- en: '![neku 0404](Images/neku_0404.png)'
+  id: totrans-58
+  prefs: []
+  type: TYPE_IMG
+  zh: '![neku 0404](Images/neku_0404.png)'
+- en: Figure 4-4\. Two in the “island network” configuration
+  id: totrans-59
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 4-4\. “孤岛网络”配置中的两个示例
+- en: kube-controller-manager Configuration
+  id: totrans-60
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: kube-controller-manager 配置
+- en: The `kube-controller-manager` runs most individual Kubernetes controllers in
+    one binary and one process, where most Kubernetes logic lives. At a high level,
+    a controller in Kubernetes terms is software that watches resources and takes
+    action to synchronize or enforce a specific state (either the desired state or
+    reflecting the current state as a status). Kubernetes has many controllers, which
+    generally “own” a specific object type or specific operation.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kube-controller-manager` 在一个二进制和一个进程中运行大多数独立的Kubernetes控制器，其中大多数Kubernetes逻辑存在。从高层次来看，Kubernetes中的控制器是指观察资源并采取行动以同步或强制执行特定状态（要么是期望的状态，要么反映当前状态作为状态）。Kubernetes有许多控制器，它们通常“拥有”特定的对象类型或特定的操作。'
+- en: '`kube-controller-manager` includes multiple controllers that manage the Kubernetes
+    network stack. Notably, administrators set the cluster CIDR here.'
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kube-controller-manager` 包括多个控制器，用于管理Kubernetes网络堆栈。特别是管理员在这里设置集群CIDR。'
+- en: '`kube-controller-manager`, due to running a significant number of controllers,
+    also has a substantial number of flags. [Table 4-1](#table_title) highlights some
+    notable network configuration flags.'
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kube-controller-manager` 由于运行了大量的控制器，所以有大量的标志。 [表 4-1](#table_title) 突出了一些显著的网络配置标志。'
+- en: Table 4-1\. `Kube-controller-manager` options
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 4-1\. `kube-controller-manager` 选项
+- en: '| Flag | Default | Description |'
+  id: totrans-65
+  prefs: []
+  type: TYPE_TB
+  zh: '| 标志 | 默认值 | 描述 |'
+- en: '| --- | --- | --- |'
+  id: totrans-66
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- |'
+- en: '| `--allocate-node-cidrs` | true | Sets whether CIDRs for pods should be allocated
+    and set on the cloud provider. |'
+  id: totrans-67
+  prefs: []
+  type: TYPE_TB
+  zh: '| `--allocate-node-cidrs` | true | 设置是否应在云提供商上为Pod分配和设置CIDR。 |'
+- en: '| `--CIDR-allocator-type string` | RangeAllocator | Type of CIDR allocator
+    to use. |'
+  id: totrans-68
+  prefs: []
+  type: TYPE_TB
+  zh: '| `--CIDR-allocator-type string` | RangeAllocator | 要使用的CIDR分配器类型。 |'
+- en: '| `--cluster-CIDR` |  | CIDR range from which to assign pod IP addresses. Requires
+    `--allocate-node-cidrs` to be true. If `kube-controller-manager` has `IPv6DualStack`
+    enabled, `--cluster-CIDR` accepts a comma-separated pair of IPv4 and IPv6 CIDRs.
+    |'
+  id: totrans-69
+  prefs: []
+  type: TYPE_TB
+  zh: '| `--cluster-CIDR` |  | 用于分配Pod IP地址的CIDR范围。要求`--allocate-node-cidrs`为true。如果`kube-controller-manager`启用了`IPv6DualStack`，`--cluster-CIDR`接受一个逗号分隔的IPv4和IPv6
+    CIDR对。 |'
+- en: '| `--configure-cloud-routes` | true | Sets whether CIDRs should be allocated
+    by `allocate-node-cidrs` and configured on the cloud provider. |'
+  id: totrans-70
+  prefs: []
+  type: TYPE_TB
+  zh: '| `--configure-cloud-routes` | true | 设置是否应由 `allocate-node-cidrs` 分配 CIDR，并在云提供商上配置。'
+- en: '| `--node-CIDR-mask-size` | 24 for IPv4 clusters, 64 for IPv6 clusters | Mask
+    size for the node CIDR in a cluster. Kubernetes will assign each node `2^(node-CIDR-mask-size)`
+    IP addresses. |'
+  id: totrans-71
+  prefs: []
+  type: TYPE_TB
+  zh: '| `--node-CIDR-mask-size` | 24 用于 IPv4 集群，64 用于 IPv6 集群 | 集群中节点 CIDR 的掩码大小。Kubernetes
+    将为每个节点分配 `2^(node-CIDR-mask-size)` 个 IP 地址。'
+- en: '| `--node-CIDR-mask-size-ipv4` | 24 | Mask size for the node CIDR in a cluster.
+    Use this flag in dual-stack clusters to allow both IPv4 and IPv6 settings. |'
+  id: totrans-72
+  prefs: []
+  type: TYPE_TB
+  zh: '| `--node-CIDR-mask-size-ipv4` | 24 | 集群中节点 CIDR 的掩码大小。在双栈集群中使用此标志允许 IPv4 和
+    IPv6 设置。'
+- en: '| `--node-CIDR-mask-size-ipv6` | 64 | Mask size for the node CIDR in a cluster.
+    Use this flag in dual-stack clusters to allow both IPv4 and IPv6 settings. |'
+  id: totrans-73
+  prefs: []
+  type: TYPE_TB
+  zh: '| `--node-CIDR-mask-size-ipv6` | 64 | 集群中节点 CIDR 的掩码大小。在双栈集群中使用此标志允许 IPv4 和
+    IPv6 设置。'
+- en: '| `--service-cluster-ip-range` |  | CIDR range for services in the cluster
+    to allocate service ClusterIPs. Requires `--allocate-node-cidrs` to be true. If
+    `kube-controller-manager` has `IPv6DualStack` enabled, `--service-cluster-ip-range`
+    accepts a comma-separated pair of IPv4 and IPv6 CIDRs. |'
+  id: totrans-74
+  prefs: []
+  type: TYPE_TB
+  zh: '| `--service-cluster-ip-range` |  | 集群中服务的 CIDR 范围，用于分配服务的 ClusterIP。需要 `--allocate-node-cidrs`
+    为 true。如果 `kube-controller-manager` 启用了 `IPv6DualStack`，`--service-cluster-ip-range`
+    可接受逗号分隔的 IPv4 和 IPv6 CIDR 对。'
+- en: Tip
+  id: totrans-75
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: All Kubernetes binaries have documentation for their flags in the online docs.
+    See all `kube-controller-manager` options in the [documentation](https://oreil.ly/xDGIE).
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有 Kubernetes 二进制文件在在线文档中都有它们标志的文档。在 [文档](https://oreil.ly/xDGIE) 中查看所有 `kube-controller-manager`
+    选项。
+- en: Now that we have discussed high-level network architecture and network configuration
+    in the Kubernetes control plane, let’s look closer at how Kubernetes worker nodes
+    handle networking.
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经讨论了 Kubernetes 控制平面中的高级网络架构和网络配置，让我们更详细地看一下 Kubernetes 工作节点如何处理网络。
+- en: The Kubelet
+  id: totrans-78
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Kubelet
+- en: The Kubelet is a single binary that runs on every worker node in a cluster.
+    At a high level, the Kubelet is responsible for managing any pods scheduled to
+    the node and providing status updates for the node and pods on it. However, the
+    Kubelet primarily acts as a coordinator for other software on the node. The Kubelet
+    manages a container networking implementation (via the CNI) and a container runtime
+    (via the CRI).
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubelet 是在集群中每个工作节点上运行的单个二进制文件。在高层次上，Kubelet 负责管理调度到节点上的任何 Pod，并为节点及其上的 Pod
+    提供状态更新。然而，Kubelet 主要作为节点上其他软件的协调器。Kubelet 管理容器网络实现（通过 CNI）和容器运行时（通过 CRI）。
+- en: Note
+  id: totrans-80
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: We define worker nodes as Kubernetes nodes that can run pods. Some clusters
+    technically run the API server and `etcd` on restricted worker nodes. This setup
+    can allow control plane components to be managed with the same automation as typical
+    workloads but exposes additional failure modes and security vulnerabilities.
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们定义工作节点为能够运行 Pod 的 Kubernetes 节点。某些集群技术上在受限制的工作节点上运行 API 服务器和 `etcd`。这种设置可以让控制平面组件与典型工作负载一样自动化管理，但也会暴露额外的故障模式和安全漏洞。
+- en: 'When a controller (or user) creates a pod in the Kubernetes API, it initially
+    exists as only the pod API object. The Kubernetes scheduler watches for such a
+    pod and attempts to select a valid node to schedule the pod to. There are several
+    constraints to this scheduling. Our pod with its CPU/memory requests must not
+    exceed the unrequested CPU/memory remaining on the node. Many selection options
+    are available, such as affinity/anti-affinity to labeled nodes or other labeled
+    pods or taints on nodes. Assuming the scheduler finds a node that satisfies all
+    the pod’s constraints, the scheduler writes that node’s name to our pod’s `nodeName`
+    field. Let’s say Kubernetes schedules the pod to `node-1`:'
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当控制器（或用户）在 Kubernetes API 中创建一个 Pod 时，它最初只存在于 Pod API 对象中。Kubernetes 调度器会监视这样的
+    Pod，并尝试选择一个有效的节点来调度该 Pod。对此调度有多个约束条件。我们的 Pod 及其 CPU/内存请求不能超过节点上未请求的 CPU/内存余量。有许多选择项可用，例如与带标签节点或其他带标签
+    Pod 的亲和性/反亲和性或节点上的污点。假设调度器找到满足所有 Pod 约束条件的节点，则调度器将该节点的名称写入我们 Pod 的 `nodeName`
+    字段。假设 Kubernetes 将 Pod 调度到 `node-1`：
+- en: '[PRE1]'
+  id: totrans-83
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: The  Kubelet  on  `node-1`  watches  for  all  of  the  pods  scheduled  to 
+    it.  The equivalent `kubectl` command would be `kubectl get pods -w --field-selector
+    spec.nodeName=node-1`. When  the  Kubelet  observes  that  our  pod  exists  but 
+    is not present on the node, it creates it. We will skip over the CRI details and
+    the creation of the container itself. Once the container exists, the Kubelet makes
+    an `ADD` call to the CNI, which tells the CNI plugin to create the pod network.
+    We will cover the interface and plugins in our next section.
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubelet 在 `node-1` 上监视所有调度到该节点的 pod。相应的 `kubectl` 命令将是 `kubectl get pods -w
+    --field-selector spec.nodeName=node-1`。当 Kubelet 观察到我们的 pod 存在但不在节点上时，它会创建它。我们将跳过
+    CRI 的详细信息和容器本身的创建。一旦容器存在，Kubelet 就会向 CNI 发出 `ADD` 调用，告诉 CNI 插件创建 pod 网络。我们将在下一节介绍接口和插件。
+- en: Pod Readiness and Probes
+  id: totrans-85
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Pod 就绪和探针
+- en: Pod readiness is an additional indication of whether the pod is ready to serve
+    traffic. Pod readiness determines whether the pod address shows up in the `Endpoints`
+    object from an external source. Other Kubernetes resources that manage pods, like
+    deployments, take pod readiness into account for decision-making, such as advancing
+    during a rolling update. During rolling deployment, a new pod becomes ready, but
+    a service, network policy, or load balancer is not yet prepared for the new pod
+    due to whatever reason. This may cause service disruption or loss of backend capacity.
+    It should be noted that if a pod spec does contain probes of any type, Kubernetes
+    defaults to success for all three types.
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod 就绪是一个额外指示，表明 pod 是否准备好提供流量服务。Pod 的就绪性决定了该 pod 地址是否从外部源在 `Endpoints` 对象中显示。其他管理
+    pod 的 Kubernetes 资源，如部署，考虑 pod 的就绪性以进行决策，例如在滚动更新期间推进。在滚动部署期间，新的 pod 变为就绪，但服务、网络策略或负载均衡器尚未准备好接受新的
+    pod，可能会导致服务中断或后端容量的丢失。值得注意的是，如果 pod 规范包含任何类型的探针，Kubernetes 将默认为所有三种类型的成功。
+- en: Users can specify pod readiness checks in the pod spec. From there, the Kubelet
+    executes the specified check and updates the pod status based on successes or
+    failures.
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用户可以在 pod 规范中指定 pod 的就绪检查。从那里，Kubelet 执行指定的检查，并根据成功或失败更新 pod 的状态。
+- en: 'Probes effect the `.Status.Phase` field of a pod. The following is a list of
+    the pod phases and their descriptions:'
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 探测器影响 pod 的 `.Status.Phase` 字段。以下是 pod 各个阶段及其描述的列表：
+- en: Pending
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 等待中
+- en: The pod has been accepted by the cluster, but one or more of the containers
+    has not been set up and made ready to run. This includes the time a pod spends
+    waiting to be scheduled as well as the time spent downloading container images
+    over the network.
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: pod 已被集群接受，但一个或多个容器尚未设置并准备好运行。这包括等待调度的 pod 的时间以及通过网络下载容器镜像的时间。
+- en: Running
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运行中
+- en: The  pod  has  been  scheduled  to  a  node,  and  all  the  containers  have 
+    been  created. At least one container is still running or is in the process of
+    starting or restarting. Note that some containers may be in a failed state, such
+    as in a CrashLoopBackoff.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: pod 已被调度到一个节点，并且所有的容器都已经被创建。至少有一个容器仍在运行或正在启动或重新启动过程中。请注意，某些容器可能处于失败状态，例如 CrashLoopBackoff
+    状态。
+- en: Succeeded
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 已成功
+- en: All containers in the pod have terminated in success and will not be restarted.
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有 pod 中的容器都以成功终止，并且将不会重新启动。
+- en: Failed
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 失败
+- en: All containers in the pod have terminated, and at least one container has terminated
+    in failure. That is, the container either exited with nonzero status or was terminated
+    by the system.
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有 pod 中的容器已经终止，并且至少有一个容器以失败状态终止。换句话说，该容器要么以非零状态退出，要么被系统终止。
+- en: Unknown
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 未知
+- en: For some reason the state of the pod could not be determined. This phase typically
+    occurs due to an error in communicating with the Kubelet where the pod should
+    be running.
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于无法确定 pod 的状态的某些原因，这一阶段通常是由于与应运行 pod 的 Kubelet 通信错误引起的。
+- en: 'The Kubelet performs several types of health checks for individual containers
+    in a pod: *liveness probes* (`livenessProbe`), *readiness probes* (`readinessProbe`),
+    and *startup probes* (`startupProbe`). The Kubelet (and, by extension, the node
+    itself) must be able to connect to all containers running on that node in order
+    to perform any HTTP health checks.'
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubelet 对 pod 中各个容器执行多种类型的健康检查：*存活探针* (`livenessProbe`)、*就绪探针* (`readinessProbe`)
+    和 *启动探针* (`startupProbe`)。Kubelet（以及节点本身）必须能够连接到该节点上运行的所有容器，以执行任何 HTTP 健康检查。
+- en: 'Each probe has one of three results:'
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个探测器有三种结果之一：
+- en: Success
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 成功
+- en: The container passed the diagnostic.
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器通过了诊断。
+- en: Failure
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 失败
+- en: The container failed the diagnostic.
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器未通过诊断。
+- en: Unknown
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 未知
+- en: The diagnostic failed, so no action should be taken.
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 诊断失败，因此不应采取任何行动。
+- en: The probes can be exec probes, which attempt to execute a binary within the
+    container, TCP probes, or HTTP probes. If the probe fails more than the `failureThreshold`
+    number of times, Kubernetes will consider the check to have failed. The effect
+    of this depends on the type of probe.
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 探针可以是执行探针，尝试在容器内部执行二进制文件，TCP 探针或HTTP 探针。如果探针失败次数超过`failureThreshold`，Kubernetes
+    将视为检查失败。其影响取决于探针类型。
+- en: When a container’s readiness probe fails, the Kubelet does not terminate it.
+    Instead, the Kubelet writes the failure to the pod’s status.
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当容器的就绪探针失败时，Kubelet 不会终止它。相反，Kubelet 会将失败写入到 Pod 的状态中。
+- en: If the liveness probes fail, the Kubelet will terminate the container. Liveness
+    probes can easily cause unexpected failures if misused or misconfigured. The intended
+    use case for liveness probes is to let the Kubelet know when to restart a container.
+    However, as humans, we quickly learn that if “something is wrong, restart it”
+    is a dangerous strategy. For example, suppose we create a liveness probe that
+    loads the main page of our web app. Further, suppose that some change in the system,
+    outside our container’s code, causes the main page to return a 404 or 500 error.
+    There are frequent causes of such a scenario, such as a backend database failure,
+    a required service failure, or a feature flag change that exposes a bug. In any
+    of these scenarios, the liveness probe would restart the container. At best, this
+    would be unhelpful; restarting the container will not solve a problem elsewhere
+    in the system and could quickly worsen the problem. Kubernetes has container restart
+    backoffs (`CrashLoopBackoff`), which add increasing delay to restarting failed
+    containers. With enough pods or rapid enough failures, the application may go
+    from having an error on the home page to being hard-down. Depending on the application,
+    pods may also lose cached data upon a restart; it may be strenuous to fetch or
+    impossible to fetch during the hypothetical degradation. Because of this, use
+    liveness probes with caution. When pods use them, they only depend on the container
+    they are testing, with no other dependencies. Many engineers have specific health
+    check endpoints, which provide minimal validation of criteria, such as “PHP is
+    running and serving my API.”
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果活跃探针失败，Kubelet 将终止容器。如果滥用或配置不当，活跃探针可能会导致意外故障。活跃探针的预期用例是告知 Kubelet 何时重新启动容器。然而，作为人类，我们很快学会，“出了问题就重启”是一种危险的策略。例如，假设我们创建一个活跃探针，加载我们
+    Web 应用的主页。进一步假设系统中的某些变化（超出容器代码范围）导致主页返回 404 或 500 错误。这种情况有很多频繁的原因，如后端数据库故障、必需服务故障或功能标志更改导致的错误。在这些情况中，活跃探针将重新启动容器。最好的情况下，这将毫无帮助；重新启动容器不能解决系统其他地方的问题，并且可能会迅速恶化问题。Kubernetes
+    拥有容器重启退避（`CrashLoopBackoff`），会在重新启动失败的容器时添加递增的延迟。如果 Pod 数量足够多或故障发生足够迅速，应用可能会从首页错误变成完全不可用。根据应用程序，Pod
+    在重新启动时可能也会丢失缓存数据；在假设的恶化期间可能会很费力或无法获取。因此，谨慎使用活跃探针。当 Pod 使用它们时，它们仅依赖于它们正在测试的容器，没有其他依赖性。许多工程师具有特定的健康检查端点，这些端点提供最小的验证标准，如“PHP
+    正在运行并提供我的 API”。
+- en: A startup probe can provide a grace period before a liveness probe can take
+    effect. Liveness probes will not terminate a container before the startup probe
+    has succeeded. An example use case is to allow a container to take many minutes
+    to start, but to terminate a container quickly if it becomes unhealthy after starting.
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 启动探针可以在活跃探针生效之前提供宽限期。在启动探针成功之前，活跃探针不会终止容器。一个示例用例是允许容器启动需要多分钟，但如果启动后变得不健康，则快速终止容器。
+- en: In [Example 4-1](#kubernetes_podsec_for_golang_minimal_webs_server), our Golang
+    web server has a liveness probe that performs an HTTP GET on port 8080 to the
+    path `/healthz`, while the readiness probe uses `/` on the same port.
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 [示例 4-1](#kubernetes_podsec_for_golang_minimal_webs_server) 中，我们的 Golang Web
+    服务器具有一个活跃探针，在端口 8080 上对路径 `/healthz` 执行 HTTP GET，而就绪探针使用相同端口上的 `/`。
+- en: Example 4-1\. Kubernetes podspec for Golang minimal webserver
+  id: totrans-112
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 4-1\. Golang 极简 Web 服务器的 Kubernetes PodSpec
+- en: '[PRE2]'
+  id: totrans-113
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: This status does not affect the pod itself, but other Kubernetes mechanisms
+    react to it. One key example is ReplicaSets (and, by extension, deployments).
+    A failing readiness probe causes the ReplicaSet controller to count the pod as
+    unready, giving rise to a halted deployment when too many new pods are unhealthy.
+    The `Endpoints`/`EndpointsSlice` controllers also react to failing readiness probes.
+    If a pod’s readiness probe fails, the pod’s IP address will not be in the endpoint
+    object, and the service will not route traffic to it. We will discuss services
+    and endpoints more in the next chapter.
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此状态不影响Pod本身，但其他Kubernetes机制对其做出反应。一个关键示例是ReplicaSets（以及由此延伸的部署）。如果就绪探针失败，ReplicaSet控制器将计算Pod为未就绪，当太多新的Pod不健康时导致部署停止。`Endpoints`/`EndpointsSlice`控制器也会对就绪探针失败做出反应。如果Pod的就绪探针失败，Pod的IP地址将不在端点对象中，并且服务将不会将流量路由到它。我们将在下一章节更详细地讨论服务和端点。
+- en: The `startupProbe` will inform the Kubelet whether the application inside the
+    container is started. This probe takes precedent over the others. If a `startupProbe`
+    is defined in the pod spec, all other probes are disabled. Once the `startupProbe`
+    succeeds, the Kubelet will begin running the other probes. But if the startup
+    probe fails, the Kubelet kills the container, and the container executes its restart
+    policy. Like the others, if a `startupProbe` does not exist, the default state
+    is success.
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`startupProbe`会告知Kubelet容器内的应用程序是否已启动。此探针优先于其他探针。如果Pod规范中定义了`startupProbe`，则会禁用所有其他探针。一旦`startupProbe`成功，Kubelet将开始运行其他探针。但是如果启动探针失败，Kubelet会终止容器，并根据重启策略执行容器。与其他探针一样，如果不存在`startupProbe`，默认状态为成功。'
+- en: 'Probe configurable options:'
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 探测配置选项：
+- en: initialDelaySeconds
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 初始延迟秒数
+- en: Amount of seconds after the container starts before liveness or readiness probes
+    are initiated. Default 0; Minimum 0.
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器启动后多少秒开始执行存活或就绪探针。默认为0；最小为0。
+- en: periodSeconds
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 周期秒数
+- en: How often probes are performed. Default 10; Minimum 1.
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 探测频率。默认为10；最小为1。
+- en: timeoutSeconds
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 超时秒数
+- en: Number of seconds after which the probe times out. Default 1; Minimum 1.
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 多少秒后探针超时。默认为1；最小为1。
+- en: successThreshold
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 成功阈值
+- en: Minimum consecutive successes for the probe to be successful after failing.
+    Default 1; must be 1 for liveness and startup probes; Minimum 1.
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 探测失败后必须连续成功的最小次数。默认为1；存活探针和启动探针必须为1；最小为1。
+- en: failureThreshold
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 失败阈值
+- en: When a probe fails, Kubernetes will try this many times before giving up. Giving
+    up in the case of the liveness probe means the container will restart. For readiness
+    probe, the pod will be marked Unready. Default 3; Minimum 1.
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当探针失败时，Kubernetes将尝试此次数后放弃。对于存活探针，放弃意味着容器将重新启动。对于就绪探针，Pod将标记为未就绪。默认为3；最小为1。
+- en: Application developers can also use readiness gates to help determine when the
+    application inside the pod is ready. Available and stable since Kubernetes 1.14,
+    to use readiness gates, manifest writers will add `readiness gates` in the pod’s
+    spec to specify a list of additional conditions that the Kubelet evaluates for
+    pod readiness. That is done in the `ConditionType` attribute of the readiness
+    gates in the pod spec. The `ConditionType` is a condition in the pod’s condition
+    list with a matching type. Readiness gates are controlled by the current state
+    of `status.condition` fields for the pod, and if the Kubelet cannot find such
+    a condition in the `status.conditions` field of a pod, the status of the condition
+    is defaulted to False.
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用开发者还可以使用就绪门来帮助确定Pod内部应用程序何时准备就绪。自Kubernetes 1.14以来可用且稳定，要使用就绪门，清单编写者将在Pod规范中添加`就绪门`，以指定Kubelet用于Pod准备就绪的额外条件列表。这是在就绪门的`ConditionType`属性中完成的。`ConditionType`是Pod条件列表中具有匹配类型的条件。就绪门由Pod的`status.condition`字段的当前状态控制，如果Kubelet在Pod的`status.conditions`字段中找不到这样的条件，则条件的状态默认为False。
+- en: 'As you can see in the following example, the `feature-Y` readiness gate is
+    true, while `feature-X` is false, so the pod’s status is ultimately false:'
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如您在以下示例中所看到的，`feature-Y`就绪门为true，而`feature-X`为false，因此Pod的状态最终为false：
+- en: '[PRE3]'
+  id: totrans-129
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: Load balancers like the AWS ALB can use the readiness gate as part of the pod
+    life cycle before sending traffic to it.
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 负载均衡器（如AWS ALB）可以在发送流量之前使用就绪探针作为Pod生命周期的一部分。
+- en: 'The Kubelet must be able to connect to the Kubernetes API server. In [Figure 4-5](#cluster-data-flow),
+    we can see all the connections made by all the components in a cluster:'
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubelet 必须能够连接到 Kubernetes API 服务器。在 [图 4-5](#cluster-data-flow) 中，我们可以看到集群中所有组件进行的连接：
+- en: CNI
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CNI
+- en: Network plugin in Kubelet that enables networking to get IPs for pods and services.
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubelet 中的网络插件，用于为 pod 和服务获取 IP。
+- en: gRPC
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: gRPC
+- en: API to communicate from the API server to `etcd`.
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从 API 服务器到 `etcd` 的通信 API。
+- en: Kubelet
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubelet
+- en: All Kubernetes nodes have a Kubelet that ensures that any pod assigned to it
+    are running and configured in the desired state.
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有 Kubernetes 节点都有一个 Kubelet，确保任何分配给它的 pod 都在运行并配置为所需状态。
+- en: CRI
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CRI
+- en: The gRPC API compiled in Kubelet, allowing Kubelet to talk to container runtimes
+    using gRPC API. The container runtime provider must adapt it to the CRI API to
+    allow Kubelet to talk to containers using the OCI Standard (runC). CRI consists
+    of protocol buffers and gRPC API and libraries.
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubelet 中编译的 gRPC API，允许 Kubelet 使用 gRPC API 与容器运行时进行通信。容器运行时提供者必须将其适配到 CRI
+    API，以允许 Kubelet 使用 OCI 标准（runC）与容器进行通信。CRI 包括协议缓冲区和 gRPC API 和库。
+- en: '![neku 0405](Images/neku_0405.png)'
+  id: totrans-140
+  prefs: []
+  type: TYPE_IMG
+  zh: '![neku 0405](Images/neku_0405.png)'
+- en: Figure 4-5\. Cluster data flow between components
+  id: totrans-141
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 4-5\. 组件之间的集群数据流
+- en: Communication between the pods and the Kubelet is made possible by the CNI.
+    In our next section, we will discuss the CNI specification with examples from
+    several popular CNI projects.
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: pod 和 Kubelet 之间的通信是通过 CNI 可能的。在下一节中，我们将通过几个流行的 CNI 项目的示例讨论 CNI 规范。
+- en: The CNI Specification
+  id: totrans-143
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: CNI 规范
+- en: 'The CNI specification itself is quite simple. According to the specification,
+    there are four operations that a CNI plugin must support:'
+  id: totrans-144
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CNI 规范本身非常简单。根据规范，CNI 插件必须支持四种操作：
+- en: ADD
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ADD
+- en: Add a container to the network.
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将容器添加到网络中。
+- en: DEL
+  id: totrans-147
+  prefs: []
+  type: TYPE_NORMAL
+  zh: DEL
+- en: Delete a container from the network.
+  id: totrans-148
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从网络中删除容器。
+- en: CHECK
+  id: totrans-149
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CHECK
+- en: Return an error if there is a problem with the container’s network.
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果容器的网络出现问题，则返回错误。
+- en: VERSION
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: VERSION
+- en: Report version information about the plugin.
+  id: totrans-152
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 报告关于插件的版本信息。
+- en: Tip
+  id: totrans-153
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: Tip
+- en: The full CNI spec is available on [GitHub](https://oreil.ly/1uYWl).
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 完整的 CNI 规范可以在 [GitHub](https://oreil.ly/1uYWl) 上找到。
+- en: In [Figure 4-6](#cni-configuration), we can see how Kubernetes (or the *runtime*,
+    as the CNI project refers to container orchestrators) invokes CNI plugin operations
+    by executing binaries. Kubernetes supplies any configuration for the command in
+    JSON to `stdin` and receives the command’s output in JSON through `stdout`. CNI
+    plugins frequently have very simple binaries, which act as a wrapper for Kubernetes
+    to call, while the binary makes an HTTP or RPC API call to a persistent backend.
+    CNI maintainers have discussed changing this to an HTTP or RPC model, based on
+    performance issues when frequently launching Windows processes.
+  id: totrans-155
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 [图 4-6](#cni-configuration) 中，我们可以看到 Kubernetes（或作为 CNI 项目指向容器编排器的 *runtime*）如何通过执行二进制文件调用
+    CNI 插件操作。Kubernetes 通过 `stdin` 向命令提供任何配置，并通过 `stdout` 接收命令的输出。CNI 插件通常具有非常简单的二进制文件，这些文件作为
+    Kubernetes 调用的包装器，而二进制文件通过 HTTP 或 RPC API 调用持久后端。CNI 维护者已讨论过在频繁启动 Windows 进程时基于性能问题将其更改为
+    HTTP 或 RPC 模型。
+- en: Kubernetes uses only one CNI plugin at a time, though the CNI specification
+    allows for multiplugin setups (i.e., assigning multiple IP addresses to a container).
+    Multus is a CNI plugin that works around this limitation in Kubernetes by acting
+    as a fan-out to multiple CNI plugins.
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 每次只使用一个 CNI 插件，尽管 CNI 规范允许多插件设置（即为容器分配多个 IP 地址）。Multus 是一个 CNI 插件，通过作为多个
+    CNI 插件的扇出器，绕过 Kubernetes 中的此限制。
+- en: Note
+  id: totrans-157
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: Note
+- en: At the time of writing, the CNI spec is at version 0.4\. It has not changed
+    drastically over the years and appears unlikely to change in the future—maintainers
+    of the specification plan to release version 1.0 soon.
+  id: totrans-158
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 截至撰写本文时，CNI 规范版本为 0.4\. 多年来并未有大幅变化，并且未来看起来也不太可能发生变化——规范的维护者计划很快发布 1.0 版本。
+- en: '![cni-config](Images/neku_0406.png)'
+  id: totrans-159
+  prefs: []
+  type: TYPE_IMG
+  zh: '![cni-config](Images/neku_0406.png)'
+- en: Figure 4-6\. CNI configuration
+  id: totrans-160
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 4-6\. CNI 配置
+- en: CNI Plugins
+  id: totrans-161
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: CNI 插件
+- en: 'The CNI plugin has two primary responsibilities: allocate and assign unique
+    IP addresses for pods and ensure that routes exist within Kubernetes to each pod
+    IP address. These responsibilities mean that the overarching network that the
+    cluster resides in dictates CNI plugin behavior. For example, if there are too
+    few IP addresses or it is not possible to attach sufficient IP addresses to a
+    node, cluster admins will need to use a CNI plugin that supports an overlay network.
+    The hardware stack, or cloud provider used, typically dictates which CNI options
+    are suitable. [Chapter 6](ch06.xhtml#kubernetes_and_cloud_networking) will talk
+    about the major cloud platforms and how the network design impacts CNI choice.'
+  id: totrans-162
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CNI 插件有两个主要责任：为 Pod 分配唯一的 IP 地址并确保在 Kubernetes 中存在到每个 Pod IP 地址的路由。这些责任意味着集群所在的主要网络决定了
+    CNI 插件的行为。例如，如果 IP 地址太少或无法将足够的 IP 地址附加到节点上，则集群管理员将需要使用支持覆盖网络的 CNI 插件。硬件堆栈或所使用的云提供商通常决定了哪些
+    CNI 选项适合使用。[第 6 章](ch06.xhtml#kubernetes_and_cloud_networking)将讨论主要云平台及其网络设计如何影响
+    CNI 的选择。
+- en: To use the CNI, add `--network-plugin=cni` to the Kubelet’s startup arguments.
+    By default, the Kubelet reads CNI configuration from the directory `/etc/cni/net.d/`
+    and expects to find the CNI binary in `/opt/cni/bin/`. Admins can override the
+    configuration location with `--cni-config-dir=<directory>`, and the CNI binary
+    directory with `--cni-bin-dir=<directory>`.
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要使用 CNI，请在 Kubelet 的启动参数中添加 `--network-plugin=cni`。默认情况下，Kubelet 从目录 `/etc/cni/net.d/`
+    读取 CNI 配置，并期望在 `/opt/cni/bin/` 中找到 CNI 二进制文件。管理员可以使用 `--cni-config-dir=<directory>`
+    覆盖配置位置，使用 `--cni-bin-dir=<directory>` 覆盖 CNI 二进制文件目录。
+- en: Note
+  id: totrans-164
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Managed Kubernetes offerings, and many “distros” of Kubernetes, come with a
+    CNI preconfigured.
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 托管的 Kubernetes 提供和许多 Kubernetes 的“发行版”都预配置了 CNI。
+- en: 'There are two broad categories of CNI network models: flat networks and overlay
+    networks. In a flat network, the CNI driver uses IP addresses from the cluster’s
+    network, which typically requires many IP addresses to be available to the cluster.
+    In an overlay network, the CNI driver creates a secondary network within Kubernetes,
+    which uses the cluster’s network (called the *underlay network*) to send packets.
+    Overlay networks create a virtual network within the cluster. In an overlay network,
+    the CNI plugin encapsulates packets. We discussed overlays in greater detail in
+    [Chapter 3](ch03.xhtml#container_networking_basics). Overlay networks add substantial
+    complexity and do not allow hosts on the cluster network to connect directly to
+    pods. However, overlay networks allow the cluster network to be much smaller,
+    as only the nodes must be assigned IP addresses on that network.'
+  id: totrans-166
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CNI 网络模型有两大类：平面网络和覆盖网络。在平面网络中，CNI 驱动程序使用集群网络的 IP 地址，通常需要集群中有很多 IP 地址可用。在覆盖网络中，CNI
+    驱动程序在 Kubernetes 内部创建一个次要网络，该网络使用集群网络（称为*底层网络*）发送数据包。覆盖网络在集群内创建虚拟网络。在覆盖网络中，CNI
+    插件封装数据包。我们在[第 3 章](ch03.xhtml#container_networking_basics)中详细讨论了覆盖网络。覆盖网络增加了相当多的复杂性，不允许集群网络上的主机直接连接到
+    Pod。但是，覆盖网络允许集群网络更小，因为只需为节点分配 IP 地址。
+- en: CNI plugins also typically need a way to communicate state between nodes. Plugins
+    take very different approaches, such as storing data in the Kubernetes API, in
+    a dedicated database.
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CNI 插件通常也需要一种方式在节点之间传递状态。插件采取不同的方法，例如将数据存储在 Kubernetes API 中或专用数据库中。
+- en: The CNI plugin is also responsible for calling IPAM plugins for IP addressing.
+  id: totrans-168
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CNI 插件还负责调用 IPAM 插件进行 IP 地址分配。
+- en: The IPAM Interface
+  id: totrans-169
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: IPAM 接口
+- en: 'The CNI spec has a second interface, the IP Address Management (IPAM) interface,
+    to reduce duplication of IP allocation code in CNI plugins. The IPAM plugin must
+    determine and output the interface IP address, gateway, and routes, as shown in
+    [Example 4-2](#example_ipam_plugin_output_from_the_cni_04_specification_docs).
+    The IPAM interface is similar to the CNI: a binary with JSON input to `stdin`
+    and JSON output from `stdout`.'
+  id: totrans-170
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CNI 规范还有第二个接口，即 IP 地址管理（IPAM）接口，以减少在 CNI 插件中 IP 分配代码的重复。IPAM 插件必须确定并输出接口 IP
+    地址、网关和路由，如[示例 4-2](#example_ipam_plugin_output_from_the_cni_04_specification_docs)所示。IPAM
+    接口与 CNI 类似：它是一个二进制文件，通过标准输入接收 JSON 输入，并通过标准输出返回 JSON 输出。
+- en: Example 4-2\. Example IPAM plugin output, from the CNI 0.4 specification docs
+  id: totrans-171
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 4-2\. CNI 0.4 规范文档中的 IPAM 插件输出示例
+- en: '[PRE4]'
+  id: totrans-172
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: Now we will review several of the options available for cluster administrators
+    to choose from when deploying a CNI.
+  id: totrans-173
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当部署 CNI 时，现在我们将回顾集群管理员可供选择的几个选项。
+- en: Popular CNI Plugins
+  id: totrans-174
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 热门的 CNI 插件
+- en: Cilium is open source software for transparently securing network connectivity
+    between application containers. Cilium is an L7/HTTP-aware CNI and can enforce
+    network policies on L3–L7 using an identity-based security model decoupled from
+    the network addressing. The Linux technology eBPF, which we discussed in [Chapter 2](ch02.xhtml#linux_networking),
+    is what powers Cilium. Later in this chapter, we will do a deep dive into `NetworkPolicy`
+    objects; for now know that they are effectively pod-level firewalls.
+  id: totrans-175
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Cilium是一种开源软件，用于在应用程序容器之间透明地保护网络连接。Cilium是一个L7/HTTP感知的CNI，可以使用基于身份的安全模型在L3-L7上执行网络策略，与网络寻址分离。我们在[第2章](ch02.xhtml#linux_networking)中讨论的Linux技术eBPF是Cilium的动力来源。本章稍后我们将深入探讨`NetworkPolicy`对象；现在只需知道它们实际上是面向Pod的防火墙。
+- en: Flannel focuses on the network and is a simple and easy way to configure a layer
+    3 network fabric designed for Kubernetes. If a cluster requires functionalities
+    like network policies, an admin must deploy other CNIs, such as Calico. Flannel
+    uses the Kubernetes cluster’s existing `etcd` to store its state information to
+    avoid providing a dedicated data store.
+  id: totrans-176
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Flannel专注于网络，并且是为Kubernetes设计的第3层网络结构的简单易用方式。如果集群需要网络策略等功能，管理员必须部署其他CNI，例如Calico。Flannel使用Kubernetes集群的现有`etcd`来存储其状态信息，以避免提供专用数据存储。
+- en: According to Calico, it “combines flexible networking capabilities with run-anywhere
+    security enforcement to provide a solution with native Linux kernel performance
+    and true cloud-native scalability.” Calico does not use an overlay network. Instead,
+    Calico configures a layer 3 network that uses the BGP routing protocol to route
+    packets between hosts. Calico can also integrate with Istio, a service mesh, to
+    interpret and enforce policy for workloads within the cluster at the service mesh
+    and network infrastructure layers.
+  id: totrans-177
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 根据Calico的说法，它“结合了灵活的网络功能和运行任何地方的安全执行，提供具有本地Linux内核性能和真正云原生可伸缩性的解决方案。” Calico不使用覆盖网络。相反，Calico配置一个第3层网络，使用BGP路由协议在主机之间路由数据包。Calico还可以与服务网格Istio集成，在服务网格和网络基础设施层面解释和执行工作负载的策略。
+- en: '[Table 4-2](#a_brief_overview_of_major_cni_plugins) gives a brief overview
+    of the major CNI plugins to choose from.'
+  id: totrans-178
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[表 4-2](#a_brief_overview_of_major_cni_plugins) 提供了主要CNI插件的简要概述，供选择。'
+- en: Table 4-2\. A brief overview of major CNI plugins
+  id: totrans-179
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 4-2\. 主要CNI插件的简要概述
+- en: '| Name | NetworkPolicy support | Data storage | Network setup |'
+  id: totrans-180
+  prefs: []
+  type: TYPE_TB
+  zh: '| 名称 | NetworkPolicy支持 | 数据存储 | 网络设置 |'
+- en: '| --- | --- | --- | --- |'
+  id: totrans-181
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- | --- |'
+- en: '| Cilium | Yes | etcd or consul | Ipvlan(beta), veth, L7 aware |'
+  id: totrans-182
+  prefs: []
+  type: TYPE_TB
+  zh: '| Cilium | 是 | etcd或consul | Ipvlan(beta), veth, L7感知 |'
+- en: '| Flannel | No | etcd | Layer 3 IPv4 overlay network |'
+  id: totrans-183
+  prefs: []
+  type: TYPE_TB
+  zh: '| Flannel | 否 | etcd | 第3层IPv4覆盖网络 |'
+- en: '| Calico | Yes | etcd or Kubernetes API | Layer 3 network using BGP |'
+  id: totrans-184
+  prefs: []
+  type: TYPE_TB
+  zh: '| Calico | 是 | etcd或Kubernetes API | 使用BGP的第3层网络 |'
+- en: '| Weave Net | Yes | No external cluster store | Mesh overlay network |'
+  id: totrans-185
+  prefs: []
+  type: TYPE_TB
+  zh: '| Weave Net | 是 | 没有外部集群存储 | 网格覆盖网络 |'
+- en: Note
+  id: totrans-186
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Full instructions for running KIND, Helm, and Cilium are in the book’s GitHub
+    repo.
+  id: totrans-187
+  prefs: []
+  type: TYPE_NORMAL
+  zh: KIND、Helm和Cilium的完整运行说明可在书籍的GitHub存储库中找到。
+- en: Let’s deploy Cilium for testing with our Golang web server in [Example 4-3](#kind_configuration_for_cilium_local_deploy).
+    We will need a Kubernetes cluster for deploying Cilium. One of the easiest ways
+    we have found to deploy clusters for testing locally is KIND, which stands for
+    Kubernetes in Docker. It will allow us to create a cluster with a YAML configuration
+    file and then, using Helm, deploy Cilium to that cluster.
+  id: totrans-188
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们在[示例 4-3](#kind_configuration_for_cilium_local_deploy)中使用我们的Golang Web服务器测试部署Cilium。我们将需要一个Kubernetes集群来部署Cilium。我们发现用于本地测试部署集群最简单的方法之一是KIND，它代表Kubernetes
+    in Docker。它将允许我们使用一个YAML配置文件创建一个集群，然后使用Helm将Cilium部署到该集群。
+- en: Example 4-3\. KIND configuration for Cilium local deploy
+  id: totrans-189
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 4-3\. 适用于Cilium本地部署的KIND配置
+- en: '[PRE5]'
+  id: totrans-190
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: '[![1](Images/1.png)](#co_kubernetes_networking_introduction_CO1-1)'
+  id: totrans-191
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](Images/1.png)](#co_kubernetes_networking_introduction_CO1-1)'
+- en: Specifies that we are configuring a KIND cluster
+  id: totrans-192
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 指定我们正在配置一个KIND集群
+- en: '[![2](Images/2.png)](#co_kubernetes_networking_introduction_CO1-2)'
+  id: totrans-193
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](Images/2.png)](#co_kubernetes_networking_introduction_CO1-2)'
+- en: The version of KIND’s config
+  id: totrans-194
+  prefs: []
+  type: TYPE_NORMAL
+  zh: KIND配置的版本
+- en: '[![3](Images/3.png)](#co_kubernetes_networking_introduction_CO1-3)'
+  id: totrans-195
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](Images/3.png)](#co_kubernetes_networking_introduction_CO1-3)'
+- en: The list of nodes in the cluster
+  id: totrans-196
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 集群中的节点列表
+- en: '[![4](Images/4.png)](#co_kubernetes_networking_introduction_CO1-4)'
+  id: totrans-197
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](Images/4.png)](#co_kubernetes_networking_introduction_CO1-4)'
+- en: One control plane node
+  id: totrans-198
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个控制平面节点
+- en: '[![5](Images/5.png)](#co_kubernetes_networking_introduction_CO1-5)'
+  id: totrans-199
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](Images/5.png)](#co_kubernetes_networking_introduction_CO1-5)'
+- en: Worker node 1
+  id: totrans-200
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 工作节点 1
+- en: '[![6](Images/6.png)](#co_kubernetes_networking_introduction_CO1-6)'
+  id: totrans-201
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![6](Images/6.png)](#co_kubernetes_networking_introduction_CO1-6)'
+- en: Worker node 2
+  id: totrans-202
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 工作节点 2
+- en: '[![7](Images/7.png)](#co_kubernetes_networking_introduction_CO1-7)'
+  id: totrans-203
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![7](Images/7.png)](#co_kubernetes_networking_introduction_CO1-7)'
+- en: Worker node 3
+  id: totrans-204
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 工作节点 3
+- en: '[![8](Images/8.png)](#co_kubernetes_networking_introduction_CO1-8)'
+  id: totrans-205
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![8](Images/8.png)](#co_kubernetes_networking_introduction_CO1-8)'
+- en: KIND configuration options for networking
+  id: totrans-206
+  prefs: []
+  type: TYPE_NORMAL
+  zh: KIND 网络配置选项
+- en: '[![9](Images/9.png)](#co_kubernetes_networking_introduction_CO1-9)'
+  id: totrans-207
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![9](Images/9.png)](#co_kubernetes_networking_introduction_CO1-9)'
+- en: Disables the default networking option so that we can deploy Cilium
+  id: totrans-208
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 禁用默认网络选项，以便部署 Cilium
+- en: Note
+  id: totrans-209
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Instructions for configuring a KIND cluster and more can be found in the [documentation](https://oreil.ly/12BRh).
+  id: totrans-210
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[文档](https://oreil.ly/12BRh)中可以找到配置 KIND 集群等的说明。
+- en: 'With the KIND cluster configuration YAML, we can use KIND to create that cluster
+    with the following command. If this is the first time you’re running it, it will
+    take some time to download all the Docker images for the working and control plane
+    Docker images:'
+  id: totrans-211
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 KIND 集群配置 YAML，我们可以使用以下命令使用 KIND 创建该集群。如果这是您第一次运行它，下载工作和控制平面 Docker 镜像将需要一些时间：
+- en: '[PRE6]'
+  id: totrans-212
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: '[PRE7]'
+  id: totrans-213
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: Note
+  id: totrans-214
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The cluster nodes will remain in state NotReady until Cilium deploys the network.
+    This is normal behavior for the cluster.
+  id: totrans-215
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 直到 Cilium 部署网络，集群节点将保持 NotReady 状态。这对于集群是正常行为。
+- en: 'Now that our cluster is running locally, we can begin installing Cilium using
+    Helm, a Kubernetes deployment tool. According to its documentation, Helm is the
+    preferred way to install Cilium. First, we need to add the Helm repo for Cilium.
+    Optionally, you can download the Docker images for Cilium and finally instruct
+    KIND to load the Cilium images into the cluster:'
+  id: totrans-216
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们的集群在本地运行，我们可以开始使用 Helm 安装 Cilium，这是一个 Kubernetes 部署工具。根据其文档，Helm 是安装 Cilium
+    的首选方式。首先，我们需要添加 Cilium 的 Helm 仓库。可选地，您可以下载 Cilium 的 Docker 镜像，最后指示 KIND 将 Cilium
+    镜像加载到集群中：
+- en: '[PRE8]'
+  id: totrans-217
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: 'Now that the prerequisites for Cilium are completed, we can install it in our
+    cluster with Helm. There are many configuration options for Cilium, and Helm configures
+    options with `--set NAME_VAR=VAR`:'
+  id: totrans-218
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，Cilium 的先决条件已完成，我们可以使用 Helm 在我们的集群中安装它。Cilium 有许多配置选项，Helm 使用 `--set NAME_VAR=VAR`
+    配置选项：
+- en: '[PRE9]'
+  id: totrans-219
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: 'Cilium installs several pieces in the cluster: the agent, the client, the operator,
+    and the `cilium-cni` plugin:'
+  id: totrans-220
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Cilium 在集群中安装了几个部件：代理、客户端、运营商和 `cilium-cni` 插件：
+- en: Agent
+  id: totrans-221
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 代理
+- en: The Cilium agent, `cilium-agent`, runs on each node in the cluster. The agent
+    accepts configuration through Kubernetes APIs that describe networking, service
+    load balancing, network policies, and visibility and monitoring requirements.
+  id: totrans-222
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Cilium 代理 `cilium-agent` 在集群中的每个节点上运行。代理通过 Kubernetes API 接受配置，描述网络、服务负载均衡、网络策略以及可见性和监控需求。
+- en: Client (CLI)
+  id: totrans-223
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 客户端（CLI）
+- en: The Cilium CLI client (Cilium) is a command-line tool installed along with the
+    Cilium agent. It interacts with the REST API on the same node. The CLI allows
+    developers to inspect the state and status of the local agent. It also provides
+    tooling to access the eBPF maps to validate their state directly.
+  id: totrans-224
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Cilium CLI 客户端（Cilium）是与 Cilium 代理一起安装的命令行工具。它与同一节点上的 REST API 进行交互。CLI 允许开发人员检查本地代理的状态和状态。它还提供了访问
+    eBPF 映射以直接验证其状态的工具。
+- en: Operator
+  id: totrans-225
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运营商
+- en: The operator is responsible for managing duties in the cluster, which should
+    be handled per cluster and not per node.
+  id: totrans-226
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运营商负责在集群中管理职责，应按集群而不是按节点处理。
+- en: CNI Plugin
+  id: totrans-227
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CNI 插件
+- en: The CNI plugin (`cilium-cni`) interacts with the Cilium API of the node to trigger
+    the configuration to provide networking, load balancing, and network policies
+    pods.
+  id: totrans-228
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CNI 插件 (`cilium-cni`) 与节点的 Cilium API 进行交互，触发配置以为 pods 提供网络、负载均衡和网络策略。
+- en: 'We can observe all these components being deployed in the cluster with the
+    `kubectl -n kube-system get pods --watch` command:'
+  id: totrans-229
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以通过 `kubectl -n kube-system get pods --watch` 命令在集群中观察所有这些组件的部署情况：
+- en: '[PRE10]'
+  id: totrans-230
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: 'Now that we have deployed Cilium, we can run the Cilium connectivity check
+    to ensure it is running correctly:'
+  id: totrans-231
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经部署了 Cilium，我们可以运行 Cilium 连通性检查，以确保它正常运行：
+- en: '[PRE11]'
+  id: totrans-232
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: 'The connectivity test will deploy a series of Kubernetes deployments that will
+    use various connectivity paths. Connectivity paths come with and without service
+    load balancing and in various network policy combinations. The pod name indicates
+    the connectivity variant, and the readiness and liveness gate indicates the success
+    or failure of the test:'
+  id: totrans-233
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 连通性测试将部署一系列 Kubernetes 部署，这些部署将使用各种连接路径。连接路径包括具有和不具有服务负载均衡以及各种网络策略组合。Pod 名称指示了连接变体，并且就绪性和存活性门指示了测试的成功或失败：
+- en: '[PRE12]'
+  id: totrans-234
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: Now that Cilium manages our network for the cluster, we will use it later in
+    this chapter for a `NetworkPolicy` overview. Not all CNI plugins will support
+    `NetworkPolicy`, so that is an important detail when deciding which plugin to
+    use.
+  id: totrans-235
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在 Cilium 管理我们集群的网络，我们将在本章稍后使用它来进行 `NetworkPolicy` 的概述。并非所有的 CNI 插件都支持 `NetworkPolicy`，这在选择插件时是一个重要的细节。
+- en: kube-proxy
+  id: totrans-236
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: kube-proxy
+- en: '`kube-proxy` is another per-node daemon in Kubernetes, like Kubelet. `kube-proxy`
+    provides basic load balancing functionality within the cluster. It implements
+    services and relies on `Endpoints`/`EndpointSlices`, two API objects that we will
+    discuss in detail in the next chapter on networking abstractions. It may help
+    to reference that section, but the following is the relevant and quick explanation:'
+  id: totrans-237
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kube-proxy` 是 Kubernetes 中另一个每节点的守护程序，就像 Kubelet 一样。`kube-proxy` 在集群内提供基本的负载均衡功能。它实现了服务，并依赖于
+    `Endpoints`/`EndpointSlices`，这两个我们将在下一章节关于网络抽象中详细讨论的 API 对象。可能会对该部分进行参考，但以下是相关的简要解释：'
+- en: Services define a load balancer for a set of pods.
+  id: totrans-238
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Services 定义了一组 pod 的负载均衡器。
+- en: Endpoints (and endpoint slices) list a set of ready pod IPs. They are created
+    automatically from a service, with the same pod selector as the service.
+  id: totrans-239
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Endpoints（和 endpoint slices）列出一组就绪的 pod IP 地址。它们自动从一个服务创建，并且与服务具有相同的 pod 选择器。
+- en: Most types of services have an IP address for the service, called the cluster
+    IP address, which is not routable outside the cluster. `kube-proxy` is responsible
+    for routing requests to a service’s cluster IP address to healthy pods. `kube-proxy`
+    is by far the most common implementation for Kubernetes services, but there are
+    alternatives to `kube-proxy`, such as a replacement mode Cilium. A substantial
+    amount of our content on routing in [Chapter 2](ch02.xhtml#linux_networking) is
+    applicable to `kube-proxy`, particularly when debugging service connectivity or
+    performance.
+  id: totrans-240
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大多数类型的服务都有一个服务的 IP 地址，称为集群 IP 地址，这个地址在集群外部不能路由。`kube-proxy` 负责将请求路由到服务的集群 IP
+    地址到健康的 pod。`kube-proxy` 是 Kubernetes 服务中目前最常见的实现，但是也有替代 `kube-proxy` 的选择，比如替代模式
+    Cilium。我们在 [第 2 章](ch02.xhtml#linux_networking) 中关于路由的大部分内容也适用于 `kube-proxy`，特别是在调试服务连接或性能时。
+- en: Note
+  id: totrans-241
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Cluster IP addresses are not typically routable from outside a cluster.
+  id: totrans-242
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 集群 IP 地址通常不能从集群外部路由。
+- en: '`kube-proxy` has four modes, which change its runtime mode and exact feature
+    set: `userspace`, `iptables`, `ipvs`, and `kernelspace`. You can specify the mode
+    using `--proxy-mode <mode>`. It’s worth noting that all modes rely on `iptables`
+    to some extent.'
+  id: totrans-243
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kube-proxy` 有四种模式，这些模式改变了它的运行模式和具体功能集：`userspace`、`iptables`、`ipvs` 和 `kernelspace`。你可以使用
+    `--proxy-mode <mode>` 来指定模式。值得注意的是，所有模式在某种程度上都依赖于 `iptables`。'
+- en: userspace Mode
+  id: totrans-244
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: userspace 模式
+- en: The first and oldest mode is `userspace` mode. In `userspace` mode, `kube-proxy`
+    runs a web server and routes all service IP addresses to the web server, using
+    `iptables`. The web server terminates connections and proxies the request to a
+    pod in the service’s endpoints. `userspace` mode is no longer commonly used, and
+    we suggest avoiding it unless you have a clear reason to use it.
+  id: totrans-245
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 第一个且最古老的模式是 `userspace` 模式。在 `userspace` 模式中，`kube-proxy` 运行一个 web 服务器，并将所有服务
+    IP 地址路由到该 web 服务器，使用 `iptables`。Web 服务器终止连接并代理请求到服务端点中的 pod。`userspace` 模式不再常用，我们建议除非有明确的理由，否则避免使用它。
+- en: iptables Mode
+  id: totrans-246
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: iptables 模式
+- en: '`iptables` mode uses `iptables` entirely. It is the default mode, and the most
+    commonly used (this may be in part because `IPVS` mode graduated to GA stability
+    more recently, and `iptables` is a familiar Linux technology).'
+  id: totrans-247
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`iptables` 模式完全使用 `iptables`。它是默认模式，也是最常用的（部分原因可能是 `IPVS` 模式最近才稳定并普及，而 `iptables`
+    是熟悉的 Linux 技术）。'
+- en: '`iptables` mode performs connection fan-out, instead of true load balancing.
+    In other words, `iptables` mode will route a connection to a backend pod, and
+    all requests made using that connection will go to the same pod, until the connection
+    is terminated. This is simple and has predictable behavior in ideal scenarios
+    (e.g., successive requests in the same connection will be able to benefit from
+    any local caching in backend pods). It can also be unpredictable when dealing
+    with long-lived connections, such as HTTP/2 connections (notably, HTTP/2 is the
+    transport for gRPC). Suppose you have two pods, `X` and `Y`, serving a service,
+    and you replace `X` with `Z` during a normal rolling update. The older pod `Y`
+    still has all the existing connections, plus half of the connections that needed
+    to be reestablished when pod `X` shut down, leading to substantially more traffic
+    being served by pod `Y`. There are many scenarios like this that lead to unbalanced
+    traffic.'
+  id: totrans-248
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`iptables` 模式执行连接扇出，而不是真正的负载均衡。换句话说，`iptables` 模式将一个连接路由到一个后端的 pod，所有使用该连接的请求将会发送到同一个
+    pod，直到连接终止。在理想情况下（例如，相同连接中的连续请求可以从后端 pod 的本地缓存中受益），这很简单且行为可预测。但在处理长连接时（例如 HTTP/2
+    连接，特别是 gRPC 的传输），则可能会变得不可预测。假设你有两个 pod，`X` 和 `Y`，为一个服务提供服务，而你在正常的滚动更新期间将 `X` 替换为
+    `Z`。老旧的 pod `Y` 仍然具有所有现有的连接，再加上半数需要在 pod `X` 关闭时重新建立的连接，导致 pod `Y` 承载更多的流量。类似的情况有很多，导致流量不平衡。'
+- en: 'Recall our examples in the “Practical iptables” section in [Chapter 2](ch02.xhtml#linux_networking).
+    In it, we showed that `iptables` could be configured with a list of IP addresses
+    and random routing probabilities, such that connections would be made randomly
+    between all IP addresses. Given a service that has healthy backend pods `10.0.0.1`,
+    `10.0.0.2`, `10.0.0.3`, and `10.0.0.4`, `kube-proxy` would create sequential rules
+    that route connections like so:'
+  id: totrans-249
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请回想我们在 [第二章](ch02.xhtml#linux_networking) 的“实际 iptables”部分中的示例。在其中，我们展示了 `iptables`
+    可以配置为具有 IP 地址列表和随机路由概率，使得连接随机分布在所有 IP 地址之间。给定一个有健康后端 pod `10.0.0.1`、`10.0.0.2`、`10.0.0.3`
+    和 `10.0.0.4` 的服务，`kube-proxy` 将创建顺序规则以以下方式路由连接：
+- en: 25% of connections go to `10.0.0.1`.
+  id: totrans-250
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 25% 的连接将到 `10.0.0.1`。
+- en: 33.3% of unrouted connections go to `10.0.0.2`.
+  id: totrans-251
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 33.3% 的未路由连接将到 `10.0.0.2`。
+- en: 50% of unrouted connections go to `10.0.0.3`.
+  id: totrans-252
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 50% 的未路由连接将到 `10.0.0.3`。
+- en: All unrouted connections go to `10.0.0.4`.
+  id: totrans-253
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 所有未路由的连接都会到 `10.0.0.4`。
+- en: This may seem unintuitive and leads some engineers to assume that `kube-proxy`
+    is misrouting traffic (especially because few people look at `kube-proxy` when
+    services work as expected). The crucial detail is that each routing rule happens
+    for connections that *haven’t* been routed in a prior rule. The final rule routes
+    all connections to `10.0.0.4` (because the connection has to go *somewhere*),
+    the semifinal rule has a 50% chance of routing to `10.0.0.3` as a choice of two
+    IP addresses, and so on. Routing randomness scores are always calculated as `1
+    / ${remaining number of IP addresses}`.
+  id: totrans-254
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这可能看起来不直观，并导致一些工程师认为 `kube-proxy` 在路由流量时出现问题（特别是因为当服务按预期工作时，很少有人会关注 `kube-proxy`）。关键细节在于，每个路由规则都适用于之前未路由的连接。最终的规则将所有连接路由到
+    `10.0.0.4`（因为连接必须去“某个地方”），半最终的规则有 50% 的机会将连接路由到 `10.0.0.3` 作为两个 IP 地址的选择，以此类推。路由的随机分数总是计算为
+    `1 / 剩余 IP 地址的数量`。
+- en: 'Here are the `iptables` forwarding rules for the `kube-dns` service in a cluster.
+    In our example, the `kube-dns` service’s cluster IP address is `10.96.0.10`. This
+    output has been filtered and reformatted for clarity:'
+  id: totrans-255
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是集群中 `kube-dns` 服务的 `iptables` 转发规则。在我们的示例中，`kube-dns` 服务的集群 IP 地址是 `10.96.0.10`。此输出已经经过过滤和重新格式化以便清晰查看：
+- en: '[PRE13]'
+  id: totrans-256
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: There are a pair of UDP and TCP rules for `kube-dns`. We’ll focus on the UDP
+    ones.
+  id: totrans-257
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为 `kube-dns` 设置了一对 UDP 和 TCP 规则。我们将重点关注 UDP 规则。
+- en: The first UDP rule marks any connections to the service that *aren’t* originating
+    from a pod IP address (`10.217.0.0/16` is the default pod network CIDR) for masquerading.
+  id: totrans-258
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 第一个 UDP 规则将来自于非 pod IP 地址（`10.217.0.0/16` 是默认的 pod 网络 CIDR）的服务连接标记为伪装。
+- en: 'The next UDP rule has the chain `KUBE-SVC-TCOU7JCQXEZGVUNU` as its target.
+    Let’s take a closer look:'
+  id: totrans-259
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下一个 UDP 规则以 `KUBE-SVC-TCOU7JCQXEZGVUNU` 作为其目标链条。让我们仔细看看：
+- en: '[PRE14]'
+  id: totrans-260
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: 'Here we see a chain with a 50% chance of executing, and the chain that will
+    execute otherwise. If we check the first of those chains, we see it routes to
+    `10.0.1.141`, one of our two CoreDNS pods’ IPs:'
+  id: totrans-261
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里我们看到一个有 50% 执行机会的链条，以及另一个将执行的链条。如果我们检查第一个链条，我们会看到它路由到 `10.0.1.141`，这是我们两个
+    CoreDNS pod 中的一个 IP 地址之一：
+- en: '[PRE15]'
+  id: totrans-262
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: ipvs Mode
+  id: totrans-263
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: ipvs 模式
+- en: '`ipvs` mode uses IPVS, covered in [Chapter 2](ch02.xhtml#linux_networking),
+    instead of `iptables`, for connection load balancing. `ipvs` mode supports six
+    load balancing modes, specified with `--ipvs-scheduler`:'
+  id: totrans-264
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`ipvs` 模式使用 IPVS 进行连接负载平衡，详见[第 2 章](ch02.xhtml#linux_networking)，而不是使用`iptables`。`ipvs`
+    模式支持六种负载均衡模式，可以使用`--ipvs-scheduler`指定：'
+- en: '`rr`: Round-robin'
+  id: totrans-265
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`rr`: 轮询'
+- en: '`lc`: Least connection'
+  id: totrans-266
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`lc`: 最少连接'
+- en: '`dh`: Destination hashing'
+  id: totrans-267
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`dh`: 目的哈希'
+- en: '`sh`: Source hashing'
+  id: totrans-268
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`sh`: 源哈希'
+- en: '`sed`: Shortest expected delay'
+  id: totrans-269
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`sed`: 最短预期延迟'
+- en: '`nq`: Never queue'
+  id: totrans-270
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`nq`: 永不排队'
+- en: '`Round-robin` (`rr`) is the default load balancing mode. It is the closest
+    analog to `iptables` mode’s behavior (in that connections are made fairly evenly
+    regardless of pod state), though `iptables` mode does not actually perform round-robin
+    routing.'
+  id: totrans-271
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`Round-robin` (`rr`) 是默认的负载均衡模式。它与`iptables`模式的行为最接近（即无论 Pod 状态如何，连接都会相对均匀地建立），尽管`iptables`模式实际上并不执行循环轮询路由。'
+- en: kernelspace Mode
+  id: totrans-272
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: kernelspace 模式
+- en: '`kernelspace` is the newest, Windows-only mode. It provides an alternative
+    to `userspace` mode for Kubernetes on Windows, as `iptables` and `ipvs` are specific
+    to Linux.'
+  id: totrans-273
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kernelspace` 是最新的，仅适用于 Windows 的模式。它为 Kubernetes 在 Windows 上提供了一种替代`userspace`模式的选择，因为`iptables`和`ipvs`是特定于
+    Linux 的。'
+- en: Now that we’ve covered the basics of pod-to-pod traffic in Kubernetes, let’s
+    take a look at `NetworkPolicy` and securing pod-to-pod traffic.
+  id: totrans-274
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经介绍了 Kubernetes 中 Pod 之间流量的基础知识，让我们来看看`NetworkPolicy`和保护 Pod 之间流量的方法。
+- en: NetworkPolicy
+  id: totrans-275
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: NetworkPolicy
+- en: Kubernetes’ default behavior is to allow traffic between any two pods in the
+    cluster network. This behavior is a deliberate design choice for ease of adoption
+    and flexibility of configuration, but it is highly undesirable in practice. Allowing
+    any system to make (or receive) arbitrary connections creates risk. An attacker
+    can probe systems and can potentially exploit captured credentials or find weakened
+    or missing authentication. Allowing arbitrary connections also makes it easier
+    to exfiltrate data from a system through a compromised workload. All in all, we
+    *strongly* discourage running real clusters without `NetworkPolicy`. Since all
+    pods can communicate with all other pods, we strongly recommend that application
+    owners use `NetworkPolicy` objects along with other application-layer security
+    measures, such as authentication tokens or mutual Transport Layer Security (mTLS),
+    for any network communication.
+  id: totrans-276
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 的默认行为是允许集群网络中任意两个 Pod 之间的流量。这种行为是一种有意设计的选择，以便于采纳和配置的灵活性，但在实践中却是极其不可取的。允许任何系统进行（或接收）任意连接会带来风险。攻击者可以探测系统，潜在地利用截获的凭据或找到弱化或缺失的认证机制。允许任意连接还会使得通过受损工作负载从系统中渗透数据变得更加容易。总之，我们*强烈*不建议在真实集群中运行没有`NetworkPolicy`的情况。由于所有
+    Pod 可以与所有其他 Pod 通信，我们强烈建议应用所有者使用`NetworkPolicy`对象以及其他应用层安全措施，例如认证令牌或互相认证传输层安全（mTLS），来进行任何网络通信。
+- en: '`NetworkPolicy` is a resource type in Kubernetes that contains allow-based
+    firewall rules. Users can add `NetworkPolicy` objects to restrict connections
+    to and from pods. The `NetworkPolicy` resource acts as a configuration for CNI
+    plugins, which themselves are responsible for ensuring connectivity between pods.
+    The Kubernetes API declares that `NetworkPolicy` support is optional for CNI drivers,
+    which means that some CNI drivers do not support network policies, as shown in
+    [Table 4-3](#common_cni_plugins). If a developer creates a `NetworkPolicy` when
+    using a CNI driver that does not support `NetworkPolicy` objects, it does not
+    affect the pod’s network security. Some CNI drivers, such as enterprise products
+    or company-internal CNI drivers, may introduce their equivalent of a `NetworkPolicy`.
+    Some CNI drivers may also have slightly different “interpretations” of the `NetworkPolicy`
+    spec.'
+  id: totrans-277
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`NetworkPolicy` 是 Kubernetes 中的一种资源类型，包含基于允许的防火墙规则。用户可以添加`NetworkPolicy`对象来限制与
+    Pod 的连接。`NetworkPolicy`资源作为 CNI 插件的配置，CNI 插件负责确保 Pod 之间的连接性。Kubernetes API 声明`NetworkPolicy`对于
+    CNI 驱动是可选的，这意味着一些 CNI 驱动程序不支持网络策略，如[表 4-3](#common_cni_plugins)所示。如果开发人员在使用不支持`NetworkPolicy`对象的
+    CNI 驱动程序时创建了`NetworkPolicy`，它不会影响 Pod 的网络安全性。一些 CNI 驱动程序，如企业产品或公司内部 CNI 驱动程序，可能会引入它们自己的`NetworkPolicy`等效物。一些
+    CNI 驱动程序可能也会对`NetworkPolicy`规范有稍微不同的“解释”。'
+- en: Table 4-3\. Common CNI plugins and NetworkPolicy support
+  id: totrans-278
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 4-3\. 常见 CNI 插件及其 NetworkPolicy 支持
+- en: '| CNI plugin | NetworkPolicy supported |'
+  id: totrans-279
+  prefs: []
+  type: TYPE_TB
+  zh: '| CNI 插件 | 支持 NetworkPolicy |'
+- en: '| --- | --- |'
+  id: totrans-280
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| Calico | Yes, and supports additional plugin-specific policies |'
+  id: totrans-281
+  prefs: []
+  type: TYPE_TB
+  zh: '| Calico | 是，并支持额外的插件特定策略 |'
+- en: '| Cilium | Yes, and supports additional plugin-specific policies |'
+  id: totrans-282
+  prefs: []
+  type: TYPE_TB
+  zh: '| Cilium | 是的，并支持额外的特定插件策略 |'
+- en: '| Flannel | No |'
+  id: totrans-283
+  prefs: []
+  type: TYPE_TB
+  zh: '| Flannel | 否 |'
+- en: '| Kubenet | No |'
+  id: totrans-284
+  prefs: []
+  type: TYPE_TB
+  zh: '| Kubenet | 否 |'
+- en: '[Example 4-4](#the_broad_structure_of_a_networkpolicy) details a `NetworkPolicy`
+    object, which contains a pod selector, ingress rules, and egress rules. The policy
+    will apply to all pods in the same namespace as the `NetworkPolicy` that matches
+    the selector label. This use of selector labels is consistent with other Kubernetes
+    APIs: a spec identifies pods by their labels rather than their names or parent
+    objects.'
+  id: totrans-285
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[示例 4-4](#the_broad_structure_of_a_networkpolicy) 详细介绍了一个 `NetworkPolicy` 对象，其中包含一个
+    pod 选择器、入口规则和出口规则。该策略将适用于与匹配选择器标签的 `NetworkPolicy` 同一命名空间中的所有 pods。这种选择器标签的用法与其他
+    Kubernetes API 保持一致：一个规范通过它们的标签而不是它们的名称或父对象来识别 pods。'
+- en: Example 4-4\. The broad structure of a `NetworkPolicy`
+  id: totrans-286
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 4-4\. 一个 `NetworkPolicy` 的广泛结构
+- en: '[PRE16]'
+  id: totrans-287
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: 'Before getting deep into the API, let’s walk through a simple example of creating
+    a `NetworkPolicy` to reduce the scope of access for some pods. Let’s assume we
+    have two distinct components: `demo` and `demo-DB`. As we have no existing `NetworkPolicy`
+    in [Figure 4-7](#img-unrestricted-pods), all pods can communicate with all other
+    pods (including hypothetically unrelated pods, not shown).'
+  id: totrans-288
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在深入探讨 API 之前，让我们通过创建一个简单的示例来演示如何创建一个 `NetworkPolicy` 来减少某些 pods 的访问范围。假设我们有两个不同的组件：`demo`
+    和 `demo-DB`。在 [图 4-7](#img-unrestricted-pods) 中，因为没有现有的 `NetworkPolicy`，所有 pods
+    可以与所有其他 pods 通信（包括假设的无关 pods，未显示）。
+- en: '![neku 0407](Images/neku_0407.png)'
+  id: totrans-289
+  prefs: []
+  type: TYPE_IMG
+  zh: '![neku 0407](Images/neku_0407.png)'
+- en: Figure 4-7\. Pods without `NetworkPolicy` objects
+  id: totrans-290
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 4-7\. 没有 `NetworkPolicy` 对象的 Pods
+- en: 'Let’s restrict `demo-DB`’s access level. If we create the following `NetworkPolicy`
+    that selects `demo-DB` pods, `demo-DB` pods will be unable to send or receive
+    any traffic:'
+  id: totrans-291
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们限制 `demo-DB` 的访问级别。如果我们创建以下选择 `demo-DB` pods 的 `NetworkPolicy`，`demo-DB`
+    pods 将无法发送或接收任何流量：
+- en: '[PRE17]'
+  id: totrans-292
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: In [Figure 4-8](#img-demodb-pods-no-traffic), we can now see that pods with
+    the label `app=demo` can no longer create or receive connections.
+  id: totrans-293
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 [图 4-8](#img-demodb-pods-no-traffic) 中，我们现在可以看到标有 `app=demo` 的 pods 不再能够创建或接收连接。
+- en: '![neku 0408](Images/neku_0408.png)'
+  id: totrans-294
+  prefs: []
+  type: TYPE_IMG
+  zh: '![neku 0408](Images/neku_0408.png)'
+- en: Figure 4-8\. Pods with the app:demo-db label cannot receive or send traffic
+  id: totrans-295
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 4-8\. 标有 app:demo-db 标签的 Pods 无法接收或发送流量
+- en: 'Having no network access is undesirable for most workloads, including our example
+    database. Our `demo-db` should (only) be able to receive connections from `demo`
+    pods. To do that, we must add an ingress rule to the `NetworkPolicy`:'
+  id: totrans-296
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对大多数工作负载来说，没有网络访问是不理想的，包括我们的示例数据库。我们的 `demo-db` 应该（仅）能够从 `demo` pods 接收连接。为此，我们必须向
+    `NetworkPolicy` 添加一个入口规则：
+- en: '[PRE18]'
+  id: totrans-297
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: Now `demo-db` pods can receive connections only from `demo` pods. Moreover,
+    `demo-db` pods cannot make connections (as shown in [Figure 4-9](#img-demodb-pods-no-traffic-2)).
+  id: totrans-298
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在 `demo-db` pods 只能从 `demo` pods 接收连接。此外，`demo-db` pods 不能创建连接（如 [图 4-9](#img-demodb-pods-no-traffic-2)
+    所示）。
+- en: '![neku 0409](Images/neku_0409.png)'
+  id: totrans-299
+  prefs: []
+  type: TYPE_IMG
+  zh: '![neku 0409](Images/neku_0409.png)'
+- en: Figure 4-9\. Pods with the app:demo-db label cannot create connections, and
+    they can only receive connections from the app:demo pods
+  id: totrans-300
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 4-9\. 标有 app:demo-db 标签的 Pods 无法创建连接，它们只能接收来自 app:demo pods 的连接
+- en: Warning
+  id: totrans-301
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: 'If users can unwittingly or maliciously change labels, they can change how
+    `NetworkPolicy` objects apply to all pods. In our prior example, if an attacker
+    was able to edit the `app: demo-DB` label on a pod in that same namespace, the
+    `NetworkPolicy` that we created would no longer apply to that pod. Similarly,
+    an attacker could gain access from another pod in that namespace if they could
+    add the label `app: demo` to their compromised pod.'
+  id: totrans-302
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '如果用户无意或恶意更改标签，他们可以改变 `NetworkPolicy` 对象应用于所有 pods 的方式。在我们之前的示例中，如果攻击者能够在同一命名空间中的某个
+    pod 上编辑 `app: demo-DB` 标签，那么我们创建的 `NetworkPolicy` 将不再适用于该 pod。类似地，如果攻击者能够在同一命名空间中的另一个
+    pod 上添加标签 `app: demo`，他们可以从受损的 pod 获得访问权限。'
+- en: The previous example is just an example; with Cilium we can create these `NetworkPolicy`
+    objects for our Golang web server.
+  id: totrans-303
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 先前的示例只是一个示例；使用 Cilium，我们可以为我们的 Golang web 服务器创建这些 `NetworkPolicy` 对象。
+- en: NetworkPolicy Example with Cilium
+  id: totrans-304
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用 Cilium 的 NetworkPolicy 示例
+- en: 'Our Golang web server now connects to a Postgres database with no TLS. Also,
+    with no `NetworkPolicy` objects in place, any pod on the network can sniff traffic
+    between the Golang web server and the database, which is a potential security
+    risk. The following is going to deploy our Golang web application and its database
+    and then deploy `NetworkPolicy` objects that will only allow connectivity to the
+    database from the web server. Using the same KIND cluster from the Cilium install,
+    let’s deploy the Postgres database with the following `YAML` and `kubectl` commands:'
+  id: totrans-305
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们的 Golang Web 服务器现在连接到一个没有 TLS 的 Postgres 数据库。此外，在没有 `NetworkPolicy` 对象的情况下，网络上的任何
+    pod 都可以嗅探 Golang Web 服务器与数据库之间的流量，这是一个潜在的安全风险。接下来将部署我们的 Golang Web 应用程序及其数据库，然后部署
+    `NetworkPolicy` 对象，只允许从 Web 服务器连接到数据库。使用与 Cilium 安装相同的 KIND 集群，让我们使用以下的 `YAML`
+    和 `kubectl` 命令来部署 Postgres 数据库：
+- en: '[PRE19]'
+  id: totrans-306
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: 'Here we deploy our web server as a Kubernetes deployment to our KIND cluster:'
+  id: totrans-307
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这里，我们将我们的 Web 服务器部署为 Kubernetes 部署到我们的 KIND 集群中：
+- en: '[PRE20]'
+  id: totrans-308
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: 'To run connectivity tests inside the cluster network, we will deploy and use
+    a `dnsutils` pod that has basic networking tools like `ping` and `curl`:'
+  id: totrans-309
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了在集群网络内运行连通性测试，我们将部署并使用一个具有基本网络工具如 `ping` 和 `curl` 的 `dnsutils` pod：
+- en: '[PRE21]'
+  id: totrans-310
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: 'Since we are not deploying a service with an ingress, we can use `kubectl port-forward`
+    to test connectivity to our web server:'
+  id: totrans-311
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于我们没有部署具有入口的服务，我们可以使用 `kubectl port-forward` 来测试连接到我们的 Web 服务器的连通性：
+- en: '[PRE22]'
+  id: totrans-312
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: Note
+  id: totrans-313
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: More information about `kubectl port-forward` can be found in the [documentation](https://oreil.ly/Ac6jk).
+  id: totrans-314
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 关于 `kubectl port-forward` 的更多信息可以在 [文档](https://oreil.ly/Ac6jk) 中找到。
+- en: 'Now from our local terminal, we can reach our API:'
+  id: totrans-315
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在从我们的本地终端，我们可以访问我们的 API：
+- en: '[PRE23]'
+  id: totrans-316
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: 'Let’s test connectivity to our web server inside the cluster from other pods.
+    To do that, we need to get the IP address of our web server pod:'
+  id: totrans-317
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们测试从其他 pod 内部连接到我们集群中的 Web 服务器的连通性。为此，我们需要获取我们 Web 服务器 pod 的 IP 地址：
+- en: '[PRE24]'
+  id: totrans-318
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: 'Now we can test L4 and L7 connectivity to the web server from the `dnsutils`
+    pod:'
+  id: totrans-319
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们可以从 `dnsutils` pod 测试到 Web 服务器的 L4 和 L7 连通性：
+- en: '[PRE25]'
+  id: totrans-320
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE25]'
+- en: 'From our `dnsutils`, we can test the layer 7 HTTP API access:'
+  id: totrans-321
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从我们的 `dnsutils` 中，我们可以测试层 7 的 HTTP API 访问：
+- en: '[PRE26]'
+  id: totrans-322
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE26]'
+- en: 'We can also test this on the database pod. First, we have to retrieve the IP
+    address of the database pod, `10.244.2.189`. We can use `kubectl` with a combination
+    of labels and options to get this information:'
+  id: totrans-323
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们也可以在数据库 pod 上进行测试。首先，我们必须获取数据库 pod 的 IP 地址，`10.244.2.189`。我们可以使用 `kubectl`
+    结合标签和选项来获取这些信息：
+- en: '[PRE27]'
+  id: totrans-324
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE27]'
+- en: 'Again, let’s use `dnsutils` pod to test connectivity to the Postgres database
+    over its default port 5432:'
+  id: totrans-325
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 再次使用 `dnsutils` pod 来测试通过默认端口 5432 连接到 Postgres 数据库的连通性：
+- en: '[PRE28]'
+  id: totrans-326
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE28]'
+- en: 'The port is open for all to use since no network policies are in place. Now
+    let’s restrict this with a Cilium network policy. The following commands deploy
+    the network policies so that we can test the secure network connectivity. Let’s
+    first restrict access to the database pod to only the web server. Apply the network
+    policy that only allows traffic from the web server pod to the database:'
+  id: totrans-327
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于没有设置网络策略，所有人都可以使用这个端口。现在让我们用 Cilium 网络策略来限制这一点。以下命令将部署网络策略，以便测试安全的网络连接。首先，限制对数据库
+    pod 的访问，只允许来自 Web 服务器的流量。应用只允许从 Web 服务器 pod 到数据库的网络策略：
+- en: '[PRE29]'
+  id: totrans-328
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE29]'
+- en: 'The Cilium deploy of Cilium objects creates resources that can be retrieved
+    just like pods with `kubectl`. With `kubectl describe ciliumnetworkpolicies.cilium.io
+    l3-rule-app-to-db`, we can see all the information about the rule deployed via
+    the YAML:'
+  id: totrans-329
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Cilium 对象的 Cilium 部署创建的资源可以像使用 `kubectl` 获取 pod 一样检索。通过 `kubectl describe ciliumnetworkpolicies.cilium.io
+    l3-rule-app-to-db`，我们可以看到通过 YAML 部署的规则的所有信息：
+- en: '[PRE30]'
+  id: totrans-330
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE30]'
+- en: 'With the network policy applied, the `dnsutils` pod can no longer reach the
+    database pod; we can see this in the timeout trying to reach the DB port from
+    the `dnsutils` pods:'
+  id: totrans-331
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用了网络策略后，`dnsutils` pod 无法再访问数据库 pod；我们可以从 `dnsutils` pod 尝试连接到 DB 端口的超时中看到这一点：
+- en: '[PRE31]'
+  id: totrans-332
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE31]'
+- en: 'While the web server pod is still connected to the database pod, the `/data`
+    route connects the web server to the database and the `NetworkPolicy` allows it:'
+  id: totrans-333
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然 Web 服务器 pod 仍然连接到数据库 pod，但 `/data` 路由将 Web 服务器连接到数据库，并且 `NetworkPolicy` 允许这样做：
+- en: '[PRE32]'
+  id: totrans-334
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE32]'
+- en: 'Now let’s apply the layer 7 policy. Cilium is layer 7 aware so that we can
+    block or allow a specific request on the HTTP URI paths. In our example policy,
+    we allow HTTP GETs on `/` and `/data` but do not allow them on `/healthz`; let’s
+    test that:'
+  id: totrans-335
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在让我们应用层 7 策略。Cilium 是层 7 感知的，所以我们可以阻止或允许特定的 HTTP URI 路径请求。在我们的示例策略中，我们允许 `/`
+    和 `/data` 上的 HTTP GET 请求，但不允许 `/healthz` 上的请求；让我们测试一下：
+- en: '[PRE33]'
+  id: totrans-336
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE33]'
+- en: 'We can see the policy applied just like any other Kubernetes objects in the
+    API:'
+  id: totrans-337
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以看到策略像 Kubernetes API 中的其他对象一样应用：
+- en: '[PRE34]'
+  id: totrans-338
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE34]'
+- en: 'As we can see, `/` and `/data` are available but not `/healthz`, precisely
+    what we expect from the `NetworkPolicy`:'
+  id: totrans-339
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如我们所见，`/` 和 `/data` 可用，但 `/healthz` 不可用，这正是我们从 `NetworkPolicy` 中期望的。
+- en: '[PRE35]'
+  id: totrans-340
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE35]'
+- en: These small examples show how powerful the Cilium network policies can enforce
+    network security inside the cluster. We highly recommend that administrators select
+    a CNI that supports network policies and enforce developers’ use of network policies.
+    Network policies are namespaced, and if teams have similar setups, cluster administrators
+    can and should enforce that developers define network policies for added security.
+  id: totrans-341
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些小例子展示了 Cilium 网络策略如何在集群内强制执行网络安全。我们强烈建议管理员选择支持网络策略并强制开发人员使用网络策略的 CNI。网络策略是命名空间的，如果团队有类似的设置，集群管理员可以并且应该强制开发人员为增加安全性定义网络策略。
+- en: We used two aspects of the Kubernetes API, labels and selectors; in our next
+    section, we will provide more examples of how they are used inside a cluster.
+  id: totrans-342
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们使用了 Kubernetes API 的两个方面，标签和选择器；在下一节中，我们将提供更多关于它们如何在集群内使用的示例。
+- en: Selecting Pods
+  id: totrans-343
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 选择 Pods
+- en: Pods are unrestricted until they are *selected* by a `NetworkPolicy`. If selected,
+    the CNI plugin allows pod ingress or egress only when a matching rule allows it.
+    A `NetworkPolicy` has a `spec.policyTypes` field containing a list of policy types
+    (ingress or egress). For example, if we select a pod with a `NetworkPolicy` that
+    has ingress listed but not egress, then ingress will be restricted, and egress
+    will not.
+  id: totrans-344
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 直到被 `NetworkPolicy` *选中*，Pods 是不受限制的。如果选中，则 CNI 插件仅在匹配规则允许的情况下允许 Pod 的入口或出口。`NetworkPolicy`
+    包含一个 `spec.policyTypes` 字段，其中包含策略类型（入口或出口）的列表。例如，如果我们选择一个具有列出入口但没有列出出口的 `NetworkPolicy`
+    的 Pod，则将限制入口而不限制出口。
+- en: 'The `spec.podSelector` field will dictate which pods to apply the `NetworkPolicy`
+    to. An empty `label selector.` (`podSelector: {}`) will select all pods in the
+    namespace. We will discuss label selectors in more detail shortly.'
+  id: totrans-345
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`spec.podSelector` 字段将决定将 `NetworkPolicy` 应用于哪些 Pod。一个空的 `label selector` (`podSelector:
+    {}`) 将选择命名空间中的所有 Pod。我们将在稍后详细讨论标签选择器。'
+- en: '`NetworkPolicy` objects are *namespaced* objects, which means they exist in
+    and apply to a specific namespace. The `spec .podSelector` field can select pods
+    only when they are in the same namespace as the `NetworkPolicy`. This means selecting
+    `app: demo` will apply only in the current namespace, and any pods in another
+    namespace with the label `app: demo` will be unaffected.'
+  id: totrans-346
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`NetworkPolicy` 对象是 *命名空间* 对象，这意味着它们存在于特定的命名空间并且应用于该命名空间。`spec.podSelector`
+    字段只能在与 `NetworkPolicy` 相同的命名空间中选择 Pod。这意味着选择 `app: demo` 将仅在当前命名空间中应用，并且在另一个命名空间中具有
+    `app: demo` 标签的任何 Pod 将不受影响。'
+- en: 'There are multiple workarounds to achieve firewalled-by-default behavior, including
+    the following:'
+  id: totrans-347
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有多种解决方法可以实现默认防火墙行为，包括以下几种：
+- en: Creating a blanket deny-all `NetworkPolicy` object for every namespace, which
+    will require developers to add additional `NetworkPolicy` objects to allow desired
+    traffic.
+  id: totrans-348
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 为每个命名空间创建一个拒绝所有流量的 `NetworkPolicy` 对象，这将要求开发人员添加额外的 `NetworkPolicy` 对象来允许所需的流量。
+- en: Adding a custom CNI plugin that deliberately violates the default-open API behavior.
+    Multiple CNI plugins have an additional configuration that exposes this kind of
+    behavior.
+  id: totrans-349
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 添加一个定制的 CNI 插件，故意违反默认开放的 API 行为。多个 CNI 插件具有额外的配置，暴露出这种类型的行为。
+- en: Creating admission policies to require that workloads have a `NetworkPolicy`.
+  id: totrans-350
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 创建入学政策要求工作负载具有 `NetworkPolicy`。
+- en: '`NetworkPolicy` objects rely heavily on labels and selectors; for that reason,
+    let’s dive into more complex examples.'
+  id: totrans-351
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`NetworkPolicy` 对象严重依赖于标签和选择器；因此，让我们深入探讨更复杂的示例。'
+- en: The LabelSelector type
+  id: totrans-352
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: LabelSelector 类型
+- en: This is the first time in this book that we see a `LabelSelector` in a resource.
+    It is a ubiquitous configuration element in Kubernetes and will come up many times
+    in the next chapter, so when you get there, it may be helpful to look back at
+    this section as a reference.
+  id: totrans-353
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是本书第一次在资源中看到 `LabelSelector`。它是 Kubernetes 中一个无处不在的配置元素，在下一章中将多次提到，因此当你到达那里时，回顾本节可能会有所帮助。
+- en: 'Every object in Kubernetes has a `metadata` field, with the type `ObjectMeta`.
+    That gives every type the same metadata fields, like labels. Labels are a map
+    of key-value string pairs:'
+  id: totrans-354
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 中的每个对象都有一个 `metadata` 字段，类型为 `ObjectMeta`。这为每种类型提供了相同的元数据字段，如标签。标签是键-值字符串对的映射：
+- en: '[PRE36]'
+  id: totrans-355
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE36]'
+- en: 'A `LabelSelector` identifies a group of resources by the present labels (or
+    absent). Very few resources in Kubernetes will refer to other resources by name.
+    Instead, most resources (`NetworkPolicy` objects, services, deployments, and other
+    Kubernetes objects). use label matching with a `LabelSelector`. `LabelSelector`s
+    can also be used in API and `kubectl` calls and avoid returning irrelevant objects.
+    A `LabelSelector` has two fields: `matchExpressions` and `matchLabels`. The normal
+    behavior for an empty `LabelSelector` is to select all objects in scope, e.g.,
+    all pods in the same namespace as a `NetworkPolicy`. `matchLabels` is the simpler
+    of the two. `matchLabels` contains a map of key-value pairs. For an object to
+    match, each key must be present on the object, and that key must have the corresponding
+    value. `matchLabels`, often with a single key (e.g., `app=example-thing`), is
+    usually sufficient for a selector.'
+  id: totrans-356
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`LabelSelector` 通过现有标签（或不存在）标识一组资源。 Kubernetes 中很少有资源会通过名称引用其他资源。 相反，大多数资源（如
+    `NetworkPolicy` 对象、服务、部署和其他 Kubernetes 对象）使用标签匹配与 `LabelSelector`。 `LabelSelector`
+    也可以在 API 和 `kubectl` 调用中使用，并避免返回无关的对象。 `LabelSelector` 有两个字段：`matchExpressions`
+    和 `matchLabels`。 空 `LabelSelector` 的正常行为是选择范围内的所有对象，例如，与 `NetworkPolicy` 相同命名空间中的所有
+    pod。 `matchLabels` 是两者中较简单的一个。 `matchLabels` 包含一个键值对映射。 要使对象匹配，每个键必须存在于对象上，并且该键必须具有相应的值。
+    通常情况下，具有单个键（例如 `app=example-thing`）的 `matchLabels` 就足以作为选择器。'
+- en: In [Example 4-5](#matchlabel_example), we can see a match object that has both
+    the label `colour=purple` and the label `shape=square`.
+  id: totrans-357
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 [示例 4-5](#matchlabel_example) 中，我们可以看到一个匹配对象，其标签既有 `colour=purple` 又有 `shape=square`。
+- en: Example 4-5\. `matchLabels` example
+  id: totrans-358
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 4-5\. `matchLabels` 示例
+- en: '[PRE37]'
+  id: totrans-359
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE37]'
+- en: '`matchExpressions` is more powerful but more complicated. It contains a list
+    of `LabelSelectorRequirement`s. All requirements must be true in order for an
+    object to match. [Table 4-4](#labelselectorrequirement_fields) shows all the required
+    fields for a `matchExpressions`.'
+  id: totrans-360
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`matchExpressions` 更强大但也更复杂。 它包含一个 `LabelSelectorRequirement` 列表。 所有要求必须为真，对象才能匹配。
+    [表 4-4](#labelselectorrequirement_fields) 显示了 `matchExpressions` 的所有必需字段。'
+- en: Table 4-4\. `LabelSelectorRequirement` fields
+  id: totrans-361
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 4-4\. `LabelSelectorRequirement` 字段
+- en: '| Field | Description |'
+  id: totrans-362
+  prefs: []
+  type: TYPE_TB
+  zh: '| Field | 描述 |'
+- en: '| --- | --- |'
+  id: totrans-363
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| key | The label key this requirement compares against. |'
+  id: totrans-364
+  prefs: []
+  type: TYPE_TB
+  zh: '| key | 此需求与之比较的标签键。 |'
+- en: '| operator | One of `Exists`, `DoesNotExist`, `In`, `NotIn`.`Exists`: Matches
+    an object if there is a label with the key, regardless of the value.`NotExists`:
+    Matches an object if there is no label with the key.`In`: Matches an object if
+    there is a label with the key, and the value is one of the provided values.`NotIn`:
+    Matches an object if there is no label with the key, *or* the key’s value is not
+    one of the provided values. |'
+  id: totrans-365
+  prefs: []
+  type: TYPE_TB
+  zh: '| operator | `Exists`, `DoesNotExist`, `In`, `NotIn` 中的一个。`Exists`: 如果存在具有该键的标签，则匹配对象，无论其值如何。`NotExists`:
+    如果不存在具有该键的标签，则匹配对象。`In`: 如果存在具有该键的标签，并且该值是提供的值之一，则匹配对象。`NotIn`: 如果不存在具有该键的标签，或者该键的值不是提供的值之一，则匹配对象。
+    |'
+- en: '| values | A list of string values for the key in question. It must be empty
+    when the operator is `In` or `NotIn`. It may not be empty when the operator is
+    `Exists` or `NotExists`. |'
+  id: totrans-366
+  prefs: []
+  type: TYPE_TB
+  zh: '| values | 问题中关键字的字符串值列表。 当运算符为 `In` 或 `NotIn` 时，必须为空。 当运算符为 `Exists` 或 `NotExists`
+    时，不得为空。 |'
+- en: Let’s look at two brief examples of `matchExpressions`.
+  id: totrans-367
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们来看两个 `matchExpressions` 的简短示例。
+- en: The `matchExpressions` equivalent of our prior `matchLabels` example is shown
+    in [Example 4-6](#matchexpressions_example_1).
+  id: totrans-368
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们先前 `matchLabels` 示例中的 `matchExpressions` 等效示例显示在 [示例 4-6](#matchexpressions_example_1)
+    中。
+- en: Example 4-6\. `matchExpressions` example 1
+  id: totrans-369
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 4-6\. `matchExpressions` 示例 1
+- en: '[PRE38]'
+  id: totrans-370
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE38]'
+- en: '`matchExpressions` in [Example 4-7](#matchexpressions_example_2), will match
+    objects with a color not equal to red, orange, or yellow, and with a shape label.'
+  id: totrans-371
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 [示例 4-7](#matchexpressions_example_2) 中的 `matchExpressions` 将匹配颜色不等于红色、橙色或黄色，并具有形状标签的对象。
+- en: Example 4-7\. `matchExpressions` example 2
+  id: totrans-372
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 4-7\. `matchExpressions` 示例 2
+- en: '[PRE39]'
+  id: totrans-373
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE39]'
+- en: Now that we have labels covered, we can discuss rules. Rules will enforce our
+    network policies after a match has been identified.
+  id: totrans-374
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经涵盖了标签，我们可以讨论规则。 规则将在识别出匹配后强制执行我们的网络策略。
+- en: Rules
+  id: totrans-375
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 规则
+- en: '`NetworkPolicy` objects contain distinct ingress and egress configuration sections,
+    which contain a list of ingress rules and egress rules, respectively. `NetworkPolicy`
+    rules act as exceptions, or an “allow list,” to the default block caused by selecting
+    pods in a policy. Rules cannot block access; they can only add access. If multiple
+    `NetworkPolicy` objects select a pod, all rules in each of those `NetworkPolicy`
+    objects apply. It may make sense to use multiple `NetworkPolicy` objects for the
+    same set of pods (for example, declaring application allowances in one policy
+    and infrastructure allowances like telemetry exporting in another). However, keep
+    in mind that they do not *need* to be separate `NetworkPolicy` objects, and with
+    too many `NetworkPolicy` objects it can become hard to reason.'
+  id: totrans-376
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`NetworkPolicy` 对象包含不同的入口和出口配置部分，分别包含入口规则和出口规则的列表。 `NetworkPolicy` 规则充当例外，或者说是默认阻止由策略中选择的
+    pod 引起的“允许列表”。规则不能阻止访问；它们只能添加访问。如果多个 `NetworkPolicy` 对象选择一个 pod，则每个 `NetworkPolicy`
+    对象中的所有规则都适用。可能有意义为相同的一组 pod 使用多个 `NetworkPolicy` 对象（例如，在一个策略中声明应用程序允许，而在另一个策略中声明基础设施允许，如遥测导出）。但是，请记住它们不
+    *需要* 是单独的 `NetworkPolicy` 对象，并且有太多 `NetworkPolicy` 对象会变得难以理解。'
+- en: Warning
+  id: totrans-377
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: To support health checks and liveness checks from the Kubelet, the CNI plugin
+    must always allow traffic from a pod’s node.
+  id: totrans-378
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了支持来自 Kubelet 的健康检查和存活检查，CNI 插件必须始终允许来自 pod 节点的流量。
+- en: It is possible to abuse labels if an attacker has access to the node (even without
+    admin privileges). Attackers can spoof a node’s IP and deliver packets with the
+    node’s IP address as the source.
+  id: totrans-379
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果攻击者可以访问节点（即使没有管理员权限），则可能会滥用标签。攻击者可以伪造节点的 IP 并传递带有节点 IP 地址作为源的数据包。
+- en: Ingress rules and egress rules are discrete types in the `NetworkPolicy` API
+    (`NetworkPolicyIngressRule` and `NetworkPolicyEgressRule`). However, they are
+    functionally structured the same way. Each `NetworkPolicyIngressRule`/`NetworkPolicyEgressRule`
+    contains a list of ports and a list of `NetworkPolicyPeers`.
+  id: totrans-380
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 入口规则和出口规则是 `NetworkPolicy` API 中的离散类型（`NetworkPolicyIngressRule` 和 `NetworkPolicyEgressRule`）。但是，它们在功能上结构相同。每个
+    `NetworkPolicyIngressRule`/`NetworkPolicyEgressRule` 包含一个端口列表和一个 `NetworkPolicyPeers`
+    列表。
+- en: 'A `NetworkPolicyPeer` has four ways for rules to refer to networked entities:
+    `ipBlock`, `namespaceSelector`, `podSelector`, and a combination.'
+  id: totrans-381
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`NetworkPolicyPeer` 有四种方式让规则引用网络实体：`ipBlock`、`namespaceSelector`、`podSelector`
+    和组合。'
+- en: '`ipBlock` is useful for allowing traffic to and from external systems. It can
+    be used only on its own in a rule, without a `namespaceSelector` or `podSelector`.
+    `ipBlock` contains a CIDR and an optional `except` CIDR. The `except` CIDR will
+    exclude a sub-CIDR (it must be within the CIDR range). In [Example 4-8](#allow_traffic_example_1),
+    we allow traffic from all IP addresses in the range `10.0.0.0` to `10.0.0.255`,
+    excluding `10.0.0.10`. [Example 4-9](#allow_traffic_example_2) allows traffic
+    from all pods in any namespace labeled `group:x`.'
+  id: totrans-382
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`ipBlock` 对于允许与外部系统之间的流量很有用。它可以在规则中单独使用，而无需 `namespaceSelector` 或 `podSelector`。`ipBlock`
+    包含一个 CIDR 和一个可选的 `except` CIDR。`except` CIDR 将排除一个子 CIDR（它必须在 CIDR 范围内）。在 [示例 4-8](#allow_traffic_example_1)
+    中，我们允许来自范围 `10.0.0.0` 到 `10.0.0.255` 中所有 IP 地址的流量，但排除 `10.0.0.10`。[示例 4-9](#allow_traffic_example_2)
+    允许来自任何命名空间中标记为 `group:x` 的所有 pod 的流量。'
+- en: Example 4-8\. Allow traffic example 1
+  id: totrans-383
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 4-8\. 允许流量示例 1
+- en: '[PRE40]'
+  id: totrans-384
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE40]'
+- en: Example 4-9\. Allow traffic example 2
+  id: totrans-385
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 4-9\. 允许流量示例 2
+- en: '[PRE41]'
+  id: totrans-386
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE41]'
+- en: 'In [Example 4-10](#allow_traffic_example_3), we allow traffic from all pods
+    in any namespace labeled `service: x.`. `podSelector` behaves like the `spec.podSelector`
+    field that we discussed earlier. If there is no `namespaceSelector`, it selects
+    pods in the same namespace as the `NetworkPolicy`.'
+  id: totrans-387
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '在 [示例 4-10](#allow_traffic_example_3) 中，我们允许来自任何命名空间中标记为 `service: x` 的所有 pod
+    的流量。`podSelector` 的行为类似于我们之前讨论的 `spec.podSelector` 字段。如果没有 `namespaceSelector`，它将选择与
+    `NetworkPolicy` 相同命名空间中的 pod。'
+- en: Example 4-10\. Allow traffic example 3
+  id: totrans-388
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 4-10\. 允许流量示例 3
+- en: '[PRE42]'
+  id: totrans-389
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE42]'
+- en: 'If we specify a `namespaceSelector` and a `podSelector`, the rule selects all
+    pods with the specified pod label in all namespaces with the specified namespace
+    label. It is common and highly recommended by security experts to keep the scope
+    of a namespace small; typical namespace scopes are per an app or service group
+    or team. There is a fourth option shown in [Example 4-11](#allow_traffic_example_4)
+    with a namespace *and* pod selector. This selector behaves like an AND condition
+    for the namespace and pod selector: pods must have the matching label and be in
+    a namespace with the matching label.'
+  id: totrans-390
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果我们指定了`namespaceSelector`和`podSelector`，则规则将选择所有具有指定pod标签的所有命名空间中的pod，并且具有指定命名空间标签。保持命名空间范围较小是常见且被安全专家强烈推荐的做法；典型的命名空间范围是每个应用程序或服务组或团队。在[示例 4-11](#allow_traffic_example_4)中展示了第四种选项，带有命名空间*和*
+    pod选择器。此选择器行为类似于命名空间和pod选择器的AND条件：pod必须具有匹配的标签，并且位于具有匹配标签的命名空间中。
+- en: Example 4-11\. Allow traffic example 4
+  id: totrans-391
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 4-11\. 允许流量示例 4
+- en: '[PRE43]'
+  id: totrans-392
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE43]'
+- en: Be aware this is a distinct type in the API, although the YAML syntax looks
+    *extremely* similar. As `to` and `from` sections can have multiple selectors,
+    a single character can make the difference between an `AND` and an `OR`, so be
+    careful when writing policies.
+  id: totrans-393
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，这在API中是一种独特的类型，尽管YAML语法看起来*非常*相似。由于`to`和`from`部分可以有多个选择器，一个字符就可能导致`AND`和`OR`之间的区别，因此编写策略时务必小心。
+- en: 'Our earlier security warning about API access also applies here. If a user
+    can customize the labels on their namespace, they can make a `NetworkPolicy` in
+    another namespace apply to their namespace in a way not intended. In our previous
+    selector example, if a user can set the label `group: monitoring` on an arbitrary
+    namespace, they can potentially send or receive traffic that they are not supposed
+    to. If the `NetworkPolicy` in question has only a namespace selector, then that
+    namespace label is sufficient to match the policy. If there is also a pod label
+    in the `NetworkPolicy` selector, the user will need to set pod labels to match
+    the policy selection. However, in a typical setup, the service owners will grant
+    create/update permissions on pods in that service’s namespace (directly on the
+    pod resource or indirectly via a resource like a deployment, which can define
+    pods).'
+  id: totrans-394
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '我们之前关于API访问的安全警告在这里同样适用。如果用户可以自定义其命名空间上的标签，他们可以使另一个命名空间中的`NetworkPolicy`适用于他们的命名空间，这是不期望的。在我们之前的选择器示例中，如果用户可以在任意命名空间上设置标签`group:
+    monitoring`，他们可能会发送或接收他们不应该的流量。如果相关的`NetworkPolicy`只有一个命名空间选择器，那么该命名空间标签就足以匹配策略。如果`NetworkPolicy`选择器中还有一个pod标签，用户将需要设置pod标签以匹配策略选择。然而，在典型的设置中，服务所有者将在该服务的命名空间上授予pod的创建/更新权限（直接在pod资源上或间接通过像部署这样的资源定义pod）。'
+- en: 'A typical `NetworkPolicy` could look something like this:'
+  id: totrans-395
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 典型的`NetworkPolicy`看起来可能是这样的：
+- en: '[PRE44]'
+  id: totrans-396
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE44]'
+- en: 'In this example, all pods in our `store` namespace can receive connections
+    only from pods labeled `app: frontend` in a namespace labeled `app: frontend`.
+    Those pods can only create connections to pods in namespaces where the pod and
+    namespace both have `app: downstream-1` or `app: downstream-2`. In each of these
+    cases, only traffic to port 8080 is allowed. Finally, remember that this policy
+    does not guarantee a matching policy for `downstream-1` or `downstream-2` (see
+    the next example). Accepting these connections does not preclude other policies
+    against pods in our namespace, adding additional exceptions:'
+  id: totrans-397
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '在这个例子中，我们的`store`命名空间中的所有pod只能从标记为`app: frontend`的命名空间中的pod接收连接。这些pod只能与其pod和命名空间都有`app:
+    downstream-1`或`app: downstream-2`的pod建立连接。在这些情况下，只允许到端口8080的流量。最后，请记住，此策略并不保证与`downstream-1`或`downstream-2`匹配的策略（请参阅下一个示例）。接受这些连接并不排除我们命名空间中pod的其他策略，添加额外的异常情况：'
+- en: '[PRE45]'
+  id: totrans-398
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE45]'
+- en: Although they are a “stable” resource (i.e., part of the networking/v1 API),
+    we believe `NetworkPolicy` objects are still an early version of network security
+    in Kubernetes. The user experience of configuring `NetworkPolicy` objects is somewhat
+    rough, and the default open behavior is highly undesirable. There is currently
+    a working group to discuss the future of `NetworkPolicy` and what a v2 API would
+    contain.
+  id: totrans-399
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管它们是“稳定”的资源（即网络/ v1 API的一部分），我们认为`NetworkPolicy`对象仍然是Kubernetes网络安全的早期版本。配置`NetworkPolicy`对象的用户体验有些粗糙，而默认的开放行为是极不理想的。目前有一个工作组讨论`NetworkPolicy`的未来以及v2
+    API将包含什么内容。
+- en: CNIs and those who deploy them use labels and selectors to determine which pods
+    are subject to network restrictions. As we have seen in many of the previous examples,
+    they are an essential part of the Kubernetes API, and developers and administrators
+    alike must have a thorough knowledge of how to use them.
+  id: totrans-400
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CNIs 及其部署者使用标签和选择器来确定哪些 Pod 受网络限制的影响。正如我们在许多先前的示例中所看到的，它们是 Kubernetes API 的重要组成部分，开发人员和管理员都必须全面了解如何使用它们。
+- en: '`NetworkPolicy` objects are an important tool in the cluster administrator’s
+    toolbox. They are the only tool available for controlling internal cluster traffic,
+    native to the Kubernetes API. We discuss service meshes, which will add further
+    tools for admins to secure and control workloads, in [“Service Meshes”](ch05.xhtml#servicemeshes).'
+  id: totrans-401
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`NetworkPolicy` 对象是集群管理员工具箱中的一个重要工具。它们是控制内部集群流量的唯一工具，原生于 Kubernetes API。我们将讨论服务网格，这将为管理员增加更多工具，以确保和控制工作负载，详见[“服务网格”](ch05.xhtml#servicemeshes)。'
+- en: 'Next we will discuss another important tool so administrators can understand
+    how it works inside the cluster: the Domain Name System (DNS).'
+  id: totrans-402
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来我们将讨论另一个重要工具，以便管理员能够了解其在集群内部的工作方式：域名系统（DNS）。
+- en: DNS
+  id: totrans-403
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: DNS
+- en: DNS is a critical piece of infrastructure for any network. In Kubernetes, this
+    is no different, so a brief overview is warranted. In the following “Services”
+    sections, we will see how much they depend on DNS and why a Kubernetes distribution
+    cannot declare that it is a conforming Kubernetes distribution without providing
+    a DNS service that follows the specification. But first, let’s review how DNS
+    works inside Kubernetes.
+  id: totrans-404
+  prefs: []
+  type: TYPE_NORMAL
+  zh: DNS 对于任何网络都是关键基础设施。在 Kubernetes 中也不例外，因此有必要进行简要概述。在接下来的“服务”部分中，我们将看到它们在 DNS
+    上的依赖程度以及为什么 Kubernetes 发行版如果没有提供遵循规范的 DNS 服务，则不能宣称为符合 Kubernetes 分发。但首先，让我们回顾一下
+    Kubernetes 内部 DNS 的工作方式。
+- en: Note
+  id: totrans-405
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: We will not outline the entire specification in this book. If readers are interested
+    in reading more about it, it is available on [GitHub](https://oreil.ly/tiB8V).
+  id: totrans-406
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们不会在本书中详细阐述整个规范。如果读者对此感兴趣，可以在[GitHub](https://oreil.ly/tiB8V) 上找到更多信息。
+- en: 'KubeDNS was used in earlier versions of Kubernetes. KubeDNS had several containers
+    within a single pod: `kube-dns`, `dnsmasq`, and `sidecar`. The `kube-dns` container
+    watches the Kubernetes API and serves DNS records based on the Kubernetes DNS
+    specification, `dnsmasq` provides caching and stub domain support, and `sidecar`
+    provides metrics and health checks. Versions of Kubernetes after 1.13 now use
+    the separate component CoreDNS.'
+  id: totrans-407
+  prefs: []
+  type: TYPE_NORMAL
+  zh: KubeDNS 在较早版本的 Kubernetes 中使用。KubeDNS 在单个 Pod 内包含多个容器：`kube-dns`、`dnsmasq` 和
+    `sidecar`。`kube-dns` 容器监视 Kubernetes API，并根据 Kubernetes DNS 规范提供 DNS 记录，`dnsmasq`
+    提供缓存和 stub 域支持，`sidecar` 提供指标和健康检查。从 Kubernetes 1.13 版本后，现在使用单独的组件 CoreDNS。
+- en: 'There are several differences between CoreDNS and KubeDNS:'
+  id: totrans-408
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CoreDNS 和 KubeDNS 之间有几个区别：
+- en: For simplicity, CoreDNS runs as a single container.
+  id: totrans-409
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 为简单起见，CoreDNS 作为单个容器运行。
+- en: CoreDNS is a Go process that replicates and enhances the functionality of Kube-DNS.
+  id: totrans-410
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: CoreDNS 是一个复制和增强 Kube-DNS 功能的 Go 进程。
+- en: CoreDNS is designed to be a general-purpose DNS server that is backward compatible
+    with Kubernetes, and its extendable plugins can do more than is provided in the
+    Kubernetes DNS specification.
+  id: totrans-411
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: CoreDNS 被设计为一个通用的 DNS 服务器，与 Kubernetes 兼容，并且其可扩展的插件能够执行超出 Kubernetes DNS 规范所提供的功能。
+- en: '[Figure 4-10](#core-dns) shows the components of CoreDNS. It runs a deployment
+    with a default replica of 2, and for it to run, CoreDNS needs access to the API
+    server, a ConfigMap to hold its Corefile, a service to make DNS available to the
+    cluster, and a deployment to launch and manage its pods. All of this also runs
+    in the `kube-system` namespace along with other critical components in the cluster.'
+  id: totrans-412
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 4-10](#core-dns) 显示了 CoreDNS 的组件。它以默认副本数为 2 运行部署，并且为了运行，CoreDNS 需要访问 API
+    服务器，一个 ConfigMap 用于保存其 Corefile，一个服务来使 DNS 可用于集群，并一个部署来启动和管理其 Pod。所有这些也在 `kube-system`
+    命名空间中运行，与集群中的其他关键组件一起。'
+- en: '![core-dns](Images/neku_0410.png)'
+  id: totrans-413
+  prefs: []
+  type: TYPE_IMG
+  zh: '![core-dns](Images/neku_0410.png)'
+- en: Figure 4-10\. CoreDNS components
+  id: totrans-414
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 4-10\. CoreDNS 组件
+- en: Like most configuration options, how the pod does DNS queries is in the pod
+    spec under the `dnsPolicy` attribute.
+  id: totrans-415
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与大多数配置选项一样，Pod 如何进行 DNS 查询是在 Pod 规范的 `dnsPolicy` 属性下定义的。
+- en: Outlined in [Example 4-12](#pod_spec_with_dns_configuration), the pod spec has
+    `ClusterFirstWithHostNet` as `dnsPolicy`.
+  id: totrans-416
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如[示例 4-12](#pod_spec_with_dns_configuration) 所示，Pod 规范中的 `dnsPolicy` 是 `ClusterFirstWithHostNet`。
+- en: Example 4-12\. Pod spec with DNS configuration
+  id: totrans-417
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 4-12\. 带有 DNS 配置的 Pod 规范
+- en: '[PRE46]'
+  id: totrans-418
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE46]'
+- en: 'There are four options for `dnsPolicy` that significantly affect how DNS resolutions
+    work inside a pod:'
+  id: totrans-419
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有四种选项的`dnsPolicy`会显著影响pod内部DNS解析的工作方式：
+- en: '`Default`'
+  id: totrans-420
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`默认`'
+- en: The pod inherits the name resolution configuration from the node that the pods
+    run on.
+  id: totrans-421
+  prefs: []
+  type: TYPE_NORMAL
+  zh: pod从运行其的节点继承名称解析配置。
+- en: '`ClusterFirst`'
+  id: totrans-422
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`ClusterFirst`'
+- en: Any DNS query that does not match the cluster domain suffix, such as www.kubernetes.io,
+    is sent to the upstream name server inherited from the node.
+  id: totrans-423
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 任何不匹配集群域后缀的DNS查询，例如www.kubernetes.io，都会发送到从节点继承的上游名称服务器。
+- en: '`ClusterFirstWithHostNet`'
+  id: totrans-424
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`ClusterFirstWithHostNet`'
+- en: For pods running with `hostNetwork`, admins should set the DNS policy to `ClusterFirstWithHostNet`.
+  id: totrans-425
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于使用`hostNetwork`运行的pod，管理员应将DNS策略设置为`ClusterFirstWithHostNet`。
+- en: '`None`'
+  id: totrans-426
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`无`'
+- en: All DNS settings use the `dnsConfig` field in the pod spec.
+  id: totrans-427
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有DNS设置使用pod规范中的`dnsConfig`字段。
+- en: 'If `none`, developers will have to specify name servers in the pod spec. `nameservers:`
+    is a list of IP addresses that the pod will use as DNS servers. There can be at
+    most three IP addresses specified. `searches:` is a list of DNS search domains
+    for hostname lookup in the pod. Kubernetes allows for at most six search domains.
+    The following is such an example spec:'
+  id: totrans-428
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果为`none`，开发人员必须在pod规范中指定名称服务器。`nameservers:`是一个IP地址列表，pod将使用它作为DNS服务器。最多可以指定三个IP地址。`searches:`是用于在pod中进行主机名查找的DNS搜索域列表。Kubernetes允许最多六个搜索域。以下是一个这样的示例规范：
+- en: '[PRE47]'
+  id: totrans-429
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE47]'
+- en: Others are in the `options` field, which is a list of objects where each object
+    may have a `name` property and a `value` property (optional).
+  id: totrans-430
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 其他在`options`字段中，该字段是一个对象列表，每个对象可能具有`name`属性和`value`属性（可选）。
+- en: 'All of these generated properties merge with `resolv.conf` from the DNS policy.
+    Regular query options have CoreDNS going through the following search path:'
+  id: totrans-431
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有这些生成的属性与从DNS策略中的`resolv.conf`合并。常规查询选项使CoreDNS通过以下搜索路径：
+- en: '[PRE48]'
+  id: totrans-432
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE48]'
+- en: The host search path comes from the pod DNS policy or CoreDNS policy.
+  id: totrans-433
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 主机搜索路径来自pod DNS策略或CoreDNS策略。
+- en: Querying a DNS record in Kubernetes can result in many requests and increase
+    latency in applications waiting on DNS requests to be answered. CoreDNS has a
+    solution for this called Autopath. Autopath allows for server-side search path
+    completion. It short circuits the client’s search path resolution by stripping
+    the cluster search domain and performing the lookups on the CoreDNS server; when
+    it finds an answer, it stores the result as a CNAME and returns with one query
+    instead of five.
+  id: totrans-434
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在Kubernetes中查询DNS记录可能会导致许多请求，并增加应用程序等待DNS请求响应的延迟。CoreDNS有一个名为Autopath的解决方案。Autopath允许服务器端搜索路径完成。它通过去除集群搜索域并在CoreDNS服务器上执行查找来快速完成客户端的搜索路径解析；当它找到答案时，它将结果存储为CNAME，并以一个查询返回，而不是五个。
+- en: 'Using Autopath does increase the memory usage on CoreDNS, however. Make sure
+    to scale the CoreDNS replica’s memory with the cluster’s size. Make sure to set
+    the requests for memory and CPU for the CoreDNS pods appropriately. To monitor
+    CoreDNS, it exports several metrics it exposes, listed here:'
+  id: totrans-435
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用Autopath确实会增加CoreDNS的内存使用量。确保将CoreDNS副本的内存与集群的大小相匹配。确保适当设置CoreDNS pod的内存和CPU请求。要监视CoreDNS，它会导出多个指标，这里列出了它暴露的几个：
+- en: coredns build info
+  id: totrans-436
+  prefs: []
+  type: TYPE_NORMAL
+  zh: coredns构建信息
+- en: Info about CoreDNS itself
+  id: totrans-437
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CoreDNS本身的信息
+- en: dns request count total
+  id: totrans-438
+  prefs: []
+  type: TYPE_NORMAL
+  zh: DNS请求总数
+- en: Total query count
+  id: totrans-439
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 总查询计数
+- en: dns request duration seconds
+  id: totrans-440
+  prefs: []
+  type: TYPE_NORMAL
+  zh: DNS请求持续时间（秒）
+- en: Duration to process each query
+  id: totrans-441
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 处理每个查询的持续时间
+- en: dns request size bytes
+  id: totrans-442
+  prefs: []
+  type: TYPE_NORMAL
+  zh: DNS请求大小（字节）
+- en: The size of the request in bytes
+  id: totrans-443
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请求大小（字节）
+- en: coredns plugin enabled
+  id: totrans-444
+  prefs: []
+  type: TYPE_NORMAL
+  zh: coredns插件已启用
+- en: Indicates whether a plugin is enabled on per server and zone basis
+  id: totrans-445
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 指示插件是否在每个服务器和区域基础上启用
+- en: By combining the pod metrics along with CoreDNS metrics, plugin administrators
+    will ensure that CoreDNS stays healthy and running inside your cluster.
+  id: totrans-446
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将pod的度量标准与CoreDNS的度量标准结合起来，插件管理员将确保CoreDNS在集群内保持健康且运行良好。
+- en: Tip
+  id: totrans-447
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: This is only a brief overview of the metrics available. The entire list is [available](https://oreil.ly/gm8IO).
+  id: totrans-448
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这只是可用指标的简要概述。完整列表可在[此处](https://oreil.ly/gm8IO)找到。
+- en: Autopath and other metrics are enabled via plugins. This allows CoreDNS to focus
+    on its one task, DNS, but still be extensible through the plugin framework, much
+    like the CNI pattern. In [Table 4-5](#coredns_plugins), we see a list of the plugins
+    currently available. Being an open source project, anyone can contribute a plugin.
+    There are several cloud-specific ones like router53 that enable serving zone data
+    from AWS route53 service.
+  id: totrans-449
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过插件启用 Autopath 和其他指标。这使得 CoreDNS 能够专注于其 DNS 任务，但仍可通过插件框架进行扩展，类似于 CNI 模式。在 [Table 4-5](#coredns_plugins)
+    中，我们看到当前可用插件的列表。作为开源项目，任何人都可以贡献插件。有几个特定于云的插件，如 router53，可以从 AWS route53 服务中提供区域数据。
+- en: Table 4-5\. CoreDNS plugins
+  id: totrans-450
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Table 4-5\. CoreDNS 插件
+- en: '| Name | Description |'
+  id: totrans-451
+  prefs: []
+  type: TYPE_TB
+  zh: '| Name | 描述 |'
+- en: '| --- | --- |'
+  id: totrans-452
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| auto | Enables serving zone data from an RFC 1035-style master file, which
+    is automatically picked up from disk. |'
+  id: totrans-453
+  prefs: []
+  type: TYPE_TB
+  zh: '| auto | 启用从 RFC 1035 风格的主文件中自动选取的区域数据。 |'
+- en: '| autopath | Allows for server-side search path completion. autopath [ZONE…]
+    RESOLV-CONF. |'
+  id: totrans-454
+  prefs: []
+  type: TYPE_TB
+  zh: '| autopath | 允许服务器端搜索路径完成。autopath [ZONE…] RESOLV-CONF。 |'
+- en: '| bind | Overrides the host to which the server should bind. |'
+  id: totrans-455
+  prefs: []
+  type: TYPE_TB
+  zh: '| bind | 覆盖服务器应绑定到的主机。 |'
+- en: '| cache | Enables a frontend cache. cache [TTL] [ZONES…]. |'
+  id: totrans-456
+  prefs: []
+  type: TYPE_TB
+  zh: '| cache | 启用前端缓存。cache [TTL] [ZONES…]。 |'
+- en: '| chaos | Allows for responding to TXT queries in the CH class. |'
+  id: totrans-457
+  prefs: []
+  type: TYPE_TB
+  zh: '| chaos | 允许响应 TXT 查询中的 CH 类。 |'
+- en: '| debug | Disables the automatic recovery upon a crash so that you’ll get a
+    nice stack trace. text2pcap. |'
+  id: totrans-458
+  prefs: []
+  type: TYPE_TB
+  zh: '| debug | 禁用崩溃时的自动恢复，以便获得漂亮的堆栈跟踪。text2pcap。 |'
+- en: '| dnssec | Enables on-the-fly DNSSEC signing of served data. |'
+  id: totrans-459
+  prefs: []
+  type: TYPE_TB
+  zh: '| dnssec | 对提供的数据进行即时的 DNSSEC 签名。 |'
+- en: '| dnstap | Enables logging to dnstap. [*http://dnstap.info*](http://dnstap.info)
+    golang: go get -u -v github.com/dnstap/golang-dnstap/dnstap. |'
+  id: totrans-460
+  prefs: []
+  type: TYPE_TB
+  zh: '| dnstap | 启用到 dnstap 的日志记录。[*http://dnstap.info*](http://dnstap.info) golang:
+    go get -u -v github.com/dnstap/golang-dnstap/dnstap。 |'
+- en: '| erratic | A plugin useful for testing client behavior. |'
+  id: totrans-461
+  prefs: []
+  type: TYPE_TB
+  zh: '| erratic | 用于测试客户端行为的实用插件。 |'
+- en: '| errors | Enables error logging. |'
+  id: totrans-462
+  prefs: []
+  type: TYPE_TB
+  zh: '| errors | 启用错误日志记录。 |'
+- en: '| etcd | Enables reading zone data from an etcd version 3 instance. |'
+  id: totrans-463
+  prefs: []
+  type: TYPE_TB
+  zh: '| etcd | 从 etcd 版本 3 实例读取区域数据。 |'
+- en: '| federation | Enables federated queries to be resolved via the kubernetes
+    plugin. |'
+  id: totrans-464
+  prefs: []
+  type: TYPE_TB
+  zh: '| federation | 通过 kubernetes 插件解析联合查询。 |'
+- en: '| file | Enables serving zone data from an RFC 1035-style master file. |'
+  id: totrans-465
+  prefs: []
+  type: TYPE_TB
+  zh: '| file | 从 RFC 1035 风格的主文件中提供区域数据。 |'
+- en: '| forward | Facilitates proxying DNS messages to upstream resolvers. |'
+  id: totrans-466
+  prefs: []
+  type: TYPE_TB
+  zh: '| forward | 方便地将 DNS 消息代理到上游解析器。 |'
+- en: '| health | Enables a health check endpoint. |'
+  id: totrans-467
+  prefs: []
+  type: TYPE_TB
+  zh: '| health | 启用健康检查端点。 |'
+- en: '| host | Enables serving zone data from a /etc/hosts style file. |'
+  id: totrans-468
+  prefs: []
+  type: TYPE_TB
+  zh: '| host | 从 /etc/hosts 样式文件中提供区域数据。 |'
+- en: '| kubernetes | Enables the reading zone data from a Kubernetes cluster. |'
+  id: totrans-469
+  prefs: []
+  type: TYPE_TB
+  zh: '| kubernetes | 从 Kubernetes 集群中读取区域数据。 |'
+- en: '| loadbalancer | Randomizes the order of A, AAAA, and MX records. |'
+  id: totrans-470
+  prefs: []
+  type: TYPE_TB
+  zh: '| loadbalancer | 随机化 A、AAAA 和 MX 记录的顺序。 |'
+- en: '| log enables | Queries logging to standard output. |'
+  id: totrans-471
+  prefs: []
+  type: TYPE_TB
+  zh: '| log enables | 查询日志输出到标准输出。 |'
+- en: '| loop detect | Simple forwarding loops and halt the server. |'
+  id: totrans-472
+  prefs: []
+  type: TYPE_TB
+  zh: '| loop detect | 简单的转发循环检测并停止服务器。 |'
+- en: '| metadata | Enables a metadata collector. |'
+  id: totrans-473
+  prefs: []
+  type: TYPE_TB
+  zh: '| metadata | 启用元数据收集器。 |'
+- en: '| metrics | Enables Prometheus metrics. |'
+  id: totrans-474
+  prefs: []
+  type: TYPE_TB
+  zh: '| metrics | 启用 Prometheus 指标。 |'
+- en: '| nsid | Adds an identifier of this server to each reply. RFC 5001. |'
+  id: totrans-475
+  prefs: []
+  type: TYPE_TB
+  zh: '| nsid | 将此服务器的标识符添加到每个回复中。RFC 5001。 |'
+- en: '| pprof | Publishes runtime profiling data at endpoints under /debug/pprof.
+    |'
+  id: totrans-476
+  prefs: []
+  type: TYPE_TB
+  zh: '| pprof | 在 /debug/pprof 端点下发布运行时分析数据。 |'
+- en: '| proxy | Facilitates both a basic reverse proxy and a robust load balancer.
+    |'
+  id: totrans-477
+  prefs: []
+  type: TYPE_TB
+  zh: '| proxy | 提供基本的反向代理和强大的负载均衡器。 |'
+- en: '| reload | Allows automatic reload of a changed Corefile. Graceful reload.
+    |'
+  id: totrans-478
+  prefs: []
+  type: TYPE_TB
+  zh: '| reload | 允许自动重新加载已更改的 Corefile。优雅的重新加载。 |'
+- en: '| rewrite | Performs internal message rewriting. rewrite name foo.example.com
+    foo.default.svc.cluster.local. |'
+  id: totrans-479
+  prefs: []
+  type: TYPE_TB
+  zh: '| rewrite | 执行内部消息重写。重写名称 foo.example.com foo.default.svc.cluster.local。 |'
+- en: '| root | Simply specifies the root of where to find zone files. |'
+  id: totrans-480
+  prefs: []
+  type: TYPE_TB
+  zh: '| root | 简单地指定查找区域文件的根目录。 |'
+- en: '| router53 | Enables serving zone data from AWS route53. |'
+  id: totrans-481
+  prefs: []
+  type: TYPE_TB
+  zh: '| router53 | 从 AWS route53 提供区域数据。 |'
+- en: '| secondary | Enables serving a zone retrieved from a primary server. |'
+  id: totrans-482
+  prefs: []
+  type: TYPE_TB
+  zh: '| secondary | 启用从主服务器检索的区域。 |'
+- en: '| template | Dynamic responses based on the incoming query. |'
+  id: totrans-483
+  prefs: []
+  type: TYPE_TB
+  zh: '| template | 根据传入查询动态生成响应。 |'
+- en: '| tls | Configures the server certificates for TLS and gRPC servers. |'
+  id: totrans-484
+  prefs: []
+  type: TYPE_TB
+  zh: '| tls | 配置用于 TLS 和 gRPC 服务器的服务器证书。 |'
+- en: '| trace | Enables OpenTracing-based tracing of DNS requests. |'
+  id: totrans-485
+  prefs: []
+  type: TYPE_TB
+  zh: '| trace | 启用基于 OpenTracing 的 DNS 请求跟踪。 |'
+- en: '| whoami | Returns resolver’s local IP address, port, and transport. |'
+  id: totrans-486
+  prefs: []
+  type: TYPE_TB
+  zh: '| whoami | 返回解析器的本地 IP 地址、端口和传输协议。 |'
+- en: Note
+  id: totrans-487
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: A comprehensive list of CoreDNS plugins is [available](https://oreil.ly/rlXRO).
+  id: totrans-488
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CoreDNS插件的全面列表可在[此处查看](https://oreil.ly/rlXRO)。
+- en: CoreDNS is exceptionally configurable and compatible with the Kubernetes model.
+    We have only scratched the surface of what CoreDNS is capable of; if you would
+    like to learn more about CoreDNS, we highly recommend reading [*Learning CoreDNS*](https://oreil.ly/O7Xuh)
+    by John Belamaric Cricket Liu (O’Reilly).
+  id: totrans-489
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CoreDNS具有极高的配置能力，并与Kubernetes模型兼容。我们只是触及了CoreDNS能力的表面；如果您想了解更多关于CoreDNS的信息，我们强烈推荐阅读[*Learning
+    CoreDNS*](https://oreil.ly/O7Xuh)，作者是John Belamaric和Cricket Liu（O’Reilly）。
+- en: CoreDNS allows pods to figure out the IP addresses to use to reach applications
+    and servers internal and external to the cluster. In our next section, we will
+    discuss more in depth how IPv4 and 6 are managed in a cluster.
+  id: totrans-490
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CoreDNS允许Pod确定用于访问集群内外的应用程序和服务器的IP地址。在下一节中，我们将更深入地讨论集群中IPv4和IPv6的管理。
+- en: IPv4/IPv6 Dual Stack
+  id: totrans-491
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: IPv4/IPv6双栈
+- en: Kubernetes has still-evolving support for running in IPv4/IPv6 “dual-stack”
+    mode, which allows a cluster to use both IPv4 and IPv6 addresses. Kubernetes has
+    existing stable support for running clusters in IPv6-only mode; however, running
+    in IPv6-only mode is a barrier to communicating with clients and hosts that support
+    only IPv4\. The dual-stack mode is a critical bridge to allowing IPv6 adoption.
+    We will attempt to describe the current state of dual-stack networking in Kubernetes
+    as of Kubernetes 1.20, but be aware that it is liable to change substantially
+    in subsequent releases. The full Kubernetes enhancement proposal (KEP) for dual-stack
+    support is on [GitHub](https://oreil.ly/T83u5).
+  id: totrans-492
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes对在IPv4/IPv6“双栈”模式下运行仍在不断演进的支持，允许集群同时使用IPv4和IPv6地址。Kubernetes对在IPv6-only模式下运行集群已经有了稳定的支持；然而，在IPv6-only模式下运行是与仅支持IPv4的客户端和主机通信的障碍。双栈模式是允许IPv6采用的重要桥梁。我们将尝试描述截至Kubernetes
+    1.20时双栈网络在Kubernetes中的当前状态，但请注意，此功能可能会在后续版本中发生重大变化。双栈支持的完整Kubernetes增强提案（KEP）可在[GitHub](https://oreil.ly/T83u5)上找到。
+- en: Warning
+  id: totrans-493
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: In Kubernetes, a feature is “alpha” if the design is not finalized, if the scalability/test
+    coverage/reliability is insufficient, or if it merely has not proven itself sufficiently
+    in the real world yet. Kubernetes Enhancement Proposals (KEPs) set the bar for
+    an individual feature to graduate to beta and then be stable. Like all alpha features,
+    Kubernetes disables dual-stack support by default, and the feature must be explicitly
+    enabled.
+  id: totrans-494
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在Kubernetes中，如果设计尚未最终确定，可扩展性/测试覆盖率/可靠性不足，或者在现实世界中尚未充分证明自己，那么一个功能被标记为“alpha”。Kubernetes增强提案（KEPs）设定了一个单独功能升级到beta然后稳定的标准。与所有alpha功能一样，Kubernetes默认禁用双栈支持，必须显式启用该功能。
+- en: 'IPv4/IPv6 features enable the following features for pod networking:'
+  id: totrans-495
+  prefs: []
+  type: TYPE_NORMAL
+  zh: IPv4/IPv6功能使得Pod网络可以实现以下功能：
+- en: A single IPv4 and IPv6 address per pod
+  id: totrans-496
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 每个Pod具有单独的IPv4和IPv6地址
+- en: IPv4 and IPv6 services
+  id: totrans-497
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: IPv4和IPv6服务
+- en: Pod cluster egress routing via IPv4 and IPv6 interfaces
+  id: totrans-498
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 通过IPv4和IPv6接口进行Pod集群出口路由
+- en: 'Being an alpha feature, administrators must enable IPv4/IPv6 dual-stack; to
+    do so, the `IPv6DualStack` feature gate for the network components must be configured
+    for your cluster. Here is a list of those dual-stack cluster network options:'
+  id: totrans-499
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为一个alpha功能，管理员必须启用IPv4/IPv6双栈；为此，必须为您的集群配置网络组件的`IPv6DualStack`功能门。以下是双栈集群网络选项的列表：
+- en: '`kube-apiserver`'
+  id: totrans-500
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kube-apiserver`'
+- en: '`feature-gates="IPv6DualStack=true"`'
+  id: totrans-501
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`feature-gates="IPv6DualStack=true"`'
+- en: '`service-cluster-ip-range=<IPv4 CIDR>,<IPv6 CIDR>`'
+  id: totrans-502
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`service-cluster-ip-range=<IPv4 CIDR>,<IPv6 CIDR>`'
+- en: '`kube-controller-manager`'
+  id: totrans-503
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kube-controller-manager`'
+- en: '`feature-gates="IPv6DualStack=true"`'
+  id: totrans-504
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`feature-gates="IPv6DualStack=true"`'
+- en: '`cluster-cidr=<IPv4 CIDR>,<IPv6 CIDR>`'
+  id: totrans-505
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`cluster-cidr=<IPv4 CIDR>,<IPv6 CIDR>`'
+- en: '`service-cluster-ip-range=<IPv4 CIDR>,<IPv6 CIDR>`'
+  id: totrans-506
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`service-cluster-ip-range=<IPv4 CIDR>,<IPv6 CIDR>`'
+- en: '`node-cidr-mask-size-ipv4|--node-cidr-mask-size-ipv6` defaults to /24 for IPv4
+    and /64 for IPv6'
+  id: totrans-507
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`node-cidr-mask-size-ipv4|--node-cidr-mask-size-ipv6`默认为/24用于IPv4和/64用于IPv6'
+- en: '`kubelet`'
+  id: totrans-508
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kubelet`'
+- en: '`feature-gates="IPv6DualStack=true"`'
+  id: totrans-509
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`feature-gates="IPv6DualStack=true"`'
+- en: '`kube-proxy`'
+  id: totrans-510
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kube-proxy`'
+- en: '`cluster-cidr=<IPv4 CIDR>,<IPv6 CIDR>`'
+  id: totrans-511
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`cluster-cidr=<IPv4 CIDR>,<IPv6 CIDR>`'
+- en: '`feature-gates="IPv6DualStack=true"`'
+  id: totrans-512
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`feature-gates="IPv6DualStack=true"`'
+- en: 'When IPv4/IPv6 is on in a cluster, services now have an extra field in which
+    developers can choose the `ipFamilyPolicy` to deploy for their application:'
+  id: totrans-513
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当集群开启IPv4/IPv6时，服务现在有一个额外的字段，开发者可以选择`ipFamilyPolicy`来部署他们的应用程序：
+- en: '`SingleStack`'
+  id: totrans-514
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`SingleStack`'
+- en: Single-stack service. The control plane allocates a cluster IP for the service,
+    using the first configured service cluster IP range.
+  id: totrans-515
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 单栈服务。控制平面为服务分配集群IP，使用首个配置的服务集群IP范围。
+- en: '`PreferDualStack`'
+  id: totrans-516
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`PreferDualStack`'
+- en: Used only if the cluster has dual stack enabled. This setting will use the same
+    behavior as `SingleStack`.
+  id: totrans-517
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 仅在集群启用双栈时使用。此设置将与 `SingleStack` 具有相同的行为。
+- en: '`RequireDualStack`'
+  id: totrans-518
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`RequireDualStack`'
+- en: Allocates service cluster IP addresses from both IPv4 and IPv6 address ranges.
+  id: totrans-519
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从 IPv4 和 IPv6 地址范围中分配服务集群 IP 地址。
+- en: '`ipFamilies`'
+  id: totrans-520
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`ipFamilies`'
+- en: An array that defines which IP family to use for a single stack or defines the
+    order of IP families for dual stack; you can choose the address families by setting
+    this field on the service. The allowed values are `["IPv4"]`, `["IPv6"]`, and
+    `["IPv4","IPv6"]` (dual stack).
+  id: totrans-521
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个定义单栈使用哪个 IP 簇或定义双栈 IP 簇顺序的数组；您可以通过在服务上设置此字段来选择地址簇。允许的值为 `["IPv4"]`、`["IPv6"]`
+    和 `["IPv4","IPv6"]`（双栈）。
+- en: Note
+  id: totrans-522
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Starting in 1.21, IPv4/IPv6 dual stack defaults to enabled.
+  id: totrans-523
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从 1.21 版开始，默认启用 IPv4/IPv6 双栈。
+- en: 'Here is an example service manifest that has PreferDualStack set to PreferDualStack:'
+  id: totrans-524
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里是一个示例服务清单，其中 PreferDualStack 设置为 PreferDualStack：
+- en: '[PRE49]'
+  id: totrans-525
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE49]'
+- en: Conclusion
+  id: totrans-526
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 结论
+- en: The Kubernetes networking model is the basis for how networking is designed
+    to work inside a cluster. The CNI running on the nodes implements the principles
+    set forth in the Kubernetes network model. The model does not define network security;
+    the extensibility of Kubernetes allows the CNI to implement network security through
+    network policies.
+  id: totrans-527
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 网络模型是集群内部网络设计的基础。运行在节点上的 CNI 实现了 Kubernetes 网络模型中设定的原则。该模型并不定义网络安全性；Kubernetes
+    的可扩展性允许 CNI 通过网络策略来实现网络安全。
+- en: CNI, DNS, and network security are essential parts of the cluster network; they
+    bridge the gap between Linux networking, covered in [Chapter 2](ch02.xhtml#linux_networking),
+    and container and Kubernetes networking, covered in Chapters [3](ch03.xhtml#container_networking_basics)
+    and [5](ch05.xhtml#kubernetes_networking_abstractions), respectively.
+  id: totrans-528
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CNI、DNS 和网络安全是集群网络的重要部分；它们连接了第2章中涵盖的 Linux 网络和第3章和第5章中分别涵盖的容器和 Kubernetes 网络。
+- en: Choosing the right CNI requires an evaluation from both the developers’ and
+    administrators’ perspectives. Requirements need to be laid out and CNIs tested.
+    It is our opinion that a cluster is not complete without a discussion about network
+    security and CNI that supports it.
+  id: totrans-529
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 选择正确的 CNI 需要从开发者和管理员的角度进行评估。需要明确需求并测试 CNIs。我们认为，没有关于网络安全和支持其的 CNI 的讨论，集群就不完整。
+- en: DNS is essential; a complete setup and a smooth-running network require network
+    and cluster administrators to be proficient at scaling CoreDNS in their clusters.
+    An exceptional number of Kubernetes issues stem from DNS and the misconfiguration
+    of CoreDNS.
+  id: totrans-530
+  prefs: []
+  type: TYPE_NORMAL
+  zh: DNS 是必不可少的；完整的设置和顺畅运行的网络需要网络和集群管理员在他们的集群中熟练地扩展 CoreDNS。大量 Kubernetes 问题源于 DNS
+    和 CoreDNS 的配置错误。
+- en: The information in this chapter will be important when discussing cloud networking
+    in [Chapter 6](ch06.xhtml#kubernetes_and_cloud_networking) and what options administrators
+    have when designing and deploying their production cluster networks.
+  id: totrans-531
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在讨论[第6章](ch06.xhtml#kubernetes_and_cloud_networking)中的云网络和管理员在设计和部署生产集群网络时的选项时，本章中的信息将非常重要。
+- en: In our next chapter, we will dive into how Kubernetes uses all of this to power
+    its abstractions.
+  id: totrans-532
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在我们的下一章中，我们将深入探讨 Kubernetes 如何利用所有这些内容来支持其抽象化。

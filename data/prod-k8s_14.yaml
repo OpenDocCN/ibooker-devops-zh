@@ -1,0 +1,1202 @@
+- en: Chapter 13\. Autoscaling
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第13章 自动缩放
+- en: The ability to automatically scale workload capacity is one of the compelling
+    benefits of cloud native systems. If you have applications that encounter significant
+    changes in capacity demands, autoscaling can reduce costs and reduce engineering
+    toil in managing those applications. Autoscaling is the process whereby we increase
+    and decrease the capacity of our workloads without human intervention. This begins
+    with leveraging metrics to provide an indicator for when application capacity
+    should be scaled. It includes tuning settings that respond to those metrics. And
+    it culminates in systems to actually expand and contract the resources available
+    to an application to accommodate the work it must perform.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 自动缩放工作负载容量的能力是云原生系统的一个引人注目的好处之一。如果您的应用程序面临容量需求显著变化，自动缩放可以降低成本并减少在管理这些应用程序时的工程工作量。自动缩放是在无需人工干预的情况下增加和减少工作负载容量的过程。这始于利用度量标准来提供应用程序容量应何时扩展的指示器。它包括调整响应这些指标的设置。最终目标是通过系统来实际扩展和收缩应用程序可用的资源，以适应其必须执行的工作。
+- en: While autoscaling can provide wonderful benefits, it’s important to recognize
+    when you should *not* employ autoscaling. Autoscaling introduces complexity into
+    your application management. Besides initial setup, you will very likely need
+    to revisit and tune the configuration of your autoscaling mechanisms. Therefore,
+    if an application’s capacity demands do not change markedly, it may be perfectly
+    acceptable to provision for the highest traffic volumes an app will handle. If
+    your application load alters at predictable times, the manual effort to adjust
+    capacity at those times may be trivial enough that investing in autoscaling may
+    not be justified. As with virtually all technology, leverage them only when the
+    long-term benefit outweighs the setup and maintenance of the system.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管自动缩放可以提供很好的好处，但重要的是要认识到何时**不**使用自动缩放。自动缩放为应用程序管理引入了复杂性。除了初始设置外，您很可能需要重新审视和调整自动缩放机制的配置。因此，如果应用程序的容量需求变化不显著，为应用程序能够处理的最高流量预留资源可能是完全可以接受的。如果您的应用程序负载在可预见的时间发生变化，那么在这些时间手动调整容量的工作量可能微不足道，以至于投资于自动缩放可能不值得。与几乎所有技术一样，只有在长期利益超过系统设置和维护的情况下才能利用它们。
+- en: 'We’re going to divide the subject of autoscaling into two broad categories:'
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将把自动缩放的主题划分为两个广泛的类别：
+- en: Workload autoscaling
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 工作负载自动缩放
+- en: The automated management of the capacity for individual workloads
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对个别工作负载容量的自动化管理
+- en: Cluster autoscaling
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 集群自动缩放
+- en: The automated management of the capacity of the underlying platform that hosts
+    workloads
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对托管工作负载的底层平台容量的自动化管理
+- en: 'As we examine these approaches, keep in mind the common primary motivations
+    for autoscaling:'
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在我们检视这些方法时，请记住自动缩放的主要动机：
+- en: Cost management
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 成本管理
+- en: This is most relevant when you are renting your servers from a public cloud
+    provider or being charged internally for your usage of virtualized infrastructure.
+    Cluster autoscaling allows you to dynamically adjust the number of machines you
+    pay for. In order to achieve this elasticity in your infrastructure you will need
+    to leverage workload autoscaling to manage the capacity of the relevant applications
+    within the cluster.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您从公共云提供商租用服务器或为使用虚拟化基础设施而内部计费时，这点最为相关。集群自动缩放允许您动态调整所支付的机器数量。为了实现基础设施的弹性，您将需要利用工作负载自动缩放来管理集群中相关应用程序的容量。
+- en: Capacity management
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容量管理
+- en: If you have a static set of infrastructure to leverage, autoscaling gives you
+    an opportunity to dynamically manage the allocation of that fixed capacity. For
+    example, an application that provides services to your business’s end users will
+    often have days and times when it is busiest. Workload autoscaling allows an application
+    to dynamically expand its capacity and consume large amounts of a cluster when
+    needed. It also allows it to contract and make room for other workloads. Perhaps
+    you have batch workloads that can take advantage of the unused compute resources
+    during off hours. Cluster autoscaling can remove considerable human toil in managing
+    compute infrastructure capacity since the number of machines used by your clusters
+    is adjusted without human intervention.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您有一组静态的基础设施可以利用，自动缩放为您提供了动态管理固定容量分配的机会。例如，为您的业务最终用户提供服务的应用程序通常在最繁忙的时间和日子会有高峰。工作负载自动缩放允许应用程序在需要时动态扩展其容量，并在集群中占用大量资源。它还允许它收缩并为其他工作负载腾出空间。也许您有可以在非高峰时期利用未使用计算资源的批处理工作负载。集群自动缩放可以消除大量人工管理计算基础设施容量的工作量，因为您的集群使用的机器数量会在无人干预的情况下进行调整。
+- en: 'Autoscaling is compelling for applications that fluctuate in load and traffic.
+    Without autoscaling, you have two options:'
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于负载和流量波动的应用程序，自动缩放是非常有效的。如果没有自动缩放，您有两个选择：
+- en: Chronically overprovision your application capacity, incurring additional cost
+    to your business.
+  id: totrans-14
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 过度配置你的应用容量，增加业务成本。
+- en: Alert your engineers for manual scaling operations, incurring additional toil
+    in your operations.
+  id: totrans-15
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 提醒您的工程师进行手动缩放操作，增加运维中的额外劳动成本。
+- en: In this chapter, we will first explore how to approach autoscaling, and how
+    to design software to leverage these systems. Then we will dive into details of
+    specific systems we can use to autoscale our applications in Kubernetes-based
+    platforms. This will include horizontal and vertical autoscaling, including the
+    metrics we should use to trigger scaling events. We will also look at scaling
+    workloads in proportion to the cluster itself, as well as an example of custom
+    autoscaling you might consider. Finally, in [“Cluster Autoscaling”](#cluster_autoscaling),
+    we will address the scaling of the platform itself so that it can accommodate
+    significant changes in demand from the workloads it hosts.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们首先探讨如何实现自动缩放，并设计软件以利用这些系统。然后我们将深入探讨特定系统的细节，这些系统可以用于在基于Kubernetes的平台中自动缩放我们的应用程序。这将包括水平和垂直自动缩放，包括触发缩放事件所应使用的指标。我们还将研究如何按比例缩放工作负载以适应集群本身，以及您可能考虑的自定义自动缩放示例。最后，在[“集群自动缩放”](#cluster_autoscaling)中，我们将讨论扩展平台本身的缩放，以便它能够适应其托管的工作负载的需求显著变化。
+- en: Types of Scaling
+  id: totrans-17
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 缩放类型
+- en: 'In software engineering, scaling generally falls into two categories:'
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在软件工程中，缩放通常分为两类：
+- en: Horizontal scaling
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 水平缩放
+- en: This involves changing the number of identical replicas of a workload. This
+    is either the number of Pods for a particular application or the number of nodes
+    in a cluster that hosts applications. Future references to horizontal scaling
+    will use the terms “out” or “in” when referring to increasing or decreasing the
+    number of Pods or nodes.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这涉及更改工作负载的相同副本数量。这可以是特定应用程序的Pod的数量，也可以是托管应用程序的集群中的节点数量。未来提到水平缩放将使用术语“外扩”或“内缩”来指示增加或减少Pod或节点的数量。
+- en: Vertical scaling
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 垂直缩放
+- en: This involves altering the resource capacity of a single instance. For an application,
+    this is changing the resource requests and/or limits for the containers of the
+    application. For nodes of a cluster, this generally involves changing the amount
+    of CPU and memory resources available. Future references to vertical scaling will
+    use the terms “up” or “down” to refer to these changes.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这涉及修改单个实例的资源容量。对于应用程序来说，这意味着更改应用程序容器的资源请求和/或限制。对于集群的节点来说，通常涉及改变可用的CPU和内存资源的数量。未来提到垂直缩放将使用术语“上升”或“下降”来表示这些变化。
+- en: In systems that have a need to dynamically scale, i.e., have frequent, significant
+    changes in load, prefer horizontal scaling where possible. Vertical scaling is
+    limited by the largest machine you have available to use. Furthermore, increasing
+    capacity with vertical scaling involves a restart for the application. Even in
+    virtualized environments where dynamic scaling of machines is possible, Pods will
+    need to be restarted as resource requests and limits cannot be dynamically updated
+    at this time. Compare this with horizontal scaling, where existing instances need
+    not restart and capacity is dynamically increased by adding replicas.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于需要动态扩展的系统，即频繁、显著变化负载的系统，尽可能偏好水平扩展。垂直扩展受限于可用的最大机器。此外，通过垂直扩展增加容量需要应用程序重新启动。即使在虚拟化环境中，动态扩展机器也是可能的，但
+    Pod 需要重新启动，因为此时不能动态更新资源请求和限制。与之相比，水平扩展不需要现有实例重新启动，并且通过添加副本动态增加容量。
+- en: Application Architecture
+  id: totrans-24
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 应用程序架构
+- en: The topic of autoscaling is particularly important to service-oriented systems.
+    One of the benefits of decomposing applications into distinct components is the
+    ability to scale different parts of an application independently. We were doing
+    this with n-tier architectures well before cloud native emerged. It became commonplace
+    to separate web applications from their relational databases and scale the web
+    app independently. With microservice architecture we can extend this further.
+    For example, an enterprise website may have a service that powers its online store,
+    which is distinct from a service that serves blog posts. When there is a marketing
+    event, the online store can be scaled while the blog service is not affected and
+    may remain unchanged.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 自动扩展的主题对面向服务的系统尤为重要。将应用程序分解为不同组件的好处之一是能够独立扩展应用程序的不同部分。在云原生出现之前，我们在 n 层架构中已经做到了这一点。将网页应用程序与其关系数据库分离并独立扩展已成常态。通过微服务架构，我们可以进一步扩展。例如，企业网站可能有一个支持在线商店的服务，与一个服务提供博客文章的服务不同。在进行市场活动时，可以扩展在线商店而不影响博客服务，博客服务可能保持不变。
+- en: With this opportunity to scale different services independently, you are able
+    to more efficiently utilize the infrastructure used by your workloads. However,
+    you introduce the management overhead of scaling many distinct workloads. Automating
+    this scaling process becomes very imporant. At a certain point, it becomes essential.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有了独立扩展不同服务的机会，您能够更有效地利用工作负载使用的基础设施。但是，您引入了管理多个独立工作负载的管理开销。自动化这一扩展过程变得非常重要。在某一时刻，它变得至关重要。
+- en: Autoscaling lends itself well to smaller, more nimble workloads that have tiny
+    image sizes and fast startup times. If the time required to pull a container image
+    onto a given node is short, and if the time it takes for the application to start
+    once the container is created is also short, the workload can respond to scaling
+    events quickly. Capacity can be adjusted much more readily. Applications with
+    image sizes over a gigabyte and startup scripts that run for minutes are far less
+    suited to responding to changes in load. Workloads like this are not good candidates
+    for autoscaling, so keep this in mind when designing and building your apps.
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 自动扩展非常适合那些具有小型、敏捷的工作负载，其镜像大小小且启动速度快。如果将容器镜像拉到特定节点所需时间短，并且一旦创建容器后应用程序启动时间也很短，则工作负载可以迅速响应扩展事件。可以更快速地调整容量。镜像大小超过一千兆字节且启动脚本运行几分钟的应用程序，则不太适合响应负载变化。在设计和构建应用程序时请牢记这一点。
+- en: It’s also important to recognize that autoscaling will involve stopping instances
+    of the app. This doesn’t apply when workloads scale out, of course. However, that
+    which scales out, must scale back in. That will involve stopping running instances.
+    And with vertically scaled workloads, restarts are required to update resource
+    allocations. In either case, your application’s ability to gracefully shut down
+    will be important. [Chapter 14](ch14.html#application_considerations_chapter)
+    covers this topic in detail.
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 还需注意的是，自动扩展将涉及停止应用程序实例。当然，这不适用于工作负载的扩展。然而，扩展之后，也必须缩回。这将涉及停止正在运行的实例。而对于垂直扩展的工作负载，需要重新启动以更新资源分配。无论哪种情况，你的应用程序能够优雅地关闭的能力都是很重要的。详细讨论请参见[第
+    14 章](ch14.html#application_considerations_chapter)。
+- en: Now that we’ve addressed the design concerns to keep in mind, let’s dive into
+    the details of autoscaling workloads in Kubernetes clusters.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经解决了需要注意的设计问题，让我们深入探讨在 Kubernetes 集群中自动扩展工作负载的详细信息。
+- en: Workload Autoscaling
+  id: totrans-30
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 工作负载自动扩展
+- en: This section will focus on autoscaling application workloads. This involves
+    monitoring some metric and adjusting workload capacity without human intervention.
+    While this sounds like a set-it-and-forget-it operation, don’t treat it that way,
+    especially in initial stages. Even after you load test your autoscaling configurations,
+    you need to ensure the behavior you get in production is what you intended. Load
+    tests don’t always mimic production conditions accurately. So once in production,
+    you will want to check in on the application to verify that it is scaling at the
+    right thresholds and your objectives for efficiency and end-user experience are
+    being met. Strongly consider setting alerts so that you get notified of significant
+    scaling events to review and tweak its behavior as needed.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本节将重点讨论自动扩展应用程序工作负载。这涉及监控某些指标并在没有人为干预的情况下调整工作负载容量。虽然这听起来像是一种设定并忘记的操作，但不要这样对待，特别是在初始阶段。即使在负载测试自动缩放配置之后，您仍需要确保生产环境中的行为符合您的意图。负载测试并不总能准确模拟生产条件。因此，一旦投入生产使用，您将希望检查应用程序，以验证它是否在正确的阈值上进行扩展，并满足效率和最终用户体验的目标。强烈建议设置警报，以便在出现重要的扩展事件时得到通知，并根据需要查看和调整其行为。
+- en: Most of this section will address the Horizontal Pod Autoscaler and the Vertical
+    Pod Autoscaler. These are the most common tools used for autoscaling workloads
+    on Kubernetes. We’ll also dig into the metrics your workload uses to trigger scaling
+    events and when you should consider custom application metrics for this purpose.
+    We’ll also look at the Cluster Proportional Autoscaler and the use cases where
+    that makes sense. Lastly, we’ll touch on custom methods beyond these particular
+    tools you might consider.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本节大部分内容将涉及水平 Pod 自动缩放器和垂直 Pod 自动缩放器。这些是在 Kubernetes 上自动扩展工作负载时最常用的工具。我们还将深入探讨工作负载使用的指标以触发扩展事件的情况，以及在考虑自定义应用程序指标用于此目的时应考虑的内容。我们还将探讨集群比例自动缩放器以及适合使用该工具的用例。最后，我们将简要讨论超出这些特定工具范围的自定义方法。
+- en: Horizontal Pod Autoscaler
+  id: totrans-33
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 水平 Pod 自动缩放器
+- en: The Horizontal Pod Autoscaler (HPA) is the most common tool used for autoscaling
+    workloads in Kubernetes-based platforms. It is natively supported by Kubernetes
+    with the HorizontalPodAutoscaler resource and a controller bundled into the kube-controller-manager.
+    If you are using CPU or memory consumption as a metric for autoscaling your workload,
+    the barrier to entry is low for using the HPA.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 水平 Pod 自动缩放器（HPA）是在基于 Kubernetes 平台上自动扩展工作负载时最常用的工具。它由 Kubernetes 原生支持，通过水平
+    Pod 自动缩放器资源和捆绑到 kube-controller-manager 中的控制器实现。如果您使用 CPU 或内存消耗作为工作负载自动缩放的度量标准，使用
+    HPA 的门槛就很低。
+- en: In this case, you can use the [Kubernetes Metrics Server](https://oreil.ly/S0vbj)
+    to make the PodMetrics available to the HPA. The Metrics Server collects CPU and
+    memory usage metrics for containers from the kubelets in the cluster and makes
+    them available through the resource metrics API in PodMetrics resources. The Metrics
+    Server leverages the [Kubernetes API aggregation layer](https://oreil.ly/eXDcl).
+    Requests for resources in the API group and version `metrics.k8s.io/v1beta1` will
+    be proxied to the Metrics Server.
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这种情况下，您可以使用 [Kubernetes Metrics Server](https://oreil.ly/S0vbj) 将 PodMetrics
+    提供给 HPA。Metrics Server 从集群中的 kubelet 收集容器的 CPU 和内存使用情况指标，并通过 PodMetrics 资源在资源指标
+    API 中提供这些指标。Metrics Server 利用 [Kubernetes API 聚合层](https://oreil.ly/eXDcl)。对于
+    API 组和版本 `metrics.k8s.io/v1beta1` 的资源请求将被代理到 Metrics Server。
+- en: '[Figure 13-1](#horizontal_pod_autoscaling) illustrates how the components carry
+    out this function. The Metrics Server collects resource usage metrics for the
+    containers on the platform. It gets this data from the kubelets running on each
+    node in the cluster and makes that data available to clients that need to access
+    it. The HPA controller queries the Kubernetes API server to retrieve that resource
+    usage data every 15 seconds, by default. The Kubernetes API proxies the requests
+    to the Metrics Server, which serves the requested data. The HPA controller maintains
+    a watch on the HorizontalPodAutoscaler resource type and uses the configuration
+    defined there to determine if the number of replicas for an application is appropriate.
+    [Example 13-1](#an_example_of_deployment_and_horizontalpdodautoscaler_manifests)
+    demonstrates how this determination is made. The app is most commonly defined
+    with a Deployment resource, and, when the HPA controller determines that the replica
+    count needs to be adjusted, it updates the relevant Deployment through the API
+    server. Subsequently, the Deployment controller responds by updating the ReplicaSet,
+    which leads to a change in the number of Pods.'
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 13-1](#horizontal_pod_autoscaling) 展示了组件如何执行这一功能。度量服务器收集平台上容器的资源使用度量数据。它从集群中每个节点上运行的
+    kubelet 获取数据，并使这些数据对需要访问它的客户端可用。HPA 控制器每 15 秒默认从 Kubernetes API 服务器查询一次资源使用数据。Kubernetes
+    API 代理请求到度量服务器，并提供所请求的数据。HPA 控制器保持对 HorizontalPodAutoscaler 资源类型的监视，并使用在那里定义的配置来确定应用程序副本数量是否合适。[示例 13-1](#an_example_of_deployment_and_horizontalpdodautoscaler_manifests)
+    展示了如何进行此决定。应用程序通常使用 Deployment 资源进行定义，当 HPA 控制器确定需要调整副本数时，它通过 API 服务器更新相关的 Deployment。随后，Deployment
+    控制器响应并更新 ReplicaSet，从而改变 Pod 的数量。'
+- en: '![prku 1301](assets/prku_1301.png)'
+  id: totrans-37
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1301](assets/prku_1301.png)'
+- en: Figure 13-1\. Horizontal Pod autoscaling.
+  id: totrans-38
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 13-1\. 水平 Pod 自动扩展。
+- en: The desired state for an HPA is declared in the HorizontalPodAutoscaler resource,
+    as demonstrated in the following example. The `targetCPUUtilizationPercentage`
+    is used to determine replica count for the target workload.
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: HPA 的期望状态在 HorizontalPodAutoscaler 资源中声明，如下例所示。`targetCPUUtilizationPercentage`
+    用于确定目标工作负载的副本数。
+- en: Example 13-1\. An example of Deployment and HorizontalPodAutoscaler manifests
+  id: totrans-40
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 13-1\. Deployment 和 HorizontalPodAutoscaler 配置示例。
+- en: '[PRE0]'
+  id: totrans-41
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: '[![1](assets/1.png)](#co_autoscaling_CO1-1)'
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_autoscaling_CO1-1)'
+- en: A `resources.requests` value must be set for the metric being used.
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 度量使用的 `resources.requests` 必须为设置值。
+- en: '[![2](assets/2.png)](#co_autoscaling_CO1-2)'
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_autoscaling_CO1-2)'
+- en: The replicas will never scale in below this value.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 副本数永远不会低于此值进行缩减。
+- en: '[![3](assets/3.png)](#co_autoscaling_CO1-3)'
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_autoscaling_CO1-3)'
+- en: The replicas will never scale out beyond this value.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 副本数永远不会超出此值进行扩展。
+- en: '[![4](assets/4.png)](#co_autoscaling_CO1-4)'
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_autoscaling_CO1-4)'
+- en: The desired CPU utilization. If the actual utilization goes significantly beyond
+    this value, the replica count will be increased; if significantly below, decreased.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 期望的 CPU 利用率。如果实际利用率显著超出此值，则副本数将增加；如果显著低于，则减少。
+- en: Note
+  id: totrans-50
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: If you have a use case to use multiple metrics, e.g., CPU *and* memory, to trigger
+    scaling events, you can use the `autoscaling/v2beta2` API. In this case, the HPA
+    controller will calculate the appropriate number of replicas based on each metric
+    individually, and then apply the highest value.
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您有使用多个度量触发扩展事件的用例，例如 CPU *和* 内存，您可以使用 `autoscaling/v2beta2` API。在这种情况下，HPA
+    控制器将根据每个度量单独计算合适的副本数，然后应用最高值。
+- en: 'This is the most common and readily used autoscaling method, is widely applicable,
+    and is relatively uncomplicated to implement. However, it’s important to understand
+    the limitations of this method:'
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是最常见和广泛使用的自动扩展方法，适用性广泛，并且相对简单实现。但是，理解此方法的局限性非常重要：
+- en: Not all workloads can scale horizontally
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 并非所有工作负载都可以进行水平扩展。
+- en: For applications that cannot share load among distinct instances, horizontal
+    scaling is useless. This is true for some stateful workloads and leader-elected
+    applications. For these use cases you may consider vertical Pod autoscaling.
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于无法在不同实例之间共享负载的应用程序，水平扩展毫无用处。这对某些有状态工作负载和领导选举应用程序是正确的。对于这些用例，您可以考虑使用垂直 Pod
+    自动扩展。
+- en: The cluster size will limit scaling
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 集群大小将限制扩展能力。
+- en: As an application scales out, it may run out of capacity available in the worker
+    nodes of a cluster. This can be solved by provisioning sufficient capacity ahead
+    of time, using alerts to prompt your platform operators to add capacity manually,
+    or by using cluster autoscaling, which is discussed in another section of this
+    chapter.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当应用程序扩展时，可能会耗尽集群工作节点中的可用容量。这可以通过提前配置足够的容量来解决，使用警报来提示平台操作员手动添加容量，或者使用集群自动缩放来解决，这在本章的另一节中进行了讨论。
+- en: CPU and memory may not be the right metric to use for scaling decisions
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CPU 和内存可能不是用于扩展决策的正确指标。
+- en: If your workload exposes a custom metric that better identifies a need to scale,
+    it can be used. We will cover that use case later in this chapter.
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您的工作负载暴露了更好地标识需要进行扩展的自定义指标，则可以使用它。我们将在本章的后面部分讨论这种用例。
+- en: Warning
+  id: totrans-59
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Avoid autoscaling your workload based on a metric that does not always change
+    in proportion to the load placed on the application. The most common autoscaling
+    metric is CPU. However, if a particular workload’s CPU doesn’t change significantly
+    with added load, and instead consumes memory in more direct proportion to increased
+    load, do not use CPU. A less obvious example is if a workload consumes added CPU
+    at startup. During normal operation, CPU may be a perfectly useful trigger for
+    autoscaling. However, a startup CPU spike will be interpreted by the HPA as a
+    trigger for a scaling event even though traffic has not induced the spike. There
+    are ways to mitigate this with kube-controller-manager flags such as `--horizontal-pod-autoscaler-cpu-initialization-period`,
+    which will provide a startup grace period, or the `--horizontal-pod-autoscaler-sync-period`,
+    which allows you to increase the time between scaling evaluations. But note that
+    these flags are set on the kube-controller-manager. These will affect all HPAs
+    across the entire cluster, which will impact workloads that do *not* have high
+    startup CPU consumption. You could wind up reducing the responsiveness of the
+    HPA for workloads cluster-wide. If you find your team employing workarounds to
+    make CPU consumption work as a trigger for your autoscaling needs, consider using
+    a more representative custom metric. Perhaps number of HTTP requests received
+    would make a better measuring stick, for example.
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 避免根据不总是与应用程序负载放置成比例变化的指标自动缩放工作负载。最常见的自动缩放指标是 CPU。但是，如果特定工作负载的 CPU 随增加的负载并未显著变化，而是更直接地与增加的负载成比例地消耗内存，则不要使用
+    CPU。一个不太明显的例子是如果工作负载在启动时消耗了额外的 CPU。在正常运行期间，CPU 可能是一个完全有用的自动缩放触发器。然而，在启动时的 CPU
+    峰值将被 HPA 解释为触发缩放事件，即使流量未引起峰值。可以通过 kube-controller-manager 标志来减轻这种情况，例如 `--horizontal-pod-autoscaler-cpu-initialization-period`，它将提供一个启动宽限期，或者
+    `--horizontal-pod-autoscaler-sync-period`，它允许您增加缩放评估之间的时间。但请注意，这些标志是设置在 kube-controller-manager
+    上的。这将影响整个集群中所有 HPAs，这将影响那些启动时 CPU 消耗不高的工作负载。您可能会减少整个集群中工作负载的 HPA 响应性。如果您发现您的团队在使用变通方法使
+    CPU 消耗作为自动缩放需求的触发器，请考虑使用更具代表性的自定义指标。例如，收到的 HTTP 请求数量可能会更好地作为衡量标准。
+- en: 'That wraps up the Horizontal Pod Autoscaler. Next, we’ll look at another form
+    of autoscaling available in Kubernetes: vertical Pod autoscaling.'
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这就结束了水平 Pod 自动缩放器。接下来，我们将看一下 Kubernetes 中另一种可用的自动缩放形式：竖直 Pod 自动缩放。
+- en: Vertical Pod Autoscaler
+  id: totrans-62
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 竖直 Pod 自动缩放器
+- en: For reasons covered earlier in [“Types of Scaling”](#types_of_scaling), vertically
+    scaling workloads is a less common requirement. Furthermore, automating vertical
+    scaling is more complex to implement in Kubernetes. While the HPA is included
+    in core Kubernetes, the VPA needs to be implemented by deploying three distinct
+    controller components in addition to the Metrics Server. For these reasons, the
+    [Vertical Pod Autoscaler (VPA)](https://oreil.ly/TxeiY) is less commonly used
+    than the HPA.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 出于早前在 [“扩展类型”](#types_of_scaling) 中讨论的原因，竖直扩展工作负载是一个较少见的需求。此外，在 Kubernetes 中实现竖直缩放的自动化更为复杂。虽然
+    HPA 包含在核心 Kubernetes 中，但 VPA 需要通过部署三个不同的控制器组件以及度量服务器来实现。因此，[竖直 Pod 自动缩放器（VPA）](https://oreil.ly/TxeiY)
+    比 HPA 更少被使用。
+- en: 'The VPA consists of three distinct components:'
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: VPA 由三个不同的组件组成：
+- en: Recommender
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 推荐器
+- en: Determines optimum container CPU and/or memory request values based on usage
+    in the PodMetrics resource for the Pod in question.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 基于 PodMetrics 资源中 Pod 的使用情况，确定最佳的容器 CPU 和/或内存请求值。
+- en: Admission plug-in
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 准入插件
+- en: Mutates the resource requests and limits on new Pods when they are created based
+    on the recommender’s recommendation.
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当根据推荐者的建议创建新 Pod 时，会变异资源请求和限制。
+- en: Updater
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 更新程序
+- en: Evicts Pods so that they may have updated values applied by the admission plug-in.
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将 Pod 驱逐，以便由准入插件应用更新后的值。
+- en: '[Figure 13-2](#vertical_pod_autoscaling) illustrates the interaction of components
+    with the VPA.'
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Figure 13-2](#vertical_pod_autoscaling) 说明了组件与 VPA 的交互。'
+- en: '![prku 1302](assets/prku_1302.png)'
+  id: totrans-72
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1302](assets/prku_1302.png)'
+- en: Figure 13-2\. Vertical Pod autoscaling.
+  id: totrans-73
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 13-2\. 垂直 Pod 自动缩放。
+- en: The desired state for a VPA is declared in the VerticalPodAutoscaler resource
+    as demonstrated in [Example 13-2](#ex_13-2).
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 VerticalPodAutoscaler 资源中声明 VPA 的期望状态，如示例 [Example 13-2](#ex_13-2) 所示。
+- en: Example 13-2\. A Pod resource and the VerticalPodAutoscaler resource that configures
+    vertical autoscaling
+  id: totrans-75
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: Example 13-2\. 一个 Pod 资源和配置垂直自动缩放的 VerticalPodAutoscaler 资源
+- en: '[PRE1]'
+  id: totrans-76
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: '[![1](assets/1.png)](#co_autoscaling_CO2-1)'
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_autoscaling_CO2-1)'
+- en: The VPA will maintain the requests:limit ratio when updating values. In this
+    guaranteed QOS example, any change to requests will result in an identical change
+    to the limits.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当更新值时，VPA 将保持请求:限制比例。在这个保证的 QOS 示例中，对请求的任何更改都将导致限制的相同更改。
+- en: '[![2](assets/2.png)](#co_autoscaling_CO2-2)'
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_autoscaling_CO2-2)'
+- en: This scaling policy will apply to every container—just one in this example.
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个缩放策略将适用于每个容器——在这个示例中只有一个。
+- en: '[![3](assets/3.png)](#co_autoscaling_CO2-3)'
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_autoscaling_CO2-3)'
+- en: Resources requests will not be set below these values.
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 资源请求不会设置低于这些值。
+- en: '[![4](assets/4.png)](#co_autoscaling_CO2-4)'
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_autoscaling_CO2-4)'
+- en: Resources requests will not be set above these values.
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 资源请求不会设置超过这些值。
+- en: '[![5](assets/5.png)](#co_autoscaling_CO2-5)'
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#co_autoscaling_CO2-5)'
+- en: Specifies the resources being autoscaled.
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 指定正在自动缩放的资源。
+- en: '[![6](assets/6.png)](#co_autoscaling_CO2-6)'
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![6](assets/6.png)](#co_autoscaling_CO2-6)'
+- en: There are three `updateMode` options. `Recreate` mode will activate autoscaling.
+    `Initial` mode will apply admission control to set resource values when created,
+    but will never evict any Pods. `Off` mode will recommend resource values but never
+    automatically change them.
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有三种 `updateMode` 选项。`Recreate` 模式将激活自动缩放。`Initial` 模式将应用准入控制以在创建时设置资源值，但不会驱逐任何
+    Pod。`Off` 模式将建议资源值，但永远不会自动更改它们。
+- en: We very rarely see the VPA in full `Recreate` mode in the field. However, using
+    it in `Off` mode can also be valuable. While comprehensive load testing and profiling
+    of applications is recommended and preferable before they go to production, that’s
+    not always the reality. In corporate environments with deadlines, workloads are
+    often deployed to production before the resource consumption profile is well understood.
+    This commonly leads to overrequested resources as a safety measure, which often
+    results in poor utilization of infrastructure. In these cases, the VPA can be
+    used to recommend values that are then evaluated and manually updated by engineers
+    once production load has been applied. This gives them peace of mind that workloads
+    will not be evicted at peak usage times, which is particularly important if an
+    app does not yet gracefully shut down. But, because the VPA recommends values,
+    it saves some of the toil in reviewing resource usage metrics and determining
+    optimum values. In this use case, it is not an autoscaler, but rather a resource
+    tuning aid.
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们很少在现场看到 VPA 处于完全的 `Recreate` 模式。但是，在 `Off` 模式下使用它也是有价值的。在应用发布到生产之前，建议进行全面的负载测试和应用程序分析，但这并非总是现实。在企业环境中，由于截止日期的存在，工作负载通常在理解资源消耗配置文件之前就已部署到生产中。这通常导致过度请求资源作为一种安全措施，这往往导致基础设施的低利用率。在这些情况下，VPA
+    可以用来推荐值，然后由工程师评估并手动更新一旦生产负载已应用，他们可以放心工作负载不会在峰值使用时间被驱逐，这对于尚未优雅关闭的应用程序尤为重要。但是，由于
+    VPA 推荐值，它节省了一些审查资源使用度量和确定最佳值的工作。在这种用例中，它不是一个自动缩放器，而是一个资源调整辅助工具。
+- en: To get recommendations from a VPA in `Off` mode, run `kubectl describe vpa <vpa
+    name>`. You will get an output similar to [Example 13-3](#ex_13-3) under the `Status`
+    section.
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要从处于 `Off` 模式的 VPA 获取建议，请运行 `kubectl describe vpa <vpa name>`。您将在 `Status` 部分获得类似于
+    [Example 13-3](#ex_13-3) 的输出。
+- en: Example 13-3\. Vertical Pod Autoscaler recommendation
+  id: totrans-91
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: Example 13-3\. 垂直 Pod 自动缩放建议
+- en: '[PRE2]'
+  id: totrans-92
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: It will provide recommendations for each container. Use the `Target` value as
+    a baseline recommendation for the CPU and memory requests.
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 它将为每个容器提供建议。使用 `Target` 值作为 CPU 和内存请求的基线建议。
+- en: Autoscaling with Custom Metrics
+  id: totrans-94
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用自定义指标进行自动缩放
+- en: If CPU and memory consumption are not good metrics by which to scale a particular
+    workload, you can leverage custom metrics as an alternative. We can still use
+    tools like the HPA. However, we will change the source of metrics used to trigger
+    the autoscaling. The first step is to expose the appropriate custom metrics from
+    your application. [Chapter 14](ch14.html#application_considerations_chapter) addresses
+    how to go about doing this.
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果 CPU 和内存消耗不是缩放特定工作负载的好指标，您可以利用自定义指标作为替代方案。我们仍然可以使用 HPA 等工具。但是，我们将更改用于触发自动缩放的指标来源。第一步是从应用程序中公开适当的自定义指标。[第
+    14 章](ch14.html#application_considerations_chapter) 解释了如何执行此操作。
+- en: Next, you will need to expose the custom metrics to the autoscaler. This will
+    require a custom metrics server that will be used instead of the Kubernetes Metrics
+    Server that we looked at earlier. Some vendors, such as Datadog, provide systems
+    to do this in Kubernetes. You can also do it with Prometheus, assuming you have
+    a Prometheus server that is scraping and storing the app’s custom metrics, which
+    is covered in [Chapter 10](ch10.html#chapter10). In this case, we can use the
+    [Prometheus Adapter](https://oreil.ly/vDgk3) to serve the custom metrics.
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，您需要将自定义指标公开给自动缩放器。这将需要一个自定义指标服务器，用于替代之前介绍过的 Kubernetes Metrics Server。一些供应商，如
+    Datadog，在 Kubernetes 中提供了执行此操作的系统。您还可以使用 Prometheus 进行此操作，假设您有一个 Prometheus 服务器在抓取和存储应用程序的自定义指标，这在
+    [第 10 章](ch10.html#chapter10) 中有所介绍。在这种情况下，我们可以使用 [Prometheus 适配器](https://oreil.ly/vDgk3)
+    提供自定义指标。
+- en: The Prometheus Adapter will retrieve the custom metrics from Prometheus’ HTTP
+    API and expose them through the Kubernetes API. Like the Metrics Server, the Prometheus
+    Adapter uses Kubernetes API aggregation to instruct Kubernetes to proxy requests
+    for metrics APIs to the Prometheus Adapter. In fact, in addition to the custom
+    metrics API, the Prometheus Adapter implements the resource metrics API that allows
+    you to entirely replace the Metrics Server functionality with the Prometheus Adapter.
+    Additionally, it implements the external metrics API that offers the opportunity
+    to scale an application based on metrics external to the cluster.
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Prometheus 适配器将从 Prometheus 的 HTTP API 中检索自定义指标，并通过 Kubernetes API 公开这些指标。与
+    Metrics Server 类似，Prometheus 适配器使用 Kubernetes API 聚合来指示 Kubernetes 代理请求以获取指向 Prometheus
+    适配器的指标 API。事实上，除了自定义指标 API 外，Prometheus 适配器还实现了资源指标 API，允许您完全用 Prometheus 适配器替换
+    Metrics Server 的功能。此外，它还实现了外部指标 API，提供了根据集群外部指标调整应用程序规模的机会。
+- en: When leveraging custom metrics for horizontal autoscaling, Prometheus scrapes
+    those metrics from your app. The Prometheus Adapter gets those metrics from Prometheus
+    and exposes them through the Kubernetes API server. The HPA queries those metrics
+    and scales your application accordingly, as shown in [Figure 13-3](#horizontal_pod_autoscaling_with_custom_metrics).
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在利用自定义指标进行水平自动缩放时，Prometheus 从应用程序中抓取这些指标。Prometheus 适配器从 Prometheus 获取这些指标，并通过
+    Kubernetes API 服务器公开它们。HPA 查询这些指标，并相应地调整应用程序规模，如图 [13-3](#horizontal_pod_autoscaling_with_custom_metrics)
+    所示。
+- en: While leveraging custom metrics in this way introduces some added complexity,
+    if you are already exposing useful metrics from your workloads and using Prometheus
+    to monitor them, replacing Metrics Server with the Prometheus Adapter is not a
+    huge leap. And the additional autoscaling opportunities it opens up make it well
+    worth considering.
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管以这种方式利用自定义指标引入了一些额外的复杂性，但如果您已经从工作负载中公开有用的指标并使用 Prometheus 对其进行监视，则用 Prometheus
+    适配器替换 Metrics Server 不是一个巨大的飞跃。而且它开启的额外自动缩放机会使其值得考虑。
+- en: '![prku 1303](assets/prku_1303.png)'
+  id: totrans-100
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1303](assets/prku_1303.png)'
+- en: Figure 13-3\. Horizontal Pod autoscaling with custom metrics.
+  id: totrans-101
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 13-3\. 使用自定义指标的水平 Pod 自动缩放。
+- en: Cluster Proportional Autoscaler
+  id: totrans-102
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 集群比例自动缩放器
+- en: The [Cluster Proportional Autoscaler](https://oreil.ly/2ATBG) (CPA) is a horizontal
+    workload autoscaler that scales replicas based on the number of nodes (or a subset
+    of nodes) in the cluster. So, unlike the HPA, it does not rely on any of the metrics
+    APIs. Therefore, it does not have a dependency on the Metrics Server or Prometheus
+    Adapter. Also, it is not configured with a Kubernetes resource, but rather uses
+    flags to configure target workloads and a ConfigMap for scaling configuration.
+    [Figure 13-4](#cluster_proportional_autoscaling) illustrates the CPA’s much simpler
+    operational model.
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[集群比例自动扩展器](https://oreil.ly/2ATBG)（CPA）是一种水平工作负载自动扩展器，根据集群中节点（或节点子集）的数量来扩展副本。因此，与
+    HPA 不同，它不依赖任何度量 API。因此，它不依赖于 Metrics Server 或 Prometheus Adapter。此外，它不是使用 Kubernetes
+    资源进行配置，而是使用标志来配置目标工作负载和用于缩放配置的 ConfigMap。[图 13-4](#cluster_proportional_autoscaling)
+    说明了 CPA 的简化操作模型。'
+- en: '![prku 1304](assets/prku_1304.png)'
+  id: totrans-104
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1304](assets/prku_1304.png)'
+- en: Figure 13-4\. Cluster proportional autoscaling.
+  id: totrans-105
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 13-4\. 集群比例自动扩展。
+- en: The CPA has a narrower use case. Workloads that need to scale in proportion
+    to the cluster are generally limited to platform services. When considering the
+    CPA, evaluate whether an HPA would provide a better solution, especially if you
+    are already leveraging the HPA with other workloads. If you are already using
+    HPAs, you will have the Metrics Server or Prometheus Adapter already deployed
+    to implement the necessary metrics APIs. So deploying another autoscaler, and
+    the maintenance overhead that goes with it, may not be the best option. Alternatively,
+    in a cluster where HPAs are *not* already in use, and the CPA provides the functionality
+    you need, it becomes more attractive due to its simple operational model.
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CPA 具有较窄的使用案例。通常需要根据集群比例扩展的工作负载通常限于平台服务。在考虑 CPA 时，评估是否 HPA 能提供更好的解决方案，特别是如果您已经与其他工作负载一起使用
+    HPA。如果您已经使用 HPAs，则已经部署了 Metrics Server 或 Prometheus Adapter 来实现必要的度量 API。因此，部署另一个自动扩展器以及随之而来的维护开销可能不是最佳选择。或者，如果在尚未使用
+    HPAs 的集群中，并且 CPA 提供所需功能，则由于其简单的操作模型，它变得更具吸引力。
+- en: 'There are two scaling methods used by the CPA:'
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CPA 使用的两种扩展方法有：
+- en: The linear method scales your application in direct proportion to how many nodes
+    or cores are in the cluster.
+  id: totrans-108
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 线性方法会按照集群中节点或核心数的数量直接扩展您的应用程序。
+- en: The ladder method uses a step function to determine the proportion of nodes:replicas
+    and/or cores:replicas.
+  id: totrans-109
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 阶梯方法使用阶梯函数来确定节点：副本和/或核心：副本的比例。
+- en: We have seen the CPA used with success for services like cluster DNS where clusters
+    are allowed to scale to hundreds of worker nodes. In cases such as this, the traffic
+    and demand for a service at 5 nodes is going to be drastically different than
+    at 300 nodes, so this approach can be quite useful.
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们已经看到 CPA 在诸如集群 DNS 这样的服务中成功使用，允许集群扩展到数百个工作节点。在这种情况下，服务在 5 个节点时的流量和需求将与 300
+    个节点时大不相同，因此这种方法非常有用。
+- en: Custom Autoscaling
+  id: totrans-111
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 自定义自动扩展
+- en: 'On the subject of workload autoscaling, so far we’ve discussed some specific
+    tools available in the community: the HPA, VPA, and CPA along with the Metrics
+    Server and Prometheus Adapter. But autoscaling your workloads is not limited to
+    this tool set. Any automated method you can employ that implements the scaling
+    behavior you require falls into the same category. For example, if you know the
+    days and times when traffic increases for your application, you can implement
+    something as simple as a Kubernetes CronJob that updates the replica count on
+    the relevant Deployment. In fact, if you can leverage a simple, straightforward
+    method such as this, lean toward the simpler solution. A system with fewer moving
+    parts is less likely to produce unexpected results.'
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 关于工作负载自动扩展，到目前为止，我们已经讨论了社区中可用的一些具体工具：HPA、VPA 和 CPA，以及 Metrics Server 和 Prometheus
+    Adapter。但是，扩展您的工作负载不仅限于这些工具集。任何您可以采用的自动化方法，实现您需要的扩展行为，都属于同一类别。例如，如果您知道应用程序流量在哪些天和时间增加，您可以实施像
+    Kubernetes CronJob 这样简单的解决方案，更新相关部署的副本计数。实际上，如果您能利用像这样的简单、直接的方法，更倾向于选择更简单的解决方案。少运动部件的系统更不太可能产生意外结果。
+- en: 'This wraps up the approaches to autoscaling workloads. We’ve looked at several
+    ways to approach this using core Kubernetes, community-developed add-on components,
+    and custom solutions. Next, we’re going to look at autoscaling the substrate that
+    hosts these workloads: the Kubernetes cluster itself.'
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些是自动缩放工作负载的方法。我们已经探讨了几种使用核心Kubernetes、社区开发的附加组件和定制解决方案的方法。接下来，我们将看一看如何对托管这些工作负载的基础结构进行自动缩放：即Kubernetes集群本身。
+- en: Cluster Autoscaling
+  id: totrans-114
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 集群自动伸缩器
+- en: The Kubernetes [Cluster Autoscaler (CA)](https://oreil.ly/Q5Xdp) provides an
+    automated solution for horizontally scaling the worker nodes in your cluster.
+    It provides a solution to one of the limitations of HPAs and can alleviate significant
+    toil around capacity and cost management for your Kubernetes infrastructure.
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes [集群自动伸缩器（CA）](https://oreil.ly/Q5Xdp) 提供了一种自动化方案，用于横向扩展集群中的工作节点。它解决了HPA的一些限制，并可以显著减少围绕Kubernetes基础设施的容量和成本管理的工作量。
+- en: As platform teams adopt your Kubernetes-based platform, you will need to manage
+    the clusters’ capacity as new tenants are onboarded. This can be a manual, routine
+    review process. It can also be alert-driven, whereby you use alerting rules on
+    usage metrics to notify you of situations where workers need to be added or removed.
+    Or you can fully automate the operation such that you can simply add and remove
+    tenants and let the CA manage the cluster scaling to accommodate.
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 随着平台团队采用基于Kubernetes的平台，您需要在新租户上线时管理集群的容量。这可能是一个手动的常规审查过程。也可以是基于警报驱动的，通过使用使用率指标的警报规则通知您需要增加或移除工作节点的情况。或者您可以完全自动化操作，只需添加和移除租户，让CA管理集群扩展以适应需求。
+- en: Furthermore, if you are leveraging workload autoscaling with significant fluctuation
+    in resource consumption, the story for CA becomes even more compelling. As load
+    increases on an HPA-managed workload, its replica count will increase. If you
+    run out of compute resources in your cluster, some of the Pods will not be scheduled
+    and remain in a `Pending` state. CA looks for this exact condition, calculates
+    the number of nodes needed to satisfy the shortage, and adds new nodes to your
+    cluster. The diagram in [Figure 13-5](#cluster_autoscaler_scaling_out_nodes_in_response_to_pod_replicas_scaling_out)
+    shows the cluster scaling out to accommodate a horizontally scaling application.
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此外，如果您正在利用工作负载自动缩放，并且资源消耗波动显著，CA的作用会更加突出。当HPA管理的工作负载负载增加时，其副本数量将增加。如果您的集群计算资源不足，一些Pod将无法调度并保持在`Pending`状态。CA会检测到这种确切条件，计算出满足需求的节点数量，并向您的集群添加新节点。图
+    [图 13-5](#cluster_autoscaler_scaling_out_nodes_in_response_to_pod_replicas_scaling_out)
+    显示了集群扩展以容纳横向扩展应用程序的情况。
+- en: '![prku 1305](assets/prku_1305.png)'
+  id: totrans-118
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1305](assets/prku_1305.png)'
+- en: Figure 13-5\. Cluster Autoscaler scaling out nodes in response to Pod replicas
+    scaling out.
+  id: totrans-119
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 13-5\. 集群自动伸缩器响应Pod副本扩展而扩展节点。
+- en: On the other side of the coin, when load reduces and the HPA scales in the Pods
+    for an application, the CA will look for nodes that have been underutilized for
+    an extended period. If the Pods on the underutilized nodes can be rescheduled
+    to other nodes in the cluster, the CA will deprovision the underutilized nodes
+    to scale the cluster in.
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一方面，当负载减少并且HPA缩减应用程序的Pod时，CA将寻找长时间未被充分利用的节点。如果可以将低利用率节点上的Pod重新调度到集群中的其他节点，CA将取消分配低利用率节点以进行集群缩减。
+- en: One thing to keep in mind when you invoke this dynamic management of worker
+    nodes is that it will inevitably shuffle the distribution of Pods across your
+    nodes. The Kubernetes scheduler will generally spread Pods evenly around your
+    worker nodes when they are first created. However, once a Pod is running, the
+    scheduling decision that determined its home will not be reevaluated unless it
+    is evicted. So when a particular application horizontally scales out and then
+    back in, you may end up with Pods unevenly spread across your worker nodes. In
+    some cases you may end up with many replicas for a Deployment clustered on just
+    a few nodes. If this presents a threat to a workload’s node failure tolerance,
+    you can use the [Kubernetes descheduler](https://github.com/kubernetes-sigs/descheduler)
+    to evict them according to different policies. Once evicted, the Pods will be
+    rescheduled. This will help rebalance their distribution across nodes. We have
+    not found many cases where there was a genuine compelling need to do this, but
+    it is an available option.
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您调用这种动态管理工作节点的方法时，请记住它将不可避免地重新分配 Pod 在节点间的分布。Kubernetes 调度器通常会在 Pod 刚创建时在工作节点间均匀地分布
+    Pod。然而，一旦 Pod 开始运行，决定其所属的调度决策将不会重新评估，除非它被驱逐。因此，当特定应用程序水平扩展然后再次缩减时，您可能会发现 Pod 在工作节点上分布不均匀。在某些情况下，可能会导致一个部署的多个副本聚集在几个节点上。如果这对工作负载的节点故障容忍性构成威胁，您可以使用
+    [Kubernetes descheduler](https://github.com/kubernetes-sigs/descheduler) 根据不同的策略将它们驱逐出去。一旦被驱逐，Pod
+    将被重新调度。这将有助于重新平衡它们在节点间的分布。我们尚未发现许多情况下确实存在这样的迫切需求，但这是一个可用的选择。
+- en: As you might imagine, there are infrastructure management concerns to plan for
+    if you are considering cluster autoscaling. Firstly, you will need to use one
+    of the supported cloud providers that are documented in the project repo. Next
+    you will have to give permissions to CA to create and destroy machines for you.
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您正在考虑集群自动缩放，您需要计划基础设施管理方面的问题。首先，您需要使用项目存储库中记录的受支持的云提供商之一。接下来，您将需要授权 CA 为您创建和销毁机器。
+- en: These infrastructure management concerns change somewhat if you use the CA with
+    the [Cluster API](https://github.com/kubernetes-sigs/cluster-api) project. Cluster
+    API uses its own Kubernetes operators to manage cluster infrastructure. In this
+    case, instead of connecting directly with the cloud provider to add and remove
+    worker nodes, CA offloads this operation to Cluster API. The CA simply updates
+    the replicas in a `MachineDeployment` resource, which is reconciled by Cluster
+    API controllers. This removes the need to use a cloud provider that’s compatible
+    with CA (however, you *will* need to check whether there is a Cluster API provider
+    for your cloud provider). The permissions issue is also offloaded to Cluster API
+    components. This is a better model in many ways. However, Cluster API is commonly
+    implemented using management clusters. This introduces external dependencies for
+    cluster autoscaling that should be considered. This topic is covered further in
+    [“Management clusters”](ch02.html#management_clusters).
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您使用 [Cluster API](https://github.com/kubernetes-sigs/cluster-api) 项目与 CA 配合使用，那么这些基础设施管理问题将有所变化。Cluster
+    API 使用其自己的 Kubernetes 操作符来管理集群基础设施。在这种情况下，CA 不再直接连接云提供商来添加和删除工作节点，而是将此操作卸载给 Cluster
+    API。CA 只需更新 `MachineDeployment` 资源中的副本数，这由 Cluster API 控制器来协调。这消除了需要使用与 CA 兼容的云提供商的必要性（但是，您需要检查是否有适用于您云提供商的
+    Cluster API 提供程序）。权限问题也被转移到 Cluster API 组件上处理。从许多方面来看，这是一个更好的模型。然而，Cluster API
+    通常使用管理集群进行实现。这为集群自动缩放引入了应该考虑的外部依赖关系。有关此主题的进一步信息，请参阅 [“管理集群”](ch02.html#management_clusters)。
+- en: The scaling behavior of CA is quite configurable. The CA is configured using
+    flags that are documented in the project’s [FAQ on GitHub](https://oreil.ly/DzQ0J).
+    [Example 13-4](#ex_13-4) shows a CA Deployment manifest for AWS and includes examples
+    of how to set some common flags.
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CA 的扩展行为是可以配置的。CA 使用在项目的 [GitHub 上的常见问题解答](https://oreil.ly/DzQ0J) 中记录的标志进行配置。[示例 13-4](#ex_13-4)
+    展示了针对 AWS 的 CA 部署清单，并包括如何设置一些常见标志的示例。
+- en: Example 13-4\. CA Deployment manifest targeting an Amazon Web Services autoscaling
+    group
+  id: totrans-125
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 13-4\. CA 部署清单针对亚马逊 Web 服务自动缩放组
+- en: '[PRE3]'
+  id: totrans-126
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: '[![1](assets/1.png)](#co_autoscaling_CO3-1)'
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_autoscaling_CO3-1)'
+- en: Configures the supported cloud provider; AWS in this case.
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 配置所支持的云服务提供商；在这种情况下是AWS。
+- en: '[![2](assets/2.png)](#co_autoscaling_CO3-2)'
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_autoscaling_CO3-2)'
+- en: This flag configures the CA to update an AWS autoscaling group called `worker-auto-scaling-group`.
+    It allows CA to scale the number of machines in this group between 1 and 10.
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此标志配置CA以更新名为`worker-auto-scaling-group`的AWS自动扩展组。它允许CA在此组中的机器数量在1和10之间进行扩展。
+- en: Cluster autoscaling can be extremely useful. It unlocks one of the compelling
+    benefits offered by cloud native infrastructure. However, it introduces nontrivial
+    complexity. Ensure you load test and understand well how the system will behave
+    before you rely on it to autonomously manage the scaling of business-critical
+    platforms in production. One important consideration is to clearly understand
+    the upper limits that you will be reaching with your cluster. If your platform
+    hosts significant workload capacity and you allow your cluster to scale to hundreds
+    of nodes, understand where it will scale to before components of the platform
+    start to introduce bottlenecks. More discussion around cluster sizing can be found
+    in [Chapter 2](ch02.html#deployment_models).
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 集群自动缩放可以非常有用。它解锁了云原生基础设施提供的引人注目的好处之一。然而，它引入了不小的复杂性。在依赖其自主管理生产环境中关键业务平台的扩展之前，请确保进行负载测试并深入了解系统的行为。一个重要的考虑因素是清楚地了解您的集群将达到的上限。如果您的平台托管大量工作负载能力，并且允许您的集群扩展到数百个节点，请了解在平台组件开始引入瓶颈之前它将扩展到的位置。有关集群大小的更多讨论可以在[第2章](ch02.html#deployment_models)中找到。
+- en: Another consideration with cluster autoscaling is the speed at which your clusters
+    will scale when the need arises. This is where overprovisioning may help.
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 集群自动缩放的另一个考虑因素是在需要时集群将扩展的速度。这是过度配置可能有所帮助的地方。
+- en: Cluster Overprovisioning
+  id: totrans-133
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 集群过度配置
+- en: It’s important to remember that Cluster Autoscaler responds to `Pending` Pods
+    that couldn’t be scheduled due to insufficient compute resources in the cluster.
+    So at the moment the CA takes action to scale out the cluster nodes, your cluster
+    is already full. This means that, if not managed properly, your scaling workloads
+    could suffer from a shortage of capacity for the time it takes for new nodes to
+    become available for scheduling. This is where [cluster-overprovisioner](https://oreil.ly/vXij5)
+    can help.
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 重要的是要记住，集群自动缩放器响应因集群中计算资源不足而无法调度的`Pending` Pod。因此，在CA采取扩展集群节点的操作时，您的集群已经满了。这意味着，如果管理不当，您的扩展工作负载可能会因为新节点变得可用以进行调度所需的时间而受到容量不足的影响。这是[集群过度配置器](https://oreil.ly/vXij5)可以帮助的地方。
+- en: 'First it’s important to understand how long it takes for new nodes to spin
+    up, join the cluster, and become ready to accept workloads. Once this is understood,
+    you can address the best solution for your situation:'
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，重要的是要了解新节点启动、加入集群并准备接受工作负载需要多长时间。一旦理解了这一点，您可以针对您的情况找到最佳解决方案：
+- en: Set the target utilization in your HPAs sufficiently low so that your workloads
+    are scaled out well before the application is at full capacity. This could provide
+    the buffer that allows for time to provision nodes. It relieves the need for overprovisioning
+    the cluster, but if you need to account for particularly sharp increases in load,
+    you may need to set that target utilization too low to guard against capacity
+    shortages. This leads to a situation where you have chronically overprovisioned
+    workload capacity to account for rare events.
+  id: totrans-136
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 将目标利用率在您的HPAs中设置得足够低，以便在应用程序达到最大容量之前充分扩展您的工作负载。这可以提供缓冲区，允许时间来配置节点。这样可以减轻过度配置集群的需要，但如果需要考虑负载特别急剧增加的情况，可能需要将目标利用率设置得过低以防止容量短缺。这将导致您在长期过度配置工作负载能力以应对罕见事件的情况。
+- en: Another solution is to use cluster overprovisioning. With this method, you put
+    empty nodes on standby to provide the buffer for workloads that are scaling out.
+    This will relieve the need to set target utilization on HPAs artificially low
+    in preparation for high load events.
+  id: totrans-137
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 另一种解决方案是使用集群过度配置。通过这种方法，您可以将空节点准备好以提供工作负载扩展的缓冲区。这将减轻在准备高负载事件时人为地将HPAs的目标利用率设置得过低的需求。
+- en: 'Cluster overprovisioning works by deploying Pods that do the following:'
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 集群过度配置通过部署执行以下操作的Pod来工作：
+- en: Request enough resources to reserve virtually all resources for a node
+  id: totrans-139
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 请求足够的资源来为节点预留几乎所有资源
+- en: Consume no actual resources
+  id: totrans-140
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 不消耗实际资源
+- en: Use a priority class that causes them to be evicted as soon as any other Pod
+    needs it
+  id: totrans-141
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用优先级类使它们在任何其他Pod需要时立即被驱逐
+- en: With the resource requests on the overprovisioner Pod set to reserve an entire
+    node, you can then adjust the number of standby nodes with the number of replicas
+    on the overprovisioner Deployment. Overprovisioning for a particular event or
+    marketing campaign can be achieved by simply increasing the number of replicas
+    on the overprovisioner Deployment.
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将过度配置器 Pod 上的资源请求设置为保留整个节点，然后通过调整过度配置器 Deployment 上的副本数量来调整待命节点的数量。通过简单增加过度配置器
+    Deployment 上的副本数量，可以实现特定事件或营销活动的过度配置。
+- en: '[Figure 13-6](#cluster_overprovisioning) illustrates what this looks like.
+    This illustration shows just a single Pod replica, but it can be as many as you
+    need to provide adequate buffer for scaling events.'
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 13-6](#cluster_overprovisioning) 展示了这一过程。此图示仅显示了一个 Pod 副本，但可以根据需要提供足够的缓冲区以应对扩展事件。'
+- en: '![prku 1306](assets/prku_1306.png)'
+  id: totrans-144
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1306](assets/prku_1306.png)'
+- en: Figure 13-6\. Cluster overprovisioning.
+  id: totrans-145
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 13-6\. 集群过度配置。
+- en: 'The node occupied by the overprovisioner Pod is now on standby for whenever
+    it becomes needed by another Pod in the cluster. You can accomplish this by creating
+    a priority class with `value: -1` and then applying this to the overprovisioner
+    Deployment. This will make all other workloads a higher priority by default. Should
+    a Pod from another workload need the resources, the overprovisioner Pod will be
+    immediately evicted, making way for the scaling workload. The overprovisioner
+    Pod will go into a `Pending` state, which will trigger the Cluster Autoscaler
+    to provision a new node to sit on standby, as shown in [Figure 13-7](#scaling_out_with_cluster_overprivisoner).'
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '现在过度配置器 Pod 占用的节点处于待命状态，随时准备为集群中的另一个 Pod 所需。您可以通过创建一个优先级类，并将其应用于过度配置器 Deployment，来实现这一点，其中
+    `value: -1` 将使所有其他工作负载默认具有更高的优先级。如果来自另一个工作负载的 Pod 需要资源，过度配置器 Pod 将立即被驱逐，为扩展工作负载腾出空间。过度配置器
+    Pod 将进入 `Pending` 状态，这将触发集群自动缩放器来准备一个新节点待命，如图 13-7\. [使用集群过度配置扩展](#scaling_out_with_cluster_overprivisoner)
+    所示。'
+- en: '![prku 1307](assets/prku_1307.png)'
+  id: totrans-147
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 1307](assets/prku_1307.png)'
+- en: Figure 13-7\. Scaling out with cluster-overprovisioner.
+  id: totrans-148
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 13-7\. 使用集群过度配置扩展。
+- en: With Cluster Autoscaler and cluster-overprovisioner, you have effective mechanisms
+    to horizontally scale your Kubernetes clusters, which dovetails very nicely with
+    horizontally scaling workloads. We haven’t covered vertically scaling clusters
+    here because we have not found a use for it that isn’t solved by horizontal scaling.
+  id: totrans-149
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用集群自动缩放器和集群过度配置器，您可以有效地水平扩展您的 Kubernetes 集群，这与水平扩展工作负载非常匹配。我们在这里没有涵盖垂直扩展集群，因为我们还没有发现通过水平扩展无法解决的用例。
+- en: Summary
+  id: totrans-150
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 概要
+- en: If you have applications that are subject to significant changes in capacity
+    requirements, lean toward using horizontal scaling, if possible. Develop the apps
+    that you will autoscale to play nicely with being stopped and started frequently
+    and expose custom metrics if CPU or memory are not good metrics to trigger scaling.
+    Test your autoscaling to ensure it behaves as you expect to optimize efficiency
+    and end-user experience. If your workloads will scale beyond the capacity of your
+    cluster, consider autoscaling the cluster itself. And if your scaling events are
+    particularly sharp, consider putting nodes on standby with cluster-overprovisioner.
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您的应用程序需要显著变化的容量需求，请尽量倾向于使用水平扩展。如果可能的话，开发能够自动扩展的应用程序，并确保其能够频繁停止和启动，并暴露自定义指标，如果
+    CPU 或内存不是触发扩展的良好指标。测试您的自动扩展以确保其行为符合预期，以优化效率和最终用户体验。如果您的工作负载将超出集群容量，请考虑自动扩展集群本身。如果您的扩展事件特别急剧，请考虑使用集群过度配置器将节点放置在待命状态。

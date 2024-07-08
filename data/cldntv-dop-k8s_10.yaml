@@ -1,0 +1,1558 @@
+- en: Chapter 8\. Running Containers
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第八章. 运行容器
+- en: If you have a tough question that you can’t answer, start by tackling a simpler
+    question that you can’t answer.
+  id: totrans-1
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 如果您有一个棘手的问题无法回答，可以先处理一个简单问题无法回答的问题。
+- en: ''
+  id: totrans-2
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+- en: Max Tegmark
+  id: totrans-3
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: Max Tegmark
+- en: 'In previous chapters, we’ve focused mostly on the operational aspects of Kubernetes:
+    where to get your clusters, how to maintain them, and how to manage your cluster
+    resources. Let’s turn now to the most fundamental Kubernetes object: the *container*.
+    We’ll look at how containers work on a technical level, how they relate to Pods,
+    and how to deploy container images to Kubernetes.'
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在之前的章节中，我们主要关注了Kubernetes的操作方面：如何获取您的集群，如何维护它们以及如何管理您的集群资源。现在让我们转向Kubernetes中最基本的对象：*容器*。我们将深入探讨容器在技术层面上的工作原理，它们与Pods的关系以及如何将容器镜像部署到Kubernetes。
+- en: In this chapter, we’ll also cover the important topic of container security,
+    and how to use the security features in Kubernetes to deploy your applications
+    in a secure way, according to best practices. Finally, we’ll look at how to mount
+    disk volumes on Pods, allowing containers to share and persist data.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本章中，我们还将涵盖容器安全的重要主题，以及如何利用Kubernetes中的安全功能按照最佳实践安全地部署应用程序。最后，我们将讨论如何在Pod上挂载磁盘卷，使容器能够共享和持久化数据。
+- en: Containers and Pods
+  id: totrans-6
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 容器和Pods
+- en: 'We’ve already introduced Pods in [Chapter 2](ch02.html#firststeps), and talked
+    about how Deployments use ReplicaSets to maintain a set of replica Pods, but we
+    haven’t really looked at Pods themselves in much detail. Pods are the unit of
+    scheduling in Kubernetes. A Pod object represents a container or group of containers,
+    and everything that runs in Kubernetes does so by means of a Pod:'
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们已经在[第二章](ch02.html#firststeps)介绍了Pods，并讨论了部署如何使用ReplicaSets来维护一组副本Pods，但我们并没有详细研究过Pods本身。Pod是Kubernetes中的调度单位。一个Pod对象表示一个容器或一组容器，Kubernetes中的所有运行都通过Pod来实现：
+- en: A Pod represents a collection of application containers and volumes running
+    in the same execution environment. Pods, not containers, are the smallest deployable
+    artifact in a Kubernetes cluster. This means all of the containers in a Pod always
+    land on the same machine.
+  id: totrans-8
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 一个Pod代表在同一执行环境中运行的应用程序容器和卷的集合。Pods而不是容器是Kubernetes集群中最小的可部署工件。这意味着Pod中的所有容器始终部署在同一台机器上。
+- en: ''
+  id: totrans-9
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+- en: Kelsey Hightower et al., *Kubernetes Up & Running*
+  id: totrans-10
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: Kelsey Hightower等，《Kubernetes权威指南》
+- en: 'So far in this book the terms *Pod* and *container* have been used more or
+    less interchangeably: the demo application Pod only has one container in it. In
+    more complex applications, though, it’s quite likely that a Pod will include two
+    or more containers. So let’s look at how that works, and see when and why you
+    might want to group containers together in Pods.'
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，在本书中，“Pod”和“容器”这两个术语基本可以互换使用：演示应用程序Pod中只有一个容器。然而，在更复杂的应用程序中，Pod很可能包含两个或更多个容器。因此，让我们看看这是如何工作的，以及何时以及为什么您可能希望将容器组合在Pods中。
+- en: What Is a Container?
+  id: totrans-12
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 什么是容器？
+- en: Before asking why you might want to have multiple containers in a Pod, let’s
+    take a moment to revisit what a container actually is.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在询问为什么要在Pod中拥有多个容器之前，让我们花点时间重新审视容器到底是什么。
+- en: 'You know from [“The Coming of Containers”](ch01.html#containers-intro) that
+    a container is a standardized package that contains a piece of software together
+    with its dependencies, configuration, data, and so on: everything it needs to
+    run. How does that actually work, though?'
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您从[“容器的到来”](ch01.html#containers-intro)了解到，容器是一个标准化的软件包，其中包含软件及其依赖项、配置、数据等：即使是运行所需的一切。然而，它究竟是如何工作的呢？
+- en: 'In Linux, and most other operating systems, everything that runs on a machine
+    does so by means of a *process*. A process represents the binary code and memory
+    state of a running application, such as Chrome, `top`, or Visual Studio Code.
+    All processes exist in the same global namespace: they can all see and interact
+    with each other, they all share the same pool of resources, such as CPU, memory,
+    and filesystem. (A Linux namespace is a bit like a Kubernetes namespace, though
+    not the same thing technically.)'
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在Linux和大多数其他操作系统中，所有在机器上运行的东西都是通过*进程*来实现的。进程代表运行应用程序的二进制代码和内存状态，如Chrome、`top`或Visual
+    Studio Code。所有进程存在于同一个全局命名空间：它们可以相互看到和交互，它们共享CPU、内存和文件系统等资源池。（Linux命名空间有点像Kubernetes命名空间，尽管从技术上讲并非完全相同。）
+- en: From the operating system’s point of view, a container represents an isolated
+    process (or group of processes) that exists in its own namespace. Processes inside
+    the container can’t see processes outside it, and vice versa. A container can’t
+    access resources belonging to another container, or processes outside of a container.
+    The container boundary is like a ring-fence that stops processes running wild
+    and using up each other’s resources.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从操作系统的角度来看，容器表示存在于自己命名空间中的隔离进程（或一组进程）。容器内部的进程看不到外部进程，反之亦然。容器无法访问属于另一个容器的资源，或者容器外部的进程。容器边界就像是一个环形栅栏，阻止进程胡作非为并占用彼此的资源。
+- en: 'As far as the process inside the container is concerned, it’s running on its
+    own machine, with complete access to all its resources, and there are no other
+    processes running. You can see this if you run a few commands inside a container:'
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 就容器内部进程而言，它好像在自己的机器上运行，并且完全访问所有资源，且没有其他进程在运行。如果在容器内运行几个命令，您就可以看到这一点：
+- en: '[PRE0]'
+  id: totrans-18
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'Normally, the `ps ax` command will list all processes running on the machine,
+    and there are usually a lot of them (a few hundred on a typical Linux server).
+    But there are only two processes shown here: `/bin/sh`, and `ps ax`. The only
+    processes visible inside the container, therefore, are the ones actually running
+    in the container.'
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常，`ps ax` 命令将列出机器上运行的所有进程，通常有很多进程（在典型的 Linux 服务器上可能有几百个）。但在这里只显示了两个进程：`/bin/sh`
+    和 `ps ax`。因此，容器内可见的进程只有实际在容器中运行的进程。
+- en: 'Similarly, the `hostname` command, which would normally show the name of the
+    host machine, returns `busybox`: in fact, this is the name of the container. So
+    it looks to the `busybox` container as if it’s running on a machine called `busybox`,
+    and it has the whole machine to itself. This is true for each of the containers
+    running on the same machine.'
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 类似地，`hostname` 命令通常会显示主机名称，但在这里返回的是 `busybox`：实际上，这是容器的名称。因此，对于 `busybox` 容器来说，它看起来好像在一个名为
+    `busybox` 的机器上运行，并且它拥有整个机器的控制权。这对于同一台机器上运行的每个容器都是成立的。
+- en: Tip
+  id: totrans-21
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 小贴士
+- en: It’s a fun exercise to create a container yourself, without the benefit of a
+    container runtime like Docker. Liz Rice’s excellent talk on [“What is a Container,
+    Really?”](https://oreil.ly/KRMP7) shows how to do this from scratch in a Go program.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个有趣的练习是自己创建一个容器，而不依赖像 Docker 这样的容器运行时。Liz Rice 在[“What is a Container, Really?”](https://oreil.ly/KRMP7)的精彩演讲中展示了如何在
+    Go 程序中从头开始做到这一点。
+- en: Container Runtimes in Kubernetes
+  id: totrans-23
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Kubernetes 中的容器运行时
+- en: As we mentioned in [Chapter 3](ch03.html#gettingk8s), Docker is not the only
+    way to run containers. In fact, in December 2020, the maintainers [announced](https://oreil.ly/D8jVd)
+    that the Docker runtime in Kubernetes will be deprecated and replaced with alternatives
+    that use the [Container Runtime Interface (CRI)](https://oreil.ly/K5qJw). This
+    does not mean that Docker containers will no longer work in Kubernetes in the
+    future, nor does it mean that Docker will cease to be a useful tool for interacting
+    with containers outside of the context of Kubernetes. As long as a container conforms
+    to the standards defined by the [Open Container Initiative (OCI)](https://oreil.ly/OXs0C)
+    then it should run in Kubernetes, and containers built using Docker do meet these
+    standards. You can read more about this change, and the impact, in [“Dockershim
+    Removal FAQ” on the Kubernetes blog](https://oreil.ly/PMTXH).
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如我们在[第三章](ch03.html#gettingk8s)中提到的，Docker 并不是运行容器的唯一方式。事实上，2020年12月，维护者们[宣布](https://oreil.ly/D8jVd)
+    Kubernetes 中的 Docker 运行时将被弃用，并用使用[容器运行时接口（CRI）](https://oreil.ly/K5qJw)的替代方案取而代之。这并不意味着将来
+    Kubernetes 中将不再支持 Docker 容器，也不意味着 Docker 将不再是与 Kubernetes 外的容器交互的有用工具。只要容器符合[开放容器倡议（OCI）](https://oreil.ly/OXs0C)定义的标准，它就应该能在
+    Kubernetes 中运行，而使用 Docker 构建的容器确实符合这些标准。您可以在 Kubernetes 博客上的[“Dockershim Removal
+    FAQ”](https://oreil.ly/PMTXH)中详细了解此变更及其影响。
+- en: What Belongs in a Container?
+  id: totrans-25
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 容器中应该放什么内容？
+- en: 'There’s no technical reason why you can’t run as many processes as you want
+    to inside a container: you could run a complete Linux distribution, with multiple
+    running applications, network services, and so on, all inside the same container.
+    This is why you sometimes hear containers referred to as *lightweight virtual
+    machines*. But this isn’t the best way to use containers, because then you don’t
+    get the benefits of resource isolation.'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 技术上没有理由限制您在一个容器中运行多少进程：您可以在同一个容器中运行完整的Linux发行版，包括多个正在运行的应用程序、网络服务等等。这也是为什么有时容器被称为*轻量级虚拟机*。但这并不是使用容器的最佳方式，因为这样您无法获得资源隔离的好处。
+- en: 'If processes don’t need to know about each other, then they don’t need to run
+    in the same container. A good rule of thumb with a container is that it should
+    *do one thing*. For example, our demo application container listens on a network
+    port, and sends the string `Hello, 世界` to anyone who connects to it. That’s a
+    simple, self-contained service: it doesn’t rely on any other programs or services,
+    and in turn, nothing relies on it. It’s a perfect candidate for having its own
+    container.'
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果进程不需要彼此知道，则它们无需在同一个容器中运行。一个容器的一个良好的经验法则是它应该*只做一件事*。例如，我们的演示应用程序容器监听一个网络端口，并向连接到它的任何人发送字符串`Hello,
+    世界`。这是一个简单的、自包含的服务：它不依赖于任何其他程序或服务，反过来也没有程序依赖它。这是一个非常适合拥有自己容器的理想候选者。
+- en: 'A container also has an *entrypoint*: a command that is run when the container
+    starts. That usually results in the creation of a single process to run the command,
+    though some applications often start a few subprocesses to act as helpers or workers.
+    To start multiple separate processes in a container, you’d need to write a wrapper
+    script to act as the entrypoint, which would in turn start the processes you want.'
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器还有一个*入口点*：在容器启动时运行的命令。通常情况下，这会导致创建一个单独的进程来运行命令，尽管某些应用程序经常启动几个子进程作为辅助程序或工作程序。如果要在容器中启动多个独立的进程，您需要编写一个包装脚本作为入口点，然后启动您想要的进程。
+- en: Tip
+  id: totrans-29
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: Each container should run just one main process. If you’re running a large group
+    of unrelated processes in a container, you’re not taking full advantage of the
+    power of containers, and you should think about splitting your application up
+    into multiple, communicating containers.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个容器应只运行一个主要进程。如果在一个容器中运行大量不相关的进程，则没有充分利用容器的强大功能，您应考虑将应用程序拆分为多个相互通信的容器。
+- en: What Belongs in a Pod?
+  id: totrans-31
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 什么应该放在一个Pod中？
+- en: Now that you know what a container is, you can see why it’s useful to group
+    them together in Pods. A Pod represents a group of containers that need to communicate
+    and share data with each other; they need to be scheduled together, they need
+    to be started and stopped together, and they need to run on the same physical
+    machine.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在您知道容器是什么，就能明白将它们组合在Pod中的好处所在。Pod代表一组需要相互通信和共享数据的容器；它们需要一起调度，需要一起启动和停止，并且需要运行在同一物理机器上。
+- en: 'A good example of this is an application that stores data in a local cache,
+    such as [Memcached](https://memcached.org/about). You’ll need to run two processes:
+    your application, and the `memcached` server process that handles storing and
+    retrieving data. Although you could run both processes inside a single container,
+    that’s unnecessary—they only need to communicate via a network socket. Better
+    to split them into two separate containers, each of which only needs to worry
+    about building and running its own process.'
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 典型例子是将数据存储在本地缓存中的应用程序，比如[Memcached](https://memcached.org/about)。您需要运行两个进程：您的应用程序和处理存储和检索数据的`memcached`服务器进程。虽然您可以将这两个进程运行在一个单独的容器内，但这是不必要的——它们只需要通过网络套接字进行通信。最好将它们拆分成两个独立的容器，每个容器只需关心构建和运行自己的进程。
+- en: You can use a public Memcached container image, [available from Docker Hub](https://hub.docker.com/_/memcached),
+    which is already set up to work as part of a Pod with another container.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用公共的Memcached容器镜像，[可从Docker Hub获取](https://hub.docker.com/_/memcached)，它已经设置为可以作为Pod的一部分与另一个容器一起工作。
+- en: 'So you create a Pod with two containers: Memcached, and your application. The
+    application can talk to Memcached by making a network connection, and because
+    the two containers are in the same Pod, that connection will always be local:
+    the two containers will always run on the same node.'
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，您创建一个Pod，其中包含两个容器：Memcached和您的应用程序。应用程序可以通过网络连接与Memcached通信，因为这两个容器位于同一个Pod中，所以连接始终是本地的：这两个容器始终运行在同一节点上。
+- en: Similarly, imagine a web application, which consists of a web server container,
+    such as NGINX, and a blog application that generates HTML webpages, files, images,
+    and so on. The blog container writes data to disk, and because containers in a
+    Pod can share a disk volume, the data can also be available to the NGINX container
+    to serve over HTTP. You can find such an example on the [Kubernetes docs site](https://oreil.ly/Jpueo).
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 同样地，想象一个 web 应用程序，其中包含一个 web 服务器容器，比如 NGINX，以及一个生成 HTML 网页、文件和图片等的博客应用程序。博客容器将数据写入磁盘，由于
+    Pod 中的容器可以共享磁盘卷，数据也可以供 NGINX 容器通过 HTTP 服务。你可以在 [Kubernetes 文档网站](https://oreil.ly/Jpueo)
+    上找到这样一个例子。
+- en: In general, the right question to ask yourself when designing Pods is, “Will
+    these containers work correctly if they land on different machines?” If the answer
+    is “no,” a Pod is the correct grouping for the containers. If the answer is “yes,”
+    multiple Pods is the probably the correct solution.
+  id: totrans-37
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 总的来说，在设计 Pod 时应该问自己的正确问题是，“如果这些容器落在不同的机器上，它们能否正常工作？” 如果答案是“否”，那么 Pod 是容器的正确分组方式。如果答案是“是”，那么多个
+    Pod 可能是正确的解决方案。
+- en: ''
+  id: totrans-38
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+- en: Kelsey Hightower et al., *Kubernetes Up & Running*
+  id: totrans-39
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: Kelsey Hightower 等人，《Kubernetes 上手指南》
+- en: 'The containers in a Pod should all be working together to do one job. If you
+    only need one container to do that job, fine: use one container. If you need two
+    or three, that’s OK. If you have more than that, you might want to think about
+    whether the containers could actually be split into separate Pods.'
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod 中的容器应该共同工作以执行一个任务。如果你只需要一个容器来完成这个任务，那很好：使用一个容器。如果你需要两个或三个，那也可以。如果你有更多，你可能需要考虑这些容器是否可以分成单独的
+    Pod。
+- en: Container Manifests
+  id: totrans-41
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 容器清单
+- en: We’ve outlined what containers are, what should go in a container, and when
+    containers should be grouped together in Pods. So how do we actually run a container
+    in Kubernetes?
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们已经概述了容器的内容、容器中应包含的内容，以及何时应将容器组合在 Pod 中。那么，我们如何在 Kubernetes 中实际运行容器呢？
+- en: 'When you created your first Deployment, in [“Deployment Manifests”](ch04.html#deploymentmanifests),
+    it contained a `template.spec` section specifying the container to run (only one
+    container, in that example):'
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当你创建你的第一个 Deployment 时，在[“部署清单”](ch04.html#deploymentmanifests)中，它包含一个 `template.spec`
+    部分，指定要运行的容器（在那个例子中只有一个容器）：
+- en: '[PRE1]'
+  id: totrans-44
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: 'Here’s an example of what the `template.spec` section for a Deployment with
+    two containers would look like:'
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下面是具有两个容器部署的 `template.spec` 部分的示例：
+- en: '[PRE2]'
+  id: totrans-46
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'The only required fields in each container’s spec are the `name` and `image`:
+    a container has to have a name, so that other resources can refer to it, and you
+    have to tell Kubernetes what image to run in the container.'
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个容器规范中唯一需要的字段是 `name` 和 `image`：一个容器必须有一个名称，这样其他资源可以引用它，并且你必须告诉 Kubernetes
+    在容器中运行什么镜像。
+- en: Image Identifiers
+  id: totrans-48
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 镜像标识符
+- en: You’ve already used some different container image identifiers so far in this
+    book; for example, `cloudnatived/demo:hello`, `alpine` and `busybox:1.28`.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，你在本书中已经使用了一些不同的容器镜像标识符；例如，`cloudnatived/demo:hello`、`alpine` 和 `busybox:1.28`。
+- en: 'There are actually four different parts to an image identifier: the *registry
+    hostname*, the *repository namespace*, the *image repository*, and the *tag*.
+    All but the image name are optional. An image identifier using all of those parts
+    looks like this:'
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 实际上，镜像标识符有四个不同的部分：*注册表主机名*、*仓库命名空间*、*镜像仓库* 和 *标签*。除了镜像名称外，其他都是可选的。一个使用所有这些部分的镜像标识符看起来像这样：
+- en: '`docker.io/cloudnatived/demo:hello`'
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`docker.io/cloudnatived/demo:hello`'
+- en: The registry hostname in this example is `docker.io`; in fact, that’s the default
+    for Docker images, so we don’t need to specify it. If your image is stored in
+    another registry, though, you’ll need to give its hostname. For example, Google
+    Container Registry images are prefixed by `gcr.io`.
+  id: totrans-52
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在这个例子中，注册表主机名是 `docker.io`；实际上，这是 Docker 镜像的默认设置，所以我们不需要指定它。然而，如果你的镜像存储在另一个注册表中，你需要给出其主机名。例如，Google
+    Container Registry 的镜像以 `gcr.io` 为前缀。
+- en: 'The repository namespace is `cloudnatived`: that’s us (hello!). If you don’t
+    specify the repository namespace, then the default namespace (called `library`)
+    is used. This is a set of [official images](https://oreil.ly/nCHJn), which are
+    approved and maintained by Docker, Inc. Popular official images include OS base
+    images (`alpine`, `ubuntu`, `debian`, `centos`), language environments (`golang`,
+    `python`, `ruby`, `php`, `java`), and widely used software (`mongo`, `mysql`,
+    `nginx`, `redis`).'
+  id: totrans-53
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 仓库命名空间是 `cloudnatived`：这是我们（你好！）。如果不指定仓库命名空间，则使用默认命名空间（称为 `library`）。这是一组 [官方镜像](https://oreil.ly/nCHJn)，由
+    Docker, Inc. 批准和维护。流行的官方镜像包括操作系统基础镜像（`alpine`、`ubuntu`、`debian`、`centos`）、语言环境（`golang`、`python`、`ruby`、`php`、`java`）以及广泛使用的软件（`mongo`、`mysql`、`nginx`、`redis`）。
+- en: The image repository is `demo`, which identifies a particular container image
+    within the registry and namespace. (See also [“Container Digests”](#digests).)
+  id: totrans-54
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 镜像仓库是 `demo`，它标识了注册表和命名空间内的特定容器镜像（另见 [“Container Digests”](#digests)）。
+- en: The tag is `hello`. Tags identify different versions of the same image.
+  id: totrans-55
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 标签是 `hello`。标签标识了同一镜像的不同版本。
+- en: 'It’s up to you what tags to put on a container: some common choices include:'
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可以根据需要给容器打上任何标签：一些常见的选择包括：
+- en: A semantic version tag, like `v1.3.0`. This usually refers to the version of
+    the application.
+  id: totrans-57
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 语义化版本标签，比如 `v1.3.0`。这通常指的是应用程序的版本。
+- en: A Git SHA tag, like `5ba6bfd...`. This identifies the specific commit in the
+    source repo that was used to build the container (see [“Git SHA Tags”](ch14.html#gitshatags)).
+  id: totrans-58
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Git SHA 标签，比如 `5ba6bfd...`。这标识了构建容器所用源代码库中特定的提交（参见 [“Git SHA Tags”](ch14.html#gitshatags)）。
+- en: The environment it represents, such as `staging` or `production`.
+  id: totrans-59
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 它所代表的环境，如 `staging` 或 `production`。
+- en: You can add as many tags as you want to a given image.
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可以给一个给定的镜像添加任意多个标签。
+- en: The latest Tag
+  id: totrans-61
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 最新标签
+- en: If you don’t specify a tag when pulling an image, the default tag for Docker
+    images is `latest`. For example, when you run an `alpine` image with no tag specified,
+    you’ll get `alpine:latest`.
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果在拉取镜像时未指定标签，默认的 Docker 镜像标签是 `latest`。例如，当你运行一个未指定标签的 `alpine` 镜像时，你将得到 `alpine:latest`。
+- en: The `latest` tag is a default tag that’s added to an image when you build or
+    push it without specifying a tag. It doesn’t necessarily identify the most recent
+    image, just the most recent image that wasn’t explicitly tagged. This makes `latest`
+    [rather unhelpful](https://oreil.ly/cVp7N) as an identifier.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`latest` 标签是在没有指定标签的情况下构建或推送镜像时添加的默认标签。它并不一定标识最近的镜像，只是最近未显式标记的镜像。这使得 `latest`
+    作为标识符 [相当无用](https://oreil.ly/cVp7N)。'
+- en: 'That’s why it’s important to always use a specific tag when deploying production
+    containers to Kubernetes. When you’re just running a quick one-off container for
+    troubleshooting or experimentation, like the `alpine` container, it’s fine to
+    omit the tag and get the latest image. For real applications, though, you want
+    to make sure that if you deploy the Pod tomorrow, you’ll get the exact same container
+    image as when you deployed it today:'
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这就是为什么在部署生产容器到 Kubernetes 时，始终使用特定标签非常重要。当你只运行一个临时容器进行故障排除或实验时，例如 `alpine` 容器，可以省略标签并获取最新镜像。但对于真正的应用程序，你需要确保如果明天部署
+    Pod，你将得到与今天部署时相同的容器镜像：
+- en: You should avoid using the `latest` tag when deploying containers in production
+    as it is harder to track which version of the image is running, and more difficult
+    to roll back properly.
+  id: totrans-65
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 在生产环境中部署容器时应避免使用 `latest` 标签，因为难以追踪镜像的版本，也更难以正确回滚。
+- en: ''
+  id: totrans-66
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+- en: '[The Kubernetes documentation](https://oreil.ly/ZmTBp)'
+  id: totrans-67
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: '[Kubernetes 文档](https://oreil.ly/ZmTBp)'
+- en: Container Digests
+  id: totrans-68
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 容器摘要
+- en: As we’ve seen, the `latest` tag doesn’t always mean what you think it will,
+    and even a semantic version or Git SHA tag doesn’t uniquely and permanently identify
+    a particular container image. If the maintainer decides to push a different image
+    with the same tag, the next time you deploy, you’ll get that updated image. In
+    technical terms, a tag is *nondeterministic*.
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如我们所见，`latest` 标签并不总是如你所想象的那样，即使是语义化版本或者 Git SHA 标签也不能唯一永久地标识特定的容器镜像。如果维护者决定推送一个具有相同标签的不同镜像，在下次部署时，你将获得那个更新的镜像。技术上来说，一个标签是
+    *不确定的*。
+- en: 'Sometimes it’s desirable to have *deterministic* deployments: in other words,
+    to guarantee that a deployment will always reference the exact container image
+    you specified. You can do this using the container’s *digest*: a cryptographic
+    hash of the image’s contents that immutably identifies that image.'
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有时希望具有*确定性*部署：换句话说，保证部署始终引用你指定的确切容器镜像。你可以通过容器的*摘要*来实现这一点：镜像内容的加密哈希，不可变地标识该镜像。
+- en: 'Images can have many tags, but only one digest. This means that if your container
+    manifest specifies the image digest, you can guarantee deterministic deployments.
+    An image identifier with a digest looks like this:'
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 镜像可以有多个标签，但只有一个摘要。这意味着如果你的容器清单指定了镜像摘要，你可以保证确定性部署。带有摘要的镜像标识看起来像这样：
+- en: '`cloudnatived/demo@sha256:aeae1e551a6cbd60bcfd56c3b4ffec732c45b8012b7cb758c6c4a34...`'
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`cloudnatived/demo@sha256:aeae1e551a6cbd60bcfd56c3b4ffec732c45b8012b7cb758c6c4a34...`'
+- en: Base Image Tags
+  id: totrans-73
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 基础镜像标签
+- en: When you reference a base image in a Dockerfile, if you do not specify a tag,
+    you will get `latest`, just as you do when running a container. This can be confusing
+    if one day your builds stop working and you find out that the `latest` image you
+    were using now points to a different version of the image that introduces some
+    breaking change to your application.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在Dockerfile中引用基础镜像时，如果未指定标签，将会获取`latest`，就像在运行容器时一样。如果有一天你的构建停止工作，并发现你正在使用的`latest`镜像现在指向了引入某些破坏性变更的不同版本的镜像，这可能会让人困惑。
+- en: For this reason, you may want to use a more specific tag for the base images
+    on your `FROM` lines in your Dockerfile. But which tag should you use? Or should
+    you use an exact digest? This largely depends on your development situation and
+    preferences.
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 出于这个原因，你可能希望在Dockerfile中的`FROM`行中使用更具体的基础镜像标签。但你应该使用哪个标签？或者应该使用确切的摘要吗？这在很大程度上取决于你的开发情况和偏好。
+- en: Let’s use the [official Python image](https://oreil.ly/VOII3) on Docker Hub
+    as an example. You have the option of using `python:3`, `python:3.9`, `python:3.9.7`,
+    or many other variations of version tags, and also different base operating systems
+    like Windows, Alpine, and Debian.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们以[Docker Hub上的官方Python镜像](https://oreil.ly/VOII3)为例。你可以选择使用`python:3`、`python:3.9`、`python:3.9.7`或许多其他版本标签的变体，还可以选择不同的基础操作系统，如Windows、Alpine和Debian。
+- en: The advantage of using a less-specific tag, such as `python:3`, is that you
+    will automatically be pulling in any updates and security patches, along with
+    whichever is the newest minor release version of Python 3 every time you build
+    a new image. The downside is that sometimes these updates could cause issues if
+    something like a system package gets renamed or removed. Your application may
+    work perfectly fine on Python 3.9, but then start failing from changes introduced
+    in a new 3.10 release if you build a new image and do not realize that your base
+    image `python:3` actually moved from 3.9 to 3.10.
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用较为通用的标签，比如`python:3`，的优势在于，每次构建新镜像时，你会自动获取任何更新和安全补丁，以及Python 3的最新小版本。缺点是，有时这些更新可能会导致问题，比如系统包重命名或移除。你的应用在Python
+    3.9上可能运行良好，但如果构建新镜像后没有意识到基础镜像`python:3`实际上从3.9版本移动到了3.10版本，可能会因为新的3.10版本引入的变更而开始失败。
+- en: If you use a more specific tag, such as `python:3.9.7`, your base image is less
+    likely to change unexpectedly. However, you will need to pay attention and manually
+    update your Dockerfile when there is a new version available so that you can pull
+    in those important security and bug fixes. You may prefer this style of development
+    where you have greater control of your builds, but it is important to regularly
+    check for updates to your base images so that they do not lag behind, as they
+    will be missing security fixes that have been pushed up by the maintainers.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你使用更具体的标签，比如`python:3.9.7`，你的基础镜像不太可能意外更改。然而，你需要注意并手动更新你的Dockerfile，以便在有重要的安全和错误修复时拉取这些更新。你可能更喜欢这种开发风格，因为你可以更好地控制你的构建过程，但定期检查基础镜像的更新是很重要的，以免滞后，因为它们将缺少维护者推送的安全修复。
+- en: The image tag you use will largely depend on your team preferences, release
+    cadence, and development style. You should weigh the pros and cons of whichever
+    tag system you choose and check in regularly to ensure that you have a process
+    that provides reasonably reliable builds with regular updates at a sustainable
+    pace.
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你使用的镜像标签很大程度上取决于你的团队偏好、发布节奏和开发风格。你应该权衡你选择的标签系统的利弊，并定期检查，以确保你有一个可以提供合理可靠的构建并按可持续的速度进行常规更新的流程。
+- en: Ports
+  id: totrans-80
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 端口
+- en: You’ve already seen the `ports` field used with our demo application back in
+    [“Service Resources”](ch04.html#services). It specifies the network port numbers
+    the application will listen on, and can be matched up with, a [Service](https://oreil.ly/N3EvV)
+    for routing requests to the container.
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在我们的演示应用程序中，您已经看到了`ports`字段在[“服务资源”](ch04.html#services)中的使用。它指定应用程序将监听的网络端口号，并且可以与[服务](https://oreil.ly/N3EvV)匹配，用于将请求路由到容器。
+- en: Resource Requests and Limits
+  id: totrans-82
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 资源请求和限制
+- en: We have already covered resource requests and limits for containers in detail,
+    in [Chapter 5](ch05.html#resources), so a brief recap here will suffice.
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们已经在[第5章](ch05.html#resources)详细介绍了容器的资源请求和限制，所以在这里简要回顾一下就够了。
+- en: 'Each container can supply one or more of the following as part of its spec:'
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个容器可以作为其规范的一部分提供以下一个或多个：
+- en: '`resources.requests.cpu`'
+  id: totrans-85
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`resources.requests.cpu`'
+- en: '`resources.requests.memory`'
+  id: totrans-86
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`resources.requests.memory`'
+- en: '`resources.limits.cpu`'
+  id: totrans-87
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`resources.limits.cpu`'
+- en: '`resources.limits.memory`'
+  id: totrans-88
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`resources.limits.memory`'
+- en: Although requests and limits are specified on individual containers, we usually
+    talk in terms of the Pod’s total resource requests and limits. A Pod’s resource
+    request is the sum of the resource requests for all containers in that Pod, and
+    so on.
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管在单个容器上指定了请求和限制，但我们通常根据 Pod 的总资源请求和限制来讨论。Pod 的资源请求是该 Pod 中所有容器的资源请求之和，等等。
+- en: Image Pull Policy
+  id: totrans-90
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 镜像拉取策略
+- en: 'Before a container can be run on a node, the image has to be *pulled*, or downloaded,
+    from the appropriate container registry. The `imagePullPolicy` field on a container
+    governs how often Kubernetes will do this. It can take one of three values: `Always`,
+    `IfNotPresent`, or `Never`:'
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在容器可以在节点上运行之前，必须从适当的容器注册表中*拉取*或下载镜像。容器上的`imagePullPolicy`字段控制 Kubernetes 完成此操作的频率。它可以取三个值之一：`Always`、`IfNotPresent`或`Never`：
+- en: '`Always` will pull the image every time the container is started. Assuming
+    that you specify a tag—which you should (see [“The latest Tag”](#latesttag))—then
+    this is probably unnecessary, and could be wasting time and bandwidth.'
+  id: totrans-92
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`Always`将在每次容器启动时拉取镜像。假设您指定了一个标签 —— 这是您应该做的（参见[“最新标签”](#latesttag)）——那么这可能是不必要的，并且可能会浪费时间和带宽。'
+- en: '`IfNotPresent`, the default, is correct for most situations. If the image is
+    not already present on the node, it will be downloaded. After that, unless you
+    change the image spec, the saved image will be used every time the container starts,
+    and Kubernetes will not attempt to redownload it.'
+  id: totrans-93
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`IfNotPresent`是默认值，适合大多数情况。如果镜像尚未在节点上存在，将下载它。之后，除非更改镜像规范，否则每次容器启动时都会使用保存的镜像，并且
+    Kubernetes 不会尝试重新下载它。'
+- en: '`Never` will never update the image at all. With this policy, Kubernetes will
+    never fetch the image from a registry: if it’s already present on the node, it
+    will be used, but if it’s not, the container will fail to start. You’re unlikely
+    to want this.'
+  id: totrans-94
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`Never`根本不会更新镜像。使用此策略时，Kubernetes 永远不会从注册表中获取镜像：如果节点上已经存在，将使用它，但如果不存在，则容器将无法启动。您不太可能希望这样做。'
+- en: If you run into strange problems (for example, a Pod not updating when you’ve
+    pushed a new container image), check your image pull policy.
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果遇到奇怪的问题（例如，推送新容器镜像后 Pod 没有更新），请检查您的镜像拉取策略。
+- en: Environment Variables
+  id: totrans-96
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 环境变量
+- en: 'Environment variables are a common, if limited, way to pass information to
+    containers at runtime. Common, because all Linux executables have access to environment
+    variables, and even programs that were written long before containers existed
+    can use their environment for configuration. Limited, because environment variables
+    can only be string values: no arrays, no keys and values, no structured data in
+    general. The total size of a process’s environment is also limited to 32 KiB,
+    so you can’t pass large data files in the environment.'
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 环境变量是在运行时向容器传递信息的常见但有限的方式。常见是因为所有 Linux 可执行文件都可以访问环境变量，即使是在容器出现之前编写的程序也可以使用它们的环境进行配置。有限是因为环境变量只能是字符串值：没有数组，没有键值对，总之没有结构化数据。进程环境的总大小也被限制为32
+    KiB，因此不能在环境中传递大数据文件。
+- en: 'To set an environment variable, list it in the container’s `env` field:'
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要设置环境变量，请在容器的`env`字段中列出它：
+- en: '[PRE3]'
+  id: totrans-99
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: If the container image itself specifies environment variables (set in the Dockerfile,
+    for example), then the Kubernetes `env` settings will override them. This can
+    be useful for altering the default configuration of a container.
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果容器镜像本身指定了环境变量（例如在 Dockerfile 中设置），那么 Kubernetes 的`env`设置将覆盖它们。这对于修改容器的默认配置非常有用。
+- en: Tip
+  id: totrans-101
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 小贴士
+- en: 'A more flexible way of passing configuration data to containers is to use a
+    Kubernetes ConfigMap or Secret object: see [Chapter 10](ch10.html#config) for
+    more about these.'
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 向容器传递配置数据的更灵活的方法是使用 Kubernetes 的 ConfigMap 或 Secret 对象：有关详细信息，请参阅[第 10 章](ch10.html#config)。
+- en: Container Security
+  id: totrans-103
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 容器安全性
+- en: You might have noticed in [“What Is a Container?”](#whatsacontainer) that when
+    we looked at the process list in the container with the `ps ax` command, the processes
+    were all running as the root user. In Linux and other Unix-derived operating systems,
+    `root` is the superuser, which has privileges to read any data, modify any file,
+    and perform any operation on the system.
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可能已经注意到在 [“什么是容器？”](#whatsacontainer) 中，当我们用 `ps ax` 命令查看容器中的进程列表时，所有进程都以 root
+    用户身份运行。在 Linux 和其他类 Unix 操作系统中，`root` 是超级用户，拥有读取任何数据、修改任何文件以及执行系统上任何操作的权限。
+- en: While on a full Linux system some processes need to run as `root` (for example
+    `init`, which manages all other processes), that’s not usually the case with a
+    container.
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在完整的 Linux 系统上，一些进程需要以 `root` 身份运行（例如管理所有其他进程的 `init` 进程），但在容器中通常情况并非如此。
+- en: Indeed, running processes as the root user when you don’t need to is a bad idea.
+    It contravenes the [*principle of least privilege*](https://oreil.ly/Q5h79). This
+    says that a program should only be able to access the information and resources
+    that it actually needs to do its job.
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 确实，当不需要时以 root 用户身份运行进程是一个坏主意。这违反了 [*最小权限原则*](https://oreil.ly/Q5h79)。这一原则指出，程序只能访问它实际需要执行其工作的信息和资源。
+- en: Programs have bugs—this is a fact of life apparent to anyone who’s written one.
+    Some bugs allow malicious users to hijack the program to do things it’s not supposed
+    to, like read secret data or execute arbitrary code. To mitigate this, it’s important
+    to run containers with the minimum possible privileges.
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 程序会有 bug ——这是任何写过程序的人都明白的事实。一些 bug 允许恶意用户劫持程序去执行不应该做的事情，比如读取秘密数据或执行任意代码。为了减少这种风险，以最小可能的权限运行容器非常重要。
+- en: 'This starts with not allowing them to run as `root`, but instead assigning
+    them an *ordinary* user: one that has no special privileges, such as reading other
+    users’ files:'
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这始于不允许它们以 `root` 身份运行，而是分配给它们一个普通用户：一个没有特殊特权的用户，例如读取其他用户文件的特权。
+- en: Just like you wouldn’t (or shouldn’t) run anything as root on your server, you
+    shouldn’t run anything as root in a container on your server. Running binaries
+    that were created elsewhere requires a significant amount of trust, and the same
+    is true for binaries in containers.
+  id: totrans-109
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 就像你不应该在服务器上以 root 运行任何东西一样，在服务器上的容器中也不应该以 root 运行任何东西。运行在其他地方创建的二进制文件需要极大的信任，同样适用于容器中的二进制文件。
+- en: ''
+  id: totrans-110
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+- en: '[Marc Campbell](https://oreil.ly/RlmNm)'
+  id: totrans-111
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: '[马克·坎贝尔](https://oreil.ly/RlmNm)'
+- en: It’s also possible for attackers to exploit bugs in the container runtime to
+    “escape” from the container, and get the same powers and privileges on the host
+    machine that they did in the container.
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 攻击者也可以利用容器运行时的 bug “逃离” 容器，并在主机上获取与容器中相同的权限。
+- en: Running Containers as a Non-Root User
+  id: totrans-113
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 以非 root 用户身份运行容器
+- en: 'Here’s an example of a container spec that tells Kubernetes to run the container
+    as a specific user:'
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下面是一个容器规范的示例，告诉 Kubernetes 以特定用户身份运行容器：
+- en: '[PRE4]'
+  id: totrans-115
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: The value for `runAsUser` is a *UID* (a numerical user identifier). On many
+    Linux systems, UID 1000 is assigned to the first non-root user created on the
+    system, so it’s generally safe to choose values of 1000 or above for container
+    UIDs. It doesn’t matter whether or not a Unix user with that UID *exists* in the
+    container, or even if there is an operating system in the container; this works
+    just as well with scratch containers.
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`runAsUser` 的值是 *UID*（数字用户标识符）。在许多 Linux 系统上，UID 1000 被分配给系统上创建的第一个非 root 用户，因此通常选择
+    1000 或更高的值作为容器 UID 是安全的。无论容器中是否存在具有该 UID 的 Unix 用户，甚至容器中是否存在操作系统，这种方式都同样有效，即使是在空白容器中也是如此。'
+- en: If a `runAsUser` UID is specified, it will override any user configured in the
+    container image. If there is no `runAsUser`, but the container specifies a user,
+    Kubernetes will run it as that user. If no user is specified either in the manifest
+    or the image, the container will run as `root` (which, as we’ve seen, is a bad
+    idea).
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果指定了 `runAsUser` UID，它会覆盖容器镜像中配置的任何用户。如果没有指定 `runAsUser`，但容器指定了一个用户，Kubernetes
+    将以该用户身份运行。如果在清单或镜像中都没有指定用户，容器将以 `root` 用户运行（正如我们所见，这是一个坏主意）。
+- en: For maximum security, you should choose a different UID for each container.
+    That way, if a container should be compromised somehow, or accidentally overwrite
+    data, it only has permission to access its own data, and not that of other containers.
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了最大的安全性，您应该为每个容器选择不同的UID。这样，如果某个容器被某种方式妥协，或者意外覆盖数据，它只有访问自己数据的权限，而不是其他容器的权限。
+- en: On the other hand, if you want two or more containers to be able to access the
+    same data (via a mounted volume, for example), you should assign them the same
+    UID.
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一方面，如果你希望两个或更多的容器能够通过挂载卷等方式访问相同的数据，你应该为它们分配相同的UID。
+- en: Blocking Root Containers
+  id: totrans-120
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 阻止 Root 容器
+- en: To help prevent this situation, Kubernetes allows you to block containers from
+    running if they would run as the root user.
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了防止这种情况发生，Kubernetes 允许您阻止容器以 root 用户身份运行。
+- en: 'The `runAsNonRoot: true` setting will do this:'
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '使用`runAsNonRoot: true`设置将实现这一点：'
+- en: '[PRE5]'
+  id: totrans-123
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: When Kubernetes runs this container, it will check to see if the container wants
+    to run as root. If so, it will refuse to start it. This will protect you against
+    forgetting to set a non-root user in your containers, or running third-party containers
+    that are configured to run as root.
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当 Kubernetes 运行该容器时，它将检查容器是否希望以 root 用户身份运行。如果是这样，它将拒绝启动。这将保护您免受忘记在容器中设置非 root
+    用户或运行配置为以 root 用户身份运行的第三方容器的影响。
+- en: 'If this happens, you’ll see the Pod status shown as `CreateContainerConfigError`,
+    and when you `kubectl describe` the Pod, you’ll see this error:'
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果发生这种情况，您将看到 Pod 状态显示为`CreateContainerConfigError`，当您使用`kubectl describe`查看
+    Pod 时，您将看到此错误：
+- en: '[PRE6]'
+  id: totrans-126
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: Best Practice
+  id: totrans-127
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: 'Run containers as non-root users, and block root containers from running, using
+    the `runAsNonRoot: true` setting.'
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '使用`runAsNonRoot: true`设置以非 root 用户身份运行容器，并阻止 root 容器的运行。'
+- en: Setting a Read-Only Filesystem
+  id: totrans-129
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 设置只读文件系统
+- en: 'Another useful security context setting is `readOnlyRootFilesystem`, which
+    will prevent the container from writing to its own filesystem. It’s possible to
+    imagine a container taking advantage of a bug in Docker or Kubernetes, for example,
+    where writing to its filesystem could affect files on the host node. If its filesystem
+    is read-only, that can’t happen; the container will get an I/O error:'
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个有用的安全上下文设置是`readOnlyRootFilesystem`，它将阻止容器向自己的文件系统写入。例如，可以想象一个容器利用 Docker
+    或 Kubernetes 中的错误，将其文件系统的写入影响到主机节点上的文件。如果其文件系统是只读的，这种情况就不会发生；容器将收到 I/O 错误：
+- en: '[PRE7]'
+  id: totrans-131
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: Many containers don’t need to write anything to their own filesystem, so this
+    setting won’t interfere with them. It’s [good practice](https://oreil.ly/JGiKP)
+    to always set `readOnlyRootFilesystem` unless the container really does need to
+    write to files.
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 许多容器不需要向自己的文件系统写入任何内容，因此这个设置不会对它们产生干扰。始终设置`readOnlyRootFilesystem`是[良好的实践](https://oreil.ly/JGiKP)，除非容器确实需要写入文件。
+- en: Disabling Privilege Escalation
+  id: totrans-133
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 禁用特权升级
+- en: 'Normally, Linux binaries run with the same privileges as the user that executes
+    them. There is an exception, though: binaries that use the `setuid` mechanism
+    can temporarily gain the privileges of the user that *owns* the binary (usually
+    `root`).'
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常，Linux 二进制文件以执行它们的用户拥有的权限运行。但是也有例外情况：使用`setuid`机制的二进制文件可以临时获取拥有该二进制文件的用户（通常为`root`）的权限。
+- en: This is a potential problem in containers, since even if the container is running
+    as a regular user (UID 1000, for example), if it contains a `setuid` binary, that
+    binary can gain root privileges by default.
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这在容器中是一个潜在的问题，因为即使容器以常规用户（例如UID 1000）身份运行，如果它包含一个`setuid`二进制文件，该二进制文件默认可以通过设置获得
+    root 权限。
+- en: 'To prevent this, set the `allowPrivilegeEscalation` field of the container’s
+    security policy to `false`:'
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要防止这种情况发生，请将容器安全策略中的`allowPrivilegeEscalation`字段设置为`false`：
+- en: '[PRE8]'
+  id: totrans-137
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: Modern Linux programs don’t need `setuid`; they can use a more flexible and
+    fine-grained privilege mechanism called *capabilities* to achieve the same thing.
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现代 Linux 程序不需要`setuid`；它们可以使用称为 *capabilities* 的更灵活和细粒度的权限机制来实现相同的功能。
+- en: Capabilities
+  id: totrans-139
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 能力
+- en: 'Traditionally, Unix programs had two levels of privileges: *normal* and *superuser*.
+    Normal programs have no more privileges than the user who runs them, while superuser
+    programs can do anything, bypassing all kernel security checks.'
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 传统上，Unix 程序具有两个特权级别：*normal* 和 *superuser*。普通程序的权限不超过运行它们的用户，而超级用户程序可以执行任何操作，绕过所有内核安全检查。
+- en: 'The Linux capabilities mechanism improves on this by defining various specific
+    things that a program can do: load kernel modules, perform direct network I/O
+    operations, access system devices, and so on. Any program that needs a specific
+    privilege can be granted it, but no others.'
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linux 的能力机制通过定义程序可以执行的各种具体操作来改进此问题：加载内核模块、执行直接网络 I/O 操作、访问系统设备等等。需要特定权限的程序可以被授予，但不能超出其它权限。
+- en: For example, a web server that listens on port 80 would normally need to run
+    as `root` to do this; port numbers below 1024 are considered privileged *system*
+    ports. Instead, the program can be granted the `NET_BIND_SERVICE` capability,
+    which allows it to bind to any port, but gives it no other special privileges.
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，监听端口 80 的 Web 服务器通常需要以 `root` 用户身份运行才能实现此功能；低于 1024 的端口号被视为特权 *系统* 端口。相反，程序可以被授予
+    `NET_BIND_SERVICE` 能力，允许其绑定到任何端口，但不给予其它特殊权限。
+- en: 'The default set of capabilities for Docker containers is fairly generous. This
+    is a pragmatic decision based on a trade-off of security against usability: giving
+    containers *no* capabilities by default would require operators to set capabilities
+    on many containers in order for them to run.'
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Docker 容器的默认能力集相当宽松。这是一个权衡安全性与可用性的实用决策：默认情况下不给容器设置任何能力会要求操作者在许多容器上设置能力才能运行。
+- en: 'On the other hand, the principle of least privilege says that a container should
+    have no capabilities it doesn’t need. Kubernetes security contexts allow you to
+    drop any capabilities from the default set and add ones as they’re needed, like
+    this example shows:'
+  id: totrans-144
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一方面，最小权限原则表明容器不应具有其不需要的任何能力。Kubernetes 安全上下文允许您从默认设置中删除任何能力，并根据需要添加能力，就像这个例子展示的那样：
+- en: '[PRE9]'
+  id: totrans-145
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: The container will have the `CHOWN`, `NET_RAW`, and `SETPCAP` capabilities removed,
+    and the `NET_ADMIN` capability added.
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器将删除 `CHOWN`、`NET_RAW` 和 `SETPCAP` 能力，并添加 `NET_ADMIN` 能力。
+- en: The Docker [documentation](https://oreil.ly/TOz3a) lists all the capabilities
+    that are set on containers by default, and that can be added as necessary.
+  id: totrans-147
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Docker [文档](https://oreil.ly/TOz3a)列出了默认情况下容器设置的所有能力，并可以根据需要添加。
+- en: 'For maximum security, you should drop all capabilities for every container
+    and only add specific capabilities if they’re needed:'
+  id: totrans-148
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了最大化安全性，您应该为每个容器放弃所有能力，并仅在需要时添加特定的能力：
+- en: '[PRE10]'
+  id: totrans-149
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: The capability mechanism puts a hard limit on what processes inside the container
+    can do, even if they’re running as root. Once a capability has been dropped at
+    the container level, it can’t be regained, even by a malicious process with maximum
+    privileges.
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容量机制在容器内部的进程能够做的事情上设置了硬限制，即使它们以 root 用户身份运行。一旦在容器级别放弃了某项能力，即使是以最高权限运行的恶意进程也无法重新获得该能力。
+- en: Pod Security Contexts
+  id: totrans-151
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Pod 安全上下文
+- en: 'We’ve covered security context settings at the level of individual containers,
+    but you can also set some of them at the Pod level:'
+  id: totrans-152
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们已经在单个容器级别上覆盖了安全上下文设置，但您也可以在 Pod 级别上设置其中的一些：
+- en: '[PRE11]'
+  id: totrans-153
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: These settings will apply to all containers in the Pod, unless the container
+    overrides a given setting in its own security context.
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些设置将适用于 Pod 中的所有容器，除非容器在其自己的安全上下文中覆盖了特定设置。
+- en: Pod Service Accounts
+  id: totrans-155
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Pod 服务账户
+- en: Pods run with the permissions of the default service account for the namespace,
+    unless you specify otherwise (see [“Applications and Deployment”](ch11.html#rbac-apps)).
+    If you need to grant extra permissions for some reason (such as viewing Pods in
+    other namespaces), create a dedicated service account for the app, bind it to
+    the required roles, and configure the Pod to use the new service account.
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod 使用命名空间的默认服务账户权限运行，除非您另有指定（参见[“应用程序和部署”](ch11.html#rbac-apps)）。如果出于某些原因需要授予额外的权限（例如查看其他命名空间中的
+    Pod），请为应用程序创建专用服务账户，将其绑定到所需的角色，并配置 Pod 使用新的服务账户。
+- en: 'To do that, set the `serviceAccountName` field in the Pod spec to the name
+    of the service account:'
+  id: totrans-157
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要实现这一点，请在 Pod 规范的 `serviceAccountName` 字段中设置服务账户的名称：
+- en: '[PRE12]'
+  id: totrans-158
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: Volumes
+  id: totrans-159
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 卷
+- en: 'As you may recall, each container has its own filesystem, which is accessible
+    only to that container, and is *ephemeral*: any data that is not part of the container
+    image will be lost when the container is restarted.'
+  id: totrans-160
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如您可能记得的那样，每个容器都有自己的文件系统，只能由该容器访问，并且是 *临时的*：当容器重新启动时，不属于容器镜像的任何数据都将丢失。
+- en: Often, this is fine; the demo application, for example, is a stateless server
+    which therefore needs no persistent storage. Nor does it need to share files with
+    any other container.
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常情况下，这是可以的；例如，演示应用程序是一个无状态服务器，因此不需要持久存储。它也不需要与任何其他容器共享文件。
+- en: More complex applications, though, may need both the ability to share data with
+    other containers in the same Pod and to have it persist across restarts. A Kubernetes
+    Volume object can provide both of these.
+  id: totrans-162
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，更复杂的应用可能需要既能与同一 Pod 中的其他容器共享数据，又能在重启后保持数据持久性。Kubernetes Volume 对象可以提供这两者。
+- en: There are many different types of Volume that you can attach to a Pod. Whatever
+    the underlying storage medium, a Volume mounted on a Pod is accessible to all
+    the containers in the Pod. Containers that need to communicate by sharing files
+    can do so using a Volume of one kind or another. We’ll look at some of the more
+    important types in the following sections.
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以将许多不同类型的 Volume 附加到 Pod 上。无论基础存储介质如何，挂载到 Pod 上的 Volume 对所有 Pod 中的容器都是可访问的。需要通过共享文件进行通信的容器可以使用各种类型的
+    Volume。我们将在以下部分讨论一些更重要的类型。
+- en: emptyDir Volumes
+  id: totrans-164
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: emptyDir Volumes
+- en: The simplest Volume type is `emptyDir`. This is a piece of ephemeral storage
+    that starts out empty—hence the name—and stores its data on the node (either in
+    memory, or on the node’s disk). It persists only as long as the Pod is running
+    on that node.
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最简单的 Volume 类型是 `emptyDir`。这是一种临时存储，初始为空——因此得名——并将其数据存储在节点上（可以是内存中或节点的磁盘上）。它只在
+    Pod 在该节点上运行时存在。
+- en: An `emptyDir` is useful when you want to provision some extra storage for a
+    container, but it’s not critical to have the data persist forever or move with
+    the container if it should be scheduled on another node. Some examples include
+    caching downloaded files or generated content, or using a scratch workspace for
+    data processing jobs.
+  id: totrans-166
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您想要为容器提供一些额外的存储空间，但数据永久保存或在容器移动到另一个节点时移动并不关键时，`emptyDir` 是有用的。一些示例包括缓存下载文件或生成内容，或者用于数据处理作业的临时工作空间。
+- en: Similarly, if you just want to share files between containers in a Pod, but
+    don’t need to keep the data around for a long time, an `emptyDir` Volume is ideal.
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 同样地，如果您只想在 Pod 中的容器之间共享文件，但不需要长时间保留数据，那么 `emptyDir` Volume 是理想的选择。
+- en: 'Here’s an example of a Pod that creates an `emptyDir` Volume and mounts it
+    on a container:'
+  id: totrans-168
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是一个创建 `emptyDir` Volume 并将其挂载到容器上的 Pod 示例：
+- en: '[PRE13]'
+  id: totrans-169
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: 'First, in the `volumes` section of the Pod spec, we create an `emptyDir` Volume
+    named `cache-volume`:'
+  id: totrans-170
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，在 Pod 规范的 `volumes` 部分，我们创建一个名为 `cache-volume` 的 `emptyDir` Volume：
+- en: '[PRE14]'
+  id: totrans-171
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: 'Now the `cache-volume` Volume is available for any container in the Pod to
+    mount and use. To do that, we list it in the `volumeMounts` section of the `demo`
+    container:'
+  id: totrans-172
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在 `cache-volume` Volume 可供 Pod 中的任何容器挂载和使用。为此，我们在 `demo` 容器的 `volumeMounts`
+    部分列出它：
+- en: '[PRE15]'
+  id: totrans-173
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: 'The container doesn’t have to do anything special to use the new storage: anything
+    it writes to the path `/cache` will be written to the Volume, and will be visible
+    to other containers that mount the same Volume. All containers mounting the Volume
+    can read and write to it.'
+  id: totrans-174
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器不必采取任何特殊操作即可使用新存储：任何写入路径 `/cache` 的内容将写入 Volume，并对挂载同一 Volume 的其他容器可见。所有挂载该
+    Volume 的容器都可以对其读写。
+- en: Tip
+  id: totrans-175
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: Be careful writing to shared Volumes. Kubernetes doesn’t enforce any locking
+    on disk writes. If two containers try to write to the same file at once, data
+    corruption can result. To avoid this, either implement your own write-lock mechanism,
+    or use a Volume type that supports locking, such as `nfs` or `glusterfs`.
+  id: totrans-176
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在写入共享 Volume 时要小心。Kubernetes 不强制执行磁盘写入的任何锁定。如果两个容器同时尝试写入同一个文件，可能会导致数据损坏。为了避免这种情况，可以实现自己的写锁定机制，或使用支持锁定的
+    Volume 类型，如 `nfs` 或 `glusterfs`。
+- en: Persistent Volumes
+  id: totrans-177
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 持久化 Volumes
+- en: 'While an ephemeral `emptyDir` Volume is ideal for cache and temporary file
+    sharing, some applications need to store persistent data; for example, any kind
+    of database. In general, we don’t recommend that you start out trying to run databases
+    in Kubernetes. You’re almost always better served by using a cloud service instead:
+    for example, most cloud providers have managed solutions for relational databases
+    such as MySQL and PostgreSQL, as well as key-value (NoSQL) stores.'
+  id: totrans-178
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管临时的 `emptyDir` Volume 适合缓存和临时文件共享，但某些应用需要存储持久数据；例如，任何类型的数据库。总的来说，我们不建议您试图在
+    Kubernetes 中运行数据库。通常情况下，最好使用云服务：例如，大多数云提供商都有管理解决方案，如 MySQL 和 PostgreSQL 的关系型数据库，以及键值（NoSQL）存储。
+- en: As we saw in [“Kubernetes Is Not a Panacea”](ch01.html#nodbsink8s), Kubernetes
+    is best at managing stateless applications, which means no persistent data. Storing
+    persistent data significantly complicates the Kubernetes configuration for your
+    app. You’ll need to ensure that your persistent storage is reliable, performant,
+    secure, and backed up.
+  id: totrans-179
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如我们在[“Kubernetes不是万能药”](ch01.html#nodbsink8s)中看到的，Kubernetes最擅长管理无状态应用，这意味着没有持久化数据。存储持久化数据会显著复杂化应用程序的Kubernetes配置。您需要确保您的持久化存储可靠、高性能、安全且备份。
+- en: If you need to use persistent volumes with Kubernetes, the PersistentVolume
+    resource is what you’re looking for. We won’t go into great detail about that
+    here, because the details tend to be specific to your cloud provider; you can
+    read more about PersistentVolumes in the Kubernetes [documentation](https://oreil.ly/FQvRN).
+  id: totrans-180
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您需要在Kubernetes中使用持久卷，那么持久卷资源（PersistentVolume）正是您要找的。我们不会在这里详细介绍它，因为具体细节通常特定于您的云提供商；您可以在Kubernetes的[文档](https://oreil.ly/FQvRN)中了解更多关于持久卷的信息。
+- en: The most flexible way to use PersistentVolumes in Kubernetes is to create a
+    PersistentVolumeClaim object. This represents a request for a particular type
+    and size of PersistentVolume; for example, a 10 GiB Volume of high-speed, read-write
+    storage.
+  id: totrans-181
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在Kubernetes中最灵活使用持久卷的方式是创建一个PersistentVolumeClaim对象。这代表了对特定类型和大小持久卷的请求；例如，一个10
+    GiB大小的高速读写存储卷。
+- en: 'The Pod can then add this PersistentVolumeClaim as a Volume, where it will
+    be available for containers to mount and use:'
+  id: totrans-182
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后，Pod可以将此持久卷索取作为一个卷，容器可以挂载和使用它：
+- en: '[PRE16]'
+  id: totrans-183
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: 'You can create a pool of PersistentVolumes in your cluster to be claimed by
+    Pods in this way. Alternatively, you can set up [*dynamic provisioning*](https://oreil.ly/4VNTz):
+    when a PersistentVolumeClaim like this is mounted, a suitable chunk of storage
+    will be automatically provisioned and connected to the Pod.'
+  id: totrans-184
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在集群中创建一组持久卷（PersistentVolumes），供Pod按此方式索取。或者，您可以设置[*动态配置*](https://oreil.ly/4VNTz)：当像这样的持久卷索取时，将自动配置并连接适当大小的存储到Pod。
+- en: We will cover this more in [“StatefulSets”](ch09.html#statefulsets).
+  id: totrans-185
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将在[“有状态副本集”](ch09.html#statefulsets)中更详细地讨论这个问题。
+- en: Restart Policies
+  id: totrans-186
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 重启策略（Restart Policies）
+- en: 'We saw in [“Running Containers for Troubleshooting”](ch07.html#runningcxrs)
+    that Kubernetes always restarts a Pod when it exits, unless you tell it otherwise.
+    The default restart policy is thus `Always`, but you can change this to `OnFailure`
+    (restart only if the container exited with a nonzero status), or `Never`:'
+  id: totrans-187
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如我们在[“运行容器进行故障排除”](ch07.html#runningcxrs)中看到的，当Pod退出时，Kubernetes会始终重新启动它。因此，默认的重启策略是`Always`，但您可以将其更改为`OnFailure`（仅在容器以非零状态退出时重启）或`Never`：
+- en: '[PRE17]'
+  id: totrans-188
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: If you want to run a Pod to completion and then have it exit, rather than being
+    restarted, you can use a Job resource to do this (see [“Jobs”](ch09.html#jobs)).
+  id: totrans-189
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您希望运行一个Pod直到完成并退出，而不是重新启动，您可以使用Job资源来实现这一点（参见[“作业”](ch09.html#jobs)）。
+- en: Image Pull Secrets
+  id: totrans-190
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 镜像拉取密钥（Image Pull Secrets）
+- en: Kubernetes will download your specified image from the container registry if
+    it isn’t already present on the node. However, what if you’re using a private
+    registry? How can you give Kubernetes the credentials to authenticate to the registry?
+  id: totrans-191
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果容器注册表中没有指定的镜像，Kubernetes将从该注册表下载。但是，如果您使用的是私有注册表呢？您如何提供给Kubernetes认证到注册表的凭据？
+- en: 'The `imagePullSecrets` field on a Pod allows you to configure this. First,
+    you need to store the registry credentials in a Secret object (see [“Kubernetes
+    Secrets”](ch10.html#secrets) for more about this). Now you can tell Kubernetes
+    to use this Secret when pulling any containers in the Pod. For example, if your
+    Secret is named `registry-creds`:'
+  id: totrans-192
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod上的`imagePullSecrets`字段允许您进行配置。首先，您需要将注册表凭据存储在一个Secret对象中（有关详细信息，请参阅[“Kubernetes
+    Secrets”](ch10.html#secrets)）。现在，您可以告诉Kubernetes在拉取Pod中的任何容器时使用此Secret。例如，如果您的Secret命名为`registry-creds`：
+- en: '[PRE18]'
+  id: totrans-193
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: The exact format of the registry credentials data is described in the Kubernetes
+    [documentation](https://oreil.ly/AfdOF).
+  id: totrans-194
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注册表凭据数据的确切格式在Kubernetes的[文档](https://oreil.ly/AfdOF)中有描述。
+- en: You can also attach `imagePullSecrets` to a service account (see [“Pod Service
+    Accounts”](#serviceaccounts)). Any Pods created using this service account will
+    automatically have the attached registry credentials available.
+  id: totrans-195
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您还可以将`imagePullSecrets`附加到服务账户上（参见[“Pod服务账户”](#serviceaccounts)）。使用此服务账户创建的任何Pod都将自动具有附加的注册表凭据。
+- en: Init Containers
+  id: totrans-196
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 初始容器（Init Containers）
+- en: If you find yourself in a situation where you need to run a container prior
+    to running your main applications, you can use an [Init container](https://oreil.ly/Obo5B).
+  id: totrans-197
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你发现自己需要在运行主应用程序之前运行容器的情况下，可以使用一个[初始化容器](https://oreil.ly/Obo5B)。
+- en: 'Init containers are defined in the Pod spec and work mostly the same as regular
+    containers, but they do not use liveness or readiness probes. Instead init containers
+    must run and exit successfully before other containers in the Pod are started:'
+  id: totrans-198
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 初始化容器在 Pod 规范中定义，工作方式基本与常规容器相同，但它们不使用存活探针或就绪探针。相反，初始化容器必须在 Pod 中的其他容器启动之前成功运行并退出：
+- en: '[PRE19]'
+  id: totrans-199
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: These can be useful for doing pre-flight checks before starting your app, or
+    running any sort of bootstrap script needed to get things ready for your app.
+    One common use-case for an init container is grabbing Secrets from an external
+    Secret store and mounting them into your application with a Volume before startup.
+    Just make sure that your init containers are idempotent and can be safely retried
+    if you decide to use them.
+  id: totrans-200
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些可以在启动应用程序之前进行预检查，或者运行任何必要的引导脚本来准备你的应用程序。一个常见的初始化容器用例是从外部 Secret 存储中获取 Secrets，并在启动前将它们挂载到你的应用程序中。只需确保你的初始化容器是幂等的，并且如果决定使用它们，则可以安全地重试。
+- en: Summary
+  id: totrans-201
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 总结
+- en: In order to understand Kubernetes, you first need to understand containers.
+    In this chapter, we’ve outlined the basic idea of what a container is, how they
+    work together in Pods, and what options are available for you to control how containers
+    run in Kubernetes.
+  id: totrans-202
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要理解 Kubernetes，首先需要理解容器。在本章中，我们概述了容器的基本概念，它们如何在 Pod 中协同工作，以及可用于控制容器在 Kubernetes
+    中运行方式的选项。
+- en: 'The bare essentials:'
+  id: totrans-203
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 基本要求：
+- en: A Linux container, at the kernel level, is an isolated set of processes, with
+    ring-fenced resources. From inside a container, it looks as though the container
+    has a Linux machine to itself.
+  id: totrans-204
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Linux 容器在内核级别是一组隔离的进程集合，具有环形资源。从容器内部看，它看起来就像容器拥有一个专属的 Linux 机器。
+- en: Containers are not virtual machines. Each container should run one primary process.
+  id: totrans-205
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 容器不是虚拟机。每个容器应该运行一个主要进程。
+- en: A Pod usually contains one container that runs a primary application, plus optional
+    *helper* containers that support it.
+  id: totrans-206
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一个 Pod 通常包含一个运行主要应用程序的容器，以及可选的*辅助*容器来支持它。
+- en: Container image specifications can include a registry hostname, a repository
+    namespace, an image repository, and a tag; for example, `docker.io/cloudnatived/demo:hello`.
+    Only the image name is required.
+  id: totrans-207
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 容器镜像规格可以包括注册表主机名、仓库命名空间、镜像仓库和标签；例如，`docker.io/cloudnatived/demo:hello`。只有镜像名称是必需的。
+- en: For reproducible deployments, always specify a tag for the container image.
+    Otherwise, you’ll get whatever happens to be `latest`.
+  id: totrans-208
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 为了可重现的部署，始终为容器镜像指定一个标签。否则，你将得到任意的`latest`版本。
+- en: Programs in containers should not run as the root user. Instead, assign them
+    an ordinary user.
+  id: totrans-209
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 容器中的程序不应该以 root 用户身份运行。相反，分配给它们一个普通用户。
+- en: 'You can set the `runAsNonRoot: true` field on a container to block any container
+    that wants to run as `root`.'
+  id: totrans-210
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '你可以在容器上设置`runAsNonRoot: true`字段，以阻止任何想要作为`root`运行的容器。'
+- en: 'Other useful security settings on containers include `readOnlyRootFilesystem:
+    true` and `allowPrivilegeEscalation: false`.'
+  id: totrans-211
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '容器的其他有用的安全设置包括`readOnlyRootFilesystem: true`和`allowPrivilegeEscalation: false`。'
+- en: Linux capabilities provide a fine-grained privilege control mechanism, but the
+    default capabilities for containers may be too generous. You can lock down your
+    Pods by dropping all capabilities for containers, then granting specific capabilities
+    if a container needs them.
+  id: totrans-212
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Linux 权限提供了一种细粒度的权限控制机制，但是容器的默认权限可能过于宽松。你可以通过取消所有容器的权限，然后根据需要授予特定的权限来锁定你的 Pods。
+- en: Containers in the same Pod can share data by reading and writing a mounted Volume.
+    The simplest Volume is of type `emptyDir`, which starts out empty and preserves
+    its contents only as long as the Pod is running.
+  id: totrans-213
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 相同 Pod 中的容器可以通过读取和写入挂载的 Volume 来共享数据。最简单的 Volume 类型是`emptyDir`，它在开始时是空的，并且只在
+    Pod 运行时保留其内容。
+- en: A PersistentVolume, on the other hand, preserves its contents as long as needed.
+    Pods can dynamically provision new PersistentVolumes using PersistentVolumeClaims.
+  id: totrans-214
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 另一方面，持久卷会根据需要保留其内容。Pods 可以使用持久卷声明动态配置新的持久卷。
+- en: Init containers can be useful for doing inital setup before your application
+    is started in a Pod.
+  id: totrans-215
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 初始化容器在 Pod 中启动应用程序之前进行初始设置非常有用。

@@ -1,0 +1,1394 @@
+- en: Chapter 12\. Deploying Kubernetes Applications
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第 12 章. 部署 Kubernetes 应用程序
+- en: I lay on my back, surprised at how calm and focused I felt, strapped to four
+    and a half million pounds of explosives.
+  id: totrans-1
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 我躺在背上，惊讶地感受到自己是如何平静和专注的，绑在四百五十万磅的炸药上。
+- en: ''
+  id: totrans-2
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+- en: Ron Garan, astronaut
+  id: totrans-3
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 罗恩·加兰，宇航员
+- en: 'In this chapter, we’ll deal with the question of how to turn your manifest
+    files into running applications. We’ll learn how to build Helm charts for your
+    applications, and look at some alternative tools for manifest management: Tanka,
+    kustomize, Kapitan, and kompose.'
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们将讨论如何将您的清单文件转换为运行中的应用程序。我们将学习如何为您的应用程序构建 Helm 图表，并查看一些替代清单管理工具：Tanka、kustomize、Kapitan
+    和 kompose。
+- en: Building Manifests with Helm
+  id: totrans-5
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用 Helm 构建清单
+- en: We saw in [Chapter 2](ch02.html#firststeps) how to deploy and manage applications
+    with Kubernetes resources created from YAML manifests. There’s nothing stopping
+    you from managing all your Kubernetes applications using just the raw YAML files
+    in this way, but it’s not ideal. Not only is it difficult to maintain these files,
+    but there is also a problem of distribution.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在 [第 2 章](ch02.html#firststeps) 中看到如何使用从 YAML 清单创建的 Kubernetes 资源部署和管理应用程序。您完全可以使用这种方式管理所有
+    Kubernetes 应用程序的原始 YAML 文件，但这并不理想。维护这些文件不仅困难，而且存在分发问题。
+- en: Suppose you want to make your application available to other people to run in
+    their own clusters. You can distribute the manifest files to them, but they will
+    inevitably need to customize some of the settings for their own environment.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设您想要让其他人在他们自己的集群中运行您的应用程序。您可以向他们分发清单文件，但他们必然需要根据自己的环境定制一些设置。
+- en: To do this, they will have to make their own copy of the Kubernetes configs,
+    find where the various settings are defined (perhaps duplicated in several places),
+    and edit them.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了做到这一点，他们将不得不复制 Kubernetes 配置的自己的副本，找到定义各种设置的位置（可能在几个地方重复），并对其进行编辑。
+- en: Over time, they will need to maintain their own copies of the files, and when
+    you make updates available, they will have to pull and reconcile them manually
+    with their local changes.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 随着时间的推移，他们将需要维护文件的自己的副本，并在您提供更新后，他们将不得不手动拉取并与其本地更改进行协调。
+- en: This eventually starts to become painful. What we want is the ability to separate
+    the raw manifest files from the particular settings and variables that you or
+    any user of the application might need to adjust. Ideally we could then make these
+    available in a standard format, which anyone can download and install to a Kubernetes
+    cluster.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最终，这开始变得痛苦起来。我们希望能够将原始清单文件与您或应用程序任何用户可能需要调整的特定设置和变量分离开来。理想情况下，我们可以将这些内容以标准格式提供给任何人下载并安装到
+    Kubernetes 集群中。
+- en: Once we have this, then each application can expose not only configuration values,
+    but also any dependencies it has on other apps or services. An intelligent package
+    management tool could then install and run an application, along with all its
+    dependencies, in a single command.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦我们拥有了这些，那么每个应用程序都可以暴露出不仅是配置值，还包括它对其他应用程序或服务的任何依赖关系。一个智能的包管理工具可以通过单个命令安装和运行应用程序及其所有依赖项。
+- en: 'In [“Helm: A Kubernetes Package Manager”](ch04.html#helm-intro), we introduced
+    the Helm tool and showed you how to use it to install public charts. Let’s look
+    at Helm charts in a little more detail now, and see how to create our own.'
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 [“Helm：一个 Kubernetes 包管理器”](ch04.html#helm-intro) 中，我们介绍了 Helm 工具，并展示了如何使用它安装公共图表。现在让我们更详细地看看
+    Helm 图表，以及如何创建我们自己的图表。
+- en: What’s Inside a Helm Chart?
+  id: totrans-13
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Helm 图表的内部构成是什么？
+- en: In the demo repo, open up the *hello-helm3/k8s* directory to see what’s inside
+    our Helm chart.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在演示资料库中，打开 *hello-helm3/k8s* 目录，看看我们的 Helm 图表里面有什么。
+- en: 'Every Helm chart has a standard structure. First, the chart is contained in
+    a directory with the same name as the chart (`demo` in this case):'
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个 Helm 图表都有一个标准结构。首先，图表包含在一个与图表同名的目录中（在这种情况下是 `demo`）：
+- en: '[PRE0]'
+  id: totrans-16
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: The Chart.yaml file
+  id: totrans-17
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: Chart.yaml 文件
+- en: 'Next, it contains a file named *Chart.yaml*, which specifies the chart name
+    and version:'
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，它包含一个名为 *Chart.yaml* 的文件，其中指定了图表的名称和版本：
+- en: '[PRE1]'
+  id: totrans-19
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: There are lots of optional fields you can supply in *Chart.yaml*, including
+    a link to the project source code, as here, but the only required information
+    is the name and version.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*Chart.yaml* 中有许多可选字段供您提供，包括指向项目源代码的链接，如此处所示，但唯一必需的信息是名称和版本。'
+- en: The values.yaml file
+  id: totrans-21
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: '*values.yaml* 文件'
+- en: 'There is also a file named *values.yaml*, which contains user-modifiable settings
+    that the chart author has exposed:'
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 还有一个名为 *values.yaml* 的文件，其中包含图表作者公开的可修改用户设置：
+- en: '[PRE2]'
+  id: totrans-23
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'This looks a bit like a Kubernetes YAML manifest, but there’s an important
+    difference. The *values.yaml* file is completely free-form YAML, with no predefined
+    schema: it’s up to you to choose what variables are defined, their names, and
+    their values.'
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这看起来有点像 Kubernetes YAML 清单，但有一个重要的区别。*values.yaml* 文件是完全自由格式的 YAML，没有预定义的模式：由您选择定义什么变量，它们的名称和值。
+- en: There don’t have to be any variables at all in your Helm chart, but if there
+    are, you can put them in *values.yaml* and then refer to them elsewhere in the
+    chart.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您的 Helm chart 中完全可以没有任何变量，但如果有的话，您可以将它们放在 *values.yaml* 中，然后在图表的其他地方引用它们。
+- en: Ignore the *production-values.yaml* and *staging-values.yaml* files for the
+    moment; we’ll explain what they’re for shortly.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 暂时忽略 *production-values.yaml* 和 *staging-values.yaml* 文件；我们稍后会解释它们的用途。
+- en: Helm Templates
+  id: totrans-27
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Helm 模板
+- en: 'So where are these variables referenced? If you look in the *templates* subdirectory,
+    you’ll see a couple of familiar-looking files:'
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 那么这些变量被引用在哪里？如果你看 *templates* 子目录，你会看到几个看起来很熟悉的文件：
+- en: '[PRE3]'
+  id: totrans-29
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'These are just the same as the Deployment and Service manifest files from the
+    previous example, except that now they are *templates*: instead of referring to
+    things like the container name directly, they contain a placeholder that Helm
+    will replace with the actual value from *values.yaml*.'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些与前面示例中的部署和服务清单文件完全相同，只是现在它们是*模板*：不再直接引用诸如容器名称之类的东西，而是包含一个 Helm 将从 *values.yaml*
+    中实际值替换的占位符。
+- en: 'Here’s what the template Deployment looks like:'
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下面是模板部署的样子：
+- en: '[PRE4]'
+  id: totrans-32
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: Tip
+  id: totrans-33
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: The curly braces indicate a place where Helm should substitute the value of
+    a variable, but they’re actually part of *Go template syntax*.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 花括号表示 Helm 应该替换变量值的位置，但它们实际上是 *Go 模板语法* 的一部分。
+- en: (Yes, Go is everywhere. Kubernetes and Helm themselves are written in Go, so
+    it’s no surprise that Helm charts use Go templates.)
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: （没错，Go 到处都是。Kubernetes 和 Helm 本身都是用 Go 编写的，所以 Helm charts 使用 Go 模板并不奇怪。）
+- en: Interpolating Variables
+  id: totrans-36
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 插值变量
+- en: 'There are several variables referenced in this template:'
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此模板中引用了多个变量：
+- en: '[PRE5]'
+  id: totrans-38
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'This whole section of text, including the curly braces, will be *interpolated*
+    (that is, replaced) with the values of `container.name` and `environment`, taken
+    from *values.yaml*. The generated result will look like this:'
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这整段文字，包括花括号，都将被*插值*（即替换）为从 *values.yaml* 中取得的 `container.name` 和 `environment`
+    的值。生成的结果将看起来像这样：
+- en: '[PRE6]'
+  id: totrans-40
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: 'This is powerful, because values like `container.name` are referenced more
+    than once in the template. Naturally, it’s referenced in the Service template,
+    too:'
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这非常强大，因为诸如 `container.name` 这样的值在模板中被多次引用。当然，它也在 Service 模板中被引用：
+- en: '[PRE7]'
+  id: totrans-42
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: You can see how many times `.Values.container.name` is referenced, for example.
+    Even in a simple chart like this, you need to repeat the same bits of information
+    many times. Using Helm variables eliminates this duplication. All you need to
+    do to change the container name, for example, is to edit *values.yaml* and reinstall
+    the chart, and the change will be propagated throughout all the templates.
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，您可以看到 `.Values.container.name` 被引用了多少次。即使在这样一个简单的图表中，您需要多次重复相同的信息片段。使用 Helm
+    变量可以消除这种重复。例如，要更改容器名称，您只需编辑 *values.yaml* 并重新安装图表，更改将在所有模板中传播。
+- en: 'The Go template format is very powerful, and you can use it to do much more
+    than simple variable substitutions: it supports loops, expressions, conditionals,
+    and even calling functions. Helm charts can use these features to generate fairly
+    complex configuration from input values, unlike the simple substitutions in our
+    example.'
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Go 模板格式非常强大，你可以用它来做远不止简单的变量替换：它支持循环、表达式、条件语句，甚至调用函数。Helm charts 可以利用这些特性从输入值生成相当复杂的配置，不像我们示例中的简单替换。
+- en: You can read more about how to write Helm templates in the Helm [documentation](https://oreil.ly/4u06b).
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在 Helm [文档](https://oreil.ly/4u06b)中阅读更多有关如何编写 Helm 模板的信息。
+- en: Quoting Values in Templates
+  id: totrans-46
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 引用模板中的值
+- en: 'You can use the `quote` function in Helm to automatically quote values in your
+    templates:'
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在 Helm 中使用 `quote` 函数自动引用模板中的值：
+- en: '[PRE8]'
+  id: totrans-48
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: Only string values should be quoted—don’t use the `quote` function with numeric
+    values like port numbers.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 只有字符串值应该用引号括起来 —— 不要对数值（比如端口号）使用 `quote` 函数。
+- en: Specifying Dependencies
+  id: totrans-50
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 指定依赖关系
+- en: What if your chart relies on other charts? For example, if your app uses Redis,
+    the Helm chart for your app might need to specify the `redis` chart as a dependency.
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你的图表依赖于其他图表怎么办？例如，如果你的应用程序使用Redis，那么你的应用Helm图表可能需要指定`redis`图表作为一个依赖项。
+- en: 'You can do this using the `dependencies` section in the `Chart.yaml`:'
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可以使用`Chart.yaml`中的`dependencies`部分来实现这一点：
+- en: '[PRE9]'
+  id: totrans-53
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: Now run the `helm dependency update` command, and Helm will download those charts,
+    ready to install along with your own application. These dependencies can be local
+    charts, or hosted remotely in public Helm repositories.
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在运行`helm dependency update`命令，Helm将下载那些图表，准备与你自己的应用程序一起安装。这些依赖项可以是本地图表，也可以是托管在公共Helm存储库中的图表。
+- en: You can also overwrite any of the default values of any charts that you pull
+    in as dependencies (often referred to as subcharts). See the [Helm docs on subchart
+    values](https://oreil.ly/rF4rq) for more details.
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你也可以覆盖任何作为依赖项引入的图表的默认值（通常称为子图表）。有关更多详情，请参阅[Helm文档上的子图表值](https://oreil.ly/rF4rq)。
+- en: The `~` symbol in the version tells Helm that you would be willing to automatically
+    upgrade to a newer version of the chart up to the next minor release version.
+    For example, `~15.4.1` means that Helm will install the newest `15.4.x` version,
+    stopping before `15.5.x`. Helm, like many other package managers, also uses a
+    *.lock* file, so after updating you should see a *Chart.lock* file generated that
+    tracks the exact versions used at the time.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 版本中的`~`符号告诉Helm，你愿意自动升级到图表的更新版本，直到下一个次要版本发布。例如，`~15.4.1`表示Helm将安装最新的`15.4.x`版本，在`15.5.x`之前停止。Helm，像许多其他包管理器一样，还使用.lock文件，因此更新后，你应该看到生成一个*Chart.lock*文件，记录了当时使用的确切版本。
+- en: Deploying Helm Charts
+  id: totrans-57
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 部署Helm图表
+- en: Let’s look at what’s involved in actually using a Helm chart to deploy an application.
+    One of the most valuable features of Helm is the ability to specify, change, update,
+    and override configuration settings. In this section, we’ll see how that works.
+    This example is in the directory of the [cloudnativedevops GitHub demo repo](https://oreil.ly/xeLdl)
+    if you wish to follow along.
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在让我们看看如何实际使用Helm图表来部署应用程序。Helm最有价值的功能之一是能够指定、更改、更新和覆盖配置设置。在本节中，我们将看到它的工作原理。如果你想跟着做示例，这个例子在[cloudnativedevops
+    GitHub演示库](https://oreil.ly/xeLdl)的目录中。
+- en: Setting Variables
+  id: totrans-59
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 设置变量
+- en: We’ve seen that the author of a Helm chart can put all the user-modifiable settings
+    in `values.yaml`, along with the default values for those settings. So how does
+    the *user* of a chart change or override those settings to suit their local site
+    or environment? The `helm install` and `helm upgrade` commands let you specify
+    additional values files on the command line, which will override any defaults
+    in *values.yaml*. Let’s look at an example.
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们已经看到，Helm图表的作者可以将所有用户可修改的设置放在`values.yaml`中，以及这些设置的默认值。那么，一个图表的*用户*如何改变或覆盖这些设置以适应他们的本地站点或环境呢？`helm
+    install`和`helm upgrade`命令允许你在命令行上指定额外的值文件，这些文件将覆盖*values.yaml*中的任何默认值。让我们看一个例子。
+- en: Creating an environment variable
+  id: totrans-61
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 创建环境变量
+- en: Suppose you want to deploy a version of the application in a staging environment.
+    For the purposes of our example, it doesn’t really matter what that means in practice,
+    but let’s say the application knows whether it’s in staging or production based
+    on the value of an environment variable named `ENVIRONMENT`, and changes its behavior
+    accordingly. How does that environment variable get created?
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设你想在一个分段环境中部署应用程序的一个版本。对于我们的示例目的，实际上这意味着什么并不重要，但假设应用程序根据名为`ENVIRONMENT`的环境变量的值知道它是在分段环境还是在生产环境，并相应地改变其行为。那个环境变量是如何创建的？
+- en: 'Looking again at the *deployment.yaml* template, this environment variable
+    is supplied to the container using this code:'
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 再次查看*deployment.yaml*模板，这个环境变量是通过以下代码提供给容器的：
+- en: '[PRE10]'
+  id: totrans-64
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: 'The value of `environment` comes from *values.yaml*, as you’d expect:'
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`environment`的值来自*values.yaml*，这是你所期望的：'
+- en: '[PRE11]'
+  id: totrans-66
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: 'So installing the chart with the default values will result in the container’s
+    `ENVIRONMENT` variable containing `development`. Suppose you want to change that
+    to `staging`. You could edit the *values.yaml* file, as we’ve seen, but a better
+    way is to create an additional YAML file containing a value for just that one
+    variable:'
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，使用默认值安装图表将导致容器的`ENVIRONMENT`变量包含`development`。假设你想将其更改为`staging`。你可以像我们看到的那样编辑*values.yaml*文件，但更好的方法是创建一个额外的YAML文件，仅包含该变量的一个值：
+- en: '[PRE12]'
+  id: totrans-68
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: You’ll find this value in the file *k8s/demo/staging-values.yaml*, which isn’t
+    part of the Helm chart—we’ve just supplied it to save you a little typing.
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您会在 *k8s/demo/staging-values.yaml* 文件中找到这个值，该文件不是 Helm 图表的一部分——我们只是提供它来节省一点打字时间。
+- en: Specifying Values in a Helm Release
+  id: totrans-70
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 在 Helm 发布中指定值
+- en: 'To specify an extra values file with the `helm upgrade` command, use the `--values`
+    flag, like this:'
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要在`helm upgrade`命令中指定额外的值文件，请使用`--values`标志，如下所示：
+- en: '[PRE13]'
+  id: totrans-72
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: Note
+  id: totrans-73
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Note that in these examples we are using `helm upgrade --install` instead of
+    `helm install`. Doing it this way means you can use the same command whether your
+    helm release has already been installed or not. If you prefer to use just `helm
+    install` first and `helm upgrade` on following deploys, that will also work.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，在这些示例中，我们使用`helm upgrade --install`而不是`helm install`。这样做可以让您无论 Helm 发布是否已安装，都可以使用相同的命令。如果您更喜欢首先使用`helm
+    install`，然后在后续部署时使用`helm upgrade`，那也可以。
+- en: This will create a new release, with a new name (`demo-staging`), and the running
+    container’s `ENVIRONMENT` variable will be set to `staging` instead of `development`.
+    The variables listed in the extra values file we specified with `--values` are
+    combined with those in the default values file (*values.yaml*). In this case,
+    there’s only one variable (`environment`) and the value from *staging-values.yaml*
+    overrides that from the default values file.
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这将创建一个新的发布，名称为`demo-staging`，运行容器的`ENVIRONMENT`变量将设置为`staging`而不是`development`。我们指定的额外值文件中列出的变量（使用`--values`标志）与默认值文件（*values.yaml*）中的变量组合在一起。在这种情况下，只有一个变量（`environment`），*staging-values.yaml*中的值将覆盖默认值文件中的值。
+- en: You can also specify values directly on the command line, using the `--set`
+    flag. This can be useful for things like changing an image tag version or testing
+    a quick change. Typically you should instead create a separate YAML file containing
+    whatever value overrides are needed for a particular envrionment, like the *staging-values.yaml*
+    file in the example, track that file in your source control repository, and apply
+    it using the `--values` flag.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你还可以直接在命令行上使用`--set`标志指定数值。这对于诸如更改镜像标签版本或测试快速更改等情况非常有用。通常，你应该创建一个单独的 YAML 文件，包含特定环境所需的任何值覆盖，例如示例中的
+    *staging-values.yaml* 文件，并将该文件跟踪到源代码控制存储库中，然后使用`--values`标志应用它。
+- en: 'While you’ll naturally want to set configuration values this way for installing
+    your own Helm charts, you can do it with public charts too. To see the list of
+    values a chart makes available for you to set, run `helm get values` with a chart
+    name:'
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然您自然会希望以这种方式设置配置值来安装自己的 Helm 图表，但您也可以对公共图表进行操作。要查看图表提供的可设置值列表，请运行带有图表名称的`helm
+    get values`：
+- en: '[PRE14]'
+  id: totrans-78
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: Updating an App with Helm
+  id: totrans-79
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用 Helm 更新应用程序
+- en: You’ve learned how to install a Helm chart with the default values, and with
+    a custom values file, but what about changing some values for an application that’s
+    already running?
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你已经学会了如何使用默认值和自定义值文件安装 Helm 图表，但是如何更改某些正在运行的应用程序的值呢？
+- en: 'The `helm upgrade` command will do this for you. Suppose you want to change
+    the number of replicas (the number of copies of the Pod that Kubernetes should
+    run) for the demo application. By default it’s 1, as you can see from the *values.yaml*
+    file:'
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`helm upgrade`命令将为您执行此操作。假设您希望更改演示应用程序的副本数（Kubernetes 应运行的 Pod 的副本数）。默认情况下为1，您可以从
+    *values.yaml* 文件中看到：'
+- en: '[PRE15]'
+  id: totrans-82
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: 'You know how to override this using a custom values file, so edit the *staging-values.yaml*
+    file to add a suitable setting:'
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您已经知道如何使用自定义值文件覆盖此设置，因此编辑 *staging-values.yaml* 文件以添加适当的设置：
+- en: '[PRE16]'
+  id: totrans-84
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: 'Run the same command as before to apply your changes to the *existing* `demo-staging`
+    Deployment, rather than creating a new one:'
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运行与之前相同的命令，将您的更改应用于*现有*的`demo-staging`部署，而不是创建一个新的部署：
+- en: '[PRE17]'
+  id: totrans-86
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: You can run `helm upgrade` as many times as you like to update a running Deployment,
+    and Helm will cheerfully oblige.
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以随意运行`helm upgrade`多次以更新正在运行的部署，Helm 将乐意为您效劳。
+- en: Rolling Back to Previous Versions
+  id: totrans-88
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 回滚到之前的版本
+- en: 'If you decide you don’t like the version you’ve just deployed, or there turns
+    out to be a problem, it’s easy to roll back to a previous version, using the `helm
+    rollback` command, and specifying the number of a previous release (as shown in
+    `helm history` output):'
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你决定不喜欢刚刚部署的版本，或者出现了问题，使用`helm rollback`命令回滚到之前的版本非常容易，只需指定之前发布的编号（如`helm history`输出中所示）即可：
+- en: '[PRE18]'
+  id: totrans-90
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: In fact, the rollback doesn’t have to be to a previous release; let’s say you
+    roll back to revision 1, and then decide you want to roll *forward* to revision
+    2\. If you run `helm rollback demo-staging 2`, that’s exactly what will happen.
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 实际上，回滚不一定要回到先前的版本；假设你回滚到版本1，然后决定要向前回滚到版本2。如果运行`helm rollback demo-staging 2`，这正是会发生的事情。
+- en: Automatic rollback with helm
+  id: totrans-92
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 使用helm进行自动回滚
+- en: You can have Helm automatically roll back an unsuccessful deployment. If you
+    add the `--atomic` flag to the `helm upgrade` command then Helm will wait for
+    your deployment to succeed. If it goes into a `FAILED` state, it will automatically
+    roll back to the last successful release. You would want to make sure that you
+    have an alert in place for this situation by checking for a failed deploy so that
+    you can go debug what happened, otherwise you may not notice that your deploy
+    didn’t actually succeed!
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可以让Helm自动回滚一个不成功的部署。如果在`helm upgrade`命令中加入`--atomic`标志，Helm将等待你的部署成功。如果进入`FAILED`状态，它将自动回滚到上一个成功的发布。你应该确保在此情况下设置了失败部署的警报，以便你能够调试发生了什么，否则你可能不会注意到你的部署实际上并没有成功！
+- en: Creating a Helm Chart Repo
+  id: totrans-94
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 创建Helm Chart库
+- en: So far we’ve used Helm to install charts from a local directory. You don’t need
+    your own chart repo to use Helm, as it’s common to store an application’s Helm
+    chart in the application’s own repo.
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，我们已经使用Helm从本地目录安装了图表。你不需要拥有自己的图表库来使用Helm，因为将应用程序的Helm Chart存储在应用程序自己的库中是很常见的。
+- en: 'But if you do want to maintain your own Helm chart repo, it’s very straightforward.
+    The charts need to be available over HTTP, and there’s a variety of ways you can
+    do this: put them in a cloud storage bucket, host your own [ChartMuseum server](https://chartmuseum.com),
+    use Artifactory, use GitHub Pages, or use an existing web server if you have one.'
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 但是，如果你确实想要维护自己的Helm chart库，这非常简单。图表需要通过HTTP访问，并且有多种方式可以实现这一点：将它们放在云存储桶中、托管自己的[ChartMuseum服务器](https://chartmuseum.com)，使用Artifactory，使用GitHub
+    Pages，或者如果有现成的Web服务器，则可以使用现有的Web服务器。
+- en: Once all your charts are collected together under a single directory, run `helm
+    repo index` to create the *index.yaml* file that contains the repo metadata.
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦所有图表都集中在一个单独的目录下，运行`helm repo index`命令来创建包含库元数据的*index.yaml*文件。
+- en: Your chart repo is ready to use! See the Helm [documentation](https://oreil.ly/glEyY)
+    for more details on managing chart repos.
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你的图表库已经准备就绪！详细了解管理图表库的更多细节，请参阅Helm的[文档](https://oreil.ly/glEyY)。
+- en: 'To install charts from your repo, you’ll first of all need to add the repo
+    to Helm’s list:'
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要从你的库中安装图表，首先需要将库添加到Helm的列表中：
+- en: '[PRE19]'
+  id: totrans-100
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: Managing Helm Chart Secrets with Sops
+  id: totrans-101
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用Sops管理Helm Chart中的秘密
+- en: We saw in [“Kubernetes Secrets”](ch10.html#secrets) how to store secret data
+    in Kubernetes, and how to pass it to applications via environment variables or
+    mounted files. If you have more than one or two secrets to manage, you may find
+    it easier to create a single file containing all the secrets, rather than individual
+    files each containing one secret. And if you’re using Helm to deploy your app,
+    you can make that file a values file, and encrypt it with Sops (see [“Encrypting
+    Secrets with Sops”](ch10.html#sops)).
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在[“Kubernetes Secrets”](ch10.html#secrets)中看到了如何在Kubernetes中存储秘密数据，以及如何通过环境变量或挂载文件将其传递给应用程序。如果需要管理超过一两个秘密，可能会更容易创建一个包含所有秘密的单个文件，而不是每个文件都包含一个秘密。如果你正在使用Helm部署你的应用程序，你可以将该文件作为值文件，并使用Sops进行加密（参见[“使用Sops加密秘密”](ch10.html#sops)）。
+- en: 'We’ve built an example for you to try in the demo repo, in the *hello-sops*
+    directory:'
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在演示库的*hello-sops*目录中为你构建了一个示例：
+- en: '[PRE20]'
+  id: totrans-104
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: This is a similar Helm chart layout to our earlier example (see [“What’s Inside
+    a Helm Chart?”](#helmcharts)). Here, we’ve defined a `Deployment` and a `Secret`.
+    But in this example, we have added a twist to make it easier to manage multiple
+    secrets for different environments.
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是与我们早期示例类似的Helm Chart布局（参见[“Helm Chart的内部是什么？”](#helmcharts)）。在这里，我们定义了一个`Deployment`和一个`Secret`。但在这个例子中，我们添加了一个变化，使得管理不同环境中的多个秘密变得更加容易。
+- en: 'Let’s see the secrets our application will need:'
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们来看看我们的应用程序将需要的秘密：
+- en: '[PRE21]'
+  id: totrans-107
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: Here we have used Sops to encrypt the values of multiple secrets for our application
+    to use.
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这里，我们使用Sops加密了多个应用程序使用的秘密的值。
+- en: 'Now take a look at the Kubernetes *secrets.yaml* file:'
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在看一下Kubernetes的*secrets.yaml*文件：
+- en: '[PRE22]'
+  id: totrans-110
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: On the last two lines, we’ve added some Go templating into the Helm chart to
+    read secrets from either the *production-secrets.yaml* or the *staging-secrets.yaml*
+    files, depending on which `environment` is set in the *values.yaml* file.
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在最后两行中，我们在 Helm 图表中添加了一些 Go 模板，以便根据 *values.yaml* 文件中设置的 `environment` 从 *production-secrets.yaml*
+    或 *staging-secrets.yaml* 文件中读取秘密。
+- en: The end result will be a single Kubernetes `Secret` named *demo-secrets*, containing
+    all of the key-value pairs defined in either secret file. This `Secret` will get
+    mounted in the Deployment as a single file named *secrets.yaml* for the application
+    to use.
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最终结果将是一个名为 *demo-secrets* 的单个 Kubernetes `Secret`，其中包含在任一秘密文件中定义的所有键值对。此 `Secret`
+    将作为一个名为 *secrets.yaml* 的单个文件挂载到 Deployment 中供应用程序使用。
+- en: We’ve also added `...| b64enc` to the end of the last line. This is another
+    handy shortcut using Helm’s Go templating to automatically convert the secret
+    data from plain text to `base64`, which, by default, is what Kubernetes expects
+    secrets to be (see [“base64”](ch10.html#base64)).
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们还在最后一行末尾添加了 `...| b64enc`。这是使用 Helm 的 Go 模板的另一个方便的快捷方式，自动将秘密数据从明文转换为 `base64`，这是
+    Kubernetes 默认期望秘密的格式（参见 [“base64”](ch10.html#base64)）。
+- en: 'We need to first temporarily decrypt the files using Sops, and then apply the
+    changes to a Kubernetes cluster. Here is a command pipeline to deploy a staging
+    version of the demo application, with its staging secrets:'
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们需要首先使用 Sops 临时解密文件，然后将更改应用到 Kubernetes 集群。这是一个命令管道，用于部署演示应用程序的暂存版本及其暂存秘密：
+- en: '[PRE23]'
+  id: totrans-115
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: 'Here’s how that works:'
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是它的工作原理：
+- en: Sops decrypts the *staging-secrets* file and writes the decrypted output to
+    *temp-staging-secrets*.
+  id: totrans-117
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: Sops 解密 *staging-secrets* 文件，并将解密后的输出写入 *temp-staging-secrets*。
+- en: Helm installs the `demo` chart using values from *staging-values* and *temp-staging-secrets*.
+  id: totrans-118
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: Helm 使用来自 *staging-values* 和 *temp-staging-secrets* 的数值来安装 `demo` 图表。
+- en: The *temp-staging-secrets* file is deleted.
+  id: totrans-119
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: '*temp-staging-secrets* 文件被删除。'
+- en: Because all this happens in one step, we don’t leave a file containing plain-text
+    secrets lying around for the wrong people to find. This is very similar to how
+    the [`helm-secrets`](https://oreil.ly/BX6uf) plugin works, so if this workflow
+    appeals to you for managing secrets, it would be worth looking at this project.
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因为所有这些操作都在一步中完成，所以我们不会留下包含明文秘密的文件，供错误的人发现。这与 [`helm-secrets`](https://oreil.ly/BX6uf)
+    插件的工作方式非常相似，因此如果您喜欢这种管理秘密的工作流程，那么值得查看这个项目。
+- en: Managing Multiple Charts with Helmfile
+  id: totrans-121
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用 Helmfile 管理多个图表
+- en: 'When we introduced Helm in [“Helm: A Kubernetes Package Manager”](ch04.html#helm-intro),
+    we showed you how to deploy the demo application Helm chart to a Kubernetes cluster.
+    As useful as Helm is, it only operates on one chart at a time. How do you know
+    what applications should be running in your cluster, together with the custom
+    settings you applied when you installed them with Helm?'
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '当我们在 [“Helm: Kubernetes 包管理器”](ch04.html#helm-intro) 中介绍 Helm 时，我们向您展示了如何将演示应用程序
+    Helm 图表部署到 Kubernetes 集群。尽管 Helm 非常有用，但它一次只能操作一个图表。您如何知道应该在集群中运行哪些应用程序，以及您在安装它们时应用的自定义设置？'
+- en: There’s a neat tool called [Helmfile](https://oreil.ly/pptjH) that can help
+    you do this. Much as Helm makes it possible for you to deploy a single application
+    using templating and variables, Helmfile enables you to deploy everything that
+    should be installed on your cluster, with a single command.
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有一个很棒的工具叫做 [Helmfile](https://oreil.ly/pptjH)，它可以帮助你完成这些操作。就像 Helm 通过模板和变量使您能够部署单个应用程序一样，Helmfile
+    使您能够使用单个命令部署应该安装在您的集群上的所有内容。
+- en: What’s in a Helmfile?
+  id: totrans-124
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Helmfile 的内容是什么？
+- en: 'There’s an example of how to use Helmfile in the `demo` repository. In the
+    *hello-helmfile* folder, you’ll find *helmfile.yaml*:'
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 `demo` 仓库中有一个使用 Helmfile 的示例。在 *hello-helmfile* 文件夹中，您会找到 *helmfile.yaml*：
+- en: '[PRE24]'
+  id: totrans-126
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: The `repositories` section defines the Helm chart repositories we are going
+    to reference. In this case, the only repository is `prometheus-community`, the
+    official Prometheus helm repository. If you’re using your own Helm chart repo
+    (see [“Creating a Helm Chart Repo”](#chartrepo)), add it here.
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`repositories` 部分定义了我们将要引用的 Helm 图表仓库。在这种情况下，唯一的仓库是 `prometheus-community`，官方的
+    Prometheus Helm 仓库。如果您正在使用自己的 Helm 图表仓库（参见 [“创建 Helm 图表仓库”](#chartrepo)），请在这里添加。'
+- en: 'Next, we define a set of `releases`: applications we would like to deploy to
+    the cluster. Each release specifies some of the following metadata:'
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，我们定义了一组 `releases`：我们希望部署到集群的应用程序。每个发布指定了以下一些元数据：
+- en: '`name` of the Helm chart to deploy'
+  id: totrans-129
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`name` 用于部署的 Helm 图表名称'
+- en: '`namespace` to deploy it to'
+  id: totrans-130
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`namespace` 用于部署'
+- en: '`chart` is the URL or path to the chart itself'
+  id: totrans-131
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`chart` 是图表本身的 URL 或路径'
+- en: '`values` gives the path to a *values.yaml* file to use with the Deployment'
+  id: totrans-132
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`values`给出了与部署一起使用的*values.yaml*文件的路径'
+- en: '`set` sets any extra values in addition to those in the values file'
+  id: totrans-133
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`set`在值文件中设置任何额外的值'
+- en: 'We’ve defined three releases here: the demo app, plus Prometheus (see [“Prometheus”](ch16.html#prometheus))
+    and `kube-state-metrics` (see [“Kubernetes Metrics”](ch16.html#k8smetrics)).'
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在这里定义了三个发布版本：演示应用程序，加上Prometheus（请参阅[“Prometheus”](ch16.html#prometheus)）和`kube-state-metrics`（请参阅[“Kubernetes
+    Metrics”](ch16.html#k8smetrics)）。
+- en: Chart Metadata
+  id: totrans-135
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 图表元数据
+- en: 'Note that we’ve specified a relative path to the `demo` chart and values files:'
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，我们已经指定了相对路径到`demo`图表和值文件：
+- en: '[PRE25]'
+  id: totrans-137
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE25]'
+- en: So your charts don’t need to be in a chart repository for Helmfile to manage
+    them; you could keep them all in the same source code repo, for example.
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，您的图表不需要在图表存储库中以便Helmfile管理它们； 例如，您可以将它们全部保存在同一个源代码存储库中。
+- en: 'For the `prometheus` chart, we’ve specified `prometheus-community/prometheus`.
+    Since this isn’t a filesystem path, Helmfile knows to look for the chart at the
+    URL for the repo, which we defined earlier in the `repositories` section:'
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于`prometheus`图表，我们已指定了`prometheus-community/prometheus`。 由于这不是文件系统路径，Helmfile知道要在仓库的URL上查找图表，我们在`repositories`部分中定义了该URL：
+- en: '[PRE26]'
+  id: totrans-140
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE26]'
+- en: All charts have various default values set in their respective *values.yaml*
+    files. In the `set:` sections of Helmfile, you can specify any values that you
+    would like to overwrite when installing the application.
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有图表都在各自的*values.yaml*文件中设置了各种默认值。 在Helmfile的`set:`部分，您可以指定在安装应用程序时想要覆盖的任何值。
+- en: 'In this example, for the `prometheus` release, we wanted to ensure that the
+    value for `rbac.create` is set to `true`:'
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这个例子中，对于`prometheus`发布，我们想确保`rbac.create`的值设置为`true`：
+- en: '[PRE27]'
+  id: totrans-143
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE27]'
+- en: Applying the Helmfile
+  id: totrans-144
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 应用Helmfile
+- en: The *helmfile.yaml*, then, specifies everything that should be running in the
+    cluster (or at least, a subset of it) in a declarative way, just like Kubernetes
+    manifests. When you apply this declarative manifest, Helmfile will bring the cluster
+    into line with your specification.
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*helmfile.yaml*然后以声明方式指定了集群中应该运行的所有内容（或者至少是其中的一个子集），就像Kubernetes清单一样。 当您应用这个声明性清单时，Helmfile将使集群符合您的规范。'
+- en: 'To do this, run:'
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要做到这一点，请运行：
+- en: '[PRE28]'
+  id: totrans-147
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE28]'
+- en: It’s just as though you had run `helm install`/`helm upgrade` in turn for each
+    of the Helm charts you’ve defined.
+  id: totrans-148
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 就好像您依次为您定义的每个Helm图表运行了`helm install`/`helm upgrade`一样。
+- en: You might like to run `helm sync` automatically as part of your continuous deployment
+    pipeline, for example (see [Chapter 14](ch14.html#continuous)). Instead of manually
+    running `helm install` to add a new application to the cluster, you could just
+    edit your Helmfile, check it into source control, and wait for the automation
+    to roll out your changes. In [“GitOps”](ch14.html#gitops), we will also introduce
+    another way to manage multiple helm releases using a centralized tool.
+  id: totrans-149
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，您可能希望作为连续部署管道的一部分自动运行`helm sync`（请参阅[第14章](ch14.html#continuous)）。 而不是手动运行`helm
+    install`以将新应用程序添加到集群中，您可以只需编辑您的Helmfile，将其检入源代码控制，并等待自动化推出您的更改。 在[“GitOps”](ch14.html#gitops)中，我们还将介绍使用集中工具管理多个helm发布的另一种方法。
+- en: Tip
+  id: totrans-150
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: Use a single source of truth. Don’t mix deploying individual charts manually
+    with Helm, and declaratively managing all your charts across the cluster with
+    Helmfile or a GitOps tool. If you apply a Helmfile, and then also use Helm to
+    deploy or modify applications out of band, you will no longer have a single source
+    of truth for your cluster. This is bound to lead to problems, so pick a process
+    for how you will manage your deployments and be consistent in how you use it.
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用单一的真相源。 不要混合手动使用Helm部署单个图表，并使用Helmfile或GitOps工具在集群中声明性地管理所有图表。 如果您应用了Helmfile，然后还使用Helm在带外部署或修改应用程序，您将不再拥有集群的单一真相源。
+    这肯定会导致问题，因此选择一种管理部署的流程，并在使用方式上保持一致。
+- en: If Helmfile isn’t quite to your liking, [Helmsman](https://oreil.ly/DizPj) is
+    a similar tool that does more or less the same thing.
+  id: totrans-152
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果Helmfile不完全符合您的口味，[Helmsman](https://oreil.ly/DizPj)是一个类似的工具，做的事情或多或少相同。
+- en: As with any new tool, we recommend reading through the docs, comparing the various
+    options, trying them out, and then deciding which suits you.
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与任何新工具一样，我们建议仔细阅读文档，比较各种选项，尝试它们，然后决定哪个适合您。
+- en: Advanced Manifest Management Tools
+  id: totrans-154
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 高级清单管理工具
+- en: While Helm is a great tool, and widely used, it does have a few limitations.
+    Writing and editing Helm templates isn’t a lot of fun. Kubernetes YAML files are
+    complicated, verbose, and repetitive. Therefore, so are Helm templates.
+  id: totrans-155
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然 Helm 是一个很棒的工具，并且被广泛使用，但它确实有一些局限性。编写和编辑 Helm 模板并不是一件很有趣的事情。Kubernetes 的 YAML
+    文件复杂、冗长且重复。因此，Helm 模板也如此。
+- en: 'Several new tools are under development that try to address these problems,
+    and make it easier to work with Kubernetes manifests: either by describing them
+    in a more powerful language than YAML, such as [Jsonnet](https://jsonnet.org),
+    or by grouping the YAML files into basic patterns and customizing them with overlay
+    files.'
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正在开发几种新工具来解决这些问题，并使得处理 Kubernetes 清单变得更加容易：要么通过比 YAML 更强大的语言描述，例如 [Jsonnet](https://jsonnet.org)，要么将
+    YAML 文件分组到基本模式并使用覆盖文件进行定制。
+- en: kustomize
+  id: totrans-157
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: kustomize
+- en: '[kustomize](https://oreil.ly/nc9B6) is probably the other most popular manifest
+    management tool alongside Helm. In fact, as of Kubernetes version 1.14, kustomize
+    was included inside the `kubectl` CLI tool. You can also use it separately by
+    installing the `kustomize` binary following their [instructions](https://oreil.ly/ePdt1).
+    Instead of templating, kustomize uses plain YAML files with overrides to allow
+    for substitution and reuse. You start with the *base* YAML manifests, and use
+    *overlays* to patch the manifests for different environments or configurations.
+    kustomize will generate the final manifests from the base files plus the overlays.'
+  id: totrans-158
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[kustomize](https://oreil.ly/nc9B6) 与 Helm 并列，可能是另一个最受欢迎的清单管理工具。实际上，从 Kubernetes
+    版本 1.14 开始，kustomize 已经包含在 `kubectl` CLI 工具中。您还可以按照他们的 [说明](https://oreil.ly/ePdt1)
+    单独使用 `kustomize` 通过安装二进制文件。与模板化不同，kustomize 使用普通的 YAML 文件和覆盖来允许替换和重用。您从 *base*
+    YAML 清单开始，并使用 *overlays* 来修补不同环境或配置的清单。kustomize 将从基本文件加上覆盖生成最终的清单。'
+- en: 'We have a working example in the *hello-kustomize* directory of the [cloudnativedevops
+    GitHub demo repo](https://oreil.ly/LAI8f):'
+  id: totrans-159
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在 [cloudnativedevops GitHub 演示库](https://oreil.ly/LAI8f) 的 *hello-kustomize*
+    目录中有一个工作示例：
+- en: '[PRE29]'
+  id: totrans-160
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE29]'
+- en: In this example, kustomize reads our *kustomization.yaml* file, sets `commonLabels`
+    on both the Deployment and Service for `app` and `org`, and displays the final
+    rendered output of the updated manifests. What makes this different from Helm
+    is that the original *deployment.yaml* and *service.yaml* files here are perfectly
+    valid and usable YAML as-is, yet we still can add some flexibility like adding
+    multiple common labels across our manifests using kustomize.
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这个例子中，kustomize 读取我们的 *kustomization.yaml* 文件，在部署（Deployment）和服务（Service）的
+    `app` 和 `org` 上设置了 `commonLabels`，并显示了更新清单的最终渲染输出。与 Helm 的不同之处在于，这里的原始 *deployment.yaml*
+    和 *service.yaml* 文件是完全有效且可用的 YAML，但我们仍然可以通过 kustomize 添加一些灵活性，例如在我们的清单中使用多个公共标签。
+- en: 'The `patchesStrategicMerge` kustomize setting allows us to override a field,
+    such as changing the replica count per environment:'
+  id: totrans-162
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`patchesStrategicMerge` kustomize 设置允许我们覆盖字段，例如按环境更改副本计数：'
+- en: '[PRE30]'
+  id: totrans-163
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE30]'
+- en: Again, you should see the final result of the rendered Deployment and Service
+    manifests, but notice how we were able to change the `replicas` field for production
+    environment to `3` based on the *replicas.yaml* file in the *overlays/production*
+    directory.
+  id: totrans-164
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 再次强调，您应该查看渲染后的部署（Deployment）和服务（Service）清单的最终结果，但请注意我们如何基于 *overlays/production*
+    目录中的 *replicas.yaml* 文件，将生产环境的 `replicas` 字段更改为 `3`。
+- en: 'Another useful modification we applied here is the `namePrefix` setting. Our
+    new Deployment is now named `name: prod-demo` instead of the default `name: demo`
+    defined in the *base* directory, and our Service is renamed to `prod-demo-service`.
+    Kustomize comes with other similar helpers for making tweaks to your manifests
+    for different situations, all while keeping the original YAML manifests in a usable,
+    valid state.'
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '我们在这里应用的另一个有用修改是 `namePrefix` 设置。我们的新部署现在命名为 `name: prod-demo`，而不是在 *base*
+    目录中定义的默认 `name: demo`，我们的服务被重命名为 `prod-demo-service`。Kustomize 还配有其他类似的辅助工具，用于在不同情况下对清单进行调整，同时保持原始的
+    YAML 清单处于可用且有效的状态。'
+- en: To apply your kustomize-customized manifests, you can use `kubectl apply -k`
+    (instead of the `kubectl apply -f`), and `kubectl` will use kustomize to read
+    the YAML files, render any overlays or modifications, and then apply the final
+    result into the cluster.
+  id: totrans-166
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要应用您的 kustomize 定制清单，您可以使用 `kubectl apply -k`（而不是 `kubectl apply -f`），`kubectl`
+    将使用 kustomize 读取 YAML 文件，渲染任何覆盖或修改，然后将最终结果应用到集群中。
+- en: If templating YAML files does not appeal to you, then kustomize is worth checking
+    out. You may encounter community projects that offer you the option to install
+    their applications using either their Helm chart or with kustomize, so it is worthwhile
+    to become familiar with how it works.
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果不喜欢模板化 YAML 文件，那么 kustomize 值得一试。您可能会遇到社区项目，这些项目提供使用它们的 Helm 图表或 kustomize
+    安装其应用程序的选项，因此熟悉它的工作方式是值得的。
+- en: Tanka
+  id: totrans-168
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Tanka
+- en: Sometimes declarative YAML isn’t enough, especially for large and complex deployments
+    where you need to be able to use computation and logic. For example, you might
+    want to set the number of replicas dynamically based on the size of the cluster.
+    For this, you need a real programming language.
+  id: totrans-169
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有时候，仅使用声明性 YAML 是不够的，特别是对于需要能够使用计算和逻辑的大型和复杂部署。例如，您可能希望根据集群的大小动态设置副本数。为此，您需要一个真正的编程语言。
+- en: '[Tanka](https://oreil.ly/MBVrB) lets you author Kubernetes manifests using
+    a language called Jsonnet, which is an extended version of JSON (which is a declarative
+    data format equivalent to YAML, and Kubernetes can understand JSON format manifests
+    too). Jsonnet adds important capabilities to JSON—variables, loops, arithmetic,
+    conditional statements, error handling, and so on.'
+  id: totrans-170
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Tanka](https://oreil.ly/MBVrB) 允许您使用名为 Jsonnet 的语言编写 Kubernetes 清单，Jsonnet
+    是 JSON 的扩展版本（它是等同于 YAML 的声明性数据格式，Kubernetes 也可以理解 JSON 格式的清单）。Jsonnet 为 JSON 添加了重要的功能——变量、循环、算术、条件语句、错误处理等等。'
+- en: Kapitan
+  id: totrans-171
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Kapitan
+- en: '[Kapitan](https://oreil.ly/ekar1) is another manifest management tool, focused
+    on sharing configuration values across multiple applications or even clusters.
+    It can also be used for other types of tooling, such as terraform code, Dockerfiles,
+    and Jinja2 template docs. Kapitan has a hierarchical database of config values
+    (called the *inventory*) that lets you reuse manifest patterns by plugging in
+    different values, depending on the environment or application, and they are generated
+    using either the Jsonnet or Python-based Kadet backend engines:'
+  id: totrans-172
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Kapitan](https://oreil.ly/ekar1) 是另一个清单管理工具，专注于在多个应用程序甚至集群之间共享配置值。它还可以用于其他类型的工具，如
+    terraform 代码、Dockerfiles 和 Jinja2 模板文档。Kapitan 具有配置值的分层数据库（称为 *inventory*），允许您通过插入不同的值来重用清单模式，具体取决于环境或应用程序，并且可以使用
+    Jsonnet 或基于 Python 的 Kadet 后端引擎生成它们：'
+- en: '[PRE31]'
+  id: totrans-173
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE31]'
+- en: kompose
+  id: totrans-174
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: kompose
+- en: If you’ve been running production services in Docker containers, but not using
+    Kubernetes, you may be familiar with Docker Compose.
+  id: totrans-175
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您一直在 Docker 容器中运行生产服务，但尚未使用 Kubernetes，则可能熟悉 Docker Compose。
+- en: 'Compose lets you define and deploy sets of containers that work together: for
+    example, a web server, a backend application, and a database such as Redis. A
+    single *docker-compose.yml* file could be used to define how these containers
+    talk to each other.'
+  id: totrans-176
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Compose 允许您定义和部署一组共同工作的容器：例如，一个 web 服务器，一个后端应用程序以及像 Redis 这样的数据库。一个单独的 *docker-compose.yml*
+    文件可以用来定义这些容器如何相互通信。
+- en: '[kompose](https://oreil.ly/vh2AU) is a tool to convert *docker-compose.yml*
+    files into Kubernetes manifests, to help you migrate from Docker Compose to Kubernetes,
+    without having to write your own Kubernetes manifests or Helm charts from scratch.'
+  id: totrans-177
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[kompose](https://oreil.ly/vh2AU) 是一个将 *docker-compose.yml* 文件转换为 Kubernetes
+    清单的工具，帮助您从 Docker Compose 迁移到 Kubernetes，而无需从头编写自己的 Kubernetes 清单或 Helm 图表。'
+- en: Ansible
+  id: totrans-178
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Ansible
+- en: You may already be familiar with Ansible, a popular infrastructure automation
+    tool. It’s not Kubernetes-specific, but it can manage many different kinds of
+    resources, using extension modules, much like Puppet (see [“Puppet Kubernetes
+    Module”](ch03.html#puppet)).
+  id: totrans-179
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可能已经熟悉 Ansible，这是一款流行的基础设施自动化工具。它不是专门针对 Kubernetes 的，但它可以使用扩展模块管理许多不同类型的资源，类似于
+    Puppet（参见[“Puppet Kubernetes Module”](ch03.html#puppet)）。
+- en: As well as installing and configuring Kubernetes clusters, Ansible can manage
+    Kubernetes resources like Deployments and Services directly, using the [`k8s`
+    module](https://oreil.ly/dJTLA).
+  id: totrans-180
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了安装和配置 Kubernetes 集群外，Ansible 还可以直接管理 Kubernetes 资源，如部署和服务，使用 [`k8s` 模块](https://oreil.ly/dJTLA)。
+- en: Like Helm, Ansible can template Kubernetes manifests using its standard templating
+    language (Jinja), and it has a more sophisticated notion of variable lookup, using
+    a hierarchical system. For example, you can set common values for a group of applications,
+    or a deployment environment such as `staging`.
+  id: totrans-181
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 像 Helm 一样，Ansible 可以使用其标准模板语言（Jinja）模板化 Kubernetes 清单，并且它具有更复杂的变量查找概念，使用分层系统。例如，您可以为一组应用程序或部署环境（如
+    `staging`）设置公共值。
+- en: 'If you’re already using Ansible in your organization, it’s definitely worth
+    evaluating whether you should use it for managing Kubernetes resources too. If
+    your infrastructure is based solely on Kubernetes, then Ansible may be more power
+    than you need, but for mixed infrastructures it can be very helpful to use just
+    one tool to manage everything:'
+  id: totrans-182
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你的组织已经在使用 Ansible，那么评估一下是否应该也将其用于管理 Kubernetes 资源是非常值得的。如果你的基础设施仅基于 Kubernetes，那么
+    Ansible 可能会比你需要的功能更多，但对于混合基础设施来说，使用一个工具来管理所有内容会非常有帮助：
+- en: '[PRE32]'
+  id: totrans-183
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE32]'
+- en: kubeval
+  id: totrans-184
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: kubeval
+- en: Unlike the other tools we’ve discussed in this section, [`kubeval`](https://oreil.ly/87Nh5)
+    isn’t for generating or templating Kubernetes manifests, but for validating them.
+  id: totrans-185
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与本节讨论的其他工具不同，[`kubeval`](https://oreil.ly/87Nh5) 不是用于生成或模板化 Kubernetes 配置文件的工具，而是用于验证它们的有效性。
+- en: Each version of Kubernetes has a different schema for its YAML or JSON manifests,
+    and it’s important to be able to check automatically that your manifests match
+    the schema. For example, `kubeval` will check that you’ve specified all the required
+    fields for a particular object, and that the values are of the right type.
+  id: totrans-186
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个 Kubernetes 版本都有一个不同的 YAML 或 JSON 配置文件的模式，能够自动检查你的配置文件是否符合模式是非常重要的。例如，`kubeval`
+    将检查你是否为特定对象指定了所有必需的字段，以及这些值是否为正确的类型。
+- en: '`kubectl` also validates manifests when they’re applied, and will give you
+    an error when you try to apply an invalid manifest. But it’s also very useful
+    to be able to validate them beforehand. `kubeval` doesn’t need access to a cluster,
+    and it can also validate against any version of Kubernetes.'
+  id: totrans-187
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当应用配置文件时，`kubectl` 也会验证它们，并在尝试应用无效配置文件时给出错误。但事先验证它们也非常有用。`kubeval` 不需要访问集群，也可以验证针对任何
+    Kubernetes 版本的配置文件。
+- en: It’s a good idea to add `kubeval` to your continuous deployment pipeline so
+    that manifests are automatically validated whenever you make changes to them.
+    You can also use `kubeval` to test, for example, whether your manifests need any
+    adjustments to work on the latest version of Kubernetes before you actually upgrade.
+  id: totrans-188
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将 `kubeval` 添加到你的持续部署流水线中是个好主意，这样可以在对配置文件进行更改时自动验证它们。你也可以使用 `kubeval` 测试，例如在实际升级之前，你的配置文件是否需要任何调整以适用于最新版本的
+    Kubernetes。
+- en: Summary
+  id: totrans-189
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 总结
+- en: While you can deploy applications to Kubernetes using just raw YAML manifests,
+    it’s inconvenient. Helm is a powerful tool that can help with this, provided you
+    understand how to get the best out of it.
+  id: totrans-190
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管你可以仅使用原始的 YAML 配置文件将应用部署到 Kubernetes，但这样做并不方便。Helm 是一个强大的工具，可以帮助你解决这个问题，前提是你要了解如何充分利用它。
+- en: 'There are lots of different tools that will make Kubernetes manifest management
+    much easier in the future. It’s important to be familiar with the basics of using
+    Helm because many popular tools are offered to you as Helm charts for installing
+    in your clusters:'
+  id: totrans-191
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 未来将有很多不同的工具可以使 Kubernetes 配置文件的管理变得更加简单。了解使用 Helm 的基础知识非常重要，因为许多流行的工具都以 Helm
+    Charts 的形式提供给你，用于在你的集群中安装：
+- en: A chart is a Helm package specification, including metadata about the package,
+    some configuration values for it, and template Kubernetes objects that reference
+    those values.
+  id: totrans-192
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Chart 是 Helm 的一个包规范，包括关于包的元数据，一些用于配置它的配置值，以及引用这些值的模板 Kubernetes 对象。
+- en: Installing a chart creates a Helm release. Each time you install an instance
+    of a chart, a new release is created. When you update a release with different
+    config values, Helm increments the release revision number.
+  id: totrans-193
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 安装一个 Chart 会创建一个 Helm 发布（release）。每次你安装一个 Chart 的实例时，都会创建一个新的发布。当你使用不同的配置值更新一个发布时，Helm
+    会增加发布的修订版本号。
+- en: To customize a Helm chart for your own requirements, create a custom values
+    file overriding just the settings you care about, and add it to the `helm install`
+    or `helm upgrade` command line.
+  id: totrans-194
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 要根据自己的需求定制一个 Helm Chart，可以创建一个自定义的 values 文件，仅覆盖你关心的设置，并将其添加到 `helm install`
+    或 `helm upgrade` 命令行中。
+- en: 'You can use a variable (`environment`, for example) to select different sets
+    of values or secrets depending on the deployment environment: staging, production,
+    and so on.'
+  id: totrans-195
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 你可以使用一个变量（例如 `environment`）来选择不同的值或密钥集，具体取决于部署环境：预备环境、生产环境等。
+- en: With Helmfile, you can declaratively specify a set of Helm charts and values
+    to be applied to your cluster, and install or update all of them with a single
+    command.
+  id: totrans-196
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用 Helmfile，你可以声明性地指定一组 Helm Charts 和要应用到你的集群的值，并通过一个命令安装或更新它们全部。
+- en: Helm can be used along with Sops for handling secret configuration in your charts.
+    It can also use a function to automatically base64-encode your secrets, which
+    Kubernetes expects them to be.
+  id: totrans-197
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Helm 可与 Sops 一起用于处理图表中的秘密配置。它还可以使用函数自动将您的秘密进行 base64 编码，这是 Kubernetes 所期望的。
+- en: Helm is not the only available tool for managing Kubernetes manifests. Kustomize
+    is another powerful tool and is even built into `kubectl`. Kustomize takes a different
+    approach than Helm and rather than interpolating variables, it just uses YAML
+    overlays to tweak manifests.
+  id: totrans-198
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Helm 不是管理 Kubernetes 清单的唯一工具。Kustomize 是另一个强大的工具，甚至内置在 `kubectl` 中。Kustomize
+    采用与 Helm 不同的方法，而不是插入变量，而是使用 YAML 覆盖来调整清单。
+- en: Tanka and Kapitan are alternative manifest management tools that use Jsonnet,
+    a different templating language.
+  id: totrans-199
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Tanka 和 Kapitan 是使用 Jsonnet 的替代清单管理工具。
+- en: A quick way to test and validate manifests is to use `kubeval`, which will check
+    for valid syntax and common errors in manifests.
+  id: totrans-200
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用 `kubeval` 快速测试和验证清单的有效语法和常见错误。

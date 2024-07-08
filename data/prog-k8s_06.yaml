@@ -1,0 +1,1139 @@
+- en: Chapter 6\. Solutions for Writing Operators
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第6章 解决方案编写操作员
+- en: So far we’ve had a look at custom controllers and operators on a conceptual
+    level in [“Controllers and Operators”](ch01.html#ch_controllers-operators) and,
+    in [Chapter 5](ch05.html#ch_autocodegen), how to use Kubernetes code generators—a
+    rather low-level way to deal with the topic. In this chapter we’ll walk through
+    three solutions for writing custom controllers and operators in detail and discuss
+    some more alternatives.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，我们已经在[“控制器和操作员”](ch01.html#ch_controllers-operators)的概念层面上看过自定义控制器和操作员，以及在[第5章](ch05.html#ch_autocodegen)中，如何使用
+    Kubernetes 代码生成器——这是一种处理该主题的较低级别方法。在本章中，我们将详细介绍三种编写自定义控制器和操作员的解决方案，并讨论一些更多的替代方法。
+- en: Using one of the solutions discussed in this chapter should help you to avoid
+    writing a lot of repetitive code and enable you to focus on the business logic,
+    rather than on boilerplate code. It should get you started more quickly and make
+    you more productive.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章讨论的解决方案中使用其中一个应该有助于您避免编写大量重复的代码，并使您能够专注于业务逻辑，而不是样板代码。这应该能够帮助您更快地入门并提高工作效率。
+- en: Note
+  id: totrans-3
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Operators in general, and the tools we discuss in this chapter specifically,
+    are still rapidly evolving as of mid-2019\. While we do our best, certain commands
+    and/or their outputs you see shown here, may change. Take this into account, and
+    make sure that you always use the latest version of the respective tool, keeping
+    an eye on the respective issue trackers, mailing lists, and Slack channels.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 总体而言，操作员以及我们在本章中讨论的工具截至2019年中仍在快速发展。尽管我们尽力，但这里显示的某些命令和/或它们的输出可能会更改。请考虑到这一点，并确保您始终使用相应工具的最新版本，并关注相应的问题跟踪器、邮件列表和Slack频道。
+- en: While there are resources available online that [compare](http://bit.ly/2ZC5fZT)
+    the solutions we discuss here, we will not recommend a specific solution to you.
+    We do, however, encourage you to evaluate and compare them yourself and pick the
+    one that is the best fit for your organization and environment.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管在线上有可[比较的资源](http://bit.ly/2ZC5fZT)可以比较我们在这里讨论的解决方案，但我们不会向您推荐特定的解决方案。不过，我们鼓励您自行评估和比较它们，并选择最适合您的组织和环境的解决方案。
+- en: Preparation
+  id: totrans-6
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 准备工作
+- en: 'We will be using `cnat` (cloud-native `at`, which we introduced in [“A Motivational
+    Example”](ch01.html#mot-example)) as the running example for the different solutions
+    in this chapter. If you want to follow along, note that we assume you:'
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将使用`cnat`（云原生的 `at`，我们在[“一个激励示例”](ch01.html#mot-example)中介绍过）作为本章中不同解决方案的运行示例。如果您想跟随我们一起学习，请注意我们假设您：
+- en: Have Go version 1.12 or above installed and set up properly.
+  id: totrans-8
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 已经安装并正确设置了 Go 版本 1.12 或更高版本。
+- en: Have access to a Kubernetes cluster in version 1.12 or above—either locally
+    through, for example, `kind` or `k3d`, or remotely through your favorite cloud
+    provider—and `kubectl` configured to access it.
+  id: totrans-9
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 拥有一个 Kubernetes 集群，版本为1.12或更高版本——可以是本地的，例如通过`kind`或`k3d`，也可以是通过您喜欢的云提供商远程的，并且配置了`kubectl`以访问它。
+- en: '`git clone` our [GitHub repository](http://bit.ly/2N3R6U4). The complete, functioning
+    source code and the necessary commands shown in the following sections are available
+    there. Note that what we’re showing here is how things work from scratch. If you
+    want to see the results rather than carrying out the steps yourself, you’re also
+    welcome to clone the repository and run only the commands to install the CRD,
+    install the CR, and launch the custom controller.'
+  id: totrans-10
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: '`git clone`我们的[GitHub代码库](http://bit.ly/2N3R6U4)。完整、可运行的源代码以及以下部分显示的必要命令都可以在那里找到。请注意，我们这里展示的是从零开始的工作方式。如果您只想查看结果而不是自己执行步骤，请随时克隆代码库并仅运行安装CRD、安装CR和启动自定义控制器的命令。'
+- en: 'With these housekeeping items out of the way, let’s jump into writing operators:
+    we will covers, the `sample-controller`, Kubebuilder, and the Operator SDK in
+    this chapter.'
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在处理完这些杂务事项后，让我们开始编写操作员吧：我们将在本章涵盖`sample-controller`、Kubebuilder 和 Operator SDK。
+- en: Ready? Let’s Go—pun intended!
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 准备好了吗？我们开始吧——此处有双关语！
+- en: Following sample-controller
+  id: totrans-13
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 跟随`sample-controller`
+- en: Let’s start off by implementing `cnat` based on the [*k8s.io/sample-controller*](http://bit.ly/2UppsTN),
+    which uses the `client-go` library [directly](http://bit.ly/2Yas9HK). The `sample-controller`
+    uses the [*k8s.io/code-generator*](http://bit.ly/2Kw8I8U) to generate a typed
+    client, informers, listers, and deep-copy functions. Whenever the API types change
+    in your custom controller—for example, adding a new field in the custom resource—you
+    have to use the *update-codegen.sh* script (see also its [source](http://bit.ly/2Fq3Td1)
+    in GitHub) to regenerate the aforementioned source files.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们从基于[*k8s.io/sample-controller*](http://bit.ly/2UppsTN)实现`cnat`开始，它直接使用`client-go`库来实现。（请查看[*k8s.io/code-generator*](http://bit.ly/2Kw8I8U)用于生成类型化客户端、通知器、列表器和深拷贝函数。每当你的自定义控制器中的API类型发生变化，例如在自定义资源中添加一个新字段，你都必须使用*update-codegen.sh*脚本（还可以在GitHub中查看其[源码](http://bit.ly/2Fq3Td1)）重新生成上述源文件。
+- en: Warning
+  id: totrans-15
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: You might have noticed *k8s.io* being used as the base URL throughout the book.
+    We introduced its usage in [Chapter 3](ch03.html#ch_client-go); as a reminder,
+    it is really an alias for *kubernetes.io*, and in the context of Go package management
+    it resolves to *github.com/kubernetes*. Note that *k8s.io* does not come with
+    an automatic redirect. So, for example, *k8s.io/sample-controller* really means
+    that you should be looking at [*github.com/kubernetes/sample-controller*](http://bit.ly/2UppsTN),
+    and so on.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可能已经注意到本书中始终使用*k8s.io*作为基础URL。我们在[第三章](ch03.html#ch_client-go)介绍了它的用法；作为提醒，它实际上是*kubernetes.io*的别名，在Go包管理的上下文中解析为*github.com/kubernetes*。请注意，*k8s.io*不具有自动重定向功能。例如，*k8s.io/sample-controller*实际上意味着你应该查看[*github.com/kubernetes/sample-controller*](http://bit.ly/2UppsTN)，等等。
+- en: OK, let’s implement our [`cnat`](http://bit.ly/2RpHhON) operator using `client-go`,
+    following the `sample-controller`. (See the [corresponding directory in our repo](http://bit.ly/2N3R6U4).)
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 好的，让我们使用[`cnat`](http://bit.ly/2RpHhON)操作符来实现，使用`client-go`，遵循`sample-controller`。（参见我们仓库中的[对应目录](http://bit.ly/2N3R6U4)。）
+- en: Bootstrapping
+  id: totrans-18
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 引导
+- en: To begin, do a **`go get k8s.io/sample-controller`** to get the source and dependencies
+    onto your system, which should be in *$GOPATH/src/k8s.io/sample-\controller*.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要开始，请执行**`go get k8s.io/sample-controller`**以获取源码和依赖项到你的系统中，应该位于*$GOPATH/src/k8s.io/sample-\controller*目录中。
+- en: 'If you start from scratch, copy the content of the *sample-controller* directory
+    into a directory of your choice (for example, we use *cnat-client-go* in our repo),
+    and you can run the following command sequence to build and run the base controller
+    (with the default implementation, not the `cnat` business logic yet):'
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你从零开始，将*sample-controller*目录的内容复制到你选择的目录中（例如，在我们的仓库中使用*cnat-client-go*），然后可以运行以下命令序列来构建和运行基础控制器（默认实现，尚未涉及`cnat`业务逻辑）：
+- en: '[PRE0]'
+  id: totrans-21
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'This command will launch the custom controller and wait for you to register
+    the CRD and create a custom resource. Let’s do this now and see what happens.
+    In a second terminal session, enter:'
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个命令将启动自定义控制器，并等待你注册CRD并创建自定义资源。现在让我们来做这件事，并看看会发生什么。在第二个终端会话中，输入：
+- en: '[PRE1]'
+  id: totrans-23
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: 'Make sure the CRD is properly registered and available like so:'
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 确保CRD已正确注册并可用，如下所示：
+- en: '[PRE2]'
+  id: totrans-25
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: Note that you may see other CRDs here, depending on the Kubernetes distro you’re
+    using; however, *foos.samplecontroller.k8s.io* should be listed, at least.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，你可能会看到其他CRD，这取决于你使用的Kubernetes发行版；但是，至少应该列出*foos.samplecontroller.k8s.io*。
+- en: 'Next, we create the example custom resource *foo.samplecontroller.k8s.io/example-foo*
+    and check if the controller does its job:'
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，我们创建示例自定义资源*foo.samplecontroller.k8s.io/example-foo*并检查控制器是否正常工作：
+- en: '[PRE3]'
+  id: totrans-28
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: Yay, it works as expected! We can now move on to implementing the actual `cnat`-specific
+    business logic.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 太棒了，它按预期工作！现在我们可以继续实现实际的`cnat`特定业务逻辑。
+- en: Business Logic
+  id: totrans-30
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 业务逻辑
+- en: 'To kick off implementing the business logic, we first rename the existing directory
+    *pkg/apis/samplecontroller* to *pkg/apis/cnat* and then create our own CRD and
+    custom resource as follows:'
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要启动业务逻辑的实现，我们首先将现有的*pkg/apis/samplecontroller*目录重命名为*pkg/apis/cnat*，然后按以下步骤创建我们自己的CRD和自定义资源：
+- en: '[PRE4]'
+  id: totrans-32
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: 'Note that whenever the API types change—for example, when you add a new field
+    to the `At` CRD—you have to execute the *update-codegen.sh* script, like so:'
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，每当API类型发生变化时，例如当你向`At` CRD中添加新字段时，你必须执行*update-codegen.sh*脚本，如下所示：
+- en: '[PRE5]'
+  id: totrans-34
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'This will automatically generate the following:'
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这将自动生成以下内容：
+- en: '*pkg/apis/cnat/v1alpha1/zz_generated.deepcopy.go*'
+  id: totrans-36
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '*pkg/apis/cnat/v1alpha1/zz_generated.deepcopy.go*'
+- en: '*pkg/generated/**'
+  id: totrans-37
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '*pkg/generated/**'
+- en: 'In terms of the business logic, we have two parts to implement in the operator:'
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在业务逻辑方面，我们需要实现运算符中的两个部分：
+- en: In [*types.go*](http://bit.ly/31QosJw) we modify the `AtSpec` struct to include
+    the respective fields, such as `schedule` and `command`. Note that you must run
+    `update-codegen.sh` whenever you change something here in order to regenerate
+    dependent files.
+  id: totrans-39
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在[*types.go*](http://bit.ly/31QosJw)中，我们修改了`AtSpec`结构体，包括相应的字段，如`schedule`和`command`。请注意，每当您在此处进行更改时，都必须运行`update-codegen.sh`以重新生成依赖文件。
+- en: In [*controller.go*](http://bit.ly/31MM4OS) we change the `NewController()`
+    and `syncHandler()` functions as well as add helper functions, including creating
+    pods and checking schedule time.
+  id: totrans-40
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在[*controller.go*](http://bit.ly/31MM4OS)中，我们修改了`NewController()`和`syncHandler()`函数，并添加了辅助函数，包括创建pod和检查调度时间。
+- en: 'In *types.go*, note the three constants representing the three phases of the
+    `At` resource: up until the scheduled time in `PENDING`, then `RUNNING` to completion,
+    and finally in the `DONE` state:'
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在*types.go*中，请注意代表`At`资源三个阶段的三个常量：在`PENDING`状态中直到调度时间，然后`RUNNING`直至完成，最后处于`DONE`状态：
+- en: '[PRE6]'
+  id: totrans-42
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: Note the explicit usage of the build tags `+k8s:deepcopy-gen:interfaces` (refer
+    to [Chapter 5](ch05.html#ch_autocodegen)) so that the respective sources are autogenerated.
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，显式使用构建标签`+k8s:deepcopy-gen:interfaces`（参见[第5章](ch05.html#ch_autocodegen)），以便自动生成相应的源代码。
+- en: We are now in the position to implement the business logic of the custom controller.
+    That is, we implement the state transitions between the three phases—from `PhasePending`
+    to `PhaseRunning` to `PhaseDone`—in [controller.go](http://bit.ly/31MM4OS).
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们可以开始实现自定义控制器的业务逻辑了。也就是说，我们在[controller.go](http://bit.ly/31MM4OS)中实现了三个阶段之间的状态转换——从`PhasePending`到`PhaseRunning`再到`PhaseDone`。
+- en: 'In [“Work Queue”](ch03.html#workqueue) we introduced and explained the work
+    queue that `client-go` provides. We can now put this knowledge to work: in the
+    `processNextWorkItem()` in *controller.go*—to be more precise, in [lines 176 to
+    186](http://bit.ly/2WYDbyi)—you can find the following (generated) code:'
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[“工作队列”](ch03.html#workqueue)中，我们介绍并解释了`client-go`提供的工作队列。现在我们可以将这些知识投入实践：在*controller.go*的`processNextWorkItem()`函数中——更确切地说，在[第176到186行](http://bit.ly/2WYDbyi)——您可以找到以下（生成的）代码：
+- en: '[PRE7]'
+  id: totrans-46
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: 'This snippet shows how our (yet-to-be-written) custom `syncHandler()` function
+    (explained shortly) is invoked and covers these three cases:'
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此片段展示了我们（尚未编写的）自定义`syncHandler()`函数（稍后解释）如何被调用并涵盖这三种情况：
+- en: The first `if` branch requeues the item via the `AddRateLimited()` function
+    call, handling transient errors.
+  id: totrans-48
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 第一个`if`分支通过调用`AddRateLimited()`函数重新排队项目，处理瞬态错误。
+- en: The second branch, the `else if`, requeues the item via the `AddAfter()` function
+    call to avoid hot-looping.
+  id: totrans-49
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 第二个分支，即`else if`，通过调用`AddAfter()`函数重新排队项目，以避免热循环。
+- en: The last case, the `else`, is where the item has been processed successfully
+    and is discarded via the `Forget()` function call.
+  id: totrans-50
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 最后一个情况，即`else`，是项目已成功处理并通过调用`Forget()`函数丢弃。
+- en: 'Now that we’ve got a sound understanding of the generic handling, let’s move
+    on to the business-logic-specific functionality. Key to it is the aforementioned
+    `syncHandler()` function, where we are implementing the business logic of our
+    custom controller. It has the following signature:'
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经对通用处理有了清晰的理解，让我们继续讨论业务逻辑特定的功能。其中关键的是前述的`syncHandler()`函数，我们在这里实现了自定义控制器的业务逻辑。其函数签名如下：
+- en: '[PRE8]'
+  id: totrans-52
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: This `syncHandler()` function implements the following state transitions:^([1](ch06.html#idm46336858995208))
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此`syncHandler()`函数实现了以下状态转换：^([1](ch06.html#idm46336858995208))
+- en: '[PRE9]'
+  id: totrans-54
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: 'Further, to set up informers and the controller at large, we implement the
+    following in `NewController()`:'
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此外，为了设置informer和整个控制器，我们在`NewController()`中实现了以下内容：
+- en: '[PRE10]'
+  id: totrans-56
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: 'There are two further helper functions we need in order to make it work: one
+    calculates the time until the schedule, which looks like this:'
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们还需要两个进一步的辅助函数来使其工作：一个计算直到调度时间的时间，形式如下：
+- en: '[PRE11]'
+  id: totrans-58
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: 'and the other creates a pod with the command to execute, using a `busybox`
+    container image:'
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另外一个则使用`busybox`容器镜像创建一个带有执行命令的pod：
+- en: '[PRE12]'
+  id: totrans-60
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: We will be reusing these two helper functions and the basic flow of the business
+    logic as presented here in the `syncHandler()` function later in this chapter,
+    so make sure you familiarize yourself with their details.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将在本章后面的`syncHandler()`函数中重复使用这两个辅助函数和业务逻辑的基本流程，请确保您熟悉它们的详细内容。
+- en: Note that from the point of the `At` resource, the pod is a secondary resource
+    and the controller must make sure to clean those pods up or otherwise risk orphaned
+    pods.
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注意，从 `At` 资源的角度来看，Pod 是一个次要资源，控制器必须确保清理这些 Pod，否则可能导致孤立的 Pod。
+- en: 'Now, `sample-controller` is a good tool to learn how the sausage is made, but
+    usually you want to focus on creating the business logic rather than dealing with
+    the boilerplate code. For this, there are two related projects you can choose
+    from: Kubebuilder and the Operator SDK. Let’s have a look at each and how `cnat`
+    is implemented with them.'
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，`sample-controller` 是一个学习如何制作香肠的好工具，但通常情况下，您希望专注于创建业务逻辑，而不是处理样板代码。为此，您可以选择两个相关项目：Kubebuilder
+    和 Operator SDK。让我们分别看看它们以及如何使用它们实现 `cnat`。
+- en: Kubebuilder
+  id: totrans-64
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Kubebuilder
+- en: '[Kubebuilder](http://bit.ly/2I8w9mz), owned and maintained by the Kubernetes
+    Special Interest Group (SIG) API Machinery, is a tool and set of libraries enabling
+    you to build operators in an easy and efficient manner. The best resource for
+    a deep dive on Kubebuilder is the online [Kubebuilder book](https://book.kubebuilder.io),
+    which walks you through its components and usage. We will, however, focus here
+    on implementing our [`cnat`](http://bit.ly/2RpHhON) operator with Kubebuilder
+    (see [the corresponding directory in our Git repository](http://bit.ly/2Iv6pAS)).'
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Kubebuilder](http://bit.ly/2I8w9mz)，由 Kubernetes 特别兴趣小组（SIG）API Machinery
+    拥有和维护，是一款工具和一组库，能够让您以简单高效的方式构建运算符。深入了解 Kubebuilder 最佳资源是在线的 [Kubebuilder 书籍](https://book.kubebuilder.io)，该书籍详细介绍了其组件和用法。不过，我们在这里将专注于如何使用
+    Kubebuilder 实现我们的 [`cnat`](http://bit.ly/2RpHhON) 运算符（请参阅我们 Git 仓库中的 [对应目录](http://bit.ly/2Iv6pAS)）。'
+- en: 'First, let’s make sure all the dependencies—that is, [dep](http://bit.ly/2x9Yrqq),
+    [kustomize](http://bit.ly/2Y3JeCV) (see [“Kustomize”](ch07.html#kustomize)), and
+    [Kubebuilder itself](http://bit.ly/32pQmfu)—are installed:'
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，让我们确保已安装所有依赖项，即 [dep](http://bit.ly/2x9Yrqq)、[kustomize](http://bit.ly/2Y3JeCV)（参见
+    [“Kustomize”](ch07.html#kustomize)）以及 [Kubebuilder 本身](http://bit.ly/32pQmfu)：
+- en: '[PRE13]'
+  id: totrans-67
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: We’ll walk you through the steps for writing the `cnat` operator from scratch.
+    First, create a directory of your choice (we use *cnat-kubebuilder* in our repo)
+    that you’ll use as the base for all further commands.
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将逐步指导您从头开始编写 `cnat` 运算符的步骤。首先，在您选择的目录（我们在我们的仓库中使用 *cnat-kubebuilder*）中创建基础目录，这将作为以后所有命令的基础。
+- en: Warning
+  id: totrans-69
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: At the time of this writing, Kubebuilder is moving to a new version (v2). Since
+    it’s not stable yet, we show the commands and setup for (stable) [version v1](https://book-v1.book.kubebuilder.io).
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在撰写本文时，Kubebuilder 正在迁移到新版本（v2）。由于尚未稳定，我们展示的是（稳定的）[版本 v1](https://book-v1.book.kubebuilder.io)
+    的命令和设置。
+- en: Bootstrapping
+  id: totrans-71
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 启动
+- en: 'To bootstrap the `cnat` operator, we use the `init` command like so (note that
+    this can take several minutes, depending on your environment):'
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要启动 `cnat` 运算符，我们使用 `init` 命令，如下（请注意，根据您的环境，此过程可能需要几分钟）：
+- en: '[PRE14]'
+  id: totrans-73
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: 'On completion of this command, Kubebuilder has scaffolded the operator, effectively
+    generating a bunch of files, from the custom controller to a sample CRD. Your
+    base directory should now look something like the following (excluding the huge
+    *vendor* directory for clarity):'
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 完成此命令后，Kubebuilder 将生成一堆文件，从自定义控制器到示例 CRD。您的基础目录现在应该看起来像下面这样（为清晰起见，不包括庞大的 *vendor*
+    目录）：
+- en: '[PRE15]'
+  id: totrans-75
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: 'Next, we create an API—that is, a custom controller—using the `create api`
+    command (this should be faster than the previous command but still takes a little
+    while):'
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，我们使用 `create api` 命令创建 API，也就是自定义控制器（这比之前的命令更快，但仍需一段时间）：
+- en: '[PRE16]'
+  id: totrans-77
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: 'Let’s see what has changed, focusing on the two directories that have received
+    updates and additions:'
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们来看看有哪些变化，重点放在两个已更新并添加内容的目录上：
+- en: '[PRE17]'
+  id: totrans-79
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: Note the addition of *cnat_v1alpha1_at.yaml* in *config/crds/*, which is the
+    CRD, as well as *cnat_v1alpha1_at.yaml* (yes, the same name) in *config/samples/*,
+    representing a custom resource example instance of the CRD. Further, in *pkg/*
+    we see a number of new files, most importantly *apis/cnat/v1alpha1/at_types.go*
+    and *controller/at/at_controller.go*, both of which we will modify next.
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注意在 *config/crds/* 中新增了 *cnat_v1alpha1_at.yaml*，这是自定义资源定义（CRD）的一部分；同时，在 *config/samples/*
+    中也有一个名为 *cnat_v1alpha1_at.yaml* 的文件（是的，同名），表示了该 CRD 的一个示例实例。此外，在 *pkg/* 目录下我们看到了一些新文件，其中最重要的是
+    *apis/cnat/v1alpha1/at_types.go* 和 *controller/at/at_controller.go*，我们接下来将修改它们。
+- en: 'Next, we create a dedicated namespace, `cnat`, in Kubernetes and use it as
+    the default, setting the context as follows (as a good practice, always use a
+    dedicated namespace, not the `default` one):'
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，我们在Kubernetes中创建一个专用的命名空间`cnat`，并将其用作默认命名空间，设置上下文如下（作为一个良好的实践，始终使用专用命名空间而不是`default`）：
+- en: '[PRE18]'
+  id: totrans-82
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: 'We install the CRD with:'
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们使用以下命令安装CRD：
+- en: '[PRE19]'
+  id: totrans-84
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: 'And now we can launch the operator locally:'
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们可以在本地启动操作者：
+- en: '[PRE20]'
+  id: totrans-86
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: 'Leave the terminal session running and, in a new session, install the CRD,
+    validate it, and create the sample custom resource like so:'
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将终端会话保持运行状态，并在新会话中安装CRD，验证它，并像这样创建样本自定义资源：
+- en: '[PRE21]'
+  id: totrans-88
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: 'If you now look at the output of the session where `make run` runs, you should
+    notice the following output:'
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您现在查看`make run`运行的会话输出，您应该注意到以下输出：
+- en: '[PRE22]'
+  id: totrans-90
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: 'This tells us that the overall setup was successful! Now that we’ve completed
+    the scaffolding and successfully launched the `cnat` operator, we can move on
+    to the actual core task: implementing the `cnat` business logic with Kubebuilder.'
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这告诉我们整体设置是成功的！既然我们完成了搭建并成功启动了`cnat`操作者，现在可以继续执行实际的核心任务：使用Kubebuilder实现`cnat`业务逻辑。
+- en: Business Logic
+  id: totrans-92
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 业务逻辑
+- en: For starters, we’ll change [*config/crds/cnat_v1alpha1_at.yaml*](http://bit.ly/2N1jQNb)
+    and [*config/samples/cnat_v1alpha1_at.yaml*](http://bit.ly/2Xs1F7c) to our own
+    definitions of the `cnat` CRD and custom resource values, re-using the same structures
+    as in [“Following sample-controller”](#cnat-client-go).
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，我们将更改[*config/crds/cnat_v1alpha1_at.yaml*](http://bit.ly/2N1jQNb)和[*config/samples/cnat_v1alpha1_at.yaml*](http://bit.ly/2Xs1F7c)以适应我们自己的`cnat`
+    CRD和自定义资源值定义，重用与[“Following sample-controller”](#cnat-client-go)中相同的结构。
+- en: 'In terms of the business logic, we have two parts to implement in the operator:'
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 就业务逻辑而言，操作者有两个部分需要实现：
+- en: In [*pkg/apis/cnat/v1alpha1/at_types.go*](http://bit.ly/31KNLfO) we modify the
+    `AtSpec` struct to include the respective fields, such as `schedule` and `command`.
+    Note that you must run `make` whenever you change something here in order to regenerate
+    dependent files. Kubebuilder uses the Kubernetes generators (described in [Chapter 5](ch05.html#ch_autocodegen))
+    and ships its own set of generators (e.g., to generate the CRD manifest).
+  id: totrans-95
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在[*pkg/apis/cnat/v1alpha1/at_types.go*](http://bit.ly/31KNLfO)中，我们修改了`AtSpec`结构体，包括相关字段如`schedule`和`command`。请注意，每当您在这里更改了某些内容时，都必须运行`make`来重新生成依赖文件。Kubebuilder使用Kubernetes生成器（在[第五章](ch05.html#ch_autocodegen)中描述）并提供自己的生成器集（例如，用于生成CRD清单）。
+- en: In [*pkg/controller/at/at_controller.go*](http://bit.ly/2Iwormg) we modify the
+    `Reconcile(request reconcile.Request)` method to create a pod at the time defined
+    in `Spec.Schedule`.
+  id: totrans-96
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在[*pkg/controller/at/at_controller.go*](http://bit.ly/2Iwormg)中，我们修改`Reconcile(request
+    reconcile.Request)`方法以在`Spec.Schedule`定义的时间创建一个Pod。
+- en: 'In *at_types.go*:'
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在*at_types.go*中：
+- en: '[PRE23]'
+  id: totrans-98
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: 'In *at_controller.go* we implement the state transition between the three phases,
+    `PENDING` to `RUNNING` to `DONE`:'
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在*at_controller.go*中，我们实现了三个阶段之间的状态转换，从`PENDING`到`RUNNING`再到`DONE`：
+- en: '[PRE24]'
+  id: totrans-100
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: Note here that the `Update` call at the end operates on the */status* subresource
+    (see [“Status subresource”](ch04.html#status-subresource)) instead of the whole
+    CR. Hence, here we follow the best practice of a spec-status split.
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注意在最后的`Update`调用中，操作的是*/status*子资源（参见[“状态子资源”](ch04.html#status-subresource)），而不是整个CR。因此，我们遵循了规范状态分离的最佳实践。
+- en: 'Now, once the CR `example-at` is created, we see the following output of the
+    locally executed operator:'
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，一旦创建了CR `example-at`，我们就会看到本地执行操作者的以下输出：
+- en: '[PRE25]'
+  id: totrans-103
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE25]'
+- en: 'To verify whether our custom controller has done its job, execute:'
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要验证我们的自定义控制器是否完成了其工作，请执行：
+- en: '[PRE26]'
+  id: totrans-105
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE26]'
+- en: 'Great! The `example-at-pod` has been created, and now it’s time to see the
+    result of the operation:'
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 太棒了！`example-at-pod`已经创建，现在是时候看操作的结果了：
+- en: '[PRE27]'
+  id: totrans-107
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE27]'
+- en: 'When you’re done developing the custom controller, using local mode as shown
+    here, you’ll likely want to build a container image out of it. This custom controller
+    container image can subsequently be used, for example, in a Kubernetes deployment.
+    You can use the following command to generate the container image and push it
+    into the repo *quay.io/pk/cnat*:'
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您完成开发自定义控制器时，使用如此展示的本地模式时，您可能希望构建一个容器镜像。此自定义控制器容器镜像随后可以在Kubernetes部署中使用，例如。您可以使用以下命令生成容器镜像并将其推送到仓库*quay.io/pk/cnat*：
+- en: '[PRE28]'
+  id: totrans-109
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE28]'
+- en: With this we move on to the Operator SDK, which shares some of Kubebuilder’s
+    code base and APIs.
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来我们转向Operator SDK，它与Kubebuilder的代码库和API有些共享。
+- en: The Operator SDK
+  id: totrans-111
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Operator SDK
+- en: To make it easier to build Kubernetes applications, CoreOS/Red Hat has put together
+    the Operator Framework. Part of that is the [Operator SDK](http://bit.ly/2KtpK7D),
+    which enables developers to build operators without requiring deep knowledge of
+    Kubernetes APIs.
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了更容易构建 Kubernetes 应用程序，CoreOS/Red Hat 组合了 Operator Framework。 其中的一部分是 [Operator
+    SDK](http://bit.ly/2KtpK7D)，它使开发人员能够构建操作者，而无需深入了解 Kubernetes API。
+- en: The Operator SDK provides the tools to build, test, and package operators. While
+    there is much more functionality available in the SDK, especially around testing,
+    we focus here on implementing our [`cnat`](http://bit.ly/2RpHhON) operator with
+    the SDK (see [the corresponding directory in our Git repository](http://bit.ly/2FpCtE9)).
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Operator SDK 提供了构建、测试和打包操作者的工具。 虽然 SDK 提供了更多功能，特别是关于测试的功能，但我们在这里专注于使用 SDK 实现我们的
+    [`cnat`](http://bit.ly/2RpHhON) 操作者（参见 [我们 Git 仓库中对应的目录](http://bit.ly/2FpCtE9)）。
+- en: 'First things first: make sure to [install the Operator SDK](http://bit.ly/2ZBQlCT)
+    and check if all dependencies are available:'
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先确保 [安装 Operator SDK](http://bit.ly/2ZBQlCT)，并检查所有依赖项是否可用：
+- en: '[PRE29]'
+  id: totrans-115
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE29]'
+- en: Bootstrapping
+  id: totrans-116
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 引导
+- en: 'Now it’s time to bootstrap the `cnat` operator as follows:'
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在是时候引导 `cnat` 操作者了：
+- en: '[PRE30]'
+  id: totrans-118
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE30]'
+- en: 'Next, and very similar to Kubebuilder, we add an API—or simply put: initialize
+    the custom controller like so:'
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，与 Kubebuilder 非常相似，我们添加一个 API——或者简单地说：初始化自定义控制器，如下所示：
+- en: '[PRE31]'
+  id: totrans-120
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE31]'
+- en: These commands generate the necessary boilerplate code as well as a number of
+    helper functions, such as the deep-copy functions `DeepCopy()`, `DeepCopyInto()`,
+    and `DeepCopyObject()`.
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些命令生成了必要的样板代码，以及一些辅助函数，例如深度复制函数 `DeepCopy()`、`DeepCopyInto()` 和 `DeepCopyObject()`。
+- en: 'Now we’re in a position to apply the autogenerated CRD to the Kubernetes cluster:'
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们可以将自动生成的 CRD 应用到 Kubernetes 集群中：
+- en: '[PRE32]'
+  id: totrans-123
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE32]'
+- en: 'Let’s launch our `cnat` custom controller locally. With this, it can start
+    processing requests:'
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们在本地启动我们的 `cnat` 自定义控制器。 通过这样做，它可以开始处理请求：
+- en: '[PRE33]'
+  id: totrans-125
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE33]'
+- en: 'Our custom controller will remain in this state until we create a CR, *ats.cnat.programming-kubernetes.info*.
+    So let’s do that:'
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们的自定义控制器将保持在此状态，直到我们创建了 CR *ats.cnat.programming-kubernetes.info*。 那么让我们开始吧：
+- en: '[PRE34]'
+  id: totrans-127
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE34]'
+- en: Business Logic
+  id: totrans-128
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 业务逻辑
+- en: 'In terms of the business logic, we have two parts to implement in the operator:'
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在业务逻辑方面，我们需要实现操作者的两个部分：
+- en: In [*pkg/apis/cnat/v1alpha1/at_types.go*](http://bit.ly/31Ip2sF) we modify the
+    `AtSpec` struct to include the respective fields, such as `schedule` and `command`,
+    and use `operator-sdk generate k8s` to regenerate code, as well as using the `operator-sdk
+    generate openapi` command for the OpenAPI bits.
+  id: totrans-130
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在 [*pkg/apis/cnat/v1alpha1/at_types.go*](http://bit.ly/31Ip2sF) 中，我们修改了 `AtSpec`
+    结构以包括相应的字段，如 `schedule` 和 `command`，并使用 `operator-sdk generate k8s` 重新生成代码，以及使用
+    `operator-sdk generate openapi` 命令处理 OpenAPI 部分。
+- en: In [*pkg/controller/at/at_controller.go*](http://bit.ly/2Fpo5Mi) we modify the
+    `Reconcile(request reconcile.Request)` method to create a pod at the time defined
+    in `Spec.Schedule`.
+  id: totrans-131
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在 [*pkg/controller/at/at_controller.go*](http://bit.ly/2Fpo5Mi) 中，我们修改了 `Reconcile(request
+    reconcile.Request)` 方法，以在 `Spec.Schedule` 定义的时间创建一个 pod。
+- en: 'The changes applied to the bootstrapped code in greater detail are as follows
+    (focusing on the relevant bits). In *at_types.go*:'
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 更详细地查看引导代码中的更改（专注于相关部分）。 在 *at_types.go* 中：
+- en: '[PRE35]'
+  id: totrans-133
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE35]'
+- en: In *at_controller.go* we implement the state diagram for the three phases, `PENDING`
+    to `RUNNING` to `DONE`.
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 *at_controller.go* 中，我们实现了三个阶段的状态图，从 `PENDING` 到 `RUNNING` 到 `DONE`。
+- en: Note
+  id: totrans-135
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The [`controller-runtime`](http://bit.ly/2ZFtDKd) is another SIG API Machinery–owned
+    project, aimed at providing a common set of low-level functionality for building
+    controllers in the form of Go packages. See [Chapter 4](ch04.html#ch_crds) for
+    more details.
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[`controller-runtime`](http://bit.ly/2ZFtDKd) 是另一个 SIG API Machinery 拥有的项目，旨在提供一套通用的低级功能，用于以
+    Go 包的形式构建控制器。 更多细节请参见 [第四章](ch04.html#ch_crds)。'
+- en: 'As both Kubebuilder and the Operator SDK share the controller runtime, the
+    `Reconcile()` function is in fact the same:'
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于 Kubebuilder 和 Operator SDK 都使用控制器运行时，`Reconcile()` 函数实际上是相同的：
+- en: '[PRE36]'
+  id: totrans-138
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE36]'
+- en: 'Once the CR `example-at` is created, we see the following output of the locally
+    executed operator:'
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦创建了 CR `example-at`，我们就可以看到本地执行操作者的以下输出：
+- en: '[PRE37]'
+  id: totrans-140
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE37]'
+- en: 'Here you can see the three phases of our operator: `PENDING` until timestamp
+    `1555044964.518566`, then `RUNNING`, then `DONE`.'
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这里，您可以看到我们操作者的三个阶段：从 `PENDING` 到时间戳 `1555044964.518566`，然后到 `RUNNING`，最后到 `DONE`。
+- en: 'To validate the function of our custom controller and check the result of the
+    operation, enter:'
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要验证我们自定义控制器的功能并检查操作结果，请输入：
+- en: '[PRE38]'
+  id: totrans-143
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE38]'
+- en: 'When you’re done developing the custom controller, using local mode as shown
+    here, you’ll likely want to build a container image out of it. This custom controller
+    container image can subsequently be used, for example, in a Kubernetes deployment.
+    You can use the following command to generate the container image:'
+  id: totrans-144
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您完成开发自定义控制器，并像这里展示的那样使用本地模式时，您可能希望构建一个容器镜像。这个自定义控制器容器镜像随后可以用于例如 Kubernetes
+    部署。您可以使用以下命令生成容器镜像：
+- en: '[PRE39]'
+  id: totrans-145
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE39]'
+- en: 'Here are some further resources to learn more about the Operator SDK and examples
+    around it:'
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里有更多关于 Operator SDK 和相关示例的资源：
+- en: '[“A Complete Guide to Kubernetes Operator SDK”](http://bit.ly/2RqkGSf) by Toader
+    Sebastian on BanzaiCloud'
+  id: totrans-147
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Toader Sebastian 在 BanzaiCloud 上的 [“Kubernetes 操作员 SDK 完全指南”](http://bit.ly/2RqkGSf)
+- en: Rob Szumski’s blog post [“Building a Kubernetes Operator for Prometheus and
+    Thanos”](http://bit.ly/2KvgHmu)
+  id: totrans-148
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Rob Szumski 的博客文章 [“为 Prometheus 和 Thanos 构建 Kubernetes 操作员”](http://bit.ly/2KvgHmu)
+- en: '[“Kubernetes Operator Development Guidelines for Improved Usability”](http://bit.ly/31P7rPC)
+    from CloudARK on ITNEXT'
+  id: totrans-149
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 来自 CloudARK 在 ITNEXT 上的 [“提升可用性的 Kubernetes 操作员开发指南”](http://bit.ly/31P7rPC)
+- en: To wrap up this chapter, let’s look at some alternative ways to write custom
+    controllers and operators.
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 结束本章时，让我们看看编写自定义控制器和操作器的一些替代方法。
+- en: Other Approaches
+  id: totrans-151
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 其他方法
+- en: 'In addition to, or potentially in combination with, the approaches we’ve discussed,
+    you might want to have a look at the following projects, libraries, and tools:'
+  id: totrans-152
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了或可能与我们讨论过的方法结合使用外，您可能还想看看以下项目、库和工具：
+- en: '[Metacontroller](https://metacontroller.app)'
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[元控制器](https://metacontroller.app)'
+- en: The basic idea of Metacontroller is to provide you with a declarative specification
+    of the state and changes, interfacing with JSON, based on a level-triggered reconciliation
+    loop. That is, you receive JSON describing the observed state and return JSON
+    describing your desired state. This is especially useful for rapid development
+    of automation in dynamic scripting languages like Python or JavaScript. In addition
+    to simple controllers, Metacontroller allows you to compose APIs into higher-level
+    abstractions—for example, [BlueGreenDeployment](http://bit.ly/31KNTfi).
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Metacontroller 的基本思想是为您提供状态和变更的声明性规范，与基于水平触发的协调循环相接口，JSON 为基础。也就是说，您会收到描述观察状态的
+    JSON，并返回描述期望状态的 JSON。这对于在动态脚本语言（如 Python 或 JavaScript）中快速开发自动化特别有用。除了简单的控制器外，Metacontroller
+    还允许您将 API 组合成更高级的抽象，例如[BlueGreenDeployment](http://bit.ly/31KNTfi)。
+- en: '[KUDO](https://kudo.dev)'
+  id: totrans-155
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[KUDO](https://kudo.dev)'
+- en: Similar to Metacontroller, KUDO provides a declarative approach to building
+    Kubernetes operators, covering the entire application lifecycle. In a nutshell,
+    it’s Mesosphere’s experience from Apache Mesos frameworks, ported to Kubernetes.
+    KUDO is highly opinionated but also easy to use and requires little to no coding;
+    essentially, all you have to specify is a collection of Kubernetes manifests with
+    a built-in logic to define what is executed when.
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 类似于 Metacontroller，KUDO 提供了一个声明性方法来构建 Kubernetes 操作员，涵盖整个应用程序生命周期。简而言之，这是 Mesosphere
+    在 Apache Mesos 框架中的经验移植到 Kubernetes 中。KUDO 具有很强的见解性，但也很容易使用，几乎不需要编码；基本上，您只需指定一组带有定义执行逻辑的
+    Kubernetes 清单即可。
+- en: '[Rook operator kit](http://bit.ly/2J34faw)'
+  id: totrans-157
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Rook 操作器套件](http://bit.ly/2J34faw)'
+- en: This is a common library for implementing operators. It originated from the
+    Rook operator but has been spun out into a separate, independent project.
+  id: totrans-158
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是一个用于实现操作器的常见库。它起源于 Rook 操作器，但已经独立成为一个单独的项目。
+- en: '[ericchiang/k8s](http://bit.ly/2ZHc5h0)'
+  id: totrans-159
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[ericchiang/k8s](http://bit.ly/2ZHc5h0)'
+- en: This is a slimmed-down Go client by Eric Chiang generated using the Kubernetes
+    protocol buffer support. It behaves similarly to the official Kubernetes `client-go`,
+    but imports only two external dependencies. While it comes with certain limitations—for
+    example, in terms of [cluster access configuration](http://bit.ly/2ZBQIxh)—it
+    is a simple-to-use Go package.
+  id: totrans-160
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是由 Eric Chiang 创造的一个简化的 Go 客户端，使用 Kubernetes 协议缓冲支持生成。它的行为类似于官方的 Kubernetes
+    `client-go`，但只导入了两个外部依赖项。尽管它在某些方面存在限制，例如在[集群访问配置](http://bit.ly/2ZBQIxh)方面，但它是一个易于使用的简单
+    Go 包。
+- en: '[`kutil`](http://bit.ly/2Fq3ojh)'
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[`kutil`](http://bit.ly/2Fq3ojh)'
+- en: AppsCode provides Kubernetes `client-go` add-ons via `kutil`.
+  id: totrans-162
+  prefs: []
+  type: TYPE_NORMAL
+  zh: AppsCode 通过 `kutil` 提供 Kubernetes `client-go` 的附加组件。
+- en: CLI-client-based approaches
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 基于 CLI 客户端的方法
+- en: A client-side approach, mainly for experimentation and testing, is to leverage
+    `kubectl` programmatically (e.g., the [kubecuddler](http://bit.ly/2L3CDoi) library).
+  id: totrans-164
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一种客户端方法，主要用于实验和测试，是以编程方式利用 `kubectl`（例如，[kubecuddler](http://bit.ly/2L3CDoi)
+    库）。
+- en: Note
+  id: totrans-165
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: While we focus on writing operators using the Go programming language in this
+    book, you can write operators in other languages. Two notable examples are Flant’s
+    [Shell-operator](http://bit.ly/2ZxkZ0m), which enables you to write operators
+    in good old shell scripts, and Zalando’s [Kopf (Kubernetes operators framework)](http://bit.ly/2WRXU6Q),
+    a Python framework and a library.
+  id: totrans-166
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然本书侧重于使用Go编程语言编写运算符，但你也可以用其他语言编写运算符。两个显著的例子是Flant的[Shell-operator](http://bit.ly/2ZxkZ0m)，允许你使用经典的Shell脚本编写运算符，以及Zalando的[Kopf（Kubernetes运算符框架）](http://bit.ly/2WRXU6Q)，一个Python框架和库。
+- en: As mentioned at the beginning of this chapter, the operator field is rapidly
+    evolving, and more and more practitioners are sharing their knowledge in the form
+    of code and best practices, so keep an eye on new tooling here. Make sure to check
+    out online resources and forums, such as the `#kubernetes-operators`, `#kubebuilder`,
+    and `#client-go-docs` channels on the Kubernetes Slack, to learn about new approaches
+    and/or discuss issues and receive help when you’re stuck.
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如本章开头所述，运算符领域正在迅速发展，越来越多的从业者通过代码和最佳实践分享他们的知识，因此请密切关注这里的新工具。确保查阅在线资源和论坛，例如Kubernetes
+    Slack上的`#kubernetes-operators`，`#kubebuilder`和`#client-go-docs`频道，以了解新方法和/或讨论问题，在遇到困难时寻求帮助。
+- en: Uptake and Future Directions
+  id: totrans-168
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 采用和未来方向
+- en: The jury is still out on which of the approaches to write operators will be
+    the most popular and widely used. In the context of the Kubernetes project, there
+    are activities in several SIGs when it comes to CRs and controllers. The main
+    stakeholder is the SIG [API Machinery](http://bit.ly/2RuTPEp), which owns CRs
+    and controllers and is responsible for the [Kubebuilder](http://bit.ly/2I8w9mz)
+    project. The Operator SDK has increased its efforts to align with the Kubebuilder
+    API, so there’s a lot of overlap.
+  id: totrans-169
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到底哪种编写运算符的方法最受欢迎和广泛使用，目前还没有定论。在Kubernetes项目的背景下，涉及CRs和控制器的多个SIGs活动。主要的利益相关者是SIG
+    [API Machinery](http://bit.ly/2RuTPEp)，拥有CRs和控制器，并负责[Kubebuilder](http://bit.ly/2I8w9mz)项目。Operator
+    SDK已经加大了与Kubebuilder API对齐的努力，因此两者有很多重叠之处。
+- en: Summary
+  id: totrans-170
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 摘要
+- en: In this chapter we had a look at different tools allowing you to write custom
+    controllers and operators more efficiently. Traditionally, following the `sample-controller`
+    was the only option out there, but with Kubebuilder and the Operator SDK you now
+    have two options that allow you to focus on the business logic of your custom
+    controller rather than dealing with boilerplate. And luckily these two tools share
+    a lot of APIs and code, so moving from one to the other should not be too difficult.
+  id: totrans-171
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们看了几种不同的工具，让你能更高效地编写自定义控制器和运算符。传统上，只有跟随`sample-controller`是唯一的选择，但是有了Kubebuilder和Operator
+    SDK，你现在有了两个选项，可以让你专注于自定义控制器的业务逻辑，而不必处理样板文件。而且幸运的是，这两个工具共享了很多API和代码，所以从一个工具转换到另一个工具不应该太困难。
+- en: Now, let’s see how to deliver the results of our labor—that is, how to package
+    and ship the controllers we’ve been writing.
+  id: totrans-172
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，让我们看看如何交付我们的劳动成果，即如何打包和发布我们一直在编写的控制器。
+- en: ^([1](ch06.html#idm46336858995208-marker)) We’re only showing the relevant sections
+    here; the function itself has a lot of other boilerplate code we’re not concerned
+    with for our purposes.
+  id: totrans-173
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([1](ch06.html#idm46336858995208-marker)) 这里仅展示相关部分；函数本身有很多其他的样板代码与我们的目的无关。

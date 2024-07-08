@@ -1,0 +1,518 @@
+- en: Chapter 2\. Enterprise Storage for Kubernetes
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第二章 企业级Kubernetes存储
+- en: To make Kubernetes storage ready for the enterprise, one must solve the problems
+    of elasticity and scale to meet the velocity and volume of big data. Cloud native
+    storage solutions have emerged for orchestrating pools of persistent storage that
+    are *software defined*, meaning that they are abstracted away from the underlying
+    hardware. Unlike software-defined storage (SDS) solutions for VM-based environments,
+    cloud native software-defined storage runs natively as containers that can be
+    managed by the same orchestration system that handles application containers.
+    This paves the way for dynamic, elastic storage for containerized applications
+    running on Kubernetes at scale. This chapter discusses Kubernetes storage concepts,
+    how software-defined storage brings scale to Kubernetes, and how the CSI works
+    with software-defined storage.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要使Kubernetes存储适合企业使用，必须解决弹性和规模的问题，以满足大数据的速度和量。云原生存储解决方案已经出现，用于编排持久存储池，这些存储池是*软件定义*的，意味着它们与底层硬件分离。与基于VM的环境中的软件定义存储（SDS）解决方案不同，云原生软件定义存储以容器的形式本地运行，可以由处理应用容器的同一编排系统进行管理。这为在Kubernetes上运行规模化的容器化应用提供了动态、弹性的存储。本章讨论了Kubernetes存储概念，软件定义存储如何为Kubernetes带来规模，并介绍了CSI如何与软件定义存储一起工作。
+- en: Kubernetes Storage Concepts
+  id: totrans-2
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Kubernetes存储概念
+- en: 'Kubernetes represents application entities as *primitives*, which are the basic
+    Kubernetes building blocks. Primitives represent real or logical entities so that
+    Kubernetes can manage them as if they were software objects. Storage is no exception.
+    Kubernetes provides a number of storage primitives, including the following:'
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes将应用实体表示为*原语*，这些原语是Kubernetes的基本构建块。原语表示真实或逻辑实体，使得Kubernetes可以像管理软件对象一样管理它们。存储也不例外。Kubernetes提供了许多存储原语，包括以下内容：
+- en: PersistentVolume (PV)
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 持久卷（PV）
+- en: A unit of persistent storage
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 持久存储单元
+- en: PersistentVolumeClaim (PVC)
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 持久卷声明（PVC）
+- en: A storage request, which becomes the binding between a PV and a pod
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个存储请求，成为PV和Pod之间的绑定
+- en: StatefulSet
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: StatefulSet
+- en: An object that manages the identity of a set of pods
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个对象，用于管理一组Pod的身份
+- en: StorageClass
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: StorageClass
+- en: Describes the classes of storage the cluster offers
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 描述集群提供的存储类别
+- en: There are many other primitives, of course, but these four are interesting as
+    we consider how to bring enterprise-ready scale to Kubernetes storage.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当考虑如何为Kubernetes存储提供企业级规模时，当然还有许多其他原语，但这四个是有趣的。
+- en: PersistentVolume
+  id: totrans-13
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 持久卷（PV）
+- en: A PV is an object that represents storage at a specific location. PVs provide
+    the ability to keep data longer than the lifetime of the workload or pod that
+    uses the volume. PVs can store a workload’s data on networked storage, on a cloud
+    provider, or locally on the pod where the workload is running ([Figure 2-1](#fig_1_local_cloud_and_networked_persistentvolume_locat)).
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: PV是表示特定位置存储的对象。PV提供了在使用卷的工作负载或Pod的生命周期之外保留数据的能力。PV可以将工作负载的数据存储在网络存储上，云提供商上，或者本地运行工作负载的Pod上（参见[图2-1](#fig_1_local_cloud_and_networked_persistentvolume_locat)）。
+- en: '![Local  cloud  and networked PersistentVolume locations](Images/csdp_0201.png)'
+  id: totrans-15
+  prefs: []
+  type: TYPE_IMG
+  zh: '![本地云和网络持久卷位置](Images/csdp_0201.png)'
+- en: Figure 2-1\. Local, cloud, and networked PersistentVolume locations
+  id: totrans-16
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图2-1 本地、云和网络持久卷位置
+- en: 'Kubernetes manages every PV’s lifecycle, defining the following stages:'
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes管理每个PV的生命周期，定义以下阶段：
+- en: Provisioning
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 配置
+- en: A storage administrator creates the PV statically ahead of time, or dynamically
+    using a *StorageClass*, which isa resource that provides a way for the administrator
+    to describe the storage.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 存储管理员预先静态创建PV，或者使用*StorageClass*动态创建PV，后者是一种允许管理员描述存储方式的资源。
+- en: Binding
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 绑定
+- en: A PVC binds the PV to a specific container.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: PVC将PV绑定到特定容器。
+- en: Use
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用
+- en: Workloads running on the container use the PVC to access the PV.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运行在容器上的工作负载使用PVC来访问PV。
+- en: Release
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 发布
+- en: The container removes its claim to the volume by removing the PVC.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器通过删除PVC来解除对卷的索赔。
+- en: Retention
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 保留
+- en: While the data is needed, the PV retains it, even across container and pod lifecycles.
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在需要数据时，PV保留数据，即使在容器和Pod的生命周期之间也是如此。
+- en: Deletion and reclamation
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 删除和回收
+- en: Kubernetes deletes the data when it is no longer needed, reclaiming the storage
+    space for use by other volumes.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当数据不再需要时，Kubernetes删除数据，回收存储空间供其他卷使用。
+- en: The storage administrator can provision PVs dynamically as needed, or ahead
+    of time based on predicted storage needs. PVs define additional details about
+    the data, including lifecycle policy, routes, IP addresses, and credentials.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 存储管理员可以根据预测的存储需求动态配置 PV，或者提前创建 PV。
+- en: PersistentVolumeClaim
+  id: totrans-31
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: PersistentVolumeClaim
+- en: 'A PVC is both a request for storage and an identifier that establishes a claim
+    on the storage once it’s granted. PVs on their own are not owned by specific applications
+    or projects. A PVC requests access to a PV using one of the following access modes:'
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: PVC 同时是存储请求和标识符，一旦授予存储就建立对存储的索赔。PV 本身不归属于特定的应用程序或项目。PVC 使用以下访问模式之一请求对 PV 的访问：
+- en: ReadWriteOnce (RWO)
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ReadWriteOnce（RWO）
+- en: Read-write access by all pods on a single node
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 单个节点上所有 Pod 的读写访问
+- en: ReadOnlyMany (ROX)
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ReadOnlyMany（ROX）
+- en: Read-only access by multiple nodes
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 多个节点上的只读访问
+- en: ReadWriteMany (RWX)
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ReadWriteMany（RWX）
+- en: Read-write access by multiple nodes
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 多个节点的读写访问
+- en: ReadWriteOncePod (RWOP)
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ReadWriteOncePod（RWOP）
+- en: Read-write access by a single pod only
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 单个 Pod 的读写访问
+- en: 'PVs and PVCs work together as follows:'
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: PV 和 PVC 一起工作的详细过程如下：
+- en: An application developer creates one or more PVCs describing the storage resources
+    the application needs.
+  id: totrans-42
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 应用程序开发人员创建一个或多个 PVC（Persistent Volume Claim），描述应用程序所需的存储资源。
+- en: The storage administrator can either create PVs explicitly in response, or create
+    a StorageClass that can dynamically provision new PVs as needed.
+  id: totrans-43
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 存储管理员可以根据需要显式创建 PV，或者创建一个可以根据需要动态配置新 PV 的 StorageClass。
+- en: Kubernetes manages the binding of PVCs to PVs.
+  id: totrans-44
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: Kubernetes 管理将 PVC 绑定到 PV。
+- en: Together, PVs and PVCs provide a way for pods to define requests based on the
+    storage requirements of their containers and applications. The storage administrator
+    can either configure dynamic *provisioners* that allocate storage and a PV in
+    response to these requests, or create PVs in anticipation of an application’s
+    storage needs. When the storage is granted, the cluster finds the PV associated
+    with the PVC and mounts it for the pod. In other words, the pod uses the PVC as
+    a volume. The PV is exclusively available to the pod as long as it’s needed.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: PV（Persistent Volume）和 PVC（Persistent Volume Claim）共同为 Pod 提供一种基于容器和应用程序存储需求定义请求的方式。存储管理员可以配置动态的
+    *provisioners* 来响应这些请求并为其分配存储和 PV，或者根据应用程序的存储需求提前创建 PV。当存储被授予时，集群找到与 PVC 关联的 PV
+    并将其挂载到 Pod 上。换句话说，Pod 使用 PVC 作为卷。PV 在需要时专门提供给 Pod 使用。
+- en: StatefulSet
+  id: totrans-46
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: StatefulSet
+- en: A StatefulSet is the primitive that manages the deployment and scaling of a
+    set of pods, maintaining a unique ID for each pod so that it can be identified
+    for the purposes of persistent data or networking, or when the pod migrates to
+    a different node. By providing unique, persistent IDs for pods, the StatefulSet
+    API lets administrators manage the deployment and scaling of a set of pods. When
+    individual pods fail, the persistent IDs help restore connections between their
+    replacements and the existing volumes that serve them.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: StatefulSet 是一种原语，用于管理一组 Pod 的部署和扩展，为每个 Pod 维护一个唯一的 ID，以便在需要持久数据或网络时能够识别该 Pod，或者在
+    Pod 迁移到不同节点时。通过为 Pod 提供唯一的持久化 ID，StatefulSet API 允许管理员管理一组 Pod 的部署和扩展。当单个 Pod
+    失败时，持久化 ID 有助于恢复其替换品与现有卷之间的连接。
+- en: StorageClass
+  id: totrans-48
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: StorageClass
+- en: The StorageClass primitive lets the cluster administrator describe the different
+    classes of storage the cluster offers. Storage classes can indicate different
+    policies or levels of service. For example, the administrator might set up different
+    StorageClass objects to represent different backup policies. Users can request
+    a specific storage class by name.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`StorageClass` 原语允许集群管理员描述集群提供的不同存储类别。存储类别可以表示不同的策略或服务级别。例如，管理员可以设置不同的 `StorageClass`
+    对象来表示不同的备份策略。用户可以通过名称请求特定的存储类别。'
+- en: Software-Defined Storage
+  id: totrans-50
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 软件定义存储
+- en: Just as containerized application architecture decouples application logic from
+    the hardware where the code runs, software-defined storage decouples persistent
+    data and storage policies from storage media. SDS is distributed and hardware
+    agnostic, and can run in a variety of environments including the cloud. By abstracting
+    storage from its hardware, SDS enables the presentation of hardware capacity to
+    applications, users, and other clients as a unified storage pool. SDS makes a
+    storage administrator’s job easier immediately by making it possible to manage
+    a diverse assortment of different storage types consistently without worrying
+    about the different characteristics of each type of storage ([Figure 2-2](#fig_2_software_defined_storage)).
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 就像容器化应用架构将应用逻辑与代码运行的硬件解耦一样，软件定义存储将持久数据和存储策略与存储介质解耦。SDS 是分布式的且与硬件无关，并可以在包括云环境在内的各种环境中运行。通过将存储与其硬件抽象化，SDS
+    可以将硬件容量呈现给应用程序、用户和其他客户端作为统一的存储池。SDS 通过使得可以一致地管理各种不同类型的存储而使存储管理员的工作变得更加容易，而不必担心每种存储类型的不同特性（[Figure 2-2](#fig_2_software_defined_storage)）。
+- en: '![Software defined storage](Images/csdp_0202.png)'
+  id: totrans-52
+  prefs: []
+  type: TYPE_IMG
+  zh: '![软件定义存储](Images/csdp_0202.png)'
+- en: Figure 2-2\. Software-defined storage
+  id: totrans-53
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-2\. 软件定义存储
+- en: Just as Kubernetes brings elasticity, scale, and high availability to compute
+    resources, SDS is the foundation for bringing these important characteristics
+    to storage. Because the storage is abstracted, it’s possible to build systems
+    that distribute and scale storage in different environments, integrating them
+    with Kubernetes or other orchestration systems and building in fault tolerance
+    and high availability.
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 就像 Kubernetes 为计算资源带来弹性、扩展性和高可用性一样，SDS 是将这些重要特性引入存储的基础。因为存储被抽象化了，可以构建在不同环境中分发和扩展存储的系统，并将其与
+    Kubernetes 或其他编排系统集成，并内置容错和高可用性。
+- en: 'The advantages for the enterprise are clear:'
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 企业的优势显而易见：
+- en: Developers and users don’t need to think about storage hardware.
+  id: totrans-56
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 开发者和用户不需要考虑存储硬件。
+- en: Scale becomes a matter of on-demand provisioning.
+  id: totrans-57
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 规模变成了按需配置的问题。
+- en: Data can be placed anywhere it is needed, regardless of the environment.
+  id: totrans-58
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 数据可以根据需要放置在任何地方，无论环境如何。
+- en: Because SDS presents all available physical storage as a shared pool, the resources
+    can be allocated efficiently, reducing wasted storage space.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因为 SDS 将所有可用的物理存储呈现为共享池，资源可以高效分配，减少存储空间的浪费。
+- en: Connecting SDS to Kubernetes with the CSI
+  id: totrans-60
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用 CSI 将 SDS 连接到 Kubernetes
+- en: The CSI is an interface between containerized workloads and a third-party storage
+    layer, making it possible for cloud native applications to create, manage, and
+    use storage outside of Kubernetes. The CSI makes storage available in a pool that
+    all instances of each application can access, keeping instances in sync and making
+    it possible to back up applications consistently. The CSI provides abstracted
+    access to Kubernetes over an interface, meaning that third parties can create
+    plug-ins for accessing storage systems from Kubernetes without touching the core
+    Kubernetes code. Using the CSI, containerized applications can use the normal
+    Kubernetes storage primitives on top of these storage systems ([Figure 2-3](#fig_3_connecting_software_defined_storage_to_kubernetes)).
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CSI 是容器化工作负载与第三方存储层之间的接口，使得云原生应用可以在 Kubernetes 外部创建、管理和使用存储。CSI 使得存储在一个池中可供每个应用程序实例访问，保持实例同步，并使得能够一致地备份应用程序。CSI
+    提供了通过接口对 Kubernetes 进行抽象化访问的功能，意味着第三方可以创建插件，从而在不触及核心 Kubernetes 代码的情况下访问存储系统。使用
+    CSI，容器化应用可以在这些存储系统上使用正常的 Kubernetes 存储原语（[Figure 2-3](#fig_3_connecting_software_defined_storage_to_kubernetes)）。
+- en: '![Connecting software defined storage to Kubernetes with the CSI](Images/csdp_0203.png)'
+  id: totrans-62
+  prefs: []
+  type: TYPE_IMG
+  zh: '![使用 CSI 将软件定义存储连接到 Kubernetes](Images/csdp_0203.png)'
+- en: Figure 2-3\. Connecting software-defined storage to Kubernetes with the container
+    storage interface
+  id: totrans-63
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-3\. 使用容器存储接口将软件定义存储连接到 Kubernetes
+- en: The CSI gives storage vendors the freedom to design and manage storage as they
+    see fit, providing Kubernetes and other orchestration platforms the freedom to
+    provision and manage storage transparently using native abstractions. At the time
+    of this writing, Kubernetes and the CSI don’t know how to provide application-aware
+    backups, high availability, or other functions necessary for the enterprise, but
+    the CSI makes it possible to add these capabilities at the storage layer itself.
+    This is where SDS comes in.
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CSI 给予存储供应商自由去设计和管理存储，使得 Kubernetes 和其他编排平台能够通过本地抽象透明地提供和管理存储。在撰写本文时，Kubernetes
+    和 CSI 并不知道如何提供应用程序感知的备份、高可用性或其他企业所需的功能，但 CSI 使得这些能力可以在存储层面添加。这就是 SDS 的作用所在。
+- en: Software-designed storage is not limited by hardware or standards, meaning that
+    any required capabilities can be implemented and abstracted away from the underlying
+    mechanics. For this reason, it doesn’t matter that the CSI is a slow-moving standard,
+    as standards should be. By connecting SDS to Kubernetes, the CSI makes it possible
+    to build Kubernetes-ready storage that is granular at the container level, self-healing,
+    and topology aware, without requiring Kubernetes itself to have these capabilities.
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 软件设计的存储不受硬件或标准的限制，因此可以实现并从底层机制中抽象出所需的任何能力。因此，CSI 是一个进展缓慢的标准并不重要，因为标准应如此。通过将
+    SDS 连接到 Kubernetes，CSI 使得可以构建适用于 Kubernetes 的存储，该存储在容器级别是粒度化的、自愈的，并且具有拓扑感知，而不需要
+    Kubernetes 本身具备这些能力。
+- en: 'Cloud Native Storage: Bringing Scale to Kubernetes Storage'
+  id: totrans-66
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 云原生存储：为 Kubernetes 存储引入规模
+- en: Adapting traditional SDS for containerized workloads is challenging for a number
+    of reasons.
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为容器化工作负载适应传统 SDS 在很多方面都是具有挑战性的。
+- en: First, because containers are dynamic and ephemeral, they require storage that
+    can be provisioned, attached, and deleted instantly, whenever and wherever it
+    is needed. For high availability, it must be possible to create and move volumes
+    as needed, with awareness of topology, and to back them up regularly and automatically.
+    Manual storage provisioning can’t keep up with these needs at scale.
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，由于容器是动态且短暂的，它们需要可以在需要时即刻进行提供、挂载和删除的存储。为了高可用性，必须能够根据需要创建和移动卷，并具有拓扑意识，并且定期和自动地备份它们。在规模化时，手动存储配置无法跟上这些需求。
+- en: Second, the number of volumes that physical and virtual servers can support
+    is often insufficient for the number of pods or containers that need storage.
+    A single host might run hundreds of small containers, requiring more volumes than
+    the OS can provide.
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 其次，物理和虚拟服务器支持的卷数量通常不足以满足需要存储的 pod 或容器数量。单个主机可能运行数百个小型容器，需要的卷比操作系统提供的还要多。
+- en: Finally, because the point of containers is to be infrastructure agnostic, they
+    should not care about the physical storage they’re using. Different environments
+    provide different types of storage, often multiple types within a single deployment.
+    It must be possible to move data between storage pools without affecting the way
+    containerized applications run.
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，由于容器的目标是基础架构不可知，它们不应关心所使用的物理存储。不同的环境提供不同类型的存储，通常在单个部署中提供多种类型。必须能够在不影响容器化应用程序运行方式的情况下在存储池之间移动数据。
+- en: Enter cloud native storage, a new model of SDS designed for distributed, containerized
+    applications. Cloud native storage runs in containers on the cluster, meaning
+    it can be provisioned and orchestrated, offering data locality and Kubernetes-integrated
+    features like [Stork (Storage Operator Runtime for Kubernetes)](https://github.com/libopenstorage/stork)
+    to provide storage-aware scheduling. [Figure 2-4](#fig_4_cloud_native_storage)
+    shows how cloud native storage becomes part of Kubernetes itself.
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 进入云原生存储，这是为分布式、容器化应用程序设计的 SDS 新模型。云原生存储在集群中以容器形式运行，这意味着它可以被提供和编排，并提供数据本地性以及像
+    [Stork (Kubernetes 存储操作器运行时)](https://github.com/libopenstorage/stork) 这样的 Kubernetes
+    集成功能来提供存储感知调度。[图 2-4](#fig_4_cloud_native_storage) 展示了云原生存储如何成为 Kubernetes 的一部分。
+- en: '![Cloud native storage](Images/csdp_0204.png)'
+  id: totrans-72
+  prefs: []
+  type: TYPE_IMG
+  zh: '![云原生存储](Images/csdp_0204.png)'
+- en: Figure 2-4\. Cloud native storage
+  id: totrans-73
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-4\. 云原生存储
+- en: Cloud native storage must be container aware, and all operations must take place
+    at the level of the application. Snapshots, backups, compression, encryption,
+    and other operations are not relevant to the cluster or the storage pool as a
+    whole, but to the container itself. This key aspect gives operational control
+    over data to the application owner, relieving IT admins of the responsibility
+    for provisioning storage and protecting application data.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 云原生存储必须具备容器感知能力，并且所有操作必须在应用程序级别进行。快照、备份、压缩、加密以及其他操作与整个集群或存储池无关，而是与容器本身相关。这一关键点赋予了应用程序所有者对数据的操作控制权，减轻了IT管理员对存储配置和应用程序数据保护的责任。
+- en: Clearly, redefining storage for Kubernetes at scale requires rethinking the
+    nature of storage itself. To meet the needs of containerized applications at scale,
+    a storage paradigm must be elastic, nimble, able to serve multiple replicas of
+    data to multiple instances of application services concurrently, and decoupled
+    from the application logic itself. In other words, to bring scale to Kubernetes
+    data, storage must be cloud native, which means it must be both software defined
+    and containerized.
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 显然，为了在规模化的 Kubernetes 环境中重新定义存储，必须重新思考存储本身的性质。为了满足规模化的容器化应用程序的需求，存储范式必须具备弹性、敏捷性，能够同时为多个应用服务实例提供多个数据副本，并且与应用程序逻辑本身解耦。换句话说，为了为
+    Kubernetes 数据带来规模化，存储必须是云原生的，这意味着它必须同时具备软件定义和容器化的特性。

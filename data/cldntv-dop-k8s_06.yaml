@@ -1,0 +1,1222 @@
+- en: Chapter 4\. Working with Kubernetes Objects
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第4章。使用 Kubernetes 对象工作
+- en: I can’t understand why people are frightened of new ideas. I’m frightened of
+    the old ones.
+  id: totrans-1
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 我不明白为什么人们害怕新想法。我害怕旧想法。
+- en: ''
+  id: totrans-2
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+- en: John Cage
+  id: totrans-3
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 约翰·凯奇
+- en: 'In [Chapter 2](ch02.html#firststeps), you built and deployed an application
+    to Kubernetes. In this chapter, you’ll learn about the fundamental Kubernetes
+    objects involved in that process: Pods, Deployments, and Services. You’ll also
+    find out how to use the essential Helm tool to manage applications in Kubernetes.'
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[第2章](ch02.html#firststeps)中，您构建并部署了一个应用程序到 Kubernetes。在本章中，您将学习涉及该过程的基本 Kubernetes
+    对象：Pods、Deployments 和 Services。您还将了解如何使用基本的 Helm 工具来管理 Kubernetes 中的应用程序。
+- en: After working through the example in [“Running the Demo App”](ch02.html#runningdemo),
+    you should have a container image running in the Kubernetes cluster, but how does
+    that actually work? Under the hood, the `kubectl run` command creates a Kubernetes
+    resource called a Deployment. So what’s that? And how does a Deployment actually
+    run your container image?
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[“运行演示应用程序”](ch02.html#runningdemo)示例中工作后，你应该在 Kubernetes 集群中运行一个容器镜像，但实际上是如何工作的呢？在幕后，`kubectl
+    run`命令创建了一个称为 Deployment 的 Kubernetes 资源。那么它是什么？Deployment 如何实际运行您的容器镜像？
+- en: Deployments
+  id: totrans-6
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 部署
+- en: Think back to how you ran the demo app with Docker. The `docker container run`
+    command started the container, and it ran until you killed it with `docker stop`.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 回想一下您如何使用 Docker 运行演示应用程序。`docker container run`命令启动了容器，并且直到您使用 `docker stop`
+    命令停止它。
+- en: 'But suppose that the container exits for some other reason: maybe the program
+    crashed, or there was a system error, or your machine ran out of disk space, or
+    a cosmic ray hit your CPU at the wrong moment (unlikely, but it does happen).
+    Assuming this is a production application, that means you now have unhappy users,
+    until someone can get to a terminal and type `docker container run` to start the
+    container again.'
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 但是假设容器因其他原因退出：可能是程序崩溃，或者系统错误，或者您的机器磁盘空间不足，或者宇宙射线在错误的时刻击中了您的 CPU（不太可能，但确实会发生）。假设这是一个生产应用程序，这意味着现在有不愉快的用户，直到有人可以到终端并输入
+    `docker container run` 命令再次启动容器。
+- en: 'That’s an unsatisfactory arrangement. What you really want is a kind of supervisor
+    program that continually checks that the container is running, and, if it ever
+    stops, starts it again immediately. On traditional servers, you can use a tool
+    like `systemd`, `runit`, or `supervisord` to do this; Docker has something similar,
+    and you won’t be surprised to know that Kubernetes has a supervisor feature too:
+    the Deployment.'
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是一种不令人满意的安排。您真正想要的是一种监督程序，它不断检查容器是否在运行，并且如果它停止，立即重新启动。在传统服务器上，您可以使用诸如 `systemd`、`runit`
+    或 `supervisord` 等工具来实现此目的；Docker 有类似的工具，而 Kubernetes 也有一个监督功能：Deployment。
+- en: Supervising and Scheduling
+  id: totrans-10
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 监督和调度
+- en: 'For each program that Kubernetes has to supervise, it creates a corresponding
+    Deployment object, which records some information about the program: the name
+    of the container image, the number of replicas you want to run, and whatever else
+    it needs to know to start the container.'
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于 Kubernetes 需要监督的每个程序，它都会创建一个相应的部署对象，记录有关程序的一些信息：容器镜像的名称，您想要运行的副本数，以及启动容器所需的其他任何信息。
+- en: Working together with the Deployment resource is a kind of Kubernetes component
+    called a *controller*. Controllers are basically pieces of code that run continuously
+    in a loop, and watch the resources that they’re responsible for, making sure they’re
+    present and working. If a given Deployment isn’t running enough replicas, for
+    whatever reason, the controller will create some new ones. (If there were too
+    many replicas for some reason, the controller would shut down the excess ones.
+    Either way, the controller makes sure that the real state matches the desired
+    state.)
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与部署资源一起工作的是一种称为*控制器*的 Kubernetes 组件。控制器基本上是一段代码，连续运行在循环中，监视它们负责的资源，确保它们存在且正常工作。如果某个特定的部署由于某种原因没有足够的副本运行，控制器将创建一些新的副本。（如果由于某种原因有太多副本，控制器将关闭多余的副本。无论哪种情况，控制器都会确保实际状态与期望状态匹配。）
+- en: 'Actually, a Deployment doesn’t manage replicas directly: instead, it automatically
+    creates an associated object called a ReplicaSet, which handles that. We’ll talk
+    more about ReplicaSets in a moment in [“ReplicaSets”](#replicaset-intro), but
+    since you generally interact only with Deployments, let’s get more familiar with
+    them first.'
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 实际上，一个 Deployment 并不直接管理副本：相反，它会自动创建一个称为 ReplicaSet 的关联对象来处理。我们稍后会在 [“ReplicaSets”](#replicaset-intro)
+    中详细讨论 ReplicaSets，但由于通常只与 Deployments 交互，让我们先更熟悉它们。
+- en: Restarting Containers
+  id: totrans-14
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 重新启动容器
+- en: At first sight, the way Deployments behave might be a little surprising. If
+    your container finishes its work and exits, the Deployment will restart it. If
+    it crashes, or if you kill it with a signal, or terminate it with `kubectl`, the
+    Deployment will restart it. (This is how you should think about it conceptually;
+    the reality is a little more complicated, as we’ll see.)
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 乍一看，Deployments 的行为方式可能有些令人惊讶。如果您的容器完成工作并退出，Deployment 将重新启动它。如果它崩溃，或者您用信号杀死它，或者用
+    `kubectl` 终止它，Deployment 将重新启动它。（这是您在概念上应该考虑的方式；实际情况略微复杂，我们会看到的。）
+- en: 'Most Kubernetes applications are designed to be long-running and reliable,
+    so this behavior makes sense: containers can exit for all sorts of reasons, and
+    in most cases all a human operator would do is restart them, so that’s what Kubernetes
+    does by default.'
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大多数 Kubernetes 应用程序设计为长时间运行和可靠性，所以这种行为是有道理的：容器可能因各种原因退出，在大多数情况下，人工操作员只需重新启动它们，这也是
+    Kubernetes 默认的操作方式。
+- en: 'It’s possible to change this policy for an individual container: for example,
+    to never restart it, or to restart it only on failure, not if it exited normally
+    (see [“Restart Policies”](ch08.html#restartpolicies)). However, the default behavior
+    (restart always) is usually what you want.'
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以为单个容器更改此策略：例如，从不重新启动它，或者仅在失败时重新启动它，而不是正常退出时（参见 [“Restart Policies”](ch08.html#restartpolicies)）。然而，默认行为（始终重新启动）通常是您想要的。
+- en: A Deployment’s job is to watch its associated containers and make sure that
+    the specified number of them is always running. If there are fewer, it will start
+    more. If there are too many, it will terminate some. This is much more powerful
+    and flexible than a traditional supervisor-type program.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Deployment 的任务是监视其关联的容器，并确保指定数量的容器始终运行。如果数量不足，它会启动更多。如果数量过多，它会终止一些。这比传统的监督程序类型更强大和灵活。
+- en: Creating Deployments
+  id: totrans-19
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 创建 Deployments
+- en: 'Go ahead and create a Deployment using our demo container image in your local
+    Kubernetes environment so we can dive into how they work:'
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请在您的本地 Kubernetes 环境中使用我们的演示容器镜像创建一个 Deployment，这样我们就可以深入了解它们的工作原理：
+- en: '[PRE0]'
+  id: totrans-21
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'You can see all the Deployments active in your current *namespace* (see [“Using
+    Namespaces”](ch05.html#namespaces)) by running the following command:'
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以通过运行以下命令查看当前 *namespace* 中所有活动的 Deployments（参见 [“Using Namespaces”](ch05.html#namespaces)）：
+- en: '[PRE1]'
+  id: totrans-23
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: 'To get more detailed information on this specific Deployment, run the following
+    command:'
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要获取有关此特定 Deployment 的更详细信息，请运行以下命令：
+- en: '[PRE2]'
+  id: totrans-25
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'As you can see, there’s a lot of information here, most of which isn’t important
+    for now. Let’s look more closely at the `Pod Template` section, though:'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如您所见，这里有很多信息，大部分对现在来说并不重要。不过，让我们更仔细地看一下`Pod Template`部分：
+- en: '[PRE3]'
+  id: totrans-27
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: You know that a Deployment contains the information Kubernetes needs to run
+    the container, and here it is. But what’s a Pod Template? Actually, before we
+    answer that, what’s a Pod?
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你知道 Deployment 包含了 Kubernetes 运行容器所需的信息，这就是它的作用。但是 Pod 模板是什么？实际上，在我们回答这个问题之前，什么是
+    Pod？
+- en: Pods
+  id: totrans-29
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Pods
+- en: A *Pod* is the Kubernetes object that represents a group of one or more containers
+    (*pod* is also the name for a group of whales, which fits in with the vaguely
+    seafaring flavor of Kubernetes metaphors).
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*Pod* 是代表一个或多个容器组的 Kubernetes 对象（pod 也是鲸群的名称，这与 Kubernetes 隐约的海洋比喻相符）。'
+- en: Why doesn’t a Deployment just manage an individual container directly? The answer
+    is that sometimes a set of containers needs to be scheduled together, running
+    on the same node, and communicating locally, perhaps sharing storage. This is
+    where Kubernetes starts to grow beyond simply running containers directly on a
+    host using something like Docker. It manages entire combinations of containers,
+    their configuration, and storage, etc. across a cluster of nodes.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为什么 Deployment 不直接管理单个容器？答案是有时一组容器需要一起调度，在同一个节点上运行，并在本地通信，可能共享存储。这就是 Kubernetes
+    开始超越直接在主机上运行容器（例如 Docker）的地方。它管理整个容器组合、它们的配置和存储等，跨越一个节点集群。
+- en: For example, a blog application might have one container that syncs content
+    with a Git repository, and an NGINX web server container that serves the blog
+    content to users. Since they share data, the two containers need to be scheduled
+    together in a Pod. In practice, though, many Pods only have one container, as
+    in this case. (See [“What Belongs in a Pod?”](ch08.html#whatbelongsinapod) for
+    more about this.)
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，博客应用程序可能有一个容器用于将内容与 Git 存储库同步，以及一个 NGINX Web 服务器容器用于向用户提供博客内容。由于它们共享数据，这两个容器需要在一个
+    Pod 中一起调度。但在实际操作中，许多 Pod 只有一个容器，就像本例一样。（详见 [“Pod 中应该包含什么？”](ch08.html#whatbelongsinapod)）
+- en: 'So a Pod specification (*spec* for short) has a list of `containers`, and in
+    our example there is only one container, `demo`:'
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，Pod 规范（*spec*）包含一个 `containers` 列表，在我们的例子中只有一个容器，即 `demo`：
+- en: '[PRE4]'
+  id: totrans-34
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: The `Image` spec is our demo Docker container image from Docker Hub, which is
+    all the information a Kubernetes Deployment needs to start the Pod and keep it
+    running.
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`Image` 规范是我们在 Docker Hub 上的演示 Docker 容器镜像，这是 Kubernetes 部署启动 Pod 并保持其运行所需的所有信息。'
+- en: 'And that’s an important point. The `kubectl create deployment` command didn’t
+    actually create the Pod directly. Instead it created a Deployment, and *then*
+    the Deployment created a ReplicaSet, which created the Pod. The Deployment is
+    a declaration of your desired state: “A Pod should be running with the `demo`
+    container inside it.”'
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是一个重要的观点。`kubectl create deployment` 命令实际上并没有直接创建 Pod。相反，它创建了一个部署，然后部署创建了一个副本集，再由副本集创建了
+    Pod。部署是你期望状态的声明：“应该有一个运行着 `demo` 容器的 Pod。”
+- en: ReplicaSets
+  id: totrans-37
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 副本集
+- en: Deployments don’t manage Pods directly. That’s the job of the ReplicaSet object.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 部署并不直接管理 Pod。这是副本集对象的工作。
+- en: A ReplicaSet is responsible for a group of identical Pods, or *replicas*. If
+    there are too few (or too many) Pods, compared to the specification, the ReplicaSet
+    controller will start (or stop) some Pods to rectify the situation.
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 副本集负责一组相同的 Pod 或 *副本*。如果 Pod 的数量（与规范相比）太少（或太多），副本集控制器将启动（或停止）一些 Pod 以纠正情况。
+- en: Deployments, in turn, manage ReplicaSets, and control how the replicas behave
+    when you update them—by rolling out a new version of your application, for example
+    (see [“Deployment Strategies”](ch13.html#deploymentstrategies)). When you update
+    the Deployment, a new ReplicaSet is created to manage the new Pods, and when the
+    update is completed, the old ReplicaSet and its Pods are terminated.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 部署反过来管理副本集，并控制更新时副本的行为——例如，通过部署新版本的应用程序来进行滚动更新（参见 [“部署策略”](ch13.html#deploymentstrategies)）。当你更新部署时，会创建一个新的副本集来管理新的
+    Pod，更新完成后，旧的副本集及其 Pod 将被终止。
+- en: In [Figure 4-1](#img-deployment), each ReplicaSet (V1, V2, V3) represents a
+    different version of the application, with its corresponding Pods.
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 [图 4-1](#img-deployment) 中，每个副本集（V1、V2、V3）代表应用程序的不同版本，并伴随其对应的 Pod。
+- en: '![Diagram of a Deployment managing ReplicaSets](assets/cndk_0401.png)'
+  id: totrans-42
+  prefs: []
+  type: TYPE_IMG
+  zh: '![部署管理副本集的图示](assets/cndk_0401.png)'
+- en: Figure 4-1\. Deployments, ReplicaSets, and Pods
+  id: totrans-43
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 4-1\. 部署、副本集和 Pod
+- en: Usually, you won’t interact with ReplicaSets directly, since Deployments do
+    the work for you—but it’s useful to know what they are.
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常情况下，你不会直接与副本集进行交互，因为部署工作已经为你完成了这些工作——但了解它们是非常有用的。
+- en: Maintaining Desired State
+  id: totrans-45
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 维护期望状态
+- en: Kubernetes controllers continually check the desired state specified by each
+    resource against the actual state of the cluster, and make any necessary adjustments
+    to keep them in sync. This process is called the *reconciliation loop*, because
+    it loops forever, trying to reconcile the actual state with the desired state.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 控制器会持续检查每个资源指定的期望状态与集群的实际状态是否一致，并进行必要的调整以保持同步。这个过程称为 *协调循环*，因为它会无限循环，试图协调实际状态与期望状态。
+- en: For example, when you first create the `demo` Deployment, there is no `demo`
+    Pod running. So Kubernetes will start the required Pod immediately. If it ever
+    stops, Kubernetes will start it again, so long as the Deployment still exists.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，当你首次创建 `demo` 部署时，没有 `demo` Pod 在运行。因此 Kubernetes 会立即启动所需的 Pod。如果 Pod 停止，只要部署仍然存在，Kubernetes
+    就会再次启动它。
+- en: 'Let’s verify that right now by removing the Pod manually. First, check that
+    the Pod is indeed running:'
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在让我们通过手动删除 Pod 来验证一下。首先，检查 Pod 是否确实在运行：
+- en: '[PRE5]'
+  id: totrans-49
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'Note that the name of the Pod will be unique for you. You can also see the
+    ReplicaSet that created this Pod by running:'
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，Pod 的名称对你来说将是唯一的。你也可以通过运行以下命令查看创建此 Pod 的副本集：
+- en: '[PRE6]'
+  id: totrans-51
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: See how the ReplicaSet has a randomly generated ID that matches the beginning
+    part of the demo Pod name above? In this example, the `demo-794889fc8d` ReplicaSet
+    created one Pod named `demo-794889fc8d-5ddsg`.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 看看 ReplicaSet 如何具有与上述 demo Pod 名称的开头部分匹配的随机生成 ID？在这个示例中，`demo-794889fc8d` ReplicaSet
+    创建了一个名为`demo-794889fc8d-5ddsg`的 Pod。
+- en: 'Now, run the following command to remove the Pod:'
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，运行以下命令以删除 Pod：
+- en: '[PRE7]'
+  id: totrans-54
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: 'List the Pods again:'
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 再次列出 Pods：
+- en: '[PRE8]'
+  id: totrans-56
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: You may catch the original Pod shutting down (its status is `Terminating`),
+    but it’s already been replaced by a new Pod, which is only five seconds old. You
+    can also see that the new Pod has the same ReplicaSet, `demo-794889fc8d`, but
+    a new unique Pod name `demo-794889fc8d-qbcxm`. That’s the reconciliation loop
+    at work.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可能会注意到原始 Pod 正在关闭（其状态为`Terminating`），但它已被一个新的 Pod 替换，该 Pod 只有五秒钟的历史。您还可以看到新的
+    Pod 具有相同的 ReplicaSet，`demo-794889fc8d`，但有一个新的唯一 Pod 名称`demo-794889fc8d-qbcxm`。这就是协调循环在工作。
+- en: You told Kubernetes, by means of the Deployment you created, that the `demo`
+    Pod should *always* be running one replica. It takes you at your word, and even
+    if you delete the Pod yourself, Kubernetes assumes you must have made a mistake,
+    and helpfully starts a new Pod to replace it for you.
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过创建的部署告诉 Kubernetes，`demo` Pod 应该*始终*运行一个副本。它听信于你的话，即使你自己删除了 Pod，Kubernetes
+    也会假设你可能犯了一个错误，并帮助你启动一个新的 Pod 来替换它。
+- en: 'Once you’ve finished experimenting with the Deployment, shut it down and clean
+    up using the following command:'
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您完成对部署的实验后，请使用以下命令关闭并清理：
+- en: '[PRE9]'
+  id: totrans-60
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: The Kubernetes Scheduler
+  id: totrans-61
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Kubernetes 调度程序
+- en: We’ve said things like *the Deployment will create Pods* and *Kubernetes will
+    start the required Pod*, without really explaining how that happens.
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们说过类似*部署将创建 Pods*和*Kubernetes 将启动所需的 Pod*，但并没有真正解释它是如何发生的。
+- en: The Kubernetes *scheduler* is the component responsible for this part of the
+    process. When a Deployment (via its associated ReplicaSet) decides that a new
+    replica is needed, it creates a Pod resource in the Kubernetes database. Simultaneously,
+    this Pod is added to a queue, which is like the scheduler’s inbox.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes *调度器*是此过程的负责部分。当一个部署（通过其关联的 ReplicaSet）决定需要一个新的副本时，它会在 Kubernetes
+    数据库中创建一个 Pod 资源。同时，这个 Pod 被添加到一个队列中，这就像调度器的收件箱。
+- en: The scheduler’s job is to watch its queue of unscheduled Pods, grab the next
+    Pod from it, and find a node to run it on. It will use a few different criteria,
+    including the Pod’s resource requests, to choose a suitable node, assuming there
+    is one available (we’ll talk more about this process in [Chapter 5](ch05.html#resources)).
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 调度器的工作是监视其未调度 Pod 的队列，从中获取下一个 Pod，并找到一个节点来运行它。它将使用一些不同的标准，包括 Pod 的资源请求，来选择一个合适的节点，假设有一个可用的（我们将在[第五章](ch05.html#resources)详细讨论此过程）。
+- en: Once the Pod has been scheduled on a node, the kubelet running on that node
+    picks it up and takes care of actually starting its containers (see [“Node Components”](ch03.html#nodecomponents)).
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦 Pod 已在节点上调度，运行在该节点上的 kubelet 将接管并负责实际启动其容器（参见[“节点组件”](ch03.html#nodecomponents)）。
+- en: When you deleted a Pod in [“Maintaining Desired State”](#maintainingstates),
+    it was the ReplicaSet that spotted this and started a replacement. It *knows*
+    that a `demo` Pod should be running on its node, and if it doesn’t find one, it
+    will start one. (What would happen if you shut the node down altogether? Its Pods
+    would become unscheduled and go back into the scheduler’s queue, to be reassigned
+    to other nodes.)
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当你删除一个 Pod 在[“维持期望状态”](#maintainingstates)中时，ReplicaSet 发现并开始替换它。它*知道*一个`demo`
+    Pod 应该在其节点上运行，如果找不到，则会启动一个。 （如果您完全关闭节点会发生什么？它的 Pods 将变为未调度状态，并重新进入调度程序的队列，以重新分配到其他节点。）
+- en: Stripe engineer Julia Evans has written a delightfully clear explanation of
+    [how scheduling works in Kubernetes](https://oreil.ly/APoqF).
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Stripe 工程师 Julia Evans 已经清楚地解释了[Kubernetes 中调度工作的方式](https://oreil.ly/APoqF)。
+- en: Resource Manifests in YAML Format
+  id: totrans-68
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: YAML 格式的资源清单
+- en: 'Now that you know how to run an application in Kubernetes, is that it? Are
+    you done? Not quite. Using the `kubectl create` command to create a Deployment
+    is useful, but limited. Suppose that you want to change something about the Deployment
+    spec: the image name or version, say. You could delete the existing Deployment
+    (using `kubectl delete`) and create a new one with the right fields. But let’s
+    see if we can do better.'
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在你知道如何在 Kubernetes 中运行应用程序了，就这样了吗？你完成了吗？还不完全。使用`kubectl create`命令创建一个部署是有用的，但有限制。假设你想要改变部署规范中的某些内容：比如镜像名称或版本。你可以删除现有的部署（使用`kubectl
+    delete`）并创建一个新的，带有正确字段的部署。但我们来看看我们是否能做得更好。
+- en: Because Kubernetes is inherently a *declarative* system, continuously reconciling
+    actual state with desired state, all you need to do is change the desired state—the
+    Deployment spec—and Kubernetes will do the rest. How do you do that?
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因为 Kubernetes 本质上是一个*声明式*系统，持续地将实际状态与期望状态进行协调，你只需改变期望的状态——即 Deployment 规范——Kubernetes
+    就会完成其余的工作。你如何做到这一点呢？
+- en: Resources Are Data
+  id: totrans-71
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 资源即数据
+- en: All Kubernetes resources, such as Deployments or Pods, are represented by records
+    in its internal database. The reconciliation loop watches the database for any
+    changes to those records, and takes the appropriate action. In fact, all the `kubectl
+    create` command does is add a new record in the database corresponding to a Deployment,
+    and Kubernetes does the rest.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有 Kubernetes 资源，如部署或 Pod，在其内部数据库中都以记录的形式表示。协调循环会监视数据库中这些记录的任何更改，并采取适当的行动。事实上，`kubectl
+    create`命令所做的就是在数据库中添加一个与部署对应的新记录，然后由 Kubernetes 完成其余的工作。
+- en: But you don’t need to use `kubectl create` in order to interact with Kubernetes.
+    You can also create and edit the resource *manifest* (the specification for the
+    desired state of the resource) directly. You can (and should) keep the manifest
+    file in a version control system, and instead of running imperative commands to
+    make on-the-fly changes, you can change your manifest files and then tell Kubernetes
+    to read the updated data.
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 但是你不需要使用`kubectl create`来与 Kubernetes 交互。你还可以直接创建和编辑资源*清单*（资源期望状态的规范）。你可以（而且应该）将清单文件保存在版本控制系统中，而不是运行命令以进行即时更改，你可以修改你的清单文件，然后告诉
+    Kubernetes 读取更新的数据。
+- en: Deployment Manifests
+  id: totrans-74
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 部署清单
+- en: The usual format for Kubernetes manifest files is YAML, although it can also
+    understand the JSON format. So what does the YAML manifest for a Deployment look
+    like?
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 清单文件的通常格式是 YAML，尽管它也可以理解 JSON 格式。那么部署的 YAML 清单文件是什么样的呢？
+- en: 'Have a look at our example for the demo application (*hello-k8s/k8s/deployment.yaml*):'
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 看一下我们的演示应用示例（*hello-k8s/k8s/deployment.yaml*）：
+- en: '[PRE10]'
+  id: totrans-77
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: 'At first glance, this looks complicated, but it’s mostly boilerplate. The only
+    interesting parts are the same information that you’ve already seen in various
+    forms: the container image name and port. When you gave this information to `kubectl
+    create` earlier, it created the equivalent of this YAML manifest behind the scenes
+    and submitted it to Kubernetes.'
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 乍一看，这看起来很复杂，但它主要是样板文件。唯一有趣的部分与你已经以各种形式看到的相同信息：容器镜像名称和端口。当你之前将这些信息提供给`kubectl
+    create`时，它在幕后创建了这个 YAML 清单的等效项，并将其提交给 Kubernetes。
+- en: Using kubectl apply
+  id: totrans-79
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用 kubectl apply
+- en: To use the full power of Kubernetes as a declarative infrastructure as code
+    system, submit YAML manifests to the cluster yourself, using the `kubectl apply`
+    command.
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要充分利用 Kubernetes 作为声明式基础设施即代码系统的全部功能，请自行向集群提交 YAML 清单，使用`kubectl apply`命令。
+- en: Try it with our example Deployment manifest, *hello-k8s/k8s/deployment.yaml*
+    in the [demo repository](https://oreil.ly/LAI8f).^([1](ch04.html#idm45979389460432))
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 试试我们的示例部署清单，在[demo 仓库](https://oreil.ly/LAI8f)中的*hello-k8s/k8s/deployment.yaml*中。^([1](ch04.html#idm45979389460432))
+- en: 'Run the following commands in your cloned copy of the demo repo:'
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在你克隆的演示存储库中运行以下命令：
+- en: '[PRE11]'
+  id: totrans-83
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: 'After a few seconds, a `demo` Pod should be running:'
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 几秒钟后，`demo` Pod 应该已经在运行了。
+- en: '[PRE12]'
+  id: totrans-85
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: We’re not quite done, though, because in order to connect to the `demo` Pod
+    with a web browser, we’re going to create a Service, which is a Kubernetes resource
+    that lets you connect to your deployed Pods (more on this in a moment).
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不过我们还没结束，因为为了使用 web 浏览器连接到`demo` Pod，我们将创建一个 Service，这是一个 Kubernetes 资源，允许你连接到部署的
+    Pod（稍后详细说明）。
+- en: First, let’s explore what a Service is, and why we need one.
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，让我们探讨一下什么是 Service，以及为什么我们需要它。
+- en: Service Resources
+  id: totrans-88
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 服务资源
+- en: Suppose you want to make a network connection to a Pod (such as our example
+    application). How do you do that? You could find out the Pod’s IP address and
+    connect directly to that address and the app’s port number. But the IP address
+    may change when the Pod is restarted, so you’ll have to keep looking it up to
+    make sure it’s up-to-date.
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设你想要与 Pod 进行网络连接（比如我们的示例应用程序）。你该如何做？你可以找到 Pod 的 IP 地址，并直接连接到该地址和应用程序的端口号。但是当
+    Pod 重新启动时，IP 地址可能会更改，因此你需要不断查找以确保它是最新的。
+- en: Worse, there may be multiple replicas of the Pod, each with different addresses.
+    Every other application that needs to contact the Pod would have to maintain a
+    list of those addresses, which doesn’t sound like a great idea.
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 更糟糕的是，可能会有多个 Pod 的副本，每个副本都有不同的地址。需要联系 Pod 的每个其他应用程序都必须维护这些地址的列表，这听起来并不是一个好主意。
+- en: 'Fortunately, there’s a better way: a Service resource gives you a single, unchanging
+    IP address or DNS name that will be automatically routed to any matching Pod.
+    Later on in [“Ingress”](ch09.html#ingress), we will talk about the Ingress resource,
+    which allows for more advanced routing and using TLS certificates.'
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 幸运的是，有一种更好的方法：Service 资源为你提供一个单一且不变的 IP 地址或 DNS 名称，将自动路由到任何匹配的 Pod。稍后在[“Ingress”](ch09.html#ingress)中，我们将讨论
+    Ingress 资源，它允许更高级的路由和使用 TLS 证书。
+- en: But for now, let’s take a closer look at how a Kubernetes Service works.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 但现在，让我们更仔细地看一看 Kubernetes Service 是如何工作的。
+- en: 'You can think of a Service as being like a web proxy or a load balancer, forwarding
+    requests to a set of *backend* Pods ([Figure 4-2](#img-service)). However, it
+    isn’t restricted to web ports: a Service can forward traffic from any port to
+    any other port, as detailed in the `ports` part of the spec.'
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可以将 Service 理解为类似于 Web 代理或负载均衡器，将请求转发到一组*后端* Pod（参见[图 4-2](#img-service)）。但它并不限于
+    Web 端口：Service 可以将流量从任何端口转发到任何其他端口，详细信息在规范的 `ports` 部分描述。
+- en: '![Diagram showing a Service forwarding traffic to Pods](assets/cndk_0402.png)'
+  id: totrans-94
+  prefs: []
+  type: TYPE_IMG
+  zh: '![图表显示 Service 将流量转发到 Pods](assets/cndk_0402.png)'
+- en: Figure 4-2\. A Service provides a persistent endpoint for a group of Pods
+  id: totrans-95
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 4-2\. Service 为一组 Pod 提供了持久的终结点
+- en: 'Here’s the YAML manifest of the Service for our demo app:'
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是我们演示应用程序的 Service 的 YAML 清单：
+- en: '[PRE13]'
+  id: totrans-97
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: You can see that it looks somewhat similar to the Deployment resource we showed
+    earlier. However, the `kind` is `Service`, instead of `Deployment`, and the `spec`
+    just includes a list of `ports`, plus a `selector` and a `type`.
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可以看到它在某些方面与我们之前展示的 Deployment 资源相似。但是，`kind` 是 `Service`，而不是 `Deployment`，而
+    `spec` 只包括 `ports` 列表，加上 `selector` 和 `type`。
+- en: 'If you zoom in a little, you can see that the Service is forwarding its port
+    8888 to the Pod’s port 8888:'
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你放大一点，你会看到 Service 将其端口 8888 转发到 Pod 的端口 8888：
+- en: '[PRE14]'
+  id: totrans-100
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: 'The `selector` is the part that tells the Service how to route requests to
+    particular Pods. Requests will be forwarded to any Pods matching the specified
+    set of labels; in this case, just `app: demo` (see [“Labels”](ch09.html#labels)).
+    In our example, there’s only one Pod that matches, but if there were multiple
+    Pods, the Service would send each request to a randomly selected one.^([2](ch04.html#idm45979389163376))'
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`selector` 部分告诉 Service 如何将请求路由到特定的 Pods。请求将转发到任何匹配指定标签集的 Pods；在这种情况下，只有 `app:
+    demo`（参见[“标签”](ch09.html#labels)）。在我们的示例中，只有一个匹配的 Pod，但如果有多个 Pods，Service 将每个请求发送到随机选择的一个。（参见[2](ch04.html#idm45979389163376)）'
+- en: In this respect, a Kubernetes Service is a little like a traditional load balancer,
+    and, in fact, both Services and Ingresses can automatically create cloud load
+    balancers (see [“Ingress”](ch09.html#ingress)).
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这方面，Kubernetes Service 有点像传统的负载均衡器，事实上，Service 和 Ingress 都可以自动创建云负载均衡器（参见[“Ingress”](ch09.html#ingress)）。
+- en: For now, the main thing to remember is that a Deployment manages a set of Pods
+    for your application, and a Service gives you a single entry point for requests
+    to those Pods.
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 目前，要记住的主要内容是，Deployment 管理应用程序的一组 Pod，而 Service 为这些 Pod 提供单一的请求入口点。
+- en: 'Go ahead and apply the manifest now, to create the Service:'
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，可以应用清单，创建 Service：
+- en: '[PRE15]'
+  id: totrans-105
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: As before, `kubectl port-forward` will connect the `demo` pod to a port on your
+    local machine so that you can connect to *http://localhost:9999/* with your web
+    browser.
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与之前一样，`kubectl port-forward` 将把 `demo` Pod 连接到本地机器上的一个端口，这样你就可以用你的 Web 浏览器连接到
+    *http://localhost:9999/*。
+- en: 'Once you’re satisfied that everything is working correctly, run the following
+    command to clean up before moving on to the next section:'
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦确认一切都正常工作，运行以下命令清理，然后继续下一节：
+- en: '[PRE16]'
+  id: totrans-108
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: Tip
+  id: totrans-109
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: You can use `kubectl delete` with a label selector, as we did earlier on, to
+    delete all resources that match the selector (see [“Labels”](ch09.html#labels)).
+    Alternatively, you can use `kubectl delete -f`, as here, with a directory of manifests.
+    All the resources described by the manifest files will be deleted.
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可以像之前一样使用带有标签选择器的 `kubectl delete` 来删除匹配选择器的所有资源（参见 [“标签”](ch09.html#labels)）。或者，你可以像这样使用
+    `kubectl delete -f`，用一个清单目录。所有清单文件描述的资源都将被删除。
+- en: Querying the Cluster with kubectl
+  id: totrans-111
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用 kubectl 查询集群
+- en: 'The `kubectl` tool is the Swiss Army knife of Kubernetes: it applies configuration,
+    creates, modifies, and destroys resources, and can also query the cluster for
+    information about the resources that exist, as well as their status.'
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kubectl` 工具是 Kubernetes 的瑞士军刀：它应用配置，创建、修改和销毁资源，并且还可以查询集群关于现有资源及其状态的信息。'
+- en: We’ve already seen how to use `kubectl get` to query Pods and Deployments. You
+    can also use it to see what nodes exist in your cluster.
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们已经看到如何使用 `kubectl get` 查询 Pod 和 Deployment。您还可以使用它查看集群中存在的节点。
+- en: 'If you are running minikube, it should look something like this:'
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你正在运行 minikube，它应该看起来像这样：
+- en: '[PRE17]'
+  id: totrans-115
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: If you want to see resources of all types, use `kubectl get all`. (In fact,
+    this doesn’t show literally *all* resources, just the most common types, but we
+    won’t quibble about that for now.)
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果要查看所有类型的资源，请使用 `kubectl get all`。（实际上，这并不会显示 literally *all* 的资源，只是最常见的类型，但目前我们不会对此挑剔。）
+- en: 'To see comprehensive information about an individual Pod (or any other resource),
+    use `kubectl describe`:'
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要查看单个 Pod（或任何其他资源）的详细信息，请使用 `kubectl describe`：
+- en: '[PRE18]'
+  id: totrans-118
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: In the example output, you can see that `kubectl` gives you some basic information
+    about the container itself, including its image identifier and status, along with
+    an ordered list of events that have happened to the container. (We’ll learn a
+    lot more about the power of `kubectl` in [Chapter 7](ch07.html#powertools).)
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在示例输出中，您可以看到 `kubectl` 提供了有关容器本身的一些基本信息，包括其镜像标识符和状态，以及发生在容器中的事件的有序列表。（我们将在 [第7章](ch07.html#powertools)
+    中详细了解 `kubectl` 的强大功能。）
+- en: Taking Resources to the Next Level
+  id: totrans-120
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 将资源提升到下一个级别
+- en: 'You now know everything you need to know to deploy applications to Kubernetes
+    clusters using declarative YAML manifests. But there’s a lot of repetition in
+    these files: for example, you’ve repeated the name `demo`, the label selector
+    `app: demo`, and the port `8888` several times.'
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '现在，您已经知道如何使用声明性 YAML 清单将应用程序部署到 Kubernetes 集群了。但是这些文件中存在大量重复：例如，您多次重复了名称 `demo`、标签选择器
+    `app: demo` 和端口 `8888`。'
+- en: Shouldn’t you be able to just specify those values once, and then reference
+    them wherever they occur through the Kubernetes manifests?
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你不应该只需在 Kubernetes 清单中指定这些值一次，然后在所需的任何地方引用它们吗？
+- en: For example, it would be great to be able to define variables called something
+    like `container.name` and `container.port`, and then use them wherever they’re
+    needed in the YAML files. Then, if you needed to change the name of the app or
+    the port number it listens on, you’d only have to change them in one place, and
+    all the manifests would be updated automatically.
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，如果能定义类似 `container.name` 和 `container.port` 的变量将会很棒，然后在 YAML 文件中需要它们的任何地方使用它们。然后，如果需要更改应用程序的名称或监听的端口号，您只需在一个地方进行更改，所有清单将自动更新。
+- en: Fortunately, there’s a tool for that, and in the final section of this chapter
+    we’ll show you a little of what it can do.
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 幸运的是，有一个工具可以做到这一点，在本章的最后一节中，我们将展示它能做些什么。
+- en: 'Helm: A Kubernetes Package Manager'
+  id: totrans-125
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Helm：一个 Kubernetes 包管理器
+- en: One popular package manager for Kubernetes is called Helm, and it works just
+    the way we’ve described in the previous section. You can use the `helm` command-line
+    tool to install and configure applications (your own or anyone else’s), and you
+    can create packages called Helm *charts*, which completely specify the resources
+    needed to run the application, its dependencies, and its configurable settings.
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 的一个流行的包管理器称为 Helm，它的工作方式与我们在前一节中描述的完全相同。你可以使用 `helm` 命令行工具来安装和配置应用程序（无论是你自己的还是别人的），还可以创建称为
+    Helm *charts* 的包，这些包完全指定了运行应用程序所需的资源、其依赖关系和可配置的设置。
+- en: Helm is part of the Cloud Native Computing Foundation family of projects (see
+    [“Cloud Native”](ch01.html#cloudnative)), which reflects its stability and widespread
+    adoption.
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Helm 是 Cloud Native Computing Foundation 项目家族的一部分（参见 [“Cloud Native”](ch01.html#cloudnative)），这反映了其稳定性和广泛采用。
+- en: Note
+  id: totrans-128
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: It’s important to realize that a Helm chart, unlike the binary software packages
+    used by tools like APT or Yum, doesn’t actually include the container image itself.
+    Instead, it simply contains metadata about where the image can be found, just
+    as a Kubernetes Deployment does.
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 需要注意的是，与像 APT 或 Yum 这类工具使用的二进制软件包不同，Helm 图表实际上并不包括容器映像本身。相反，它只包含有关映像位置的元数据，就像
+    Kubernetes 的 Deployment 一样。
+- en: When you install the chart, Kubernetes itself will locate and download the binary
+    container image from the place you specified. In fact, a Helm chart is really
+    just a convenient wrapper around Kubernetes YAML manifests.
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您安装图表时，Kubernetes 本身将从您指定的位置定位并下载二进制容器映像。事实上，Helm 图表实际上只是 Kubernetes YAML 清单的便捷包装。
+- en: Installing Helm
+  id: totrans-131
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 安装 Helm
+- en: Follow the [Helm installation instructions](https://oreil.ly/NgSTe) for your
+    operating system.
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 按照[Helm 安装说明](https://oreil.ly/NgSTe)为您的操作系统进行操作。
+- en: 'To verify that Helm is installed and working, run:'
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要验证 Helm 是否已安装并正在工作，请运行：
+- en: '[PRE19]'
+  id: totrans-134
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: Once this command succeeds, you’re ready to start using Helm.
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦此命令成功，您就可以开始使用 Helm 了。
+- en: Installing a Helm Chart
+  id: totrans-136
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 安装 Helm 图表
+- en: 'What would the Helm chart for our demo application look like? In the *hello-helm3*
+    directory, you’ll see a *k8s* subdirectory, which in the previous example (`hello-k8s`)
+    contained just the Kubernetes manifest files to deploy the application. Now it
+    contains a Helm chart, in the *demo* directory:'
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们的演示应用程序的 Helm 图表会是什么样子？在 *hello-helm3* 目录中，您会看到一个 *k8s* 子目录，前一个示例中 (`hello-k8s`)
+    只包含用于部署应用程序的 Kubernetes 清单文件。现在它包含一个 Helm 图表，在 *demo* 目录中：
+- en: '[PRE20]'
+  id: totrans-138
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: 'We’ll see what all these files are for in [“What’s Inside a Helm Chart?”](ch12.html#helmcharts),
+    but for now, let’s use Helm to install the demo application. First, clean up the
+    resources from any previous deployments:'
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将在[“Helm 图表的内容是什么？”](ch12.html#helmcharts)中看到所有这些文件的用途，但现在让我们使用 Helm 安装演示应用程序。首先，清理之前部署的资源：
+- en: '[PRE21]'
+  id: totrans-140
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: 'Then run the following command:'
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后运行以下命令：
+- en: '[PRE22]'
+  id: totrans-142
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: If you use your `kubectl get deployment` and `kubectl get service` commands
+    that you learned earlier, you will see that Helm has created a Deployment resource
+    (which starts a Pod) and a Service, just as in the previous examples. The `helm
+    upgrade --install` command also creates a Kubernetes Secret with a Type of `helm.sh/release.v1`
+    to track the release.
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您使用之前学到的 `kubectl get deployment` 和 `kubectl get service` 命令，您会看到 Helm 已创建了一个
+    Deployment 资源（启动一个 Pod）和一个 Service，就像之前的示例中一样。`helm upgrade --install` 命令还会创建一个
+    Kubernetes Secret，类型为 `helm.sh/release.v1` 以跟踪发布。
+- en: Charts, Repositories, and Releases
+  id: totrans-144
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 图表、仓库和发布
+- en: 'These are the three most important Helm terms you need to know:'
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些是您需要了解的三个最重要的 Helm 术语：
+- en: A *chart* is a Helm package, containing all the resource definitions necessary
+    to run an application in Kubernetes.
+  id: totrans-146
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '*图表* 是一个 Helm 包，包含在 Kubernetes 中运行应用程序所需的所有资源定义。'
+- en: A *repository* is a place where charts can be collected and shared.
+  id: totrans-147
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '*仓库* 是可以收集和共享图表的地方。'
+- en: A *release* is a particular instance of a chart running in a Kubernetes cluster.
+  id: totrans-148
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '*发布* 是在 Kubernetes 集群中运行的图表的特定实例。'
+- en: 'There are some parallels with Helm resources to Docker containers:'
+  id: totrans-149
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Helm 资源与 Docker 容器有一些相似之处：
+- en: A Helm *repository* is a server where charts are stored and downloaded from
+    clients, similar to how a container registry stores and serves container images,
+    like Docker Hub.
+  id: totrans-150
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Helm *仓库* 是存储和从客户端下载图表的服务器，类似于容器注册表存储和提供 Docker Hub 等容器映像。
+- en: A Helm *release* is when a chart is installed into a cluster, much like when
+    a published Docker image is launched as a running container.
+  id: totrans-151
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 当图表安装到集群中时，称为 Helm *发布*，就像发布 Docker 映像作为运行中容器一样。
+- en: Helm charts can be downloaded and installed from repository servers, or installed
+    directly by pointing to a local path of a directory containing the Helm YAML files
+    on the filesystem.
+  id: totrans-152
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Helm 图表可以从仓库服务器下载并安装，也可以通过指向文件系统上包含 Helm YAML 文件的本地路径直接安装。
+- en: One chart can be installed many times into the same cluster. For example, you
+    might be running multiple copies of the Redis chart for various applications,
+    each serving as a backend for different websites. Each separate instance of the
+    Helm chart is a distinct release.
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个图表可以在同一集群中安装多次。例如，您可能会为不同的应用程序运行多个 Redis 图表副本，每个副本作为不同网站的后端。每个独立的 Helm 图表实例都是一个不同的发布。
+- en: You may also want to centrally install something in your cluster used by all
+    of your apps, like [Prometheus](https://oreil.ly/Ys0Xu) for centralized monitoring,
+    or the [NGINX Ingress Controller](https://oreil.ly/ZSpg6) for handling incoming
+    web requests.
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可能还希望在集群中集中安装一些所有应用程序都使用的内容，例如 [Prometheus](https://oreil.ly/Ys0Xu) 用于集中监控，或者
+    [NGINX Ingress Controller](https://oreil.ly/ZSpg6) 用于处理传入的 Web 请求。
+- en: Listing Helm Releases
+  id: totrans-155
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 列出 Helm 发布
+- en: 'To check what releases you have running at any time, run `helm list`:'
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要随时检查您正在运行的发布版本，请运行 `helm list`：
+- en: '[PRE23]'
+  id: totrans-157
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: To see the exact status of a particular release, run `helm status` followed
+    by the name of the release. You’ll see the same information that you did when
+    you first deployed the release.
+  id: totrans-158
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要查看特定发布的确切状态，请运行 `helm status`，然后输入发布的名称。您将看到与首次部署发布时相同的信息。
+- en: Later in the book, we’ll show you how to build your own Helm charts for your
+    applications (see [“What’s Inside a Helm Chart?”](ch12.html#helmcharts)). For
+    now, just know that Helm is a handy way to install applications from public charts.
+  id: totrans-159
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本书后面，我们将向您展示如何为您的应用构建自己的 Helm 图表（请参阅 [“Helm 图表的内容是什么？”](ch12.html#helmcharts)）。现在，只需知道
+    Helm 是从公共图表中安装应用的便捷方式。
+- en: Many popular applications are hosted in various Helm repositories and maintained
+    by the package providers. You can add Helm repositories and install their charts,
+    and you can also host and publish your own Helm charts for your own applications.
+  id: totrans-160
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 许多流行的应用程序托管在各种 Helm 仓库中，并由包提供者维护。您可以添加 Helm 仓库并安装其图表，您也可以为自己的应用程序托管和发布自己的 Helm
+    图表。
+- en: Tip
+  id: totrans-161
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: You can see many examples of popular Helm charts hosted on [Artifact Hub](https://artifacthub.io),
+    another CNCF project.
+  id: totrans-162
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在 [Artifact Hub](https://artifacthub.io) 上看到许多流行 Helm 图表的示例，这是另一个 CNCF 项目。
+- en: Summary
+  id: totrans-163
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 总结
+- en: This is primarily a book about using Kubernetes, not diving deep into the details
+    of how Kubernetes works. Our aim is to show you what Kubernetes can *do*, and
+    bring you quickly to the point where you can run real workloads in production.
+    However, it’s useful to know at least some of the main pieces of machinery you’ll
+    be working with, such as Pods and Deployments. In this chapter, we’ve briefly
+    introduced some of the most important ones. We also recommend [*Managing Kubernetes*](https://oreil.ly/Fxs6E),
+    [*Production Kubernetes*](https://oreil.ly/ZsROQ), and the [*Kubernetes the Hard
+    Way* repo](https://oreil.ly/Chk5v) for those looking to get more familiar with
+    what is going on under the hood.
+  id: totrans-164
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本书主要讲述如何使用 Kubernetes，而不是深入探讨 Kubernetes 的工作原理。我们的目标是向您展示 Kubernetes 能够*做*什么，并迅速带您达到可以在生产环境中运行真实工作负载的水平。然而，了解一些您将要使用的主要组件（如
+    Pods 和 Deployments）也是很有用的。在本章中，我们简要介绍了一些最重要的内容。我们还推荐 [*管理 Kubernetes*](https://oreil.ly/Fxs6E)、[*生产
+    Kubernetes*](https://oreil.ly/ZsROQ) 和 [*Kubernetes the Hard Way* 仓库](https://oreil.ly/Chk5v)，供那些希望更加熟悉
+    Kubernetes 内部工作机制的人使用。
+- en: As fascinating as the technology is to geeks like us, we’re also interested
+    in getting stuff done. Therefore, we haven’t exhaustively covered every kind of
+    resource Kubernetes provides, because there are a *lot*, and many of them you
+    almost certainly won’t need (at least, not yet).
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管像我们这样的极客对这项技术如此迷人，但我们也对完成工作感兴趣。因此，我们并没有详尽地覆盖 Kubernetes 提供的每一种资源，因为种类实在是太多了，而且其中许多您几乎肯定用不上（至少目前还用不上）。
+- en: 'The key points we think you need to know right now are:'
+  id: totrans-166
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们认为您现在需要了解的关键点有：
+- en: The Pod is the fundamental unit of work in Kubernetes, specifying a single container
+    or group of communicating containers that are scheduled together.
+  id: totrans-167
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Pod 是 Kubernetes 中的基本工作单元，指定了一个或多个通信容器的组合，它们一起被调度。
+- en: A Deployment is a high-level Kubernetes resource that declaratively manages
+    Pods, deploying, scheduling, updating, and restarting them when necessary.
+  id: totrans-168
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Deployment 是一个高级 Kubernetes 资源，以声明方式管理 Pod，进行部署、调度、更新并在必要时重新启动它们。
+- en: A Service is the Kubernetes equivalent of a load balancer or proxy, routing
+    traffic to its matching Pods via a single, well-known, durable IP address or DNS
+    name.
+  id: totrans-169
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Service 是 Kubernetes 中负载均衡器或代理的等效物，通过单一、著名且持久的 IP 地址或 DNS 名称将流量路由到其匹配的 Pods。
+- en: The Kubernetes scheduler watches for a Pod that isn’t yet running on any node,
+    finds a suitable node for it, and instructs the kubelet on that node to run the
+    Pod.
+  id: totrans-170
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Kubernetes 调度器会监视尚未在任何节点上运行的 Pod，找到合适的节点，并指示该节点上的 kubelet 运行该 Pod。
+- en: Resources like Deployments are represented by records in Kubernetes’s internal
+    database. Externally, these resources can be represented by text files (known
+    as *manifests*) in YAML format. The manifest is a declaration of the desired state
+    of the resource.
+  id: totrans-171
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 资源如部署（Deployments）在Kubernetes的内部数据库中以记录形式表示。在外部，这些资源可以以YAML格式的文本文件（称为*清单*）表示。清单是资源期望状态的声明。
+- en: '`kubectl` is the main tool for interacting with Kubernetes, allowing you to
+    apply manifests, query resources, make changes, delete resources, and do many
+    other tasks.'
+  id: totrans-172
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`kubectl`是与Kubernetes交互的主要工具，允许您应用清单、查询资源、进行更改、删除资源以及执行许多其他任务。'
+- en: Helm is a Kubernetes package manager. It simplifies configuring and deploying
+    Kubernetes applications, allowing you to use a single set of bundled manifests
+    and templates used to generate parameterized Kubernetes YAML files, instead of
+    having to maintain the raw YAML files yourself.
+  id: totrans-173
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Helm是一个Kubernetes包管理器。它简化了配置和部署Kubernetes应用程序，允许您使用一组捆绑的清单和模板来生成参数化的Kubernetes
+    YAML文件，而不是自己维护原始的YAML文件。
+- en: '^([1](ch04.html#idm45979389460432-marker)) *k8s*, pronounced *kates*, is a
+    common abbreviation for *Kubernetes*, following the geeky pattern of abbreviating
+    words as a *numeronym*: their first and last letters, plus the number of letters
+    in between (*k-8-s*). See also *i18n* (internationalization), *a11y* (accessibility),
+    and *o11y* (observability).'
+  id: totrans-174
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([1](ch04.html#idm45979389460432-marker)) *k8s*，发音为*kates*，是*Kubernetes*的常见缩写，遵循将单词缩写为*数字代号*的极客模式：它们的第一个和最后一个字母，以及中间字母的数量（*k-8-s*）。也可以参见*i18n*（国际化）、*a11y*（可访问性）和*o11y*（可观察性）。
+- en: ^([2](ch04.html#idm45979389163376-marker)) This is the default load-balancing
+    algorithm; Kubernetes versions 1.10+ support other algorithms too, such as *least
+    connection*. See the [Kubernetes documentation](https://oreil.ly/YZDrx) for more.
+  id: totrans-175
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([2](ch04.html#idm45979389163376-marker)) 这是默认的负载均衡算法；Kubernetes 1.10+版本还支持其他算法，如*最小连接*。更多信息请参阅[Kubernetes文档](https://oreil.ly/YZDrx)。

@@ -1,0 +1,1057 @@
+- en: Chapter 9\. Intrusion Detection
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第9章。入侵检测
+- en: In this chapter we will see how container intrusion detection operates with
+    the new low-level eBPF interface, what forensics looks like for a container, and
+    how to catch attackers who have evaded all other controls.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们将看到容器入侵检测如何使用新的低级eBPF接口运行，容器的取证是什么样子，以及如何捕捉已逃避所有其他控制的攻击者。
+- en: Defense in depth means limiting the trust you place in each security control
+    you deploy. No solution is infallible, but you can use intrusion detection systems
+    (IDS) to detect unexpected activity in much the same way that motion sensors detect
+    movement. Your adversary has already accessed your system and may even have viewed
+    confidential information already, so an IDS reviews your system in real time for
+    unexpected behavior and observes or blocks it. Alerts can trigger further defensive
+    actions from an IDS, like dumping compromised memory or recording network activity.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 防御深度意味着限制您对每个部署的安全控制的信任。没有解决方案是绝对可靠的，但您可以使用入侵检测系统（IDS）类似于运动传感器检测运动的方式来检测系统中的意外活动。您的对手已经访问了您的系统，甚至可能已经查看了机密信息，因此IDS会实时审查您的系统以检测并观察或阻止意外行为。警报可以触发IDS的进一步防御措施，例如转储受损内存或记录网络活动。
+- en: Intrusion detection can inspect file, network, and kernel reads and writes to
+    verify or block them with an allowlist or a denylist (as `seccomp-bpf` configuration
+    does). If Captain Hashjack’s Hard Hat Hacking Collective has remote access to
+    your servers, an IDS might be triggered by their use of malware with known behavioral
+    signatures, scan of networks or files for further targets, or any other program
+    access that deviates from the expected “stable” baseline the IDS has learned about
+    the process.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 入侵检测可以检查文件、网络和内核的读写操作，以验证或阻止它们使用允许列表或拒绝列表（如`seccomp-bpf`配置所做的）。如果Hashjack船长的硬帽黑客集体可以远程访问您的服务器，入侵检测系统可能会因其使用带有已知行为特征签名的恶意软件、扫描网络或文件以寻找更多目标，或任何其他与IDS学习的预期“稳定”基线偏离的程序访问而触发。
+- en: Some attackers’ campaigns are only discovered after the adversary has been on
+    the system for weeks or months and finally inadvertently tripped the IDS detection.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一些攻击者的攻击活动仅在对手在系统上存在几周或几个月后才被发现，最终无意中触发IDS检测。
+- en: Defaults
+  id: totrans-5
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 默认设置
+- en: 'Stable behavior is what we’d expect our container process to do normally, when
+    running as intended, and not compromised. We can apply the same thing to any data
+    we collect: access and audit logs, metrics and telemetry, and system calls and
+    network activity.'
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 稳定的行为是我们期望容器进程在正常运行时执行的，而不是被妥协的状态。我们可以对收集的任何数据应用相同的原则：访问和审计日志、指标和遥测，以及系统调用和网络活动。
+- en: Intrusion detection to identify deviance from this behavior requires installation,
+    maintenance, and monitoring. By default most systems do not have any intrusion
+    detection unless configured to do so.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 入侵检测以识别与此行为偏离相关的威胁需要安装、维护和监控。默认情况下，大多数系统没有任何入侵检测，除非进行了配置。
+- en: Threat Model
+  id: totrans-8
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 威胁模型
+- en: 'Intrusion detection can detect threats to BCTL’s systems. If an attacker gets
+    remote code execution (RCE) into a container they may be able to control the process,
+    changing its behavior. Potentially nonstable behaviors that could indicate compromise
+    might include:'
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 入侵检测可以检测到对BCTL系统的威胁。如果攻击者通过远程代码执行（RCE）进入容器，他们可能能够控制该进程，从而改变其行为。可能表明存在威胁的非稳定行为可能包括：
+- en: New or disallowed system calls (perhaps fork or exec system calls to create
+    a shell like Bash or sh)
+  id: totrans-10
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 新的或不允许的系统调用（也许是fork或exec系统调用以创建像Bash或sh这样的shell）
+- en: Any unexpected network, filesystem, file metadata, or device access
+  id: totrans-11
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 任何意外的网络、文件系统、文件元数据或设备访问
+- en: Application usage and order
+  id: totrans-12
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 应用程序的使用和顺序
+- en: Unexplained processes or files
+  id: totrans-13
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 未经说明的进程或文件
+- en: Changes to users or identity settings
+  id: totrans-14
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 用户或身份设置的更改
+- en: System and kernel configuration events
+  id: totrans-15
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 系统和内核配置事件
+- en: Any of a process’s properties and behaviors when interacting with the wider
+    system may also be subject to scrutiny.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当与更广泛的系统交互时，进程的属性和行为也可能受到审查。
+- en: Tip
+  id: totrans-17
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 小贴士
+- en: Attack tools like [ccat](https://oreil.ly/pKyt0) and [dockerscan](https://oreil.ly/bchJw)
+    can poison images in registries and install backdoors in container images that
+    an attacker may use to gain entry to your pods at runtime. This sort of unexpected
+    behavior should be noticed and alerted on by your IDS.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 攻击工具如[ccat](https://oreil.ly/pKyt0)和[dockerscan](https://oreil.ly/bchJw)可以在镜像注册表中毒害镜像，并在容器镜像中安装后门，攻击者可能会在运行时使用它们来进入您的Pods。这种意外行为应该由您的IDS察觉并发出警报。
+- en: Of course, you don’t want to be alerted to legitimate activity, so you authorize
+    expected behavior. It’s either preconfigured with rules and signatures or learned
+    while the process is under observation in a nonproduction environment.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当然，您不希望因为合法活动而受到警报，因此您可以授权预期的行为。这可以通过预配置的规则和签名或在非生产环境中观察过程中学习来实现。
+- en: These threats should be identified and configured to alert your IDS system.
+    We’ll see how in this chapter.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些威胁应被识别并配置以警报您的 IDS 系统。本章将介绍如何操作。
+- en: Traditional IDS
+  id: totrans-21
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 传统 IDS
+- en: Before we get into cloud native IDS, let’s have a look at a few of the other
+    intrustion detection applications that have been prominent over the years.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在我们深入讨论原生云 IDS 之前，让我们先看看多年来突出的几款其他入侵检测应用程序。
+- en: Traditional intrusion detection systems are classed as Network- or Host-based
+    IDS (NIDS or HIDS), and some tools offer both. Historically these used signals
+    from the host kernel or network adapter, and were not aware of the Linux namespaces
+    that containers use.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 传统入侵检测系统分为基于网络或主机的 IDS（NIDS 或 HIDS），一些工具同时提供两者。这些工具历来使用主机内核或网络适配器的信号，但未意识到容器使用的
+    Linux 命名空间。
+- en: Linux has [`auditd`](https://oreil.ly/N5BSs) built in for system call events,
+    but this doesn’t correlate activity nicely across nodes in a distributed system.
+    It’s also considered heavyweight (it generates a great volume of logs) and can’t
+    distinguish by namespace due to “complex and incomplete” ID tracking of namespaced
+    processes.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linux 内置了[`auditd`](https://oreil.ly/N5BSs)来跟踪系统调用事件，但在分布式系统中，这不能很好地关联活动。它也被认为是笨重的（生成大量日志），且由于“复杂且不完整”的命名空间进程
+    ID 跟踪，无法区分命名空间。
+- en: Tools like [Suricata](https://suricata.io), [Snort](https://www.snort.org),
+    and [Zeek](https://zeek.org) inspect network traffic against a rule and scripting
+    engine, and may be run on the same host or (as they tend to be resource intensive)
+    on dedicated hardware attached to the network under observation. Encrypted or
+    steganographic payloads may escape such NIDS undetected. To further guard against
+    these slippery assailants, the old-but-effective [Tripwire](https://oreil.ly/3ewaE)
+    tool watches files on the host for unauthorized changes.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 像[Suricata](https://suricata.io)、[Snort](https://www.snort.org)和[Zeek](https://zeek.org)这样的工具，通过规则和脚本引擎检查网络流量，并可在同一主机上运行，或者（由于资源密集型）连接到被观察网络的专用硬件上。加密或隐写载荷可能会逃脱此类
+    NIDS 的检测。为了进一步防范这些隐秘的攻击者，老牌而有效的[Tripwire](https://oreil.ly/3ewaE)工具监视主机上文件的未授权更改。
+- en: An IDS detects threats by either using preknown information about them or detecting
+    deviance from an expected baseline. Information known in advance can be considered
+    a “signature,” and signatures can relate to network traffic and scans, malware
+    binaries, or memory. Any suspicious patterns in packets, “fingerprints” of application
+    code or memory usage, and process activities are verified against an expected
+    ruleset derived from the application’s “known good” behavior.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: IDS 通过使用有关已知信息或检测与预期基线的偏差来检测威胁。事先已知的信息可以被视为“签名”，这些签名可以与网络流量和扫描、恶意软件二进制文件或内存相关联。数据包中的任何可疑模式、“指纹”应用代码或内存使用以及进程活动，都会与从应用的“已知良好”行为中导出的预期规则集进行验证。
+- en: Once a signature pattern is identified (for example, the SUNBURST traffic back
+    to command and control servers), the IDS creates a relevant alert.
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦确定了签名模式（例如，SUNBURST 流量返回到命令和控制服务器），IDS 就会创建相关的警报。
+- en: Note
+  id: totrans-28
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: FireEye released IDS configurations [to detect SUNBURST](https://oreil.ly/kgkNH).
+    These configurations support various IDS tools including Snort, Yara, IOC, and
+    ClamAV.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: FireEye 发布了 IDS 配置[来检测 SUNBURST](https://oreil.ly/kgkNH)。这些配置支持包括 Snort、Yara、IOC
+    和 ClamAV 在内的各种 IDS 工具。
+- en: Signatures are distributed and update files, so you must regularly update them
+    to ensure new and recent threats are detected. A signature-based approach is usually
+    less resource intensive and less prone to false positives, but it may not detect
+    zero-days and novel attacks. Attackers have access to defensive tooling and can
+    determine how to circumvent controls in their own test systems.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 签名是分发和更新的文件，因此您必须定期更新它们，以确保检测到新的和最近的威胁。基于签名的方法通常资源消耗较少且假阳性的可能性较小，但可能无法检测到零日和新型攻击。攻击者可以访问防御工具，并确定如何绕过其自己的测试系统中的控制。
+- en: Without predefined signatures to trip the IDS, anomalous behavior may be detected.
+    This relies on a “known good state” of the application.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果没有预定义的签名来触发 IDS，则可能会检测到异常行为。这依赖于应用程序的“已知良好状态”。
+- en: The derivation of a normal application behavior state defines “secure,” which
+    puts the onus on defenders to ensure application correctness, rather than on the
+    tool to enforce a generic ruleset.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正常应用行为状态的派生定义了“安全”，这使得防御者有责任确保应用程序的正确性，而不是工具来强制执行通用规则集。
+- en: This observational approach is more powerful than signatures as it can act autonomously
+    against new threats. The price for this more general protection is greater resource
+    utilization, which may impact the performance of the system being protected.
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种观察方法比签名更强大，因为它可以自主地对抗新的威胁。这种更广泛的保护的代价是更大的资源利用，可能会影响被保护系统的性能。
+- en: Signature and anomaly detection can be fooled, circumvented, and potentially
+    disabled by a skilled adversary, so never rely entirely upon one control.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 签名和异常检测可能会被熟练的对手欺骗、规避，并可能被禁用，因此永远不要完全依赖于单一控制。
+- en: Note
+  id: totrans-35
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: '[VirusTotal](https://oreil.ly/Zpw8C) is a library of malicious files. When
+    a defender discovers an attack, they upload the files retrieved by forensics (for
+    example, malware, implants, and C2 binaries or encrypted files), allowing researchers
+    to correlate techniques across targets and helping defenders to understand their
+    adversary, the attacks being used, and (with any luck) how they can best defend
+    themselves. Antivirus vendors ensure their products have signatures for every
+    malicious file on VirusTotal, and new submissions are scanned by existing virus
+    detection engines for matches.'
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[VirusTotal](https://oreil.ly/Zpw8C)是一个恶意文件库。当防御者发现攻击时，他们会上传法证检索到的文件（例如恶意软件、植入物、C2二进制文件或加密文件），允许研究人员跨目标关联技术，并帮助防御者了解他们的对手、正在使用的攻击方法，以及（幸运的话）如何最好地保护自己。防病毒软件供应商确保其产品对VirusTotal上的每个恶意文件都有签名，并通过现有病毒检测引擎扫描新提交的文件。'
+- en: Attackers use these same tools to ensure their payloads will bypass antivirus
+    and malware signature scanners. Red Teams have been retrospectively discovered
+    leaking tooling and signatures onto VirusTotal once their attacking campaigns
+    have been decloaked.
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 攻击者使用这些同样的工具来确保他们的载荷能够绕过防病毒和恶意软件签名扫描器。红队在攻击活动揭晓后，有时会被发现将工具和签名泄漏到VirusTotal上。
+- en: eBPF-Based IDS
+  id: totrans-38
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 基于eBPF的IDS
+- en: Running IDS for every packet or system call can incur overhead and slow down
+    the system.
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对每个数据包或系统调用运行IDS可能会增加开销并减慢系统运行速度。
+- en: 'We introduced eBPF in [“eBPF”](ch05.xhtml#workload-networking-bpf) as a mechanism
+    to safely and efficiently extend the Linux kernel. eBPF avoids some of these issues
+    by being very fast indeed: it was designed for fast packet handling, and now kernel
+    developers use it to observe runtime behavior for everything in the kernel. Because
+    it runs inside the kernel as trusted code it is less restricted than other IDS
+    and tracing technologies.'
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在[《eBPF》](ch05.xhtml#workload-networking-bpf)中介绍了eBPF作为一种安全高效地扩展Linux内核的机制。eBPF通过极其快速的特性避免了一些问题：它被设计用于快速数据包处理，现在内核开发者使用它来观察内核中所有内容的运行时行为。因为它作为内核中的受信任代码运行，比其他IDS和追踪技术受到的限制更少。
+- en: However, running in the kernel poses its own set of possible risks, and the
+    eBPF subsystem and JIT compiler have had a number of breakouts, but these are
+    considered less dangerous than slow, incomplete kernel developer tracing solutions
+    or more fallible IDS.
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，在内核中运行也带来了一系列潜在的风险，并且eBPF子系统和JIT编译器也有过一些突破，但这些被认为比慢、不完整的内核开发者追踪解决方案或更容易出错的IDS风险小。
+- en: Note
+  id: totrans-42
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: '[Jeff Dileo’s](https://oreil.ly/BPYwJ) [“Evil eBPF In-Depth Practical Abuses
+    of an In-Kernel Bytecode Runtime”](https://oreil.ly/sllD3) is a good primer on
+    BPF and its attacks, and [“Kernel Pwning with eBPF: A Love Story”](https://oreil.ly/KzOg0)
+    by [Valentina Palmiotti](https://oreil.ly/NjjEf) is a walkthrough of the various
+    components of eBPF.'
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Jeff Dileo](https://oreil.ly/BPYwJ)的[《Evil eBPF深度实用滥用：内核字节码运行时的实际应用》](https://oreil.ly/sllD3)是关于BPF及其攻击的良好入门，并由[Valentina
+    Palmiotti](https://oreil.ly/NjjEf)撰写的[《用eBPF入侵内核：一段爱的故事》](https://oreil.ly/KzOg0)详细介绍了eBPF的各个组成部分。'
+- en: Since eBPF’s powers have been extended and integrated more deeply into the kernel,
+    a number of CNIs and security products now use eBPF for detection and networking
+    including [Cilium](https://cilium.io), [Pixie](https://pixielabs.ai), and [Falco](https://falco.org)
+    (which we detail in the following section).
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于eBPF的功能已被扩展并深度集成到内核中，现在许多CNIs和安全产品都使用eBPF进行检测和网络操作，包括[Cilium](https://cilium.io)，[Pixie](https://pixielabs.ai)和[Falco](https://falco.org)（我们在下一节中详细介绍）。
+- en: Warning
+  id: totrans-45
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: As with all container software, bugs can lead to container breakout, as in [CVE-2021-31440](https://oreil.ly/82xbU),
+    where an incorrect bounds calculation in the Linux kernel eBPF verifier allowed
+    an exploitable verifier bypass.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与所有容器软件一样，漏洞可能导致容器突破，就像[CVE-2021-31440](https://oreil.ly/82xbU)中Linux内核eBPF验证程序中的错误边界计算允许可利用的验证器绕过一样。
+- en: Let’s move on to some applications of eBPF in Kubernetes.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们继续探讨eBPF在Kubernetes中的一些应用。
+- en: Kubernetes and Container Intrusion Detection
+  id: totrans-48
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Kubernetes 和容器入侵检测
+- en: There are signature and anomaly detection systems available for Kubernetes workloads
+    at runtime. Kubernetes and container IDS systems support namespaced workload,
+    host, and network IDS.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes工作负载在运行时有可用的签名和异常检测系统。Kubernetes 和容器IDS系统支持命名空间工作负载、主机和网络IDS。
+- en: By splitting processes into namespaces, you can use more well-defined metadata
+    to help an IDS make decisions. This more granular data can give greater insight
+    into an attack, which is vital when the decision to kill a running container may
+    affect your production workloads.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过将进程分割成命名空间，您可以使用更明确定义的元数据来帮助IDS做出决策。这种更细粒度的数据可以在攻击发生时提供更大的洞察力，这在决定是否终止正在运行的容器时可能会影响到您的生产工作负载时至关重要。
+- en: 'This gives container IDS an advantage: the behavior it is monitoring is just
+    a single container, not a whole machine. The definition of allowed behavior is
+    much smaller in a single-purpose container, so the IDS has a far greater fidelity
+    of policy to block unwanted behavior. With this in mind, let’s now have a look
+    at a few container-specific IDS.'
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这为容器IDS提供了一个优势：它所监视的行为仅限于单个容器，而不是整个机器。在单用途容器中，允许行为的定义要小得多，因此IDS在阻止不需要的行为时具有更高的策略精度。有了这个理念，现在让我们来看看几个特定于容器的IDS。
+- en: Falco
+  id: totrans-52
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Falco
+- en: Falco is an open source, cloud native IDS that can run in a container or on
+    a host. Traditionally, Falco required a dedicated kernel module to run (with its
+    code loaded into the kernel) so that it could interact with system calls. Since
+    2019, Falco has also supported eBPF. The eBPF interface allows general-purpose
+    code to be loaded by Falco, from userspace, into the kernel’s memory. This means
+    less custom code, fewer kernel modules, and the ability to use the kernel monitoring
+    and enforcement techniques through a well-known interface.
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco是一个开源的、云原生的IDS，可以运行在容器中或主机上。传统上，Falco需要一个专用的内核模块来运行（将其代码加载到内核中），以便与系统调用进行交互。自2019年以来，Falco还支持eBPF。eBPF接口允许通用代码从用户空间加载到内核内存中，这意味着更少的自定义代码、更少的内核模块，并且通过一个众所周知的接口使用内核监视和执行技术。
+- en: When run in a container, it requires privileged access to the host or use of
+    the `CAP_BPF` capability with host PID namespace access.
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在容器中运行时，需要对主机进行特权访问或者使用具有主机PID命名空间访问权限的 `CAP_BPF` 功能。
+- en: 'In eBPF mode, when a process interacts with a file using a system call such
+    as `open()`, the eBPF program is triggered, which can run arbitrary code in a
+    kernel VM to make its decision. Depending on the inputs, the action will be accepted
+    or blocked:'
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在eBPF模式下，当进程使用诸如 `open()` 等系统调用与文件交互时，将触发eBPF程序，该程序可以在内核VM中运行任意代码来做出决策。根据输入，操作将被接受或阻止：
+- en: '[PRE0]'
+  id: totrans-56
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: '[PRE1]'
+  id: totrans-57
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: Note
+  id: totrans-58
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Falco is based on Sysdig, a system introspection tool. Sysdig Cloud offers workload
+    and Kubernetes performance monitoring, and [Sysdig Secure](https://oreil.ly/S6q1e)
+    is the commercial product built around Falco.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco基于Sysdig，一个系统内省工具。Sysdig Cloud提供工作负载和Kubernetes性能监控，而[Sysdig Secure](https://oreil.ly/S6q1e)是围绕Falco构建的商业产品。
+- en: 'Falco comes with a collection of [community contributed and maintained rules](https://oreil.ly/T43NW),
+    including dedicated rules to manage Kubernetes clusters:'
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco附带了一系列[社区贡献和维护的规则](https://oreil.ly/T43NW)，包括专门用于管理Kubernetes集群的规则：
+- en: 'Unexpected inbound TCP connections:'
+  id: totrans-61
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 意外的入站TCP连接：
+- en: Detects inbound TCP traffic to Kubernetes components from a port outside of
+    an expected set
+  id: totrans-62
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 检测到从预期集外的端口到Kubernetes组件的入站TCP流量
+- en: 'Allowed inbound ports:'
+  id: totrans-63
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 允许的入站端口：
+- en: '`6443` (`kube-apiserver` container)'
+  id: totrans-64
+  prefs:
+  - PREF_IND
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`6443`（`kube-apiserver` 容器）'
+- en: '`10252` (`kube-controller` container)'
+  id: totrans-65
+  prefs:
+  - PREF_IND
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`10252`（`kube-controller` 容器）'
+- en: '`8443` (`kube-dashboard` container)'
+  id: totrans-66
+  prefs:
+  - PREF_IND
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`8443`（`kube-dashboard` 容器）'
+- en: '`10053`, `10055`, `8081` (`kube-dns` container)'
+  id: totrans-67
+  prefs:
+  - PREF_IND
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`10053`, `10055`, `8081`（`kube-dns` 容器）'
+- en: '`10251` (`kube-scheduler` container)'
+  id: totrans-68
+  prefs:
+  - PREF_IND
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`10251`（`kube-scheduler` 容器）'
+- en: 'Unexpected spawned processes:'
+  id: totrans-69
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 意外生成的进程：
+- en: Detects a process started in a Kubernetes cluster outside of an expected set
+  id: totrans-70
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 检测到在Kubernetes集群中启动的超出预期集的进程
+- en: 'Allowed processes:'
+  id: totrans-71
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 允许的进程：
+- en: '`kube-apiserver` (for `kube-apiserver` container)'
+  id: totrans-72
+  prefs:
+  - PREF_IND
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`kube-apiserver`（用于 `kube-apiserver` 容器）'
+- en: '`kube-controller-manager` (for `kube-controller` container)'
+  id: totrans-73
+  prefs:
+  - PREF_IND
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`kube-controller-manager`（对`kube-controller`容器）'
+- en: '`/dashboard` (`kube-dashboard` container)'
+  id: totrans-74
+  prefs:
+  - PREF_IND
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`/dashboard`（`kube-dashboard`容器）'
+- en: '`/kube-dns` (`kube-dns` container)'
+  id: totrans-75
+  prefs:
+  - PREF_IND
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`/kube-dns`（`kube-dns`容器）'
+- en: '`kube-scheduler` (`kube-scheduler` container)'
+  id: totrans-76
+  prefs:
+  - PREF_IND
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`kube-scheduler`（`kube-scheduler`容器）'
+- en: 'Unexpected file access readonly:'
+  id: totrans-77
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 意外的只读文件访问：
+- en: Detects an attempt to access a file in readonly mode, other than those in an
+    expected list of directories
+  id: totrans-78
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 检测试图以只读模式访问文件的尝试，除了预期目录列表中的文件以外。
+- en: 'Allowed file prefixes for readonly:'
+  id: totrans-79
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '只读模式的允许文件前缀:'
+- en: '`/public`'
+  id: totrans-80
+  prefs:
+  - PREF_IND
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`/public`'
+- en: These rules form a useful base set to extend with custom rules for your own
+    cluster’s specific security needs.
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些规则形成了一个有用的基础集，可以根据您自己集群的特定安全需求进行扩展。
+- en: Warning
+  id: totrans-82
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: 'While it’s almost always better to consume community contributed rules, no
+    software is free of bugs. For example, Darkbit found a [Falco rule bypass](https://oreil.ly/wgZy7)
+    that exploited a loose regex rule to deploy a custom privileged agent container—`docker.io/my-org-name-that-ends-with-sysdig/agent`:'
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管使用社区贡献的规则通常更好，但没有软件是没有漏洞的。例如，Darkbit发现了一个[Falco规则绕过](https://oreil.ly/wgZy7)，利用宽松的正则表达式规则部署了一个自定义特权代理容器——`docker.io/my-org-name-that-ends-with-sysdig/agent`：
+- en: '[PRE2]'
+  id: totrans-84
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: Machine Learning Approaches to IDS
+  id: totrans-85
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: IDS的机器学习方法
+- en: Machine learning (ML) replays the same signals used in other IDS systems through
+    a model, which then predicts whether the container is compromised.
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 机器学习（ML）通过模型重播其他IDS系统中使用的相同信号，然后预测容器是否受到威胁。
+- en: 'There are many examples of machine learning IDS available:'
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有许多可用的机器学习IDS示例：
+- en: '[Aqua Security](https://oreil.ly/gfl98) uses ML-based behavioral profiling
+    to analyze and react to behaviors in containers, the network, and hosts.'
+  id: totrans-88
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Aqua Security](https://oreil.ly/gfl98)使用基于机器学习的行为分析来分析和响应容器、网络和主机的行为。'
+- en: '[Prisma Cloud](https://oreil.ly/AoLCX)’s layer 3 inter-container firewall learns
+    valid traffic flows between app components with ML.'
+  id: totrans-89
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Prisma Cloud](https://oreil.ly/AoLCX)的第3层容器间防火墙使用ML学习应用组件之间的有效流量流动。'
+- en: '[Lacework](https://oreil.ly/6pooI) uses unsupervised machine learning for cross-cloud
+    observability and response to runtime threats.'
+  id: totrans-90
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Lacework](https://oreil.ly/6pooI)利用无监督的机器学习进行跨云可观察性，并对运行时威胁作出响应。'
+- en: '[Accuknox](https://accuknox.com) uses unsupervised machine learning to detect
+    instability and discern potential attacks, and “Identity as a Perimeter” for zero-trust
+    network, application, and data protection.'
+  id: totrans-91
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Accuknox](https://accuknox.com)使用无监督的机器学习来检测不稳定性并辨别潜在攻击，以及“身份作为边界”来实现零信任网络、应用程序和数据保护。'
+- en: Container Forensics
+  id: totrans-92
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 容器取证
+- en: Forensics is the art of reconstructing data from incomplete or historical sources.
+    In Linux this involves capturing process, memory, and filesystem contents to interrogate
+    them offline, find the source or impact of a breach, and inspect adversarial techniques.
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 取证是从不完整或历史来源重建数据的艺术。在Linux中，这涉及捕获进程、内存和文件系统内容以离线审讯它们，找到入侵的来源或影响，并检查对抗性技术。
+- en: More advanced systems gather more information, like network connection information
+    they were already logging. In the event of a serious break, the entire cluster
+    or account may be cut off from the network so that the attacker cannot continue
+    their assault, and the entire system can be imaged and explored.
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 更高级的系统收集更多信息，例如它们已经记录的网络连接信息。在严重突破事件中，整个集群或账户可能会被断开网络连接，以防止攻击者继续攻击，可以对整个系统进行镜像和探索。
+- en: Tools like [kube-forensics](https://oreil.ly/s4xup) “create checkpoint snapshots
+    of the state of running pods for later off-line analysis,” so malicious workloads
+    can be dumped and killed, and the system returned to use. It runs a `forensics-controller-manager`
+    with a `PodCheckpoint` custom resource definition (CRD) to effectively `docker
+    inspect`, `docker diff`, and finally `docker export`. Notably, this does not capture
+    the process’s memory, which may have implants or attacker tools that were not
+    saved to disk or were deleted once the process started.
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 类似[kube-forensics](https://oreil.ly/s4xup)的工具“创建运行中pod状态的检查点快照，以供以后进行离线分析”，因此可以卸载和终止恶意工作负载，并使系统恢复使用。它运行一个`forensics-controller-manager`，带有一个`PodCheckpoint`自定义资源定义（CRD），有效地进行`docker
+    inspect`、`docker diff`和最终`docker export`。值得注意的是，这不会捕获进程的内存，可能存在未保存到磁盘或在进程启动后被删除的植入物或攻击者工具。
+- en: 'To capture a process’ memory, you can use standard tools like GDB. Using these
+    tools from inside a container is difficult as symbols may be required. From outside
+    a container, dumping memory and searching it for interesting data is trivial,
+    as this [simple Bash script](https://oreil.ly/6eDzc) mashing together [Trufflehog](https://oreil.ly/U2ibi)
+    and GDB process dumping demonstrates:'
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要捕获进程的内存，可以使用像GDB这样的标准工具。从容器内使用这些工具很困难，因为可能需要符号。从容器外部，转储内存并搜索其中的有趣数据是微不足道的，就像这个[simple
+    Bash script](https://oreil.ly/6eDzc)结合[Trufflehog](https://oreil.ly/U2ibi)和GDB进程转储所示：
+- en: '[PRE3]'
+  id: totrans-97
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'Put this script into *procdump.sh* and run it against a local shell:'
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将此脚本放入*procdump.sh*并在本地shell中运行：
+- en: '[PRE4]'
+  id: totrans-99
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: 'You will see any high entropy strings or suspected secrets that were loaded
+    into the shell:'
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您将看到加载到shell中的任何高熵字符串或可疑秘密：
+- en: '[PRE5]'
+  id: totrans-101
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: Warning
+  id: totrans-102
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: An attacker as root in a process namespace can dump the memory of any other
+    process in the namespace. The root user in the host process namespace can dump
+    any process memory on the node (including child namespaces).
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在进程命名空间中作为root的攻击者可以转储命名空间中任何其他进程的内存。主机进程命名空间中的root用户可以转储节点上任何进程的内存（包括子命名空间）。
+- en: Avoid this type of attack in a cloud native application by retrieving secrets
+    at time of use from a filesystem or key management system. If you can discard
+    the Secrets from memory when not in use, you’ll be more resilient to this attack.
+    You can also encrypt Secrets in memory, although the decryption keys suffer the
+    same risk of being dumped and so should also be discarded when not in use.
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过从文件系统或密钥管理系统在使用时检索秘密，可以避免云原生应用程序中的此类攻击。如果在不使用时从内存中丢弃秘密，您将更加抗攻击。您还可以在内存中加密秘密，尽管解密密钥面临相同的被转储风险，因此在不使用时也应将其丢弃。
+- en: Honeypots
+  id: totrans-105
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 诱饵（Honeypots）
+- en: '![captain](Images/haku_0000.png)'
+  id: totrans-106
+  prefs: []
+  type: TYPE_IMG
+  zh: '![captain](Images/haku_0000.png)'
+- en: 'Although IDS can detect and prevent almost all abuses of your systems, we cannot
+    emphasize enough that there is no such thing as a silver bullet. It should be
+    assumed that rogue sea dogs like Captain Hashjack will still be able to bypass
+    any careful security configuration. A complex system offers asymmetrical advantage
+    for an attacker: a defender only has to make one mistake to get compromised.'
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管IDS可以检测和阻止系统几乎所有的滥用，我们不能再次强调没有银弹这样的事实。应该假定像Hashjack船长这样的流氓海盗仍然能够绕过任何小心的安全配置。复杂的系统为攻击者提供了不对称的优势：防御者只需犯一个错误就可能被攻击。
+- en: Attackers may still be able to escape from a container or traverse onto the
+    host. Or, if they’re in a container governed by IDS and manipulates the expected
+    behavior of the application (for example, by invoking the same application with
+    different flags), they may be able to read sensitive data without triggering IDS
+    alarms.
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 攻击者可能仍然能够逃离容器或者遍历到主机。或者，如果他们在由入侵检测系统（IDS）监管的容器中，操纵应用程序的预期行为（例如，通过以不同的标志调用同一应用程序），他们可能能够读取敏感数据而不触发IDS警报。
+- en: So the last line of defense is the humble honeypot, a simple server or file
+    that legitimate applications never use. It innocuously nestles in a tempting or
+    secured location and triggers an alert when an attacker accesses it. Honeypots
+    might be triggered by a network scan, or HTTP requests that the system would never
+    usually make.
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，最后的防线是简单的诱饵（honeypot），一个普通的服务器或者文件，合法应用程序从不使用。它安静地安置在诱人或安全的位置，并在攻击者访问时触发警报。诱饵可能会被网络扫描触发，或者系统通常不会发出的HTTP请求触发。
+- en: '[Figure 9-1](#ids-honeypot-architecture) shows BCTL’s honeypot entrapping Dread
+    Pirate Hashjack. A honeypot such as this one is as simple as using tools like
+    [ElastAlert](https://oreil.ly/L1bSu) to monitor, audit, and access logs for pods
+    that should never be accessed.'
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 9-1](#ids-honeypot-architecture)展示了BCTL的诱饵（honeypot）诱捕Dread Pirate Hashjack。像这样的诱饵（honeypot）使用工具如[ElastAlert](https://oreil.ly/L1bSu)来监控、审计和访问不应被访问的pod的日志，非常简单。'
+- en: '![Catching an attacker in a Honeypot](Images/haku_0901.png)'
+  id: totrans-111
+  prefs: []
+  type: TYPE_IMG
+  zh: '![在诱饵中捕获攻击者](Images/haku_0901.png)'
+- en: Figure 9-1\. Catching an attacker in a honeypot
+  id: totrans-112
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 9-1\. 在诱饵中捕获攻击者
+- en: You are looking to catch an attacker operating inside the pod network. They
+    may scan local IP ranges for open TCP and UDP ports. Remember that each Kubernetes
+    workload must be identical, so we can’t run “custom” pods to deploy a single honeypot.
+    Instead, deploy a dedicated DaemonSet so each node is defended by a honeypot pod.
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您希望捕捉在pod网络内操作的攻击者。他们可能会扫描本地IP范围以开放TCP和UDP端口。请记住，每个Kubernetes工作负载必须是相同的，因此我们无法运行“自定义”pod来部署单个诱饵。而是部署一个专用的DaemonSet，以便每个节点都由一个诱饵pod保护。
+- en: If the attacker or internal actor has cluster DNS access, can read a pod’s environment
+    variables, or has read access to the Kubernetes API, they can see the names of
+    the Kubernetes services in the DNS and pod names. They may be looking for a specifically
+    named target. You can name your honeypot service with an appealingly similar name
+    (such as “myapp-data” or “myapp-support”) to entice an attacker. Deploying honeypots
+    as a DaemonSet will ensure one is lying in wait on any node Captain Hashjack might
+    plunder.
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果攻击者或内部人员可以访问集群 DNS，可以读取 pod 的环境变量，或者可以读取 Kubernetes API 的访问权限，他们可以看到 DNS 和
+    pod 名称中 Kubernetes 服务的名称。他们可能在寻找特定命名的目标。您可以使用一个具有吸引力的类似名称的诱饵服务（例如“myapp-data”或“myapp-support”）来诱使攻击者。将诱饵部署为
+    DaemonSet 将确保它在 Captain Hashjack 可能掠夺的任何节点上等待。
+- en: Note
+  id: totrans-115
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: '[Canary tokens](https://oreil.ly/1E7Eo) are honeypots for protocols like AWS
+    and Slack keys, URLs, DNS records, QR codes, email addresses, documents, and binaries.
+    They are “tiny tripwires” that you can drop in production systems and developer
+    devices to detect compromise.'
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Canary tokens](https://oreil.ly/1E7Eo) 是用于 AWS 和 Slack 密钥、URL、DNS 记录、QR 码、电子邮件地址、文档和二进制文件的诱饵。它们是您可以在生产系统和开发人员设备中投放的“小陷阱”，以检测是否遭到了入侵。'
+- en: Auditing
+  id: totrans-117
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 审计
+- en: As discussed in [Chapter 8](ch08.xhtml#ch-policy), Kubernetes generates audit
+    logs for every API request it receives, and IDS tools can ingest and monitor that
+    stream of information for unexpected requests. This could include requests from
+    outside known IP ranges or expected working hours, honeytoken credentials, or
+    attempts to use unauthorized APIs (e.g., a default service account token attempting
+    to get all Secrets in its namespace or a privileged namespace).
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如在[第 8 章](ch08.xhtml#ch-policy)中讨论的，Kubernetes 为其接收的每个 API 请求生成审计日志，并且 IDS
+    工具可以摄取和监控该信息流以获取意外的请求。这可能包括来自未知 IP 范围外或预期工作时间外的请求，诱饵令牌凭证，或者尝试使用未授权的 API（例如，默认服务账户令牌尝试在其命名空间中获取所有
+    Secrets 或特权命名空间）。
+- en: Audit log level and depth is configurable, but as CVE-2020-8563 for Kubernetes
+    v1.19.2 (and CVE-2020-8564, CVE-2020-8565, CVE-2020-8566) shows, defaults were
+    not historically tight enough. Some sensitive request payload information was
+    persisted to logs that could have been read from outside the cluster and then
+    used to attack it.
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 审计日志级别和深度是可配置的，但正如 Kubernetes v1.19.2 的 CVE-2020-8563（以及 CVE-2020-8564、CVE-2020-8565、CVE-2020-8566
+    所显示的），默认设置历来不够严格。某些敏感请求载荷信息被持久化到日志中，这些信息可能可以从集群外部读取，然后用于攻击集群。
+- en: 'Unintended data leakage into logs is being mitigated in [KEP 1753](https://oreil.ly/5iuMK):'
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[KEP 1753](https://oreil.ly/5iuMK)中正在减轻日志中的意外数据泄露：
+- en: This KEP proposes the introduction of a logging filter which could be applied
+    to all Kubernetes system components logs to prevent various types of sensitive
+    information from leaking via logs…Ensure that sensitive data cannot be trivially
+    stored in logs. Prevent dangerous logging actions with improved code review policies.
+    Redact sensitive information with logging filters. Together, these actions can
+    help to prevent sensitive data from being exposed in the logs.
+  id: totrans-121
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 该 KEP 提议引入一个日志过滤器，该过滤器可以应用于所有 Kubernetes 系统组件的日志，以防止各种类型的敏感信息通过日志泄露…… 确保敏感数据不能轻易存储在日志中。通过改进的代码审查政策防止危险的日志记录行为。使用日志过滤器对敏感信息进行遮蔽。这些措施共同有助于防止敏感数据在日志中曝光。
+- en: It can be used with the `kubelet` flag `--experimental-logging-sanitization`
+    in v1.20+.
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以在 v1.20+ 的 `kubelet` 标志 `--experimental-logging-sanitization` 中使用。
+- en: Leaking Secrets into logs and audit streams is common in all technology organizations,
+    and is another reason to avoid environment variables for sensitive information.
+    Developers need introspection and useful output from running programs, but sanitizing
+    debug during development is a rare practice. These debug strings invariably make
+    their way into production, and so searching logs for Secrets is perhaps the only
+    practical way to detect this.
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将机密信息泄露到日志和审计流中在所有技术组织中都很常见，这也是避免使用环境变量存储敏感信息的另一个原因。开发人员需要运行程序时的内省和有用的输出，但在开发过程中清理调试信息的做法很少见。这些调试字符串最终会进入生产环境，因此搜索日志以检测机密信息可能是唯一实用的方法。
+- en: Note
+  id: totrans-124
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: 'The bugs that gave momentum to the log sanitization focus include:'
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 推动日志清理关注的漏洞包括：
+- en: CVE-2020-8563
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CVE-2020-8563
+- en: Secret leaks in logs for vSphere Provider kube-controller-manager
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: vSphere Provider kube-controller-manager 的日志中的机密信息泄露
+- en: CVE-2020-8564
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CVE-2020-8564
+- en: Docker config Secrets leaked when file is malformed and `logLevel` >= 4
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当文件格式错误且 `logLevel` >= 4 时泄露的 Docker 配置 Secrets
+- en: CVE-2020-8565
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CVE-2020-8565
+- en: Incomplete fix for CVE-2019-11250 allows for token leak in logs when `logLevel`
+    >= 9
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对 CVE-2019-11250 的不完整修复允许在 `logLevel` >= 9 时泄漏令牌到日志中
+- en: CVE-2020-8566
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CVE-2020-8566
+- en: Ceph RBD adminSecrets exposed in logs when `logLevel` >= 4
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当 `logLevel` >= 4 时，Ceph RBD 管理密码在日志中暴露
+- en: You can read the disclosure on the [Kubernetes Forums](https://oreil.ly/yBvQu).
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在 [Kubernetes 论坛](https://oreil.ly/yBvQu) 上阅读披露内容。
+- en: Detection Evasion
+  id: totrans-135
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 检测逃避
+- en: Bypassing Kubernetes audit logs was demonstrated by [Brad Geesaman](https://oreil.ly/KaOWm)
+    and [Ian Coldwater](https://oreil.ly/KMK0u) at [RSA 2020](https://oreil.ly/LfzS0).
+    As [Figure 9-2](#ids-oversized-logs) shows, the `etcd` datastore in the Kubernetes
+    control plane is highly efficient and resillient, however it does not support
+    large data sizes. That means request payloads in the audit logs that exceed 256
+    KB will not get stored, enabling stealthy behavior with oversized log entries.
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Brad Geesaman](https://oreil.ly/KaOWm) 和 [Ian Coldwater](https://oreil.ly/KMK0u)
+    在 [RSA 2020](https://oreil.ly/LfzS0) 上演示了绕过 Kubernetes 审计日志的方法。正如 [图 9-2](#ids-oversized-logs)
+    所示，Kubernetes 控制平面中的 `etcd` 数据存储非常高效和可靠，但不支持大数据量。这意味着超过 256 KB 的请求负载不会被存储在审计日志中，从而使超大日志条目的隐秘行为成为可能。'
+- en: Note
+  id: totrans-137
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: An attacker with access to the API server can blackhole, redirect, or tamper
+    with any audit logs that are stored locally. As a post-mortem exercise it’s useful
+    to explore an attacker’s path, so shipping the API server’s audit logs directly
+    to a remote webhook backend safeguards against this. Configure the API server
+    to use the flag `--audit-webhook-config-file` to ship logs remotely, or use a
+    managed service that configures this for you.
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 能够访问 API 服务器的攻击者可以黑洞化、重定向或篡改任何本地存储的审计日志。作为事后检查的一部分，探索攻击者的路径非常有用，因此直接将 API 服务器的审计日志发送到远程
+    Webhook 后端可以防范这种情况。配置 API 服务器使用标志 `--audit-webhook-config-file` 远程发送日志，或使用为您配置此项服务的托管服务。
+- en: '![haku 0902](Images/haku_0902.png)'
+  id: totrans-139
+  prefs: []
+  type: TYPE_IMG
+  zh: '![haku 0902](Images/haku_0902.png)'
+- en: Figure 9-2\. Oversize `etcd` logs ([RSA 2020](https://oreil.ly/LfzS0))
+  id: totrans-140
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 9-2\. 超大 `etcd` 日志 ([RSA 2020](https://oreil.ly/LfzS0))
+- en: Security Operations Centers
+  id: totrans-141
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 安全运营中心
+- en: Larger organizations may have a Security Operations Center (SOC) that manages
+    security information and events (SIEM).
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 较大的组织可能会设有安全运营中心（SOC），负责管理安全信息和事件（SIEM）。
+- en: Configuring enterprise applications for alerting on your audit and pod logs
+    requires fine-tuning to avoid false positives and needless alerts. You can use
+    a local cluster to build out automated tests and capture the audit log events,
+    then use that data to configure your SIEM. Finally, rerun your automated tests
+    to ensure alerts are raised correctly in production systems.
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 配置企业应用程序以在审计和 Pod 日志上发出警报需要进行微调，以避免误报和不必要的警报。您可以使用本地集群构建自动化测试并捕获审计日志事件，然后使用该数据配置您的
+    SIEM。最后，在生产系统中重新运行您的自动化测试以确保正确引发警报。
+- en: You should run Red Team security tests against production systems to validate
+    the Blue Team controls work as expected. This provides a real-world test for the
+    attack trees and threat models that the system is configured upon.
+  id: totrans-144
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您应该对生产系统运行红队安全测试，以验证蓝队控制是否按预期工作。这为系统配置的攻击树和威胁模型提供了真实世界的测试。
+- en: Conclusion
+  id: totrans-145
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 结论
+- en: Intrusion detection is the last line of defense for a cloud native system. eBPF
+    approaches offer greater speed on modern kernels, and the performance overhead
+    is slight. Sensitive or web-facing workloads should always be guarded by IDS as
+    they have the greatest risk of compromise.
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 入侵检测是云原生系统的最后防线。在现代内核上，eBPF 方法提供更高的速度，性能开销很小。敏感或面向 Web 的工作负载应始终由 IDS 保护，因为它们面临最大的妥协风险。
+- en: 'With this we’re switching gears and will turn our attention to the weakest
+    link and its natural habitat: organizations.'
+  id: totrans-147
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过这一举措，我们将转向注意力最薄弱的环节及其自然栖息地：组织。

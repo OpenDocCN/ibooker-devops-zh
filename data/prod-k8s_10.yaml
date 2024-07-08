@@ -1,0 +1,2000 @@
+- en: Chapter 9\. Observability
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第9章 可观测性
+- en: 'The ability to observe any software system is critical. If you cannot examine
+    the condition of your running applications, you cannot effectively manage them.
+    And that is what we are addressing with observability: the various mechanisms
+    and systems we use to understand the condition of running software that we are
+    responsible for. We should acknowledge that we’re not adhering to the control
+    theory definition of observability in this context. We chose to use this term
+    simply because it has become popular and we want people to readily understand
+    what we’re getting at.'
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 观察任何软件系统的能力是至关重要的。如果您不能检查正在运行的应用程序的状态，您就无法有效地管理它们。这就是我们通过可观测性来解决的问题：我们用于理解我们负责的正在运行的软件状态的各种机制和系统。我们应该承认，在这种情况下，我们并未遵循控制理论对可观测性的定义。我们选择使用这个术语仅仅是因为它变得流行，并且我们希望人们能够轻松理解我们的意图。
+- en: 'The components of observability can be broken into three categories:'
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可观测性的组成部分可以分为三类：
+- en: Logging
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 日志记录
+- en: Aggregating and storing the logged event messages written by programs
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 聚合并存储由程序编写的日志事件消息
+- en: Metrics
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 指标
+- en: Collecting time series data, making it available in dashboards, and alerting
+    upon it
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 收集时间序列数据，将其显示在仪表板上，并对其进行警报
+- en: Tracing
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 追踪
+- en: Capturing data for requests that traverse multiple distinct workloads in the
+    cluster
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 捕获跨多个不同工作负载的请求数据
+- en: In this chapter, we will cover how to implement effective observability in Kubernetes-based
+    platforms so that you can safely manage a platform and the workloads it hosts
+    in production. First, we will explore logging and examine the systems for aggregating
+    logs and forwarding them to your company’s logging backend. Next, we’ll cover
+    how to collect metrics, how to visualize that data, and how to alert upon it.
+    Lastly, we’ll cover tracing requests through distributed systems so as to better
+    understand what’s happening when applications are composed of distinct workloads.
+    Let’s jump into logging and cover the commonly successful models there.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们将讨论如何在基于 Kubernetes 的平台中实现有效的可观测性，以便您可以安全地管理生产中的平台及其托管的工作负载。首先，我们将探讨日志记录，并检查聚合日志并将其转发到公司的日志后端的系统。接下来，我们将讨论如何收集指标、如何可视化数据以及如何对其进行警报。最后，我们将探讨通过分布式系统跟踪请求，以便更好地理解在由不同工作负载组成的应用程序运行时发生的情况。让我们开始日志记录，并覆盖那里通常成功的模型。
+- en: Logging Mechanics
+  id: totrans-10
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 日志记录机制
+- en: This section covers logging concerns in a Kubernetes-based platform. We’re primarily
+    dealing with the mechanisms for capturing, processing, and forwarding logs from
+    your platform components and tenant workloads to a storage backend.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本节涵盖了在基于 Kubernetes 的平台中的日志记录问题。我们主要处理从您的平台组件和租户工作负载捕获、处理和转发日志到存储后端的机制。
+- en: Once upon a time, the software we ran in production usually wrote logs to a
+    file on disk. Aggregation of logs—if performed at all—was a simpler exercise because
+    there were fewer distinct workloads and fewer instances of those workloads compared
+    with today’s systems. In a containerized world, our applications commonly log
+    to standard out and standard error the way an interactive CLI would. Indeed, this
+    became accepted as best practice for modern service-oriented software even before
+    containers became prevalent. In cloud native software ecosystems, there are more
+    distinct workloads and instances of each, but they’re also ephemeral and often
+    without a disk mounted to persist the logs—hence the shift away from writing logs
+    to disk. This introduced challenges in the collection, aggregation, and storage
+    of logs.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从前，我们在生产中运行的软件通常将日志写入磁盘上的文件中。聚合日志——如果有的话——是一个更简单的过程，因为工作负载较少，而且这些工作负载的实例也较少，与今天的系统相比。在容器化的世界中，我们的应用程序通常将日志记录到标准输出和标准错误输出，就像交互式命令行界面一样。事实上，即使在容器变得普遍之前，这已经成为现代面向服务的软件的最佳实践。在云原生软件生态系统中，有更多不同的工作负载和每个工作负载的实例，但它们也是短暂的，通常没有挂载磁盘以保存日志——因此，远离将日志写入磁盘的做法。这引入了在收集、聚合和存储日志方面的挑战。
+- en: Often a single workload will have multiple replicas, and there may be multiple
+    distinct components to examine. Without centralized log aggregation, analyzing
+    (viewing and parsing) logs in this scenario becomes very tedious, if not practically
+    impossible. Consider having to analyze logs for a workload that has *dozens* of
+    replicas. In these cases, it is essential to have a central collection point that
+    allows you to search the log entries across replicas.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常，单个工作负载将具有多个副本，并且可能有多个不同的组件需要检查。如果没有集中式日志聚合，分析（查看和解析）此场景中的日志将变得非常繁琐，甚至几乎不可能。考虑必须分析具有*数十个*副本的工作负载的日志。在这些情况下，具有允许您跨副本搜索日志条目的中心收集点至关重要。
+- en: In covering logging mechanics, we’ll first look at strategies for capturing
+    and routing the logs from the containerized workloads in your platform. This includes
+    the logs for the Kubernetes control plane and platform utilities as well as the
+    platform tenants. We’ll also cover the Kubernetes API Server audit logs as well
+    as Kubernetes Events in this section. Lastly, we’ll address the notion of alerting
+    upon conditions found in logged data and alternative strategies for that. We will
+    not cover the storage of logs because most enterprises have a log backend that
+    we will integrate with—it is generally not a concern of the Kubernetes-based platform
+    itself.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在讨论日志机制时，我们首先看一下在您的平台中捕获和路由容器化工作负载的日志策略。这包括 Kubernetes 控制平面和平台实用程序的日志，以及平台租户的日志。在本节中，我们还将涵盖
+    Kubernetes API 服务器审计日志以及 Kubernetes 事件。最后，我们将讨论在日志数据中发现条件时的警报概念以及替代策略。我们不会涵盖日志的存储，因为大多数企业都有一个我们将集成的日志后端，这通常不是基于
+    Kubernetes 平台本身的关注点。
+- en: Container Log Processing
+  id: totrans-15
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 容器日志处理
+- en: 'Let’s look at three ways log processing could be done for the containerized
+    workloads in a Kubernetes-based platform:'
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们看看基于 Kubernetes 平台的容器化工作负载的三种日志处理方式：
+- en: Application forwarding
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用程序转发
+- en: Send logs to the backend directly from the application.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 直接从应用程序将日志发送到后端。
+- en: Sidecar processing
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 旁车处理
+- en: Use a sidecar to manage the logs for an application.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用旁车来管理应用程序的日志。
+- en: Node agent forwarding
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 节点代理转发
+- en: Run a Pod on each Node that forwards logs for all containers on that Node to
+    the backend.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在每个节点上运行一个 Pod，为该节点上所有容器的日志转发到后端。
+- en: Application forwarding
+  id: totrans-23
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 应用程序转发
+- en: In this case, the application needs to be integrated with the backend storage
+    of logs. The developers have to build this functionality into their application
+    and maintain that functionality. If the log backend changes, an update to the
+    application will likely be required. Since log processing is virtually universal,
+    it makes much more sense to offload this from the application. Application forwarding
+    is not a good option in most situations and is rarely seen in production environments.
+    It makes sense only if you have a heritage application that is being migrated
+    to a Kubernetes-based platform that already integrates with a log backend.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这种情况下，应用程序需要与后端日志存储集成。开发人员必须将此功能集成到他们的应用程序中并维护该功能。如果日志后端发生变化，可能需要更新应用程序。由于日志处理几乎是普遍存在的，因此将其从应用程序中卸载显得更加合理。在大多数情况下，应用程序转发并不是一个好的选择，并且在生产环境中很少见。只有在将遗留应用程序迁移到已经与日志后端集成的基于
+    Kubernetes 平台时，才显得合理。
+- en: Sidecar processing
+  id: totrans-25
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 旁车处理
+- en: 'In this model, the application runs in one container and writes logs to one
+    or more files in the shared storage for the Pod. Another container in the same
+    Pod, a sidecar, reads those logs and processes them. The sidecar does one of two
+    things with the logs:'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在此模型中，应用程序在一个容器中运行，并将日志写入 Pod 的共享存储中的一个或多个文件。同一 Pod 中的另一个容器（旁车）读取这些日志并处理它们。旁车使用以下两种方式处理日志：
+- en: Forwards them directly to the log storage backend
+  id: totrans-27
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 直接将它们转发到日志存储后端
+- en: Writes the logs to standard error and standard out
+  id: totrans-28
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 将日志写入标准错误和标准输出
+- en: Forwarding directly to the backend is the primary use case for sidecar log processing.
+    This approach is uncommon and is usually a makeshift workaround where the platform
+    offers no log aggregation system.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 直接转发到后端是旁车日志处理的主要用例。这种方法并不常见，通常是一个临时解决方案，平台没有日志聚合系统的情况下使用。
+- en: In situations where the sidecar writes the logs to standard out and standard
+    error, it does so to leverage Node agent forwarding (which is covered in the next
+    section). This is also an uncommon method and is only useful if you are running
+    an application that just isn’t able to write logs to standard out and standard
+    error.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在侧车将日志写入标准输出和标准错误时，为了利用节点代理转发（在下一节中介绍），它会这样做。这也是一种不常见的方法，只有在运行一个无法将日志写入标准输出和标准错误的应用程序时才有用。
+- en: Node agent forwarding
+  id: totrans-31
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 节点代理转发
+- en: With node agent forwarding, a log processing workload runs on each node in the
+    cluster, reads the logfiles for each container written by the container runtime,
+    and forwards the logs to the backend storage.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用节点代理转发，集群中每个节点上都运行一个日志处理工作负载，读取容器运行时写入的每个容器的日志文件，并将日志转发到后端存储。
+- en: 'This is the model we generally recommend and is, by far, the most common implementation.
+    It is a useful pattern because:'
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是我们通常推荐的模型，迄今为止，也是最常见的实现。这是一个有用的模式，因为：
+- en: There is a single point of integration between the log forwarder and the backend,
+    as opposed to different sidecars and/or applications having to maintain that integration.
+  id: totrans-34
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在日志转发器和后端之间有一个集成点，而不是不同的 sidecar 或应用程序必须维护该集成。
+- en: The configuration of standardized filtering, attaching metadata, and forwarding
+    to multiple backends is centralized.
+  id: totrans-35
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 标准化过滤、附加元数据和转发到多个后端的配置是集中化的。
+- en: Log rotation is taken care of by the kubelet or container runtime. If the application
+    is writing logfiles inside the container, the application itself or the sidecar
+    (if there is one) needs to handle log rotation.
+  id: totrans-36
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: kubelet 或容器运行时负责处理日志轮换。如果应用程序在容器内部写入日志文件，则应用程序本身或 sidecar（如果有）需要处理日志轮换。
+- en: The prevailing tools used for this node agent log forwarding are [Fluentd](https://www.fluentd.org)
+    and [Fluent Bit](https://fluentbit.io). As the names suggest, they are related
+    projects. Fluentd was the original, is written primarily in Ruby, and has a rich
+    ecosystem of plug-ins around it. Fluent Bit came from a demand for a more lightweight
+    solution for environments like embedded Linux. It is written in C and has a much
+    smaller memory footprint than Fluentd, but it does not have as many plug-ins available.
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用于此节点代理日志转发的主流工具是 [Fluentd](https://www.fluentd.org) 和 [Fluent Bit](https://fluentbit.io)。如其名称所示，它们是相关的项目。Fluentd
+    是原始的，主要由 Ruby 编写，并且有一个丰富的插件生态系统围绕它。Fluent Bit 是针对嵌入式 Linux 等环境的更轻量级解决方案的需求而来。它是用
+    C 编写的，内存占用比 Fluentd 小得多，但可用的插件数量没有那么多。
+- en: The general guidance we give platform engineers when choosing a log aggregation
+    and forwarding tool is to use Fluent Bit unless there are plug-ins for Fluentd
+    that have compelling features. If you find a need to leverage Fluentd plug-ins,
+    consider running it as a cluster-wide aggregator in conjunction with Fluent Bit
+    as the node agent. In this model, you use Fluent Bit as the node agent, which
+    is deployed as a DaemonSet. Fluent Bit forwards logs to Fluentd running in the
+    cluster as a Deployment or StatefulSet. Fluentd performs further tagging and routes
+    the logs to one or more backends where developers access them. [Figure 9-1](#aggregation_of_logs_from_containerized_apps_to_back_end)
+    illustrates this pattern.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们向平台工程师提供的一般指导是，在选择日志聚合和转发工具时，使用 Fluent Bit，除非 Fluentd 有引人注目的插件功能。如果发现需要利用
+    Fluentd 插件，请考虑将其作为集群范围的聚合器与 Fluent Bit 作为节点代理一起运行。在此模型中，您使用 Fluent Bit 作为节点代理，它作为
+    DaemonSet 部署。Fluent Bit 将日志转发到在集群中以 Deployment 或 StatefulSet 运行的 Fluentd。Fluentd
+    进行进一步的标记并将日志路由到一个或多个开发者访问的后端。[图 9-1](#aggregation_of_logs_from_containerized_apps_to_back_end)说明了这种模式。
+- en: '![prku 0901](assets/prku_0901.png)'
+  id: totrans-39
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 0901](assets/prku_0901.png)'
+- en: Figure 9-1\. Aggregation of logs from containerized apps to backend.
+  id: totrans-40
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 9-1\. 从容器化应用程序聚合日志到后端。
+- en: While we strongly prefer the node agent forwarding method, it’s worth calling
+    out the potential problems with centralizing log aggregation. You are introducing
+    a central point of failure for each node, or for the entire cluster if you use
+    a cluster-wide aggregator in your stack. If your node agent gets bogged down by
+    one workload that is logging excessively, that could affect the collection of
+    logs for all workloads on that node. If you have a Fluentd cluster-wide aggregator
+    running as a Deployment, it will be using the ephemeral storage layer in its Pod
+    as a buffer. If it gets killed before it can flush the logs from its buffer, you
+    will lose logs. For this reason, consider running it as a StatefulSet so those
+    logs aren’t lost if the Pod goes down.
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然我们强烈推荐节点代理转发方法，但值得指出集中日志聚合可能出现的问题。这会为每个节点引入单点故障，或者如果在堆栈中使用集群范围的聚合器，那么整个集群会有单点故障。如果您的节点代理由于一个工作负载的过度记录而变得不堪重负，这可能会影响该节点上所有工作负载的日志收集。如果您在部署中运行
+    Fluentd 集群范围聚合器，它将使用其 Pod 中的临时存储层作为缓冲区。如果在它能够将缓冲区中的日志刷新之前被杀死，您将丢失日志。因此，考虑将其作为
+    StatefulSet 运行，以便在 Pod 停止时不会丢失这些日志。
+- en: Kubernetes Audit Logs
+  id: totrans-42
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Kubernetes 审计日志
+- en: This section covers collecting audit logs from the Kubernetes API. These logs
+    offer a way to find out who did what in the cluster. You will want to have these
+    turned on in production so that you can perform a root cause analysis in the event
+    that something goes wrong. You may also have compliance requirements that necessitate
+    them.
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本节介绍从 Kubernetes API 收集审计日志的方法。这些日志提供了一种查找集群中谁做了什么的方式。在生产环境中，您应该启用这些日志，以便在出现问题时进行根本原因分析。您可能还有要求的合规性。
+- en: Audit logs are enabled and configured with flags on the API server. The API
+    server allows you to capture a log of every stage of every request sent to it,
+    including the request and response bodies. In reality, it’s unlikely you will
+    want *every* request logged. There are a lot of calls to the API server so there
+    will be a very large number of log entries to store. You can use rules in an audit
+    policy to qualify which requests and stages you wish your API server to write
+    logs for. Without any audit policy, the API server won’t actually write any logs.
+    Tell the API server where your audit policy is on the control plane node’s filesystem
+    with the `--audit-policy-file` flag. [Example 9-1](#example_9_1) shows several
+    rules that illustrate how the policy rules work so that you can limit the volume
+    of log information without excluding important data.
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: API 服务器启用并配置了标志，允许您捕获发送到其的每个请求的每个阶段的日志，包括请求和响应体。实际情况下，您可能不希望记录*每个*请求。由于向 API
+    服务器发出大量调用，因此将有大量的日志条目需要存储。您可以使用审计策略中的规则来限定您希望 API 服务器为其编写日志的请求和阶段。如果没有任何审计策略，API
+    服务器实际上不会写入任何日志。使用`--audit-policy-file`标志告知 API 服务器您的审计策略位于控制平面节点的文件系统上。[示例 9-1](#example_9_1)
+    展示了几个规则，说明了策略规则的工作原理，以便您可以限制日志信息的量，而不会排除重要数据。
+- en: Example 9-1\. Example audit policy
+  id: totrans-45
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 9-1\. 示例审计策略
+- en: '[PRE0]'
+  id: totrans-46
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: '[![1](assets/1.png)](#co_observability_CO1-1)'
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_observability_CO1-1)'
+- en: The `None` auditing level means the API server will not log events that match
+    this rule. So when the user `system:kube-proxy` requests a watch on the listed
+    resources, the event is not logged.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`None` 审计级别意味着 API 服务器不会记录与此规则匹配的事件。因此，当用户 `system:kube-proxy` 请求对列出的资源进行监视时，该事件不会被记录。'
+- en: '[![2](assets/2.png)](#co_observability_CO1-2)'
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_observability_CO1-2)'
+- en: The `Metadata` level means that only request metadata is logged. When any request
+    for the listed resources is received by the API server, it will log which user
+    made what type of requests for what resource, but not the body of the request
+    or response. The `RequestReceived` stage will not be logged. This means it will
+    not write a separate log entry when the request is received. It will write a log
+    entry when it starts the response for a long-running watch. It will write a log
+    entry after it completes the response to the client. And it will log any panic
+    that occurs. But will omit a log entry when the request is first received.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`Metadata` 级别意味着只记录请求的元数据。当 API 服务器收到列出的资源的任何请求时，它将记录哪个用户对什么资源进行了什么类型的请求，但不记录请求或响应的正文。`RequestReceived`
+    阶段不会被记录。这意味着当首次接收请求时不会写入单独的日志条目。在开始长时间监视的响应后，它将写入日志条目。在完成向客户端的响应后，它将写入日志条目。并且将记录发生的任何
+    panic。但在首次接收请求时不会记录日志条目。'
+- en: '[![3](assets/3.png)](#co_observability_CO1-3)'
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_observability_CO1-3)'
+- en: The `Request` level will instruct the API server to log the request metadata
+    and request body, but *not* the response body. So when any client sends a get,
+    list, or watch request, the potentially verbose response body—that contains the
+    object/s—is not logged.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`Request` 级别将指示 API 服务器记录请求元数据和请求主体，但*不*记录响应主体。因此，当任何客户端发送获取、列表或观察请求时，可能包含对象的冗长响应主体不会被记录。'
+- en: '[![4](assets/4.png)](#co_observability_CO1-4)'
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_observability_CO1-4)'
+- en: 'The `RequestResponse` level logs the most information: the request metadata,
+    the request body, and the response body. This rule lists the same API groups as
+    the previous. So, in effect, this rule says that if a request is *not* a get,
+    list, or watch for a resource in one of these groups, additionally log the response
+    body. In effect this becomes the default log level for the listed groups.'
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`RequestResponse` 级别记录了最多的信息：请求元数据、请求主体和响应主体。此规则列出了与之前相同的 API 组。因此，实际上，此规则表示如果请求*不是*用于这些组中的资源的获取、列表或观察，则还记录响应主体。实际上，这成为列出的组的默认日志级别。'
+- en: '[![5](assets/5.png)](#co_observability_CO1-5)'
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#co_observability_CO1-5)'
+- en: Any other resources that aren’t matched in previous rules will have this default
+    applied, which says to skip the additional log message when a request is received
+    and log only request metadata and excluded request and response bodies.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于未匹配到先前规则的任何其他资源，都将应用此默认值，该值表示在接收到请求时跳过附加日志消息，并仅记录请求元数据以及排除的请求和响应主体。
+- en: As with other logs in your system, you will want to forward the audit logs to
+    some backend. You can use either the application forwarding or node agent forwarding
+    strategies we covered earlier in this chapter. Much of the same principles and
+    patterns apply.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与系统中的其他日志一样，您希望将审计日志转发到某个后端。您可以使用本章前面介绍的应用程序转发或节点代理转发策略。许多相同的原则和模式适用。
+- en: For the application forwarding approach, you can configure the API server to
+    send logs directly to a webhook backend. In this case you tell the API server
+    with a flag where the config file is that contains the address and credentials
+    to connect. This config file uses the kubeconfig format. You will need to spend
+    some time tuning the configuration options for buffering and batching to ensure
+    all logs arrive at the backend. For example, if you set a buffer size for the
+    number of events to buffer before batching that is too low and it overflows, events
+    will be dropped.
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于应用程序转发方法，您可以配置 API 服务器将日志直接发送到 webhook 后端。在这种情况下，您需要通过标志告知 API 服务器配置文件所在位置，该配置文件包含连接地址和凭据。此配置文件使用
+    kubeconfig 格式。您需要花一些时间调整缓冲和批处理的配置选项，以确保所有日志都到达后端。例如，如果设置了太低的缓冲区大小以及溢出导致事件被丢弃。
+- en: For node agent forwarding, you can have the API server write logfiles to the
+    filesystem on the control plane node. You can provide flags to the API server
+    to configure the filepath, maximum retention period, maximum number of files,
+    and maximum logfile size. In this case you can aggregate and forward logs with
+    tools like Fluent Bit and Fluentd. This is likely a good pattern to follow if
+    you are already using these tools to manage logs with the node agent forwarding
+    discussed earlier.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于节点代理转发，您可以让 API 服务器将日志文件写入控制平面节点上的文件系统。您可以向 API 服务器提供标志以配置文件路径、最长保留期、最大文件数和最大日志文件大小。在这种情况下，您可以使用
+    Fluent Bit 和 Fluentd 等工具聚合和转发日志。如果您已经使用这些工具管理先前讨论过的节点代理转发的日志，则这很可能是一个不错的模式。
+- en: Kubernetes Events
+  id: totrans-60
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Kubernetes 事件
+- en: In Kubernetes, Events are a native resource. They are a way for platform components
+    to expose information about what has happened to different objects through the
+    Kubernetes API. In effect, they are a kind of platform log. Unlike other logs,
+    they are not generally stored in a logging backend. They are stored in etcd and,
+    by default, are retained for one hour. They are most commonly used by platform
+    operators and users when they want to gather information about actions taken against
+    objects. [Example 9-2](#ex_9-2) shows the Events provided when describing a newly
+    created Pod.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 中，事件是一种原生资源。它们是平台组件通过 Kubernetes API 向不同对象公开发生情况的一种方式。实际上，它们是一种平台日志。与其他日志不同，它们通常不存储在日志后端。它们存储在
+    etcd 中，并且默认保留一个小时。平台操作员和用户通常在想要收集针对对象采取的操作信息时使用它们。[示例 9-2](#ex_9-2) 展示了描述新创建的
+    Pod 时提供的事件。
+- en: Example 9-2\. Events given with Pod description
+  id: totrans-62
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 9-2\. 提供的带有 Pod 描述的事件
+- en: '[PRE1]'
+  id: totrans-63
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: You can also retrieve the same Events directly as shown in [Example 9-3](#ex_9-3).
+    In this case it includes the Events for the ReplicaSet and Deployment resources
+    in addition to the Pod Events we saw when describing that resource.
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您也可以直接检索与[示例 9-3](#ex_9-3)中显示的相同事件。在这种情况下，它包括直接检索到的命名空间的ReplicaSet和Deployment资源的事件，以及我们在描述该资源时看到的Pod事件。
+- en: Example 9-3\. Events for a namespace retrieved directly
+  id: totrans-65
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 9-3\. 直接检索的命名空间事件
+- en: '[PRE2]'
+  id: totrans-66
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: Being that Kubernetes Events are available through the Kubernetes API, it is
+    entirely possible to build automation to watch for, and react to, specific Events.
+    However, in reality, we don’t see this commonly done. One additional way you can
+    leverage them is through an Event exporter that exposes them as metrics. See [“Prometheus”](#prometheus)
+    for more on Prometheus exporters.
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 鉴于Kubernetes事件可通过Kubernetes API获取，完全可以构建自动化来监视和响应特定事件。然而，实际上，我们并不经常看到这样做。您还可以通过将其公开为指标的事件导出器利用它们。有关更多关于Prometheus导出器的信息，请参见[“Prometheus”](#prometheus)。
+- en: Alerting on Logs
+  id: totrans-68
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 日志警报
+- en: Application logs expose important information about the behavior of your software.
+    They are especially valuable when unexpected failures occur that require investigation.
+    This may lead you to find patterns of events that precipitate problems. If you
+    find yourself wanting to set up alerts on Events exposed in logs, first consider
+    using metrics instead. If you expose metrics that represent that behavior, you
+    can implement alerting rules against them. Log messages are less reliable to alert
+    on as they are more subject to change. A slight change to the text of a log message
+    may inadvertently break the alerting that uses it.
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用程序日志公开了有关软件行为的重要信息。当发生需要调查的意外故障时，它们尤其有价值。这可能会使您发现导致问题的事件模式。如果您希望设置针对日志中公开的事件的警报，请首先考虑使用指标而不是日志。如果您公开代表该行为的指标，可以针对其实施警报规则。与日志消息相比，日志警报的可靠性较低，因为它们更容易发生变化。对日志消息文本的轻微更改可能会意外地破坏使用它的警报。
+- en: Security Implications
+  id: totrans-70
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 安全性影响
+- en: Don’t forget to give some thought to the access users have to the various logs
+    aggregated in your backend. You may not want your production API server audit
+    logs accessible to everyone. You may have sensitive systems with information that
+    only privileged users should have access to. This may impact the tagging of logs
+    or may necessitate using multiple backends, impacting your forwarding configurations.
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不要忘记考虑用户对后端聚合的各种日志的访问权限。您可能不希望生产API服务器审计日志对所有人都可访问。您可能拥有包含只有特权用户应该访问的信息的敏感系统。这可能会影响日志的标记或需要使用多个后端，从而影响您的转发配置。
+- en: Now that we’ve covered the various mechanics involved in managing the logs from
+    your platform and its tenants, let’s move on to metrics and alerting.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经讨论了管理平台及其租户日志涉及的各种机制，让我们继续讨论指标和警报。
+- en: Metrics
+  id: totrans-73
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 指标
+- en: Metrics and alerting services are vital to the usability of the platform. Metrics
+    allow us to plot measured data on a timeline and recognize divergences that indicate
+    undesirable or unexpected behavior. They help us understand what’s happening with
+    our applications, inform us whether they are behaving as we expect, and give us
+    insights into how we can remedy problems or improve how we manage our workloads.
+    And, critically, metrics give us useful measurements to alert on. Notifications
+    of failures, or preferably warnings of impending failures, give us the opportunity
+    to avert and/or minimize downtime and errors.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 指标和警报服务对于平台的可用性至关重要。指标允许我们在时间轴上绘制测量数据，并识别表明不良或意外行为的偏差。它们帮助我们了解我们的应用程序发生了什么，通知我们它们是否按预期行为，并为我们提供有关如何解决问题或改进工作负载管理的见解。并且，关键是，指标为我们提供了有用的测量来进行警报。失败的通知，或者更好地说是即将发生的失败的警告，给了我们避免和/或最小化停机时间和错误的机会。
+- en: In this section, we’re going to cover how to provide metrics and alerting as
+    a platform service using Prometheus. There is considerable detail to explore here,
+    and it will be helpful to reference a particular software stack as we do so. This
+    is not to say you cannot or should not use other solutions. There are many circumstances
+    where Prometheus may *not* be the right solution. However, Prometheus does provide
+    an excellent model for addressing the subject. Regardless of the exact tools you
+    use, the Prometheus model provides a clear implementation reference that will
+    inform how you approach this topic.
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本节中，我们将介绍如何使用Prometheus作为平台服务提供度量和警报功能。这里有很多细节需要探讨，我们在进行时参考特定的软件堆栈将会很有帮助。这并不意味着你不能或不应该使用其他解决方案。在许多情况下，Prometheus可能*不*是正确的解决方案。然而，Prometheus确实提供了一个优秀的模型来解决这个主题。无论你使用的具体工具是什么，Prometheus模型都为你提供了一个清晰的实现参考，将指导你如何处理这个主题。
+- en: First, we will take a general look at what Prometheus is, how it collects metrics,
+    and what functions it provides. Then we will address various general subtopics,
+    including long-term storage and the use case for pushing metrics. Next, we’ll
+    cover custom metrics generation and collection as well as organization and federation
+    of metrics collection across your infrastructure. Also, we will dive into alerting
+    and using metrics for actionable showback and chargeback data. Finally, we will
+    break down each of the various components in the Prometheus stack and illustrate
+    how they fit together.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，我们将简要介绍Prometheus是什么，它如何收集度量标准以及它提供的功能。然后我们将讨论各种一般性子主题，包括长期存储和推送度量标准的用例。接下来，我们将讨论自定义度量生成和收集，以及跨你的基础设施组织和联合度量收集。此外，我们将深入探讨警报功能，并使用度量标准进行可操作的展示和费用分摊数据。最后，我们将详细解析Prometheus堆栈的各个组件，并说明它们如何配合工作。
+- en: Prometheus
+  id: totrans-77
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Prometheus
+- en: Prometheus is an open source metrics tool that has become the prevalent open
+    source solution for Kubernetes-based platforms. The control plane components expose
+    Prometheus metrics, and virtually every production cluster uses Prometheus exporters
+    to get metrics from things like the underlying nodes. Due to this, many enterprise
+    systems such as Datadog, New Relic, and VMware Tanzu Observability support consuming
+    Prometheus metrics.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Prometheus是一种开源度量工具，已成为基于Kubernetes平台的普遍开源解决方案。控制平面组件公开Prometheus度量标准，并且几乎每个生产集群都使用Prometheus导出器从底层节点等获取度量标准。因此，许多企业系统，如Datadog、New
+    Relic和VMware Tanzu Observability，支持消耗Prometheus度量标准。
+- en: Prometheus metrics are simply a standard format for time series data that can
+    actually be used by any system. Prometheus uses a scraping model whereby it collects
+    metrics from targets. So applications and infrastructure do not typically *send*
+    metrics anywhere, they expose them at an endpoint from which Prometheus can scrape
+    them. This model removes the app’s responsibility for knowing anything about the
+    metrics system beyond the format in which to present the data.
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Prometheus度量标准只是一种用于时间序列数据的标准格式，实际上可以被任何系统使用。Prometheus采用抓取模型，通过它从目标中收集度量标准。因此，应用程序和基础设施通常不会将度量标准*发送*到任何地方，它们在端点上公开度量标准，从中Prometheus可以抓取它们。这种模型消除了应用程序除了要以何种格式呈现数据外，对度量系统了解任何内容的责任。
+- en: This scraping model for collecting metrics, its ability to process large amounts
+    of data, the use of labels in its data model, and the Prometheus Query Language
+    (PromQL) make it a great metrics tool for dynamic, cloud native environments.
+    New workloads can be readily introduced and monitored. Expose Prometheus metrics
+    from an application or system, add a scrape configuration to a Prometheus server,
+    and use PromQL to turn the raw data into meaningful insights and alerts. These
+    are some of the core reasons Prometheus became such a popular choice in the Kubernetes
+    ecosystem.
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 采用这种度量收集模型，它能够处理大量数据，其数据模型中使用标签以及Prometheus查询语言（PromQL），使其成为动态、云原生环境中的优秀度量工具。可以轻松引入和监控新的工作负载。从应用程序或系统公开Prometheus度量标准，向Prometheus服务器添加抓取配置，并使用PromQL将原始数据转化为有意义的洞察和警报。这些都是Prometheus成为Kubernetes生态系统中如此受欢迎选择的核心原因之一。
+- en: 'Prometheus provides several critical metrics functions:'
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Prometheus提供了几个关键的度量功能：
+- en: Collects metrics from targets using its scraping model
+  id: totrans-82
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用其抓取模型从目标中收集度量标准
+- en: Stores the metrics in a time series database
+  id: totrans-83
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 将度量标准存储在时间序列数据库中
+- en: Sends alerts, usually to Alertmanager, which is discussed later in this chapter,
+    based on alerting rules
+  id: totrans-84
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 根据警报规则发送警报，通常发送到稍后在本章讨论的Alertmanager
+- en: Exposes an HTTP API for other components to access the metrics stored by Prometheus
+  id: totrans-85
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Prometheus](https://oreil.ly/wcaVl)为其他组件提供了HTTP API，以访问其存储的指标数据。'
+- en: Provides a dashboard that is useful for executing ad hoc metric queries and
+    getting various status info
+  id: totrans-86
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 提供了一个仪表板，可用于执行临时指标查询并获取各种状态信息。
+- en: Most teams use Prometheus for metrics collection paired with Grafana for visualization
+    when they start out. However, maintaining organized use of the system in a production
+    environment can become challenging for smaller teams. You will have to solve for
+    long-term storage of your metrics, scaling Prometheus as the volume of metrics
+    grows, as well as organizing the federation of your metrics systems. None of these
+    are trivial problems to solve and manage over time. So if the maintenance of the
+    metrics stack becomes cumbersome as the system scales, you can migrate to one
+    of those commercial systems without changing the type of metrics you use.
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大多数团队在开始时使用Prometheus进行指标收集，并结合Grafana进行可视化。然而，在生产环境中，对系统的有组织使用可能会对较小的团队构成挑战。你将不得不解决指标的长期存储问题，随着指标数量的增长而扩展Prometheus，以及组织指标系统的联合。这些问题都不容易解决，并随着时间的推移需要持续管理。因此，如果随着系统规模扩展，指标堆栈的维护变得繁琐，你可以迁移到其中一个商业系统，而无需更改使用的指标类型。
+- en: Long-Term Storage
+  id: totrans-88
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 长期存储
+- en: It’s important to note that Prometheus is not designed for long-term storage
+    of metrics. Instead, it provides support for writing to remote endpoints, and
+    there are a [number of solutions](https://oreil.ly/wcaVl) that can be used for
+    this kind of integration. The questions you have to answer when providing a metrics
+    solution as a part of your application platform are around data retention. Do
+    you offer long-term storage only in production? If so, what retention period at
+    the Prometheus layer do you offer in nonprod environments? How will you expose
+    the metrics in long-term storage to users? Projects such as [Thanos](https://thanos.io)
+    and [Cortex](https://cortexmetrics.io) offer tool stacks to help solve these problems.
+    Just keep in mind how your platform tenants will be able to leverage these systems
+    and let them know what retention policies they can expect.
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 值得注意的是，Prometheus并不适用于指标的长期存储。相反，它支持写入远程端点，并且有多种解决方案可用于此类集成。在提供应用程序平台的一部分作为指标解决方案时，你需要回答的问题涉及数据保留。你是否只在生产环境提供长期存储？如果是，在非生产环境中Prometheus层面提供哪些保留期？如何向用户展示长期存储中的指标？像[Thanos](https://thanos.io)和[Cortex](https://cortexmetrics.io)这样的项目提供了工具堆栈来帮助解决这些问题。只需记住你的平台租户如何能够利用这些系统，并让他们知道可以期待什么保留策略。
+- en: Pushing Metrics
+  id: totrans-90
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 推送指标
+- en: Not every workload is a good fit for the scraping model. In these cases the
+    [Prometheus Pushgateway](https://github.com/prometheus/pushgateway) may be used.
+    For example, a batch workload that shuts down when it has finished its work may
+    not give the Prometheus server the chance to collect all metrics before it disappears.
+    For this situation, the batch workload can push its metrics to the Pushgateway
+    which, in turn, exposes those metrics for the Prometheus server to retrieve. So
+    if your platform will support workloads that call for this support, you will likely
+    need to deploy the Pushgateway as a part of your metrics stack and publish information
+    for tenants to leverage it. They will need to know where it is in the cluster
+    and how to use its REST-like HTTP API. [Figure 9-2](#pushgateway_for_ephemeral_workload)
+    illustrates an ephemeral workload leveraging a Prometheus client library that
+    supports pushing metrics to a Pushgateway. Those metrics are then scraped by a
+    Prometheus server.
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 并非所有的工作负载都适合抓取模型。在这些情况下，[Prometheus Pushgateway](https://github.com/prometheus/pushgateway)可能会被使用。例如，一个在完成工作后关闭的批处理工作负载可能不会给Prometheus服务器收集所有指标的机会，因此这种情况下，批处理工作负载可以将其指标推送到Pushgateway，Pushgateway会将这些指标暴露给Prometheus服务器来检索。因此，如果您的平台支持需要这种支持的工作负载，您可能需要将Pushgateway部署为您的指标堆栈的一部分，并发布信息以便租户利用它。他们需要知道它在集群中的位置以及如何使用其类似REST的HTTP
+    API。[图 9-2](#pushgateway_for_ephemeral_workload)展示了一个短暂工作负载利用Prometheus客户端库将指标推送到Pushgateway的示例。这些指标然后由Prometheus服务器抓取。
+- en: '![prku 0902](assets/prku_0902.png)'
+  id: totrans-92
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 0902](assets/prku_0902.png)'
+- en: Figure 9-2\. Pushgateway for ephemeral workload.
+  id: totrans-93
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 9-2\. 短暂工作负载使用的Pushgateway。
+- en: Custom Metrics
+  id: totrans-94
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 自定义指标
+- en: Prometheus metrics can be exposed natively by an application. Many applications
+    that are developed expressly to run on Kubernetes-based platforms do just this.
+    There are several officially supported [client libraries](https://oreil.ly/t9SLv)
+    as well as a number of community-supported libraries. Using these, your application
+    developers will likely find it trivial to expose custom Prometheus metrics for
+    scraping. This is covered in depth in [Chapter 14](ch14.html#application_considerations_chapter).
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Prometheus 指标可以被应用程序本地暴露。许多专为基于 Kubernetes 平台运行的应用程序专门开发的应用程序就是这样做的。有几个官方支持的[客户端库](https://oreil.ly/t9SLv)，以及一些社区支持的库。使用这些库，你的应用开发人员可能会发现轻松地为抓取暴露自定义
+    Prometheus 指标。这在[第 14 章](ch14.html#application_considerations_chapter)中有详细讨论。
+- en: Alternatively, *exporters* can be used when Prometheus metrics are not natively
+    supported by an app or system. Exporters collect data points from an application
+    or system, then expose them as Prometheus metrics. A common example of this is
+    the Node Exporter. It collects hardware and operating system metrics, then exposes
+    those metrics for a Prometheus server to scrape. There are [community-supported
+    exporters](https://oreil.ly/JO8sO) for a wide range of popular tools, some of
+    which you may find useful.
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 或者，当应用程序或系统不支持 Prometheus 指标时，可以使用*导出器*。导出器从应用程序或系统收集数据点，然后将其作为 Prometheus 指标暴露出来。一个常见的例子是
+    Node Exporter。它收集硬件和操作系统指标，然后将这些指标暴露给 Prometheus 服务器进行抓取。有一些[社区支持的导出器](https://oreil.ly/JO8sO)适用于各种流行工具，你可能会发现其中一些有用。
+- en: Once an application that exposes custom metrics is deployed, the next matter
+    is adding the application to the scrape configuration of a Prometheus server.
+    This is usually done with a ServiceMonitor custom resource used by the Prometheus
+    Operator. The Prometheus Operator is covered further in [“Metrics Components”](#metrics_components),
+    but for now it is enough to know that you can use a custom Kubernetes resource
+    to instruct the operator to auto-discover Services based on their Namespace and
+    labels.
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦部署了暴露自定义指标的应用程序，下一步就是将该应用程序添加到 Prometheus 服务器的抓取配置中。这通常通过 Prometheus Operator
+    使用的 ServiceMonitor 自定义资源来完成。有关 Prometheus Operator 的更多信息，请参阅[“指标组件”](#metrics_components)，但现在知道可以使用自定义的
+    Kubernetes 资源来指示操作员基于它们的命名空间和标签自动发现服务就足够了。
+- en: In short, instrument the software you develop in-house where possible. Develop
+    or leverage exporters where native instrumentation is not feasible. And collect
+    the exposed metrics using convenient auto-discovery mechanisms to provide visibility
+    into your systems.
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 简而言之，在可能的情况下，对你开发的软件进行内部仪表化。在无法进行本地仪表化时，开发或利用导出器。并使用方便的自动发现机制收集暴露的指标，以提供对系统的可见性。
+- en: Warning
+  id: totrans-99
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: While the use of labels in the Prometheus data model is powerful, with power
+    comes responsibility. You can shoot yourself in the foot with them. If you overuse
+    labels, the resource consumption of your Prometheus servers can become untenable.
+    Familiarize yourself with the impact of high cardinality of metrics and check
+    out the [instrumentation guide](https://oreil.ly/RAskV) in the Prometheus docs.
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然在 Prometheus 数据模型中使用标签是强大的，但权力与责任同在。你可能会因此自讨苦吃。如果过度使用标签，你的 Prometheus 服务器的资源消耗可能会变得难以承受。熟悉指标高基数的影响，并查阅
+    Prometheus 文档中的[仪表化指南](https://oreil.ly/RAskV)。
+- en: Organization and Federation
+  id: totrans-101
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 组织与联邦
+- en: Processing metrics can be particularly compute-intensive, so subdividing this
+    computational load can help manage resource consumption for Prometheus servers.
+    For example, use one Prometheus server to collect metrics for the platform and
+    use other Prometheus servers to collect custom metrics from applications or node
+    metrics. This is particularly applicable in larger clusters where there are far
+    more scrape targets and much larger volumes of metrics to process.
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 处理指标可能特别耗费计算资源，因此将这种计算负载细分可以帮助管理 Prometheus 服务器的资源消耗。例如，可以使用一个 Prometheus 服务器收集平台的指标，使用其他
+    Prometheus 服务器收集应用程序或节点指标的自定义指标。在更大的集群中特别适用，那里有更多的抓取目标和更大量的指标需要处理。
+- en: However, doing this will fragment the locations in which you can see this data.
+    One way to solve this is through federation. Federation, in general, refers to
+    consolidating data and control into a centralized system. Prometheus federation
+    involves collecting important metrics from various Prometheus servers into a central
+    Prometheus server. This is accomplished using the same scraping model used to
+    collect metrics from workloads. One of the targets that a Prometheus server can
+    scrape metrics from is another Prometheus server.
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，这样做会导致可以查看数据的位置分散。解决这个问题的一种方法是通过联邦。总体而言，联邦是指将数据和控制集中到一个中心化系统中。Prometheus
+    联邦涉及将来自各种 Prometheus 服务器的重要指标收集到一个中央 Prometheus 服务器中。这通过与用于收集工作负载指标的相同抓取模型完成。Prometheus
+    服务器可以从另一个 Prometheus 服务器中抓取指标的目标之一。
+- en: This can be done within a single Kubernetes cluster, among several Kubernetes
+    clusters, or both. This provides a very flexible model in that you can organize
+    and consolidate your metrics systems in ways that suit the patterns you use to
+    manage your Kubernetes clusters. This includes federating in layers or tiers.
+    [Figure 9-3](#prometheus_federation) shows an example of a global Prometheus server
+    scraping metrics from Prometheus servers in different datacenters which, in turn,
+    scrape metrics from targets within their cluster.
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这可以在单个 Kubernetes 集群中进行，也可以在多个 Kubernetes 集群之间进行。这提供了非常灵活的模型，可以根据管理 Kubernetes
+    集群的模式组织和整合您的指标系统。包括分层或分级的联邦。[图 9-3](#prometheus_federation)展示了一个全局 Prometheus
+    服务器从不同数据中心的 Prometheus 服务器中抓取指标，这些服务器反过来从其集群中的目标中抓取指标的示例。
+- en: '![prku 0903](assets/prku_0903.png)'
+  id: totrans-105
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 0903](assets/prku_0903.png)'
+- en: Figure 9-3\. Prometheus federation.
+  id: totrans-106
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 9-3\. Prometheus 联邦。
+- en: While Prometheus federation is powerful and flexible, it can be complex and
+    burdensome to manage. A relatively recent development that offers a compelling
+    way to collect metrics from all your Prometheus servers is [Thanos](https://thanos.io),
+    an open source project that builds federation-like capabilities on top of Prometheus.
+    It is supported by the Prometheus Operator and can be layered onto existing Prometheus
+    installations. [Cortex](https://cortexmetrics.io) is another promising project
+    in this capacity. Both Thanos and Cortex are incubating projects in the CNCF.
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管 Prometheus 联邦功能强大且灵活，但管理起来可能复杂且繁重。一种相对较新的解决方案，可以有效地从所有 Prometheus 服务器收集指标，是
+    [Thanos](https://thanos.io)，一个在 Prometheus 基础上构建联邦功能的开源项目。Prometheus Operator
+    支持 Thanos，并可以在现有的 Prometheus 安装上进行扩展。[Cortex](https://cortexmetrics.io) 是另一个在
+    CNCF 中有前景的项目。Thanos 和 Cortex 都是 CNCF 中的孵化项目。
+- en: Carefully plan out the organization and federation of your Prometheus servers
+    to support scaling and expanding your operations as platform adoption grows. Give
+    careful consideration to the consumption model for tenants. Avoid making them
+    use a multitude of different dashboards to access metrics for their workloads.
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 仔细规划 Prometheus 服务器的组织和联邦，以支持平台采用增长时的扩展和扩展操作。对于租户的消费模型要进行仔细考虑。避免他们使用多种不同的仪表板来访问其工作负载的指标。
+- en: Alerts
+  id: totrans-109
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 警报
+- en: Prometheus uses alerting rules to generate alerts from metrics. When an alert
+    is triggered, the alert will usually be sent to a configured Alertmanager instance.
+    Deploying Alertmanager and configuring Prometheus to send alerts to it is somewhat
+    trivial when using the Prometheus Operator. Alertmanager will process the alert
+    and integrate with messaging systems to make your engineers aware of issues. [Figure 9-4](#alerting_components)
+    illustrates the use of distinct Prometheus servers for the platform control plane
+    and tenant applications. They both use a common Alertmanager to process alerts
+    and notify receivers.
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Prometheus 使用警报规则从指标生成警报。当警报触发时，通常会发送到配置的 Alertmanager 实例。使用 Prometheus Operator
+    部署 Alertmanager 并配置 Prometheus 将警报发送到 Alertmanager 时相对不复杂。Alertmanager 将处理警报并与消息系统集成，以便通知工程师存在的问题。[图 9-4](#alerting_components)展示了将平台控制面和租户应用的不同
+    Prometheus 服务器使用共同的 Alertmanager 处理警报并通知接收者的情况。
+- en: '![prku 0904](assets/prku_0904.png)'
+  id: totrans-111
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 0904](assets/prku_0904.png)'
+- en: Figure 9-4\. Alerting components.
+  id: totrans-112
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 9-4\. 警报组件。
+- en: In general, be careful not to *over* alert. Excessive critical alerts will burn
+    out your on-call engineers and the noise of false positives can drown out actual
+    critical events. So take the time to tune your alerts to be useful. Add useful
+    descriptions to the annotations on the alerts so that when engineers are alerted
+    to a problem, they have some useful context to understand the situation. Consider
+    including links to runbooks or other docs that can aid the resolution of the alerted
+    incident.
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 总体而言，要小心不要*过度*报警。过多的关键警报会使您的值班工程师感到疲惫不堪，并且虚假阳性的噪音可能会淹没实际的关键事件。因此，请花时间调整警报以使其有用。在警报的注释中添加有用的描述，以便工程师在接到问题警报时能够理解情况。考虑包含指向运行手册或其他文档的链接，以帮助解决警报事件。
+- en: In addition to alerts for the platform, consider how to expose alerting for
+    your tenants so that they may set up alerts on the metrics for their application.
+    This involves giving them ways to add alerting rules to Prometheus, which is covered
+    more in [“Metrics Components”](#metrics_components). It also includes setting
+    up the notification mechanisms through Alertmanager so that application teams
+    are alerted according to the rules they set.
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了平台的警报外，还要考虑如何向您的租户公开警报，以便他们可以针对其应用程序的指标设置警报。这包括为他们提供向Prometheus添加警报规则的方法，更详细地介绍在[“度量组件”](#metrics_components)中。还包括通过Alertmanager设置通知机制，以便应用团队根据他们设置的规则接收警报。
+- en: Dead man’s switch
+  id: totrans-115
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 死亡开关
+- en: One alert in particular is worth addressing as it is universally applicable
+    and particularly critical. What happens if your metrics and alerting systems go
+    down? How will you get an alert of *that* event? In this case you need to set
+    up an alert that fires periodically under normal operating conditions and that,
+    if those alerts stop, fires a critical alert to let on-call know your metrics
+    and/or alerting systems are down. [PagerDuty](https://oreil.ly/zDJJE) has an integration
+    they call Dead Man’s *Snitch* that provides this feature. Alternatively, you could
+    set up a custom solution with webhook alerts to a system you install. Regardless
+    of the implementation details, ensure you are notified urgently if your alerting
+    system goes offline.
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有一个特别的警报值得关注，因为它具有普遍适用性并且尤为关键。如果您的度量和警报系统出现故障会发生什么？您将如何收到*那*个事件的警报？在这种情况下，您需要设置一个在正常运行条件下定期触发的警报，如果这些警报停止，则发出关键警报，让值班人员知道您的度量和/或警报系统已经停止运行。[PagerDuty](https://oreil.ly/zDJJE)提供了一个名为Dead
+    Man’s *Snitch*的集成，提供了这个功能。或者，您可以设置一个使用Webhook警报到您安装的系统的自定义解决方案。无论具体实现细节如何，请确保在警报系统离线时能够紧急通知您。
+- en: Showback and Chargeback
+  id: totrans-117
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Showback 和 Chargeback
+- en: '*Showback* is a term commonly used to describe resource usage by an organizational
+    unit or its workloads. *Chargeback* is the association of costs with that resource
+    usage. These are perfect examples of meaningful, actionable expressions of metrics
+    data.'
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*秀回*是一种常用术语，用于描述组织单位或其工作负载的资源使用情况。*成本回收*是将这种资源使用与成本关联起来。这些是有意义的、可操作的指标数据的完美例子。'
+- en: Kubernetes offers the opportunity to dynamically manage compute infrastructure
+    used by app development teams. If this readily available capacity is not managed
+    well, you may find cluster sprawl and poor utilization of resources. It is greatly
+    advantageous to the business to streamline the process of deploying infrastructure
+    and workloads for efficiency. However, this streamlining can also lead to waste.
+    For this reason, many organizations make their teams and lines of business accountable
+    for the usage with showback and chargeback.
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes提供了动态管理应用开发团队使用的计算基础设施的机会。如果这些即时可用的资源没有得到有效管理，可能会出现集群扩展和资源利用率低的问题。对于企业来说，优化部署基础设施和工作负载的流程非常有利。然而，这种优化也可能导致浪费。因此，许多组织都要求他们的团队和业务部门对使用情况进行秀回和成本回收的账务管理。
+- en: In order to make it possible to collect relevant metrics, workloads need to
+    be labeled with something useful like a “team” or “owner” name or identifier.
+    We recommend establishing a standardized system for this in your organization
+    and use admission control to enforce the use of such a label on all Pods deployed
+    by platform tenants. There are occasionally other useful methods of identifying
+    workloads, such as by Namespace, but labels are the most flexible.
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了能够收集相关指标，工作负载需要用一些有用的标签标记，例如“团队”或“所有者”名称或标识符。我们建议在您的组织中建立一个标准化的系统，并使用准入控制来强制平台租户部署的所有Pod使用这样的标签。偶尔还有其他有用的识别工作负载的方法，例如通过命名空间，但标签是最灵活的。
+- en: 'There are two general approaches to implementing showback:'
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 实施显示回溯的两种一般方法：
+- en: Requests
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请求
+- en: Requests are based on the resources a team reserves with the resource requests
+    that are defined for each container in a Pod.
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请求基于团队为Pod中每个容器定义的资源请求来预留的资源。
+- en: Consumption
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 资源消耗
+- en: Consumption is based on what a team actually consumes through resource requests
+    *or* actual usage, whichever is higher.
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 消耗基于团队实际通过资源请求*或*实际使用的内容，以较高者为准。
+- en: Showback by requests
+  id: totrans-126
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 按请求进行显示回溯
+- en: The requests-based method leverages the aggregate resource requests defined
+    by a workload. For example, if a Deployment with 10 replicas requests 1 CPU core
+    per replica, it is considered to have used 10 cores per unit of time that it was
+    running. In this model, if a workload bursts above its requests and uses 1.5 cores
+    per replica on average, it would have gotten those resources for free; those additional
+    5 cores consumed above its resource requests are *not* attributed to the workload.
+    This approach is advantageous in that it is based on what the scheduler can assign
+    to nodes in the cluster. The scheduler considers resource requests as reserved
+    capacity on a node. If a node has spare resources that aren’t being used, and
+    a workload bursts to use that otherwise unused capacity, that workload got those
+    resources for free. The solid line in [Figure 9-5](#showback_based_on_cpu_requests)
+    indicates the CPU resources attributed to a workload using this method. Consumption
+    that bursts above requests is *not* attributed.
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 基于请求的方法利用了工作负载定义的聚合资源请求。例如，如果一个具有 10 个副本的 Deployment 每个副本请求 1 个CPU核心，那么认为它在运行时每个单位时间使用了
+    10 个核心。在这种模型中，如果一个工作负载突破了其请求并且平均每个副本使用了 1.5 个核心，那么额外消耗的 5 个核心不会*归属*于工作负载。这种方法的优势在于它基于调度器可以在集群中的节点上分配的资源。调度器将资源请求视为节点上的预留容量。如果一个节点有未使用的空闲资源，并且工作负载突破了使用了这些本来未被使用的容量，那么该工作负载就免费获得了这些资源。在[图 9-5](#showback_based_on_cpu_requests)中的实线表示使用此方法的工作负载的CPU资源。超过请求的消耗是*不*归属的。
+- en: '![prku 0905](assets/prku_0905.png)'
+  id: totrans-128
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 0905](assets/prku_0905.png)'
+- en: Figure 9-5\. Showback based on CPU requests.
+  id: totrans-129
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 9-5\. 基于CPU请求的显示回溯。
+- en: Showback by consumption
+  id: totrans-130
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 按消耗进行显示回溯
+- en: In a consumption-based model, a workload would be assigned the usage of its
+    resource requests *or* its actual usage, whichever is higher. With this approach,
+    if a workload commonly and consistently used more than its requested resources,
+    it would be shown to have used those resources it actually consumed. This approach
+    would remove the possible incentive to game the system by setting resource requests
+    low. This could be more likely to lead to resource contention on overcommitted
+    nodes. The solid line in [Figure 9-6](#showback_based_on_cpu_consumption_when_bursting_above_requests)
+    indicates the CPU resources attributed to a workload using this consumption-based
+    method. In this case, consumption that bursts above requests is attributed.
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在基于消耗的模型中，一个工作负载将被分配其资源请求的使用量*或*其实际使用量中较高的那个。采用这种方法，如果一个工作负载通常并一贯地使用超过其请求的资源，它将显示出实际消耗的资源。这种方法将消除通过设置低资源请求来规避系统的可能激励因素。这可能更可能导致超负荷节点上的资源争用。在[图 9-6](#showback_based_on_cpu_consumption_when_bursting_above_requests)中的实线表示使用这种基于消耗的方法分配给工作负载的CPU资源。在这种情况下，超过请求的消耗是被归因的。
+- en: '![prku 0906](assets/prku_0906.png)'
+  id: totrans-132
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 0906](assets/prku_0906.png)'
+- en: Figure 9-6\. Showback based on CPU consumption when bursting above requests.
+  id: totrans-133
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 9-6\. 基于CPU消耗的显示回溯，当超出请求时。
+- en: 'In [“Metrics Components”](#metrics_components), we will cover kube-state-metrics,
+    a platform service that exposes metrics related to Kubernetes resources. If you
+    use kube-state-metrics as a part of your metrics stack, you will have the following
+    metrics available for resource requests:'
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[“指标组件”](#metrics_components)中，我们将介绍 kube-state-metrics，这是一个提供与 Kubernetes
+    资源相关的指标的平台服务。如果您将 kube-state-metrics 作为指标堆栈的一部分使用，您将可以获取以下资源请求的指标：
+- en: 'CPU: `kube_pod_container_resource_requests`'
+  id: totrans-135
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: CPU：`kube_pod_container_resource_requests`
+- en: 'Memory: `kube_pod_container_resource_requests_memory_bytes`'
+  id: totrans-136
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 内存：`kube_pod_container_resource_requests_memory_bytes`
+- en: 'Resource usage can be obtained with the following metrics:'
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可通过以下度量指标获取资源使用情况：
+- en: 'CPU: `container_cpu_usage_seconds_total`'
+  id: totrans-138
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: CPU：`container_cpu_usage_seconds_total`
+- en: 'Memory: `container_memory_usage_bytes`'
+  id: totrans-139
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 内存：`container_memory_usage_bytes`
+- en: Lastly for showback, you should decide whether to use CPU or memory for determining
+    showback for a workload. For this, calculate the percentage of total cluster resource
+    consumed by a workload for both CPU and memory. The higher value should apply
+    because if a cluster runs out of CPU *or* memory it cannot host more workloads.
+    For example, if a workload uses 1% of cluster CPU and 3% of cluster memory, it
+    is effectively using 3% of the cluster since a cluster without any more memory
+    cannot host any more workloads. This will also help inform whether you should
+    employ different node profiles to match the workloads they host, which is discussed
+    in [“Infrastructure”](ch02.html#infrastructure).
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，在展示时，您应该决定是使用CPU还是内存来确定工作负载的展示。为此，请计算工作负载占集群资源总量的百分比，分别计算CPU和内存。应用较高的值，因为如果集群的CPU或内存用尽，则无法托管更多工作负载。例如，如果一个工作负载使用集群CPU的1%和集群内存的3%，那么它实际上使用了集群的3%，因为没有更多内存的集群无法托管更多工作负载。这也将帮助您决定是否应使用不同的节点配置文件来匹配它们托管的工作负载，这一点在[“基础设施”](ch02.html#infrastructure)中有讨论。
+- en: Chargeback
+  id: totrans-141
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 收费
+- en: 'Once we solve showback, chargeback becomes possible because we have metrics
+    to apply costs to. Costs for machines will usually be pretty straightforward if
+    using a public cloud provider. It may be a little more complicated if you are
+    buying your own hardware, but somehow or another you need to come up with two
+    cost values:'
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦我们解决了展示成本，由于我们有了应用成本的指标，因此收费变得可能。如果使用公共云提供商，机器的成本通常会非常直接。如果您购买自己的硬件，可能会复杂一些，但不管怎样，您都需要提出两个成本值：
+- en: Cost per unit of time for CPU
+  id: totrans-143
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 每单位CPU的时间成本
+- en: Cost per unit of time for memory
+  id: totrans-144
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 每单位内存的时间成本
+- en: Apply these costs to the showback value determined and you have a model for
+    internally charging your platform tenants.
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将这些成本应用到确定的展示价值上，您就有了一个内部向平台租户收费的模型。
+- en: Network and storage
+  id: totrans-146
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 网络和存储
+- en: 'So far we’ve looked at showback and chargeback for the compute infrastructure
+    used by workloads. This covers a majority of use cases we have seen in the field.
+    However, there are workloads that consume considerable networking bandwidth and
+    disk storage. This infrastructure can contribute significantly to the true cost
+    of running some applications and should be considered in those cases. The model
+    will be largely the same: collect the relevant metrics and then decide whether
+    to charge according to resources reserved, consumed, or a combination of both.
+    How you collect those metrics will depend on the systems used for this infrastructure.'
+  id: totrans-147
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，我们已经研究了工作负载使用的计算基础设施的展示和收费。这涵盖了我们在现场看到的大多数用例。然而，有些工作负载消耗大量的网络带宽和磁盘存储。这种基础设施可以在运行某些应用程序的真实成本中起到重要作用，并且在这些情况下应予考虑。模型将大体相同：收集相关指标，然后决定是按照预留的资源、消耗的资源，还是两者的组合进行收费。如何收集这些指标将取决于用于该基础设施的系统。
+- en: At this point we have covered how Prometheus works and the general topics you
+    should grasp before diving into the details of the deployed components. Next is
+    a tour of those components that are commonly used in a Prometheus metrics stack.
+  id: totrans-148
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，我们已经介绍了Prometheus的工作原理以及您在深入部署组件详细信息之前应掌握的一般主题。接下来是对在Prometheus指标堆栈中常用的那些组件进行介绍。
+- en: Metrics Components
+  id: totrans-149
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 指标组件
+- en: In this section we will examine the components in a very commonly used approach
+    to deploying and managing a metrics stack. We’ll also cover some of the management
+    tools at your disposal and how all the pieces fit together. [Figure 9-7](#common_components_in_a_prometheus_metrics_stack)
+    illustrates a common configuration of components in a Prometheus metrics stack.
+    It does not include the Prometheus Operator, which is a utility for deployment
+    and management of this stack, rather than a part of the stack itself. The diagram
+    does include some autoscaling components to illustrate the role of Prometheus
+    Adapter, even though autoscaling is not covered here. See [Chapter 13](ch13.html#autoscaling_chapter)
+    for details on that topic.
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本节中，我们将检查部署和管理指标堆栈的一个非常常见的方法中的组件。我们还将介绍一些可供您使用的管理工具及其如何组合在一起。[图9-7](#common_components_in_a_prometheus_metrics_stack)展示了Prometheus指标堆栈中组件的常见配置。它不包括Prometheus操作员，后者是用于部署和管理此堆栈的实用程序，而不是堆栈本身的一部分。该图包括一些自动缩放组件，以说明Prometheus适配器的角色，即使这里不涵盖自动缩放。有关该主题的详细信息，请参阅[第13章](ch13.html#autoscaling_chapter)。
+- en: '![prku 0907](assets/prku_0907.png)'
+  id: totrans-151
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 0907](assets/prku_0907.png)'
+- en: Figure 9-7\. Common components in a Prometheus metrics stack.
+  id: totrans-152
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图9-7。Prometheus指标堆栈中的常见组件。
+- en: Prometheus Operator
+  id: totrans-153
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: Prometheus操作员
+- en: 'The [Prometheus Operator](https://oreil.ly/k1lMx) is a Kubernetes operator
+    that helps deploy and manage the various components of a Kubernetes metrics system
+    for the platform itself as well as the tenant workloads. For more information
+    about Kubernetes operators in general, see [“The Operator Pattern”](ch11.html#operator_pattern).
+    The Prometheus Operator uses several custom resources that represent Prometheus
+    servers: Alertmanager deployments, scrape configurations that inform Prometheus
+    of the targets to scrape metrics from, and rules for recording metrics and alerting
+    on them. This greatly reduces the toil in deploying and configuring Prometheus
+    servers in your platform.'
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Prometheus Operator](https://oreil.ly/k1lMx) 是一个Kubernetes操作器，帮助部署和管理用于平台本身及租户工作负载的Kubernetes度量系统的各个组件。关于Kubernetes操作器的更多信息，请参见[“操作器模式”](ch11.html#operator_pattern)。Prometheus
+    Operator使用多个自定义资源来表示Prometheus服务器：Alertmanager部署、抓取配置（通知Prometheus要从中抓取指标的目标）以及用于记录指标和对其进行警报的规则。这极大地减少了在平台中部署和配置Prometheus服务器时的工作量。'
+- en: These custom resources are very useful to platform engineers but can also provide
+    a very important interface for your platform tenants. If they require a dedicated
+    Prometheus server, they can achieve that by submitting a Prometheus resource to
+    their Namespace. If they need to add alerting rules to an existing Prometheus
+    server, they can do so with a PrometheusRule resource.
+  id: totrans-155
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些自定义资源对平台工程师非常有用，同时也为您的平台租户提供了非常重要的接口。如果他们需要专用的Prometheus服务器，可以通过向其命名空间提交Prometheus资源来实现。如果他们需要向现有的Prometheus服务器添加警报规则，可以通过PrometheusRule资源实现。
+- en: The related [kube-prometheus](https://oreil.ly/DITxj) project is a great place
+    to start with using the Prometheus Operator. It provides a collection of manifests
+    for a complete metrics stack. It includes Grafana dashboard configurations for
+    useful visualization out of the box, which is very handy. But treat it as a place
+    to start and understand the system so you can mold it to fit your requirements
+    so that, once in production, you have confidence that you have comprehensive metrics
+    and alerting for your systems.
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 相关的[kube-prometheus](https://oreil.ly/DITxj) 项目是使用Prometheus Operator的绝佳起点。它提供了用于完整度量堆栈的一组清单。它包括Grafana仪表板配置，可以方便地进行实用的可视化。但是将其视为一个起点，并理解系统，以便根据您的需求来塑造它，使其适合您的要求，以便在生产中对您的系统进行全面的度量和警报。
+- en: The rest of this section covers the components you will get with a kube-prometheus
+    deployment so you can clearly understand and customize these components for your
+    needs.
+  id: totrans-157
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本节的其余部分涵盖了您将在kube-prometheus部署中获得的组件，以便您可以清楚地理解和根据自身需求定制这些组件。
+- en: Prometheus servers
+  id: totrans-158
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: Prometheus服务器
+- en: With the Prometheus Operator in your clusters, you can create Prometheus custom
+    resources that will prompt the operator to create a new StatefulSet for a Prometheus
+    server. [Example 9-4](#ex_9-4) is an example manifest for a Prometheus resource.
+  id: totrans-159
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在您的集群中使用Prometheus Operator，您可以创建Prometheus自定义资源，以促使操作员为Prometheus服务器创建一个新的StatefulSet。[示例 9-4](#ex_9-4)
+    是用于Prometheus资源的示例清单。
+- en: Example 9-4\. Sample Prometheus manifest
+  id: totrans-160
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例9-4\. Prometheus清单示例
+- en: '[PRE3]'
+  id: totrans-161
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: '[![1](assets/1.png)](#co_observability_CO2-1)'
+  id: totrans-162
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_observability_CO2-1)'
+- en: Informs the configuration of Prometheus for where to send alerts.
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 告知Prometheus的配置以便发送警报。
+- en: '[![2](assets/2.png)](#co_observability_CO2-2)'
+  id: totrans-164
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_observability_CO2-2)'
+- en: The container image to use for Prometheus.
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Prometheus使用的容器镜像。
+- en: '[![3](assets/3.png)](#co_observability_CO2-3)'
+  id: totrans-166
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_observability_CO2-3)'
+- en: Informs the Prometheus Operator which PrometheusRules apply to this Prometheus
+    server. Any PrometheusRule created with the labels shown here will be applied
+    to this Prometheus server.
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 告知Prometheus Operator适用于此Prometheus服务器的PrometheusRules。任何带有这些标签的PrometheusRule将被应用于此Prometheus服务器。
+- en: '[![4](assets/4.png)](#co_observability_CO2-4)'
+  id: totrans-168
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_observability_CO2-4)'
+- en: This does the same for ServiceMonitors as the `ruleSelector` does for PrometheusRules.
+    Any ServiceMonitor resources that have this label will be used to inform the scrape
+    config for this Prometheus server.
+  id: totrans-169
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于ServiceMonitors，这与`ruleSelector`对PrometheusRules的作用相同。任何具有此标签的ServiceMonitor资源都将用于通知此Prometheus服务器的抓取配置。
+- en: The Prometheus custom resource allows platform operators to readily deploy Prometheus
+    servers to collect metrics. As mentioned in [“Organization and Federation”](#organization_and_federation),
+    it may be useful to divide metrics collection and processing load among multiple
+    deployments of Prometheus within any given cluster. This model is enabled by the
+    ability to spin up Prometheus servers using a custom Kubernetes resource.
+  id: totrans-170
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Prometheus 自定义资源允许平台操作员轻松部署 Prometheus 服务器以收集指标。如 [“组织和联邦”](#organization_and_federation)
+    所述，在任何给定的集群中，将指标收集和处理负载分割到多个 Prometheus 部署中可能是有用的。这种模型依赖于使用自定义 Kubernetes 资源来快速部署
+    Prometheus 服务器的能力。
+- en: In some use cases, the ability to spin up Prometheus servers with the Prometheus
+    Operator is also helpful to expose to platform tenants. A team’s applications
+    may emit a large volume of metrics that will overwhelm existing Prometheus servers.
+    And you may want to include a team’s metrics collection and processing in its
+    resource budget, so having a dedicated Prometheus server in their Namespace may
+    be a useful model. Not every team will have an appetite for this approach where
+    they deploy and manage their own Prometheus resources. Many may require further
+    abstraction of the details, but it is an option to consider. If using this model,
+    don’t discount the added complexity this will introduce for dashboards and alerting
+    for the metrics gathered, as well as for federation and long-term storage.
+  id: totrans-171
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在某些用例中，使用 Prometheus Operator 快速部署 Prometheus 服务器的能力也对平台租户公开是有帮助的。一个团队的应用程序可能会产生大量指标，这将超出现有
+    Prometheus 服务器的处理能力。您可能希望将团队的指标收集和处理包括在其资源预算中，因此在其命名空间中拥有一个专用的 Prometheus 服务器可能是一个有用的模型。并非每个团队都愿意采用这种部署和管理自己
+    Prometheus 资源的方式。许多团队可能需要进一步的抽象细节，但这是一个可以考虑的选项。如果采用这种模型，请不要忽视这将为仪表板和指标收集的警报，以及联邦和长期存储引入的额外复杂性。
+- en: Deploying Prometheus servers is one thing, but ongoing management of configuration
+    for them is another. For this, the Prometheus Operator has other custom resources,
+    the most common being the ServiceMonitor. When you create a ServiceMonitor resource,
+    the Prometheus Operator responds by updating the scrape configuration of the relevant
+    Prometheus server. [Example 9-5](#ex_9-5) shows a ServiceMonitor that will create
+    a scrape configuration for Prometheus to collect metrics from the Kubernetes API
+    server.
+  id: totrans-172
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 部署 Prometheus 服务器只是一回事，但对它们的配置进行持续管理是另一回事。为此，Prometheus Operator 还有其他自定义资源，最常见的是
+    ServiceMonitor。当创建一个 ServiceMonitor 资源时，Prometheus Operator 会更新相关 Prometheus 服务器的抓取配置。[示例 9-5](#ex_9-5)
+    展示了一个 ServiceMonitor，将创建一个抓取配置，用于从 Kubernetes API 服务器收集 Prometheus 的指标。
+- en: Example 9-5\. Example manifest for a ServiceMonitor resource
+  id: totrans-173
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 9-5\. ServiceMonitor 资源的示例清单
+- en: '[PRE4]'
+  id: totrans-174
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: '[![1](assets/1.png)](#co_observability_CO3-1)'
+  id: totrans-175
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_observability_CO3-1)'
+- en: This is the label that is referred to in [Example 9-1](#example_9_1) of a `Prometheus`
+    manifest by the `serviceMonitorSelector`.
+  id: totrans-176
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是 [示例 9-1](#example_9_1) 中 `Prometheus` 清单中 `serviceMonitorSelector` 所指的标签。
+- en: '[![2](assets/2.png)](#co_observability_CO3-2)'
+  id: totrans-177
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_observability_CO3-2)'
+- en: The `endpoints` provide configuration about the port to use and how to connect
+    to the instances that Prometheus will scrape metrics from. This example instructs
+    Prometheus to connect using HTTPS and provides a Certificate Authority and server
+    name to verify the connection endpoint.
+  id: totrans-178
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`endpoints` 提供有关要使用的端口以及如何连接 Prometheus 将从中抓取指标的实例的配置。本示例指示 Prometheus 使用 HTTPS
+    进行连接，并提供证书颁发机构和服务器名称来验证连接端点。'
+- en: '[![3](assets/3.png)](#co_observability_CO3-3)'
+  id: totrans-179
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_observability_CO3-3)'
+- en: In Prometheus terms, a “job” is a collection of instances of a service. For
+    example, an individual apiserver is an “instance.” All the apiservers in the cluster
+    collectively comprise a “job.” This field indicates which label contains the name
+    that should be used for the job in Prometheus. In this case the job will be `apiserver`.
+  id: totrans-180
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Prometheus 的术语中，“job” 是服务实例的集合。例如，单独的 apiserver 就是一个“实例”。集群中的所有 apiserver
+    共同构成一个“job”。此字段指示哪个标签包含应在 Prometheus 中用于 job 的名称。在这种情况下，job 将是 `apiserver`。
+- en: '[![4](assets/4.png)](#co_observability_CO3-4)'
+  id: totrans-181
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_observability_CO3-4)'
+- en: The `namespaceSelector` instructs Prometheus in which Namespaces to look for
+    Services to scrape metrics for this target.
+  id: totrans-182
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`namespaceSelector` 指示 Prometheus 在哪些命名空间中查找要为此目标抓取指标的服务。'
+- en: '[![5](assets/5.png)](#co_observability_CO3-5)'
+  id: totrans-183
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#co_observability_CO3-5)'
+- en: The `selector` enables service discovery by way of labels on a Kubernetes Service.
+    In other words, any Service (in the default Namespace) that contains the specified
+    labels will be used to find the targets to scrape metrics from.
+  id: totrans-184
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`selector` 通过 Kubernetes Service 上的标签实现服务发现。换句话说，任何包含指定标签的 Service（在默认命名空间中）都将用于查找要从中抓取指标的目标。'
+- en: Scrape configurations in a Prometheus server may also be managed with PodMonitor
+    resources for monitoring groups of Pods (as opposed to Services with the ServiceMonitor),
+    as well as Probe resources for monitoring Ingresses or static targets.
+  id: totrans-185
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Prometheus 服务器中的抓取配置也可以通过 PodMonitor 资源来管理，用于监控一组 Pods（而不是通过 ServiceMonitor
+    监控的服务），以及用于监控 Ingresses 或静态目标的 Probe 资源。
+- en: The PrometheusRule resource instructs the operator to generate a rule file for
+    Prometheus that contains rules for recording metrics and alerting upon metrics.
+    [Example 9-6](#ex_9-6) shows an example of a PrometheusRule manifest that contains
+    a recording rule and an alerting rule. These rules will be put in a ConfigMap
+    and mounted into the Prometheus server’s Pod/s.
+  id: totrans-186
+  prefs: []
+  type: TYPE_NORMAL
+  zh: PrometheusRule 资源指示操作员生成一个规则文件，其中包含用于记录指标和基于指标发出警报的规则。 [示例 9-6](#ex_9-6) 展示了一个
+    PrometheusRule 配置文件的示例，其中包含一个记录规则和一个警报规则。 这些规则将放置在 ConfigMap 中，并挂载到 Prometheus
+    服务器的 Pod/s 中。
+- en: Example 9-6\. Example manifest for a PrometheusRule resource
+  id: totrans-187
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 9-6\. PrometheusRule 资源的示例配置文件
+- en: '[PRE5]'
+  id: totrans-188
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: '[![1](assets/1.png)](#co_observability_CO4-1)'
+  id: totrans-189
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_observability_CO4-1)'
+- en: This is the label that is referred to in [Example 9-1](#example_9_1) of a `Prometheus`
+    manifest by the `ruleSelector`.
+  id: totrans-190
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是 [示例 9-1](#example_9_1) 中 `Prometheus` 配置文件中 `ruleSelector` 所引用的标签。
+- en: '[![2](assets/2.png)](#co_observability_CO4-2)'
+  id: totrans-191
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_observability_CO4-2)'
+- en: This is an example of a recording rule for the total LIST and GET requests to
+    all Kubernetes API server instances over a 5-minute period. It uses an expression
+    on the `apiserver_request_total` metric exposed by the API server and stores a
+    new metric called `code_resource:apiserver_request_total:rate5m`.
+  id: totrans-192
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是一个关于在 5 分钟内所有 Kubernetes API 服务器实例的总 LIST 和 GET 请求的记录规则示例。 它使用 API 服务器暴露的
+    `apiserver_request_total` 指标上的表达式，并存储一个名为 `code_resource:apiserver_request_total:rate5m`
+    的新指标。
+- en: '[![3](assets/3.png)](#co_observability_CO4-3)'
+  id: totrans-193
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_observability_CO4-3)'
+- en: Here is an alerting rule that will prompt Prometheus to send a warning alert
+    if any Pod gets stuck in a not ready state for more than 15 minutes.
+  id: totrans-194
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果任何 Pod 处于非就绪状态超过 15 分钟，这里是一个警报规则，将提示 Prometheus 发送警报。
+- en: Using the Prometheus Operator and these custom resources to manage Prometheus
+    servers and their configurations has proven to be a very useful pattern and has
+    become very prevalent in the field. If you are using Prometheus as your primary
+    metrics tool, we highly recommend it.
+  id: totrans-195
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 Prometheus Operator 和这些自定义资源来管理 Prometheus 服务器及其配置已被证明是一种非常有用的模式，并在该领域中变得非常普遍。
+    如果您将 Prometheus 作为主要指标工具使用，我们强烈推荐使用它。
+- en: Alertmanager
+  id: totrans-196
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: Alertmanager
+- en: The next major component is Alertmanager. This is a separate, distinct workload
+    that processes alerts and routes them to receivers that constitute the communication
+    medium to the on-call engineers. Prometheus has alerting rules that prompt Prometheus
+    to fire off alerts in response to measurable conditions. Those alerts get sent
+    to Alertmanager, where they are grouped and deduplicated so that humans don’t
+    receive a flood of alerts when outages occur that affect multiple replicas or
+    components. Then notifications are sent via the configured receivers. Receivers
+    are the supported notification systems, such as email, Slack, or PagerDuty. If
+    you want to implement an unsupported or custom notification system, Alertmanager
+    has a webhook receiver that allows you to provide a URL to which Alertmanager
+    will send a POST request with a JSON payload.
+  id: totrans-197
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下一个主要组件是 Alertmanager。 这是一个独立的工作负载，用于处理警报并将其路由到构成与值班工程师通信的接收者。 Prometheus 具有警报规则，以响应可测量条件触发警报。
+    这些警报会发送到 Alertmanager，那里它们将被分组和去重，以避免在影响多个副本或组件的故障发生时向人员发送大量警报。 然后通过配置的接收者发送通知。
+    接收者是支持的通知系统，如电子邮件、Slack 或 PagerDuty。 如果要实现不受支持或自定义的通知系统，Alertmanager 有一个 webhook
+    接收器，允许您提供一个 URL，Alertmanager 将向其发送带有 JSON 负载的 POST 请求。
+- en: When using the Prometheus Operator, a new Alertmanager can be deployed with
+    a manifest, as shown in [Example 9-7](#ex_9-7).
+  id: totrans-198
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 Prometheus Operator 时，可以通过配置文件部署一个新的 Alertmanager，就像 [示例 9-7](#ex_9-7) 中所示。
+- en: Example 9-7\. Example manifest for an Alertmanager resource
+  id: totrans-199
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 9-7\. Alertmanager 资源的示例配置文件
+- en: '[PRE6]'
+  id: totrans-200
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: '[![1](assets/1.png)](#co_observability_CO5-1)'
+  id: totrans-201
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_observability_CO5-1)'
+- en: Multiple replicas may be requested to deploy Alertmanager in a highly available
+    configuration.
+  id: totrans-202
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可能需要多个副本来请求以高可用配置部署Alertmanager。
+- en: While this custom resource gives you very convenient methods to deploy Alertmanager
+    instances, it is very rarely necessary to deploy multiple Alertmanagers in a cluster,
+    especially since it can be deployed in a highly available configuration. You could
+    consider a centralized Alertmanager for multiple clusters, but having one per
+    cluster is wise since it reduces external dependencies for any given cluster.
+    Leveraging a common Alertmanager for a cluster provides the opportunity for tenants
+    to leverage a single PrometheusRule resource to configure new alerting rules for
+    their app. In this model, each Prometheus server is configured to send alerts
+    to the cluster’s Alertmanager.
+  id: totrans-203
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然这个自定义资源为您提供了非常方便的方法来部署Alertmanager实例，但在集群中几乎没有必要部署多个Alertmanager，特别是因为它可以部署在高可用配置中。您可以考虑为多个集群使用一个集中式Alertmanager，但每个集群一个Alertmanager是明智的，因为这样可以减少每个集群的外部依赖。利用集群的公共Alertmanager为租户提供了使用单个PrometheusRule资源配置其应用程序的新警报规则的机会。在这种模型中，每个Prometheus服务器被配置为向集群的Alertmanager发送警报。
+- en: Grafana
+  id: totrans-204
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: Grafana
+- en: For platform operators to be able to reason about what is happening in a complex
+    Kubernetes-based platform, it is crucial to build charts and dashboards from the
+    data stored in Prometheus. [Grafana](https://grafana.com) is an open source visualization
+    layer that has become the default solution for viewing Prometheus metrics. The
+    kube-prometheus project provides a variety of dashboards to use as a basis and
+    starting point, not to mention many others available in the community. And, of
+    course, you have the freedom to build your own charts to display the time series
+    data from any system you manage as a part of your platform.
+  id: totrans-205
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于平台操作员能够推理出在基于复杂Kubernetes的平台中发生的情况至关重要，关键是从存储在Prometheus中的数据构建图表和仪表板。[Grafana](https://grafana.com)是一个开源的可视化层，已成为查看Prometheus指标的默认解决方案。kube-prometheus项目提供了多种仪表板作为基础和起点，更不用说社区中还有许多其他可用的仪表板。当然，您也可以自由地构建自己的图表，以显示您管理的任何系统的时间序列数据的情况。
+- en: 'Visualizing metrics is also critical for application teams. This is relevant
+    to how you deploy your Prometheus servers. If you are leveraging multiple Prometheus
+    instances in your cluster, how will you expose the metrics gathered to the tenants
+    of the platform? On one hand, adding a Grafana dashboard to each Prometheus server
+    may be a useful pattern. This could provide a convenient separation of concerns.
+    However, on the other hand, if users find they have to routinely log in to multiple
+    distinct dashboards, that may be cumbersome. In this case you have two options:'
+  id: totrans-206
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于应用团队来说，可视化指标也是至关重要的。这与您如何部署您的Prometheus服务器相关。如果您在集群中利用多个Prometheus实例，那么您如何向平台的租户公开收集的指标呢？一方面，为每个Prometheus服务器添加一个Grafana仪表板可能是一个有用的模式。这可能会提供方便的关注点分离。然而，另一方面，如果用户发现他们不得不经常登录到多个不同的仪表板，这可能会很麻烦。在这种情况下，您有两个选择：
+- en: Employ federation to collect metrics from different servers into a single server
+    and then add a dashboard to that for a single place to access metrics for a set
+    of systems. This is the approach used with projects such as Thanos.
+  id: totrans-207
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用联邦机制从不同服务器收集指标并汇总到单一服务器，然后为一组系统的指标访问添加仪表盘。这是像Thanos这样的项目所采用的方法。
+- en: Add multiple data sources to a single Grafana dashboard. In this case a single
+    dashboard exposes metrics from several Prometheus servers.
+  id: totrans-208
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 将多个数据源添加到单个Grafana仪表板。在这种情况下，一个单一的仪表板展示了来自多个Prometheus服务器的指标。
+- en: The choice boils down to whether you prefer the complexity to be in federating
+    Prometheus instances or in managing more complex Grafana configurations. There
+    is the additional resource consumption to consider with the federation server
+    option, but if that is palatable, it is mostly a matter of preference.
+  id: totrans-209
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 选择要么在联邦Prometheus实例中增加复杂性，要么管理更复杂的Grafana配置。还要考虑使用联邦服务器选项时的额外资源消耗，但如果可以接受，这主要是一种偏好问题。
+- en: If you are using a single Prometheus server for a cluster and your platform
+    operators and tenants are going to the same place to get metrics, you will need
+    to consider permissions around viewing and editing dashboards. You will likely
+    need to configure the organizations, teams, and users appropriately for your use
+    case.
+  id: totrans-210
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您在集群中使用单个Prometheus服务器，并且您的平台操作员和租户都去同一个地方获取指标，那么您需要考虑关于查看和编辑仪表盘的权限。您可能需要根据您的用例适当地配置组织、团队和用户。
+- en: Node exporter
+  id: totrans-211
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 节点导出器
+- en: '[Node exporter](https://github.com/prometheus/node_exporter) is the node agent
+    that usually runs as a Kubernetes DaemonSet and collects machine and operating
+    system metrics. It gives you the host-level CPU, memory, disk I/O, disk space,
+    network stats, and file descriptor information, to name just a few of the metrics
+    it collects by default. As mentioned earlier, this is one of the most common examples
+    of an exporter. Linux systems don’t export Prometheus metrics natively. The node
+    exporter knows how to collect those metrics from the kernel and then exposes them
+    for scraping by Prometheus. It is useful any time you want to monitor the system
+    and hardware of Unix-like machines with Prometheus.'
+  id: totrans-212
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Node exporter](https://github.com/prometheus/node_exporter) 是通常作为 Kubernetes
+    DaemonSet 运行的节点代理，用于收集机器和操作系统的度量标准。它提供主机级别的 CPU、内存、磁盘 I/O、磁盘空间、网络统计和文件描述符信息等度量标准，默认情况下收集的仅是其中的一部分。正如前面提到的，这是一个导出器的最常见示例之一。Linux
+    系统并不原生导出 Prometheus 度量标准，节点导出器知道如何从内核收集这些度量标准，然后将其公开供 Prometheus 抓取。任何时候您想要通过
+    Prometheus 监控类 Unix 系统的系统和硬件时，它都非常有用。'
+- en: kube-state-metrics
+  id: totrans-213
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: kube-state-metrics
+- en: '[kube-state-metrics](https://github.com/kubernetes/kube-state-metrics) provides
+    metrics related to a range of Kubernetes resources. It is essentially an exporter
+    for information about resources collected from the Kubernetes API. For example,
+    kube-state-metrics exposes Pod start times, status, labels, priority class, resource
+    requests, and limits; all the information that you would normally use `kubectl
+    get` or `kubectl describe` to collect. These metrics can be useful to detect critical
+    cluster conditions, such as Pods stuck in crash loops or Namespaces nearing their
+    resource quotas.'
+  id: totrans-214
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[kube-state-metrics](https://github.com/kubernetes/kube-state-metrics) 提供与各种
+    Kubernetes 资源相关的度量标准。它本质上是一个导出器，用于从 Kubernetes API 收集资源信息。例如，kube-state-metrics
+    公开了 Pod 的启动时间、状态、标签、优先级类、资源请求和限制等信息；这些信息通常需要使用 `kubectl get` 或 `kubectl describe`
+    命令来收集。这些度量标准对于检测关键集群条件非常有用，例如卡在崩溃循环中的 Pod 或接近资源配额的命名空间。'
+- en: Prometheus adapter
+  id: totrans-215
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: Prometheus 适配器
+- en: '[Prometheus adapter](https://github.com/DirectXMan12/k8s-prometheus-adapter)
+    is included here because it is a part of the kube-prometheus stack. However, it
+    is not an exporter, nor is it involved in the core functionality of Prometheus.
+    Instead, Prometheus adapter is a *client* of Prometheus. It retrieves metrics
+    from the Prometheus API and makes them available through the Kubernetes metrics
+    APIs. This enables autoscaling functionality for workloads. Refer to [Chapter 13](ch13.html#autoscaling_chapter)
+    for more information on autoscaling.'
+  id: totrans-216
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Prometheus 适配器](https://github.com/DirectXMan12/k8s-prometheus-adapter) 在此处包括，因为它是
+    kube-prometheus 堆栈的一部分。然而，它不是一个导出器，也不涉及 Prometheus 的核心功能。相反，Prometheus 适配器是 Prometheus
+    的一个客户端。它从 Prometheus API 中检索度量标准，并通过 Kubernetes 的度量标准 API 提供给用户。这使得工作负载的自动伸缩功能成为可能。更多关于自动伸缩的信息，请参考
+    [第 13 章](ch13.html#autoscaling_chapter)。'
+- en: As you can see, there are many components to a production-grade metrics and
+    alerting system. We’ve looked at how to accomplish this with Prometheus and the
+    patterns demonstrated with the kube-prometheus stack including the Prometheus
+    Operator to alleviate toil in managing these concerns. Now that we’ve covered
+    logging and metrics, let’s take a look at tracing.
+  id: totrans-217
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如您所见，构建生产级别的度量标准和警报系统有许多组件。我们已经看过如何通过 Prometheus 和 kube-prometheus 堆栈（包括 Prometheus
+    Operator）来实现这一点，以减轻管理这些问题的繁琐工作。既然我们已经涵盖了日志和度量标准，现在让我们来看一下追踪。
+- en: Distributed Tracing
+  id: totrans-218
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 分布式追踪
+- en: Tracing in general refers to a specialized kind of event capturing that follows
+    an execution path. While tracing can be applicable to a single piece of software,
+    in this section we’re dealing with distributed tracing that spans multiple workloads
+    and traces requests in microservice architectures. Organizations that have embraced
+    distributed systems benefit greatly from this technology. In this section, we’ll
+    discuss how to make distributed tracing available as a platform service for your
+    application teams.
+  id: totrans-219
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 追踪通常指一种特殊的事件捕获，用于跟踪执行路径。尽管追踪可以适用于单个软件，但本节讨论的是跨多个工作负载的分布式追踪，用于微服务架构中跟踪请求。已经采用分布式系统的组织从这项技术中获益良多。在本节中，我们将讨论如何将分布式追踪作为平台服务提供给您的应用团队。
+- en: An important distinction between distributed tracing compared to logging and
+    metrics is that the tracing technology between the applications and platform must
+    be compatible. As long as an app logs to stdout and stderr, the platform services
+    to aggregate logs don’t care how logs are written inside the app. And common metrics
+    like CPU and memory consumption can be gathered from workloads without specialized
+    instrumentation. However, if an application is instrumented with a client library
+    that is incompatible with the tracing system offered by the platform, tracing
+    will not work at all. For this reason, close collaboration between platform and
+    application development teams is critical in this area.
+  id: totrans-220
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 分布式追踪与日志记录和指标的重要区别在于，应用程序和平台之间的追踪技术必须兼容。只要应用程序将日志记录到stdout和stderr，平台服务聚合日志并不关心应用程序内部如何编写日志。而常见的指标如CPU和内存消耗可以从工作负载中收集，而无需专门的仪表化。然而，如果一个应用程序使用的客户端库与平台提供的追踪系统不兼容，追踪将根本无法工作。因此，在这一领域，平台和应用程序开发团队之间的紧密协作至关重要。
+- en: In covering the topic of distributed tracing, we will first look at the OpenTracing
+    and OpenTelemetry specifications along with some of the terminology that is used
+    when discussing tracing. We’ll then cover the components that are common with
+    the popular projects used for tracing. After that, we’ll touch on the application
+    instrumentation necessary to enable tracing as well as the implications of using
+    a service mesh.
+  id: totrans-221
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在讨论分布式追踪时，我们将首先看一下OpenTracing和OpenTelemetry规范，以及在讨论追踪时使用的一些术语。然后，我们将涵盖一些流行的用于追踪的项目中常见的组件。之后，我们将触及启用追踪所需的应用程序仪表化，以及使用服务网格的影响。
+- en: OpenTracing and OpenTelemetry
+  id: totrans-222
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: OpenTracing和OpenTelemetry
+- en: '[OpenTracing](https://opentracing.io) is an open source specification for distributed
+    tracing that helps the ecosystem converge on standards for implementations. The
+    spec revolves around three concepts that are important in understanding tracing:'
+  id: totrans-223
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[OpenTracing](https://opentracing.io)是用于分布式追踪的开源规范，有助于生态系统在实现标准上达成共识。该规范围绕三个重要概念展开，这些概念对理解追踪至关重要：'
+- en: Trace
+  id: totrans-224
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 追踪
+- en: When an end user of a distributed application makes a request, that request
+    traverses distinct services that process the request and participate in satisfying
+    the client request. The trace represents that entire transaction and is the entity
+    that we are interested in analyzing. A trace consists of multiple spans.
+  id: totrans-225
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当分布式应用程序的最终用户发出请求时，该请求会经过处理请求并参与满足客户请求的不同服务。追踪表示整个事务，并且是我们有兴趣分析的实体。一个追踪由多个跨度组成。
+- en: Span
+  id: totrans-226
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 跨度
+- en: Each distinct service that processes a request represents a span. The operations
+    that occur within the workload boundaries constitute a single span that are part
+    of a trace.
+  id: totrans-227
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 处理请求的每个不同服务代表一个跨度。在工作负载边界内发生的操作构成了一个跨度，它们是追踪的一部分。
+- en: Tag
+  id: totrans-228
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 标签
+- en: Tags are metadata that are attached to spans to contextualize them within a
+    trace and provide searchable indexes.
+  id: totrans-229
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 标签是附加到跨度的元数据，用于在追踪中对其进行上下文化，并提供可搜索的索引。
+- en: When traces are visualized, they will generally include each individual trace
+    and readily indicate which components in a system are impacting performance the
+    most. They will also help track down where errors are occurring and how they are
+    affecting other components of an application.
+  id: totrans-230
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当可视化追踪时，它们通常会包括每个单独的追踪，并明确指出系统中哪些组件对性能影响最大。它们还有助于追踪错误发生的位置及其如何影响应用程序的其他组件。
+- en: Recently, the OpenTracing project merged with OpenCensus to form [OpenTelemetry](https://opentelemetry.io).
+    At the time of this writing, OpenTelemetry support is still experimental in Jaeger,
+    which is a fair barometer of adoption, but it is reasonable to expect OpenTelemetry
+    to become the de facto standard.
+  id: totrans-231
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最近，OpenTracing项目与OpenCensus合并形成了[OpenTelemetry](https://opentelemetry.io)。在撰写本文时，OpenTelemetry的支持在Jaeger中仍处于实验阶段，这是对采纳的公正指标，但可以合理预期OpenTelemetry将成为事实标准。
+- en: Tracing Components
+  id: totrans-232
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 追踪组件
+- en: To offer distributed tracing as a platform service, there needs to be a few
+    platform components in place. The patterns we’ll discuss here are applicable to
+    open source projects such as [Zipkin](https://zipkin.io) and [Jaeger](https://www.jaegertracing.io),
+    but the same models will often apply for other projects and commercially supported
+    products that implement the OpenTracing standards.
+  id: totrans-233
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要将分布式跟踪作为平台服务提供，需要一些平台组件。我们将在这里讨论的模式适用于开源项目，如[Zipkin](https://zipkin.io)和[Jaeger](https://www.jaegertracing.io)，但这些模型通常也适用于其他实现
+    OpenTracing 标准的项目和商业支持产品。
+- en: Agent
+  id: totrans-234
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 代理人
+- en: Each component in a distributed application will output a span for each request
+    processed. The agent acts as a server to which the application can send the span
+    information. In a Kubernetes-based platform it will usually be a node agent that
+    runs on each machine in the cluster and receives all spans for workloads on that
+    node. The agent will forward batched spans to a central collector.
+  id: totrans-235
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 分布式应用程序中的每个组件将为每个处理的请求输出一个跨度。代理充当应用程序可以向其发送跨度信息的服务器。在基于 Kubernetes 的平台中，通常会有一个节点代理运行在集群中的每台机器上，并接收该节点上工作负载的所有跨度。代理将批处理后的跨度转发到中央收集器。
+- en: Collector
+  id: totrans-236
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 收集器
+- en: The collector processes the spans and stores them in the backend database. It
+    is responsible for validating, indexing, and performing any transformations before
+    persisting the spans to storage.
+  id: totrans-237
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 收集器处理这些跨度并将它们存储在后端数据库中。它负责验证、索引和执行任何转换，然后将跨度持久化到存储中。
+- en: Storage
+  id: totrans-238
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 存储
+- en: The supported databases vary from project to project, but the usual suspects
+    are [Cassandra](https://cassandra.apache.org) and [Elasticsearch](https://www.elastic.co/elasticsearch).
+    Even when sampling, distributed tracing systems collect very large amounts of
+    data. The databases used need to be able to process and quickly search these large
+    volumes of data to produce useful analysis.
+  id: totrans-239
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 支持的数据库因项目而异，但通常会选择[Cassandra](https://cassandra.apache.org)和[Elasticsearch](https://www.elastic.co/elasticsearch)。即使在采样时，分布式跟踪系统也会收集大量数据。使用的数据库需要能够处理和快速搜索这些大量的数据，以产生有用的分析。
+- en: API
+  id: totrans-240
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: API
+- en: As you might expect, the next component is an API that allows clients to access
+    the stored data. It exposes the traces and their spans to other workloads or visualization
+    layers.
+  id: totrans-241
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如你可能期望的那样，下一个组件是一个 API，允许客户端访问存储的数据。它向其他工作负载或可视化层公开跟踪和它们的跨度。
+- en: User interface
+  id: totrans-242
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 用户界面
+- en: This is where the rubber hits the road for your platform tenants. This visualization
+    layer queries the API and reveals the data to app developers. It is where engineers
+    can view the data collected in useful charts to analyze their systems and distributed
+    applications.
+  id: totrans-243
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是你平台租户的实际情况。这个可视化层查询 API 并向应用开发人员显示收集的数据。工程师可以在这里查看有用的图表，分析他们的系统和分布式应用程序。
+- en: '[Figure 9-8](#components_of_a_tracing_platform_service) illustrates these tracing
+    components, their relationships to one another, and the common deployment methods.'
+  id: totrans-244
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 9-8](#components_of_a_tracing_platform_service)说明了这些跟踪组件及其彼此之间的关系，以及常见的部署方法。'
+- en: '![prku 0908](assets/prku_0908.png)'
+  id: totrans-245
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prku 0908](assets/prku_0908.png)'
+- en: Figure 9-8\. Components of a tracing platform service.
+  id: totrans-246
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 9-8\. 跟踪平台服务的组件。
+- en: Application Instrumentation
+  id: totrans-247
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 应用程序工具化
+- en: In order for these spans to get collected and correlated together into traces,
+    the application has to be instrumented to deliver this information. For this reason,
+    it is crucial to get buy-in from your application development teams. The best
+    tracing platform service in the world is useless if the applications are not delivering
+    the raw data needed. [Chapter 14](ch14.html#application_considerations_chapter)
+    goes into this topic in more depth.
+  id: totrans-248
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了将这些跨度收集并归纳到跟踪中，应用程序必须被工具化以提供这些信息。因此，从你的应用开发团队那里获取认同是至关重要的。如果应用程序没有提供所需的原始数据，即使是世界上最好的跟踪平台服务也是无用的。[第14章](ch14.html#application_considerations_chapter)更深入地讨论了这个主题。
+- en: Service Meshes
+  id: totrans-249
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 服务网格
+- en: If using a service mesh, you will likely want your mesh data included in your
+    traces. Service meshes implement proxies for requests going to and from your workloads,
+    and getting timing trace spans on those proxies helps you understand how they
+    affect performance. Note that your application will still need to be instrumented,
+    even if using a service mesh. The request headers need to be propagated from one
+    service request to the next through a trace. Service meshes are covered in detail
+    in [Chapter 6](ch06.html#chapter6).
+  id: totrans-250
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果使用服务网格，您可能希望将网格数据包含在您的追踪中。服务网格实现了代理，用于处理进出工作负载的请求，获取这些代理的时间跟踪跨度有助于理解它们如何影响性能。请注意，即使使用服务网格，您的应用程序仍需要进行仪表化。请求头需要通过追踪从一个服务请求传播到下一个服务请求。服务网格在[第6章](ch06.html#chapter6)中有详细介绍。
+- en: Summary
+  id: totrans-251
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 摘要
+- en: Observability is a core concern in platform engineering. It’s fair to say that
+    no application platform could be considered production-ready without observability
+    solved. As a baseline, make sure you are able to reliably collect logs from your
+    containerized workloads and forward them to your logging backend along with the
+    audit logs from the Kubernetes API server. Also consider metrics and alerting
+    a minimum requirement. Collect the metrics exposed by the Kubernetes control plane,
+    surface them in a dashboard, and alert on them. Work with your application development
+    teams to instrument their applications to expose metrics where applicable and
+    collect those, too. Finally, if your teams have embraced microservice architectures,
+    work with your app dev teams to instrument their apps for tracing and install
+    the platform components to leverage that information as well. With these systems
+    in place you will have the visibility to troubleshoot and refine your operations
+    to improve performance and stability.
+  id: totrans-252
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可观测性是平台工程的核心关注点。可以说，如果没有解决可观测性问题，任何应用平台都无法被视为生产就绪。作为基线，确保能够可靠地从容器化工作负载中收集日志，并将其与来自Kubernetes
+    API服务器的审计日志一起转发到日志后端。还需考虑指标和警报作为最低要求。收集Kubernetes控制平面暴露的指标，将其显示在仪表板上，并对其进行警报。与应用开发团队合作，为其应用程序添加指标仪表化，以便在适用时暴露和收集这些指标。最后，如果您的团队已经采用了微服务架构，还需与应用开发团队合作，为其应用程序添加追踪功能，并安装平台组件以利用这些信息。有了这些系统，您将能够看到运行情况并优化操作，以改善性能和稳定性。

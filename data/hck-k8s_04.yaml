@@ -1,0 +1,1854 @@
+- en: Chapter 3\. Container Runtime Isolation
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第三章 容器运行时隔离
+- en: Linux has evolved sandboxing and isolation techniques beyond simple virtual
+    machines (VMs) that strengthen it from current and future vulnerabilities. Sometimes
+    these sandboxes are called *micro VMs*.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linux 已经发展出超越简单虚拟机（VM）的沙箱化和隔离技术，使其能够抵御当前和未来的漏洞。有时这些沙箱被称为*微型 VM*。
+- en: These sandboxes combine parts of all previous container and VM approaches. You
+    would use them to protect sensitive workloads and data, as they focus on rapid
+    deployment and high performance on shared infrastructure.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些沙箱结合了所有先前容器和 VM 方法的部分。你可以使用它们来保护敏感工作负载和数据，因为它们专注于在共享基础设施上快速部署和高性能。
+- en: 'In this chapter we’ll discuss different types of micro VMs that use virtual
+    machines and containers together, to protect your running Linux kernel and userspace.
+    The generic term *sandboxing* is used to cover the entire spectrum: each tool
+    in this chapter combines software and hardware virtualization of technologies
+    and uses Linux’s Kernel Virtual Machine (KVM), which is widely used to power VMs
+    in public cloud services, including Amazon Web Services and Google Cloud.'
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们将讨论不同类型的微型 VM，它们将虚拟机和容器结合在一起，以保护你正在运行的 Linux 内核和用户空间。通用术语*沙箱化*用于涵盖整个光谱：本章中的每个工具都结合了软件和硬件虚拟化技术，并使用
+    Linux 的内核虚拟机（KVM），这在包括亚马逊云服务和谷歌云在内的公共云服务中被广泛使用来支持 VM。
+- en: You run a lot of workloads at BCTL, and you should remember that while these
+    techniques may also protect against Kubernetes mistakes, all of your web-facing
+    software and infrastructure is a more obvious place to defend first. Zero-days
+    and container breakouts are rare in comparison to simple security-sensitive misconfigurations.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在BCTL上运行大量工作负载，你应该记住，虽然这些技术也可以防止 Kubernetes 错误，但你所有面向网络的软件和基础设施是首要防御的更明显的地方。与简单的安全敏感性配置错误相比，零日漏洞和容器越狱相对较少。
+- en: Hardened runtimes are newer, and have fewer generally less dangerous CVEs than
+    the kernel or more established container runtimes, so we’ll focus less on historical
+    breakouts and more on the history of micro VM design and rationale.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 强化运行时是较新的，通常比内核或更成熟的容器运行时具有更少的危险 CVE，因此我们将更少关注历史性的越狱，而更多关注微型 VM 设计和原理的历史。
+- en: Defaults
+  id: totrans-6
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 默认设置
+- en: '`kubeadm` installs Kubernetes with `runc` as its container runtime, using `cri-o`
+    or `containerd` to manage it. The old `dockershim` way of running `runc` was removed
+    in Kubernetes v1.20, so although Kubernetes doesn’t use Docker any more, the `runc`
+    container runtime that Docker is built on continues to run containers for us.
+    [Figure 3-1](#runtime-sandboxing-k8s-cris) shows three ways Kubernetes can consume
+    the `runc` container runtime: CRI-O, `containerd`, and Docker.'
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kubeadm` 使用 `runc` 作为其容器运行时安装 Kubernetes，使用 `cri-o` 或 `containerd` 进行管理。在
+    Kubernetes v1.20 中移除了旧的通过 `dockershim` 运行 `runc` 的方式，因此尽管 Kubernetes 不再使用 Docker，但
+    Docker 构建的 `runc` 容器运行时仍继续为我们运行容器。[图 3-1](#runtime-sandboxing-k8s-cris) 展示了 Kubernetes
+    可以使用 `runc` 容器运行时的三种方式：CRI-O、`containerd` 和 Docker。'
+- en: '![haku 0301](Images/haku_0301.png)'
+  id: totrans-8
+  prefs: []
+  type: TYPE_IMG
+  zh: '![haku 0301](Images/haku_0301.png)'
+- en: Figure 3-1\. Kubernetes container runtime interfaces
+  id: totrans-9
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-1 Kubernetes 容器运行时接口
+- en: We’ll get into container runtimes in a lot of detail later on in this chapter.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将在本章后面详细讨论容器运行时。
+- en: Threat Model
+  id: totrans-11
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 威胁模型
+- en: 'You have two main reasons for isolating a workload or pod—it may have access
+    to sensitive information and data, or it may be untrusted and potentially hostile
+    to other users of the system:'
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 隔离工作负载或 pod 的主要原因有两个——它可能访问敏感信息和数据，或者可能不受信任并对系统的其他用户具有潜在敌意：
+- en: A *sensitive* workload is one whose data or code is too important to permit
+    unauthorized access to. This may include fraud detection systems, pricing engines,
+    high-frequency trading algorithms, personally identifiable information (PII),
+    financial records, passwords that may be reused in other systems, machine learning
+    models, or an organization’s “secret sauce.” Sensitive workloads are precious.
+  id: totrans-13
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '*敏感*的工作负载是那些数据或代码对于未经授权访问太重要的工作负载。这可能包括欺诈检测系统、定价引擎、高频交易算法、个人可识别信息（PII）、财务记录、可能在其他系统中重复使用的密码、机器学习模型或组织的“秘密配方”。敏感工作负载是宝贵的。'
+- en: '*Untrusted* workloads are those that may be dangerous to run. They may allow
+    high-risk user input or run external software.'
+  id: totrans-14
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '*不受信任*的工作负载是可能危险的工作负载。它们可能允许高风险用户输入或运行外部软件。'
+- en: 'Examples of potentially untrusted workloads include:'
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 潜在不受信任的工作负载示例包括：
+- en: VM workloads on a cloud provider’s hypervisor
+  id: totrans-16
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 云提供商的虚拟化程序上的 VM 工作负载
+- en: CI/CD infrastructure subject to build-time supply chain attacks
+  id: totrans-17
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: CI/CD 基础设施易受构建时供应链攻击影响。
+- en: Transcoding of complex files with potential parser errors
+  id: totrans-18
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 转码复杂文件，可能存在解析器错误
+- en: Untrusted workloads may also include software with published or suspected zero-day
+    Common Vulnerabilities and Exposures (CVEs)—if no patch is available and the workload
+    is business-critical, isolating it further may decrease the potential impact of
+    the vulnerability if exploited.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不受信任的工作负载可能还包括具有已发布或怀疑存在零日漏洞 (CVE) 的软件 —— 如果没有可用的补丁，并且工作负载对业务至关重要，则进一步隔离它可能会降低漏洞被利用时的潜在影响。
+- en: Note
+  id: totrans-20
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The threat to a host running untrusted workloads is the workload, or process,
+    itself. By sandboxing a process and removing the system APIs available to it,
+    the attack surface presented by the host to the process is decreased. Even if
+    that process is compromised, the risk to the host is less.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运行不受信任工作负载的主机面临的威胁是工作负载或进程本身。通过沙盒化进程并移除其可用的系统 API，减少主机对进程的攻击面。即使该进程被 compromise，对主机的风险也较小。
+- en: BCTL allows users to upload files to import data and shipping manifests, so
+    you have a risk that threat actors will try to upload badly formatted or malicious
+    files to try to force exploitable software errors. The pods that run the batch
+    transformation and processing workloads are a good candidate for sandboxing, as
+    they are processing untrusted inputs as shown in [Figure 3-2](#runtime-sandboxing-malicious-batch-workload).
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: BCTL 允许用户上传文件以导入数据和船运清单，因此存在威胁行动者试图上传格式错误或恶意文件以尝试强制利用软件错误。负责运行批处理转换和处理工作负载的
+    Pod 是沙盒化的良好候选对象，因为它们正在处理不受信任的输入，如 [图 3-2](#runtime-sandboxing-malicious-batch-workload)
+    所示。
+- en: '![haku 0302](Images/haku_0302.png)'
+  id: totrans-23
+  prefs: []
+  type: TYPE_IMG
+  zh: '![haku 0302](Images/haku_0302.png)'
+- en: Figure 3-2\. Sandboxing a risky batch workload
+  id: totrans-24
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-2\. 沙盒化风险批量工作负载
+- en: Note
+  id: totrans-25
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Any data supplied to an application by users can be considered untrusted, however
+    most input will be sanitized in some way (for example, validating against an integer
+    or string type). Complex files like PDFs or videos cannot be sanitized in this
+    way, and rely upon the encoding libraries to be secure, which they sometimes are
+    not. Bugs in this type are often “escapable” like CVE-X or ImageTragick.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用户通过应用程序提供的任何数据都可能是不受信任的，但大多数输入会以某种方式进行消毒（例如，根据整数或字符串类型验证）。像 PDF 或视频这样的复杂文件无法通过这种方式消毒，并依赖于编码库的安全性，有时它们并不安全。此类漏洞通常是“逃逸”的，如
+    CVE-X 或 ImageTragick。
+- en: 'Your threat model may include:'
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您的威胁模型可能包括：
+- en: An untrusted user input triggers a bug in a workload that an attacker uses to
+    execute malicious code
+  id: totrans-28
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 不受信任的用户输入触发了工作负载中的漏洞，攻击者利用此漏洞执行恶意代码。
+- en: A sensitive application is compromised and the attacker tries to exfiltrate
+    data
+  id: totrans-29
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 敏感应用程序遭到 compromise，攻击者试图窃取数据。
+- en: A malicious user on a compromised node attempts to read memory of other processes
+    on the host
+  id: totrans-30
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在受 compromise 的节点上，恶意用户尝试读取主机上其他进程的内存。
+- en: New sandboxing code is less well tested, and may contain exploitable bugs
+  id: totrans-31
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 新的沙盒代码测试不足，可能包含可利用的漏洞。
+- en: A container image build pulls malicious dependencies and code from unauthenticated
+    external sources that may contain malware
+  id: totrans-32
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 容器镜像构建从未经身份验证的外部源拉取恶意依赖项和代码，可能包含恶意软件。
+- en: Note
+  id: totrans-33
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Existing container runtimes come with some hardening by default, and Docker
+    uses default `seccomp` and AppArmor profiles that drop a large number of unused
+    system calls. These are not enabled by default in Kubernetes and must be enforced
+    with admission control or PodSecurityPolicy. The `SeccompDefault=true` kubelet
+    feature gate in v1.22 restores this container runtime default behavior.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现有的容器运行时默认带有一些加固措施，Docker 使用默认的 `seccomp` 和 AppArmor 配置文件，这些配置会禁用大量未使用的系统调用。这些在
+    Kubernetes 中默认未启用，必须通过准入控制或 PodSecurityPolicy 强制执行。在 v1.22 中，`SeccompDefault=true`
+    kubelet 功能开关恢复了这种容器运行时的默认行为。
+- en: 'Now that we have an idea of the dangers to your systems, let’s take a step
+    back. We’ll look at virtualization: what it is, why we use containers, and how
+    to combine the best bits of containers and VMs.'
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们对系统的威胁有了一个概念，让我们退一步。我们将探讨虚拟化：它是什么，为什么我们使用容器，以及如何结合容器和虚拟机的最佳部分。
+- en: Containers, Virtual Machines, and Sandboxes
+  id: totrans-36
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 容器、虚拟机和沙盒
+- en: A major difference between a container and a VM is that containers exist on
+    a shared host kernel. VMs boot a kernel every time they start, use hardware-assisted
+    virtualization, and have a more secure but traditionally slower runtime.
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器与虚拟机的一个主要区别在于容器存在于共享主机内核上。虚拟机在每次启动时启动一个内核，使用硬件辅助虚拟化，并且具有更安全但传统上速度较慢的运行时。
+- en: A common perception is that containers are optimized for speed and portability,
+    and virtual machines sacrifice these features for more robust isolation from malicious
+    behavior and higher fault tolerance.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一种普遍看法是，容器被优化用于速度和可移植性，而虚拟机则牺牲了这些特性以获得更强大的隔离免受恶意行为和更高的容错能力。
+- en: This perception is not entirely true. Both technologies share a lot of common
+    code pathways in the kernel itself. Containers and virtual machines have evolved
+    like co-orbiting stars, never fully able to escape each other’s gravity. Container
+    runtimes are a form of kernel virtualization. The OCI ([Open Container Initiative](https://oreil.ly/RCCWR))
+    container image specifications have become the standardized atomic unit of container
+    deployment.
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种看法并不完全正确。这两种技术在内核本身中共享许多常见的代码路径。容器和虚拟机就像共轨运行的恒星一样演化，永远无法完全摆脱彼此的引力。容器运行时是一种内核虚拟化形式。OCI（[开放容器倡议](https://oreil.ly/RCCWR)）容器镜像规范已成为容器部署的标准化原子单位。
+- en: Next-generation sandboxes combine container and virtualization techniques (see
+    [Figure 3-3](#runtime-comparison)) to reduce workloads’ access to the kernel.
+    They do this by by emulating kernel functionality in userspace or the isolated
+    guest environment, thus reducing the host’s attack surface to the process inside
+    the sandbox. Well-defined interfaces can help to reduce complexity, minimizing
+    the opportunity for untested code paths. And, by integrating the sandboxes with
+    `containerd`, they are also able to interact with OCI images and with a software
+    proxy (“shim”) to connect two different interfaces, which can be used with orchestrators
+    like Kubernetes.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下一代沙盒结合了容器和虚拟化技术（参见[图3-3](#runtime-comparison)）以减少工作负载对内核的访问。它们通过在用户空间或隔离的宿主环境中模拟内核功能来实现这一点，从而将宿主的攻击面减少到沙盒内部的进程。明确定义的接口可以帮助减少复杂性，最小化未经测试的代码路径的机会。通过与`containerd`集成，这些沙盒还能与OCI镜像和软件代理（“shim”）进行交互，以连接两个不同的接口，这可以与像Kubernetes这样的编排器一起使用。
+- en: '![image](Images/haku_0303.png)'
+  id: totrans-41
+  prefs: []
+  type: TYPE_IMG
+  zh: '![图片](Images/haku_0303.png)'
+- en: 'Figure 3-3\. Comparison of container isolation approaches; source: Christian
+    Bargmann and Marina Tropmann-Frick’s [container isolation paper](https://oreil.ly/4slD4)'
+  id: totrans-42
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图3-3\. 容器隔离方法的比较；来源：克里斯蒂安·巴格曼和玛丽娜·特罗普曼-弗里克的[容器隔离论文](https://oreil.ly/4slD4)
+- en: These sandboxing techniques are especially relevant to public cloud providers,
+    for which multitenancy and bin packing is highly lucrative. Aggressively multitenanted
+    systems such as Google Cloud Functions and AWS Lambda are running “untrusted code
+    as a service,” and this isolation software is born from cloud vendor security
+    requirements to isolate serverless runtimes from other tenants. Multitenancy will
+    be discussed in depth in the next chapter.
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些沙盒技术对于公共云提供商尤为重要，对于他们来说，多租户和容器装箱是非常有利可图的。像谷歌云函数和AWS Lambda这样的激进多租户系统正在运行“作为服务的不受信任代码”，而这种隔离软件源自云供应商对将无服务器运行时与其他租户隔离的安全要求。多租户将在下一章中深入讨论。
+- en: Cloud providers use virtual machines as the atomic unit of compute, but they
+    may also wrap the root virtual machine process in container-like technologies.
+    Customers then use the virtual machine to run containers—virtualized inception.
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 云服务提供商将虚拟机作为计算的原子单位，但它们也可能将根虚拟机进程包装在类似容器的技术中。然后客户使用虚拟机来运行容器—虚拟化的内嵌。
+- en: Traditional virtualization emulates a physical hardware architecture in software.
+    Micro VMs emulate as small an API as possible, removing features like I/O devices
+    and even system calls to ensure least privilege. However, they are still running
+    the same Linux kernel code to perform low-level program operations such as memory
+    mapping and opening sockets—just with additional security abstractions to create
+    a secure by default runtime. So even though VMs are not sharing as much of the
+    kernel as containers do, some system calls must still be executed by the host
+    kernel.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 传统虚拟化在软件中模拟物理硬件架构。微型虚拟机尽可能模拟小的API，删除诸如I/O设备甚至系统调用等功能，以确保最小权限。然而，它们仍在运行相同的Linux内核代码来执行低级程序操作，如内存映射和打开套接字—只是通过额外的安全抽象来创建默认安全的运行时。因此，即使虚拟机没有像容器那样共享内核的那么多，一些系统调用仍必须由宿主内核执行。
+- en: Software abstractions require CPU time to execute, and so virtualization must
+    always be a balance of security and performance. It is possible to add enough
+    layers of abstraction and indirection that a process is considered “highly secure,”
+    but it is unlikely that this ultimate security will result in a viable user experience.
+    Unikernels go in the other direction, tracing a program’s execution and then removing
+    almost all kernel functionality except what the program has used. Observability
+    and debuggability are perhaps the reasons that unikernels have not seen widespread
+    adoption.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 软件抽象需要 CPU 时间来执行，因此虚拟化必须始终在安全性和性能之间取得平衡。可能会添加足够多的抽象层和间接性，使一个进程被视为“高度安全”，但最终这种极致安全可能不会带来可行的用户体验。而单内核则朝着另一个方向发展，跟踪程序的执行，然后除了程序使用的功能之外几乎移除所有内核功能。观测性和可调试性或许是单内核没有得到广泛采纳的原因。
+- en: To understand the trade-offs and compromises inherent in each approach, it is
+    important to grok a comparison of virtualization types. Virtualization has existed
+    for a long time and has many variations.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要理解每种方法中固有的权衡和妥协，重要的是理解虚拟化类型的比较。虚拟化已存在很长时间，并且有许多变种。
+- en: How Virtual Machines Work
+  id: totrans-48
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 虚拟机的工作原理
+- en: 'Although virtual machines and associated technologies have existed since the
+    late 1950s, a lack of hardware support in the 1990s led to their temporary demise.
+    During this time “process virtual machines” became more popular, especially the
+    Java virtual machine (JVM). In this chapter we are exclusively referring to system
+    virtual machines: a form of virtualization not tied to a specific programming
+    language. Examples include KVM/QEMU, VMware, Xen, VirtualBox, etc.'
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管虚拟机及其相关技术自20世纪50年代末以来就已存在，但在1990年代由于缺乏硬件支持而暂时衰退。在这段时间内，“进程虚拟机”变得越来越流行，特别是Java虚拟机（JVM）。在本章中，我们专指系统虚拟机：一种不受特定编程语言限制的虚拟化形式。例如KVM/QEMU、VMware、Xen、VirtualBox等。
+- en: Virtual machine research began in the 1960s to facilitate sharing large, expensive
+    physical machines between multiple users and processes (see [Figure 3-4](#runtime-virtualisation-family-tree)).
+    To share a physical host safely, some level of isolation must be enforced between
+    tenants—and in case of hostile tenants, there should be much less access to the
+    underlying system.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虚拟机研究始于20世纪60年代，旨在便于多个用户和进程之间共享大型昂贵的物理机器（见[图 3-4](#runtime-virtualisation-family-tree)）。要安全地共享物理主机，必须在租户之间实施某种程度的隔离，以及在敌对租户情况下，应该大幅减少对底层系统的访问权限。
+- en: '![Container abstractions](Images/haku_0304.png)'
+  id: totrans-51
+  prefs: []
+  type: TYPE_IMG
+  zh: '![容器抽象](Images/haku_0304.png)'
+- en: 'Figure 3-4\. Family tree of virtualization; source: [“The Ideal Versus the
+    Real”](https://oreil.ly/7OLfk)'
+  id: totrans-52
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-4\. 虚拟化的家族树；来源：[“理想与现实”](https://oreil.ly/7OLfk)
+- en: 'This is performed in hardware (the CPU), software (in the kernel, and userspace),
+    or from cooperation between both layers, and allows many users to share the same
+    large physical hardware. This innovation became the driving technology behind
+    public cloud adoption: safe sharing and isolation for processes, memory, and the
+    resources they require from the physical host machine.'
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是在硬件（CPU）、软件（内核和用户空间）或两者层间的协作中执行的，并允许许多用户共享相同的大型物理硬件。这种创新成为公共云采用的主要技术：为进程、内存和它们从物理主机机器上需求的资源提供安全共享和隔离。
+- en: 'The host machine is split into smaller isolated compute units, traditionally
+    referred to as guests (see [Figure 3-5](#runtime-virtualisation-high-level)).
+    These guests interact with a virtualized layer above the physical host’s CPU and
+    devices. That layer intercepts system calls to handle them itself: either by proxying
+    them to the host kernel, or handling the request itself—doing the kernel’s job
+    where possible. Full virtualization (e.g., VMware) emulates hardware and boots
+    a full kernel inside the guest. Operating-system–level virtualization (e.g., a
+    container) emulates the host’s kernel (i.e., using namespace, `cgroups`, capabilities,
+    and `seccomp`) so it can start a containerized process directly on the host kernel.
+    Processes in containers share many of the kernel pathways and security mechanisms
+    that processes in VMs execute.'
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 主机机器被分割为较小的孤立计算单元，传统上称为客户（见[图3-5](#runtime-virtualisation-high-level)）。这些客户与位于物理主机CPU和设备上方的虚拟化层进行交互。该层拦截系统调用以自行处理：将它们代理给主机内核，或者在可能的情况下自行处理请求——执行内核的工作。全虚拟化（例如VMware）模拟硬件并在客户内部启动完整内核。操作系统级虚拟化（例如容器）模拟主机的内核（即使用命名空间、`cgroups`、功能和`seccomp`），因此可以直接在主机内核上启动容器化进程。容器中的进程与VM中执行的进程相似，共享许多内核路径和安全机制。
+- en: '![image](Images/haku_0305.png)'
+  id: totrans-55
+  prefs: []
+  type: TYPE_IMG
+  zh: '![image](Images/haku_0305.png)'
+- en: 'Figure 3-5\. Server virtualization; source: [“The Ideal Versus the Real”](https://oreil.ly/oNBFf)'
+  id: totrans-56
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图3-5\. 服务器虚拟化；来源：[“理想与现实”](https://oreil.ly/oNBFf)
+- en: To boot a kernel, a guest operating system will require access to a subset of
+    the host machine’s functionality, including BIOS routines, devices and peripherals
+    (e.g., keyboard, graphical/console access, storage, and networking), an interrupt
+    controller and an interval timer, a source of entropy (for random number seeds),
+    and the memory address space that it will run in.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要引导内核，客户操作系统将需要访问主机机器功能的子集，包括BIOS例程、设备和外围设备（例如键盘、图形/控制台访问、存储和网络）、中断控制器和间隔定时器、熵源（用于随机数种子）以及其将在其中运行的内存地址空间。
+- en: Inside each guest virtual machine is an environment in which processes (or workloads)
+    can run. The virtual machine itself is owned by a privileged parent process that
+    manages its setup and interaction with the host, known as a *virtual machine monitor*
+    or VMM (as in [Figure 3-6](#runtime-virtualisation-vmm)). This has also been known
+    as a hypervisor, but the distinction is blurred with more recent approaches so
+    the original term VMM is preferred.
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个客户虚拟机内部都有一个环境，其中可以运行进程（或工作负载）。虚拟机本身由一个特权父进程拥有，负责管理其设置和与主机的交互，称为*虚拟机监视器*或VMM（如[图3-6](#runtime-virtualisation-vmm)所示）。这也被称为超级监视器，但是随着较新方法的出现，这两者之间的区别变得模糊，因此更倾向于使用原始术语VMM。
+- en: '![image](Images/haku_0306.png)'
+  id: totrans-59
+  prefs: []
+  type: TYPE_IMG
+  zh: '![image](Images/haku_0306.png)'
+- en: Figure 3-6\. A virtual machine manager
+  id: totrans-60
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图3-6\. 一个虚拟机管理器
+- en: Linux has a built-in virtual machine manager called KVM that allows a host kernel
+    to run virtual machines. Along with QEMU, which emulates physical devices and
+    provides memory management to the guest (and can run by itself if necessary),
+    an operating system can run fully emulated by the guest OS and by QEMU (as contrasted
+    with the Xen hypervisor in [Figure 3-7](#runtime-virtualisation-kvm-vs-xen-vs-qemu)).
+    This emulation narrows the interface between the VM and the host kernel and reduces
+    the amount of kernel code the process inside the VM can reach directly. This provides
+    a greater level of isolation from unknown kernel vulnerabilities.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linux具有名为KVM的内置虚拟机管理器，允许主机内核运行虚拟机。与QEMU一起，后者模拟物理设备并为客户提供内存管理（必要时可以单独运行），操作系统可以通过客户OS和QEMU完全模拟运行（与[图3-7](#runtime-virtualisation-kvm-vs-xen-vs-qemu)中的Xen
+    hypervisor相对）。此模拟缩小了VM与主机内核之间的接口，并减少了VM内部进程可以直接访问的内核代码量，从而提供了更高级别的隔离以防止未知的内核漏洞。
+- en: '![image](Images/haku_0307.png)'
+  id: totrans-62
+  prefs: []
+  type: TYPE_IMG
+  zh: '![image](Images/haku_0307.png)'
+- en: 'Figure 3-7\. KVM contrasted with Xen and QEMU; source: [What Is the Difference
+    Between KVM and QEMU](https://oreil.ly/k1bJ1)'
+  id: totrans-63
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图3-7\. KVM与Xen和QEMU的对比；来源：[KVM与QEMU之间的区别是什么](https://oreil.ly/k1bJ1)
+- en: Note
+  id: totrans-64
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Despite many decades of effort, “in practice no virtual machine is completely
+    equivalent to its real machine counterpart” ([“The Ideal Versus the Real”](https://oreil.ly/oNBFf)).
+    This is due to the complexities of emulating hardware, and hopefully decreases
+    the chance that we’re living in a simulation.
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管经过多年的努力，“在实践中，没有一个虚拟机完全等同于其真实机器的对应物”（[“理想与现实”](https://oreil.ly/oNBFf)）。这是由于模拟硬件的复杂性所致，并且希望减少我们生活在模拟中的可能性。
+- en: Benefits of Virtualization
+  id: totrans-66
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 虚拟化的好处
+- en: 'Like all things we try to secure, virtualization must balance performance with
+    security: decreasing the risk of running your workloads using the minimum possible
+    number of extra checks at runtime. For containers, a shared host kernel is an
+    avenue of potential container escape—the Linux kernel has a long heritage and
+    monolithic codebase.'
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 像所有我们试图保护的东西一样，虚拟化必须在性能和安全性之间取得平衡：通过在运行时尽可能少的额外检查来降低运行负载的风险。对于容器来说，共享主机内核是一个潜在的容器逃逸通道——Linux
+    内核拥有悠久的遗产和单片式代码库。
+- en: Linux is mainly written in the C language, which has classes of memory management
+    and range checking vulnerabilities that have proven notoriously difficult to entirely
+    eradicate. Many applications have experienced these exploitable bugs when subjected
+    to fuzzers. This risk means we want to keep hostile code away from trusted interfaces
+    in case they have zero-day vulnerabilities. This is a pretty serious defensive
+    stance—it’s about reducing any window of opportunity for an attacker that has
+    access to zero-day Linux vulnerabilities.
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linux 主要使用 C 语言编写，具有内存管理类和范围检查漏洞，这些漏洞被证明是极难完全消除的。许多应用程序在面对模糊测试时都曾遇到这些可利用的漏洞。这种风险意味着我们希望将恶意代码远离信任接口，以防它们具有零日漏洞。这是一种相当严格的防御态度——它的目的是减少攻击者利用零日
+    Linux 漏洞的任何机会窗口。
+- en: Note
+  id: totrans-69
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Google’s [OSS-Fuzz](https://oreil.ly/8LAkV) was born from the swirling maelstrom
+    around the Heartbleed OpenSSL bug, which may have been raging in the wild for
+    up to two years. Critical, internet-bolstering projects like OpenSSL are poorly
+    funded and much goodwill exists in the open source community, so finding these
+    bugs before they are exploited is a vital step in securing critical software.
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 谷歌的 [OSS-Fuzz](https://oreil.ly/8LAkV) 项目诞生于围绕 Heartbleed OpenSSL 漏洞的漩涡之中，这个漏洞可能在野外存在了长达两年之久。像
+    OpenSSL 这样的关键互联网项目资金匮乏，开源社区中存在大量善意，因此在这些漏洞被利用之前发现它们是保护关键软件的重要步骤。
+- en: The sandboxing model defends against zero-days by abstractions. It moves processes
+    away from the Linux system call interface to reduce the opportunities to exploit
+    it, using an assortment of containers and capabilities, LSMs and kernel modules,
+    hardware and software virtualization, and dedicated drivers. Most recent sandboxes
+    use a type-safe language like Golang or Rust, which makes their memory management
+    safer than software programmed in C (which requires manual and potentially error-prone
+    memory management).
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 沙盒模型通过抽象防御零日漏洞。它将进程从 Linux 系统调用接口中移开，以减少利用它的机会，使用各种容器和能力、LSM 和内核模块、硬件和软件虚拟化以及专用驱动程序。大多数最新的沙盒使用像
+    Golang 或 Rust 这样的类型安全语言，这使得它们的内存管理比使用 C 编程的软件更安全（后者需要手动且潜在存在错误的内存管理）。
+- en: What’s Wrong with Containers?
+  id: totrans-72
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 容器有何问题？
+- en: Let’s further define what we mean by containers by looking at how they interact
+    with the host kernel, as shown in [Figure 3-8](#runtime-host-kernel-boundary).
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们进一步定义一下我们所说的容器，看看它们如何与主机内核交互，如图 [Figure 3-8](#runtime-host-kernel-boundary)
+    所示。
+- en: Containers talk directly to the host kernel, but the layers of LSMs, capabilities,
+    and namespaces ensure they do not have full host kernel access. Conversely, instead
+    of sharing one kernel, VMs use a guest kernel (a dedicated kernel running in a
+    hypervisor). This means if the VM’s guest kernel is compromised, more work is
+    required to break out of the hypervisor and into the host.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器直接与主机内核通信，但是 LSM、能力和命名空间的层确保它们不能完全访问主机内核。相反，虚拟机（VM）使用客户机内核（在虚拟化程序中运行的专用内核）。这意味着如果
+    VM 的客户机内核受到损害，则需要更多工作才能从虚拟化程序中打破出来并进入主机。
+- en: '![Host kernel boundary](Images/haku_0308.png)'
+  id: totrans-75
+  prefs: []
+  type: TYPE_IMG
+  zh: '![主机内核边界](Images/haku_0308.png)'
+- en: Figure 3-8\. Host kernel boundary
+  id: totrans-76
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-8\. 主机内核边界
+- en: Containers are created by a low-level container runtime, and as users we talk
+    to the high-level container runtime that controls it.
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器由低级容器运行时创建，作为用户，我们与控制它的高级容器运行时交互。
+- en: The diagram in [Figure 3-9](#runtime-docker-podman-crio) shows the high-level
+    interfaces, with the container managers on the left. Then Kubernetes, Docker,
+    and Podman interact with their respective libraries and runtimes. These perform
+    useful container management features including pushing and pulling container images,
+    managing storage and network interfaces, and interacting with the low-level container
+    runtime.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图3-9](#runtime-docker-podman-crio)中的图表显示了高级接口，容器管理器位于左侧。然后，Kubernetes、Docker和Podman与各自的库和运行时进行交互。这些功能包括推送和拉取容器镜像、管理存储和网络接口，并与低级容器运行时进行交互。'
+- en: '![Container abstractions](Images/haku_0309.png)'
+  id: totrans-79
+  prefs: []
+  type: TYPE_IMG
+  zh: '![容器抽象](Images/haku_0309.png)'
+- en: 'Figure 3-9\. Container abstractions; source: [“What’s up with CRI-O, Kata Containers
+    and Podman?”](https://oreil.ly/2Mx7n)'
+  id: totrans-80
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图3-9\. 容器抽象；来源：[“CRI-O、Kata Containers和Podman的最新情况”](https://oreil.ly/2Mx7n)
+- en: In the middle column of [Figure 3-9](#runtime-docker-podman-crio) are the container
+    runtimes that your Kubernetes cluster interacts with, while in the right column
+    are the low-level runtimes responsible for starting and managing the container.
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[图3-9](#runtime-docker-podman-crio)的中间列中是您的Kubernetes集群与之交互的容器运行时，而右列是负责启动和管理容器的低级运行时。
+- en: That low-level container runtime is directly responsible for starting and managing
+    containers, interfacing with the kernel to create the namespaces and configuration,
+    and finally starting the process in the container. It is also responsible for
+    handling your process inside the container, and getting its system calls to the
+    host kernel at runtime.
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 那个低级容器运行时直接负责启动和管理容器，与内核接口以创建命名空间和配置，并最终在容器中启动进程。它还负责处理容器内部的进程，并在运行时将其系统调用传递给主机内核。
+- en: User Namespace Vulnerabilities
+  id: totrans-83
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 用户命名空间漏洞
+- en: 'Linux was written with a core assumption: that the root user is always in the
+    host namespace. This assumption held true while there were no other namespaces.
+    But this changed with the introduction of user namespaces (the last major kernel
+    namespace to be completed): developing user namespaces required many code changes
+    to code concerning the root user.'
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linux最初的核心假设是：根用户始终在主机命名空间中。这一假设在没有其他命名空间时成立。但随着用户命名空间的引入（最后一个完成的主要内核命名空间），开发用户命名空间需要对涉及根用户的代码进行多次代码更改。
+- en: User namespaces allow you to map users inside a container to other users on
+    the host, so ID 0 (root) inside the container can create files on a volume that
+    from within the container look to be root-owned. But when you inspect the same
+    volume from the host, they show up as owned by the user root was mapped to (e.g.,
+    user ID 1000, or 110000, as shown in [Figure 3-10](#runtime-user-ns-remapping)).
+    User namespaces are not enabled in Kubernetes, although work is underway to support
+    them.
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用户命名空间允许您将容器中的用户映射到主机上的其他用户，因此容器中的ID 0（root）可以在卷上创建文件，而从容器内部看，这些文件看起来是由root拥有。但是当您从主机检查同一卷时，它们显示为由映射到的用户拥有（例如，用户ID为1000或110000，如[图3-10](#runtime-user-ns-remapping)所示）。尽管正在进行支持工作，但用户命名空间在Kubernetes中并未启用。
+- en: '![User namespace user id remapping](Images/haku_0310.png)'
+  id: totrans-86
+  prefs: []
+  type: TYPE_IMG
+  zh: '![用户命名空间用户ID重映射](Images/haku_0310.png)'
+- en: Figure 3-10\. User namespace user ID remapping
+  id: totrans-87
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图3-10\. 用户命名空间用户ID重映射
+- en: 'Everything in Linux is a file, and files are owned by users. This makes user
+    namespaces wide-reaching and complex, and they have been a source of privilege
+    escalation bugs in previous versions of Linux:'
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在Linux中，一切都是文件，文件由用户拥有。这使得用户命名空间具有广泛和复杂的影响，并且它们曾经是Linux早期版本中特权升级漏洞的源头：
+- en: '[CVE-2013-1858](https://oreil.ly/5UHB1) (user namespace & CLONE_FS)'
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[CVE-2013-1858](https://oreil.ly/5UHB1) (用户命名空间 & CLONE_FS)'
+- en: The clone system-call implementation in the Linux kernel before 3.8.3 does not
+    properly handle a combination of the `CLONE_NEWUSER` and `CLONE_FS` flags, which
+    allows local users to gain privileges by calling `chroot` and leveraging the sharing
+    of the / directory between a parent process and a child process.
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linux内核在3.8.3版本之前的克隆系统调用实现未正确处理`CLONE_NEWUSER`和`CLONE_FS`标志的组合，允许本地用户通过调用`chroot`并利用父进程与子进程之间共享/目录的方式获取特权。
+- en: '[CVE-2014-4014](https://oreil.ly/iRKjY) (user namespace & chmod)'
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[CVE-2014-4014](https://oreil.ly/iRKjY) (用户命名空间 & chmod)'
+- en: The capabilities implementation in the Linux kernel before 3.14.8 does not properly
+    consider that namespaces are inapplicable to inodes, which allows local users
+    to bypass intended `chmod` restrictions by first creating a user namespace, as
+    demonstrated by setting the `setgid` bit on a file with group ownership of `root`.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在Linux内核版本3.14.8之前的capabilities实现中，未正确考虑到命名空间对于inode不适用的事实，这使得本地用户可以通过首先创建用户命名空间来绕过预期的`chmod`限制，例如在具有`root`组所有权的文件上设置`setgid`位。
+- en: '[CVE-2015-1328](https://oreil.ly/uCaNj) (user namespace & OverlayFS (Ubuntu
+    only))'
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[CVE-2015-1328](https://oreil.ly/uCaNj)（用户命名空间和OverlayFS（仅限Ubuntu））'
+- en: The `overlayfs` implementation in the Linux kernel package before 3.19.0-21.21
+    in Ubuntu versions until 15.04 did not properly check permissions for file creation
+    in the upper filesystem directory, which allowed local users to obtain root access
+    by leveraging a configuration in which `overlayfs` is permitted in an arbitrary
+    mount namespace.
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在Ubuntu版本直到15.04之前的Linux内核包中的3.19.0-21.21之前的`overlayfs`实现未正确检查上层文件系统目录中的文件创建权限，允许本地用户通过配置，在任意挂载命名空间中允许`overlayfs`来获取root访问权限。
+- en: '[CVE-2018-18955](https://oreil.ly/8YIWz) (user namespace & complex ID mapping)'
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[CVE-2018-18955](https://oreil.ly/8YIWz)（用户命名空间和复杂ID映射）'
+- en: In the Linux kernel 4.15.x through 4.19.x before 4.19.2, `map_write()` *in kernel/user_namespace.c*
+    allows privilege escalation because it mishandles nested user namespaces with
+    more than 5 `UID` or `GID` ranges. A user who has `CAP_SYS_ADMIN` in an affected
+    user namespace can bypass access controls on resources outside the namespace,
+    as demonstrated by reading */etc/shadow*. This occurs because an ID transformation
+    takes place properly for the namespaced-to-kernel direction but not for the kernel-to-namespaced
+    direction.
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在Linux内核4.15.x到4.19.x版本的4.19.2之前，在*kernel/user_namespace.c*中的`map_write()`存在特权提升漏洞，因为它在具有超过5个`UID`或`GID`范围的嵌套用户命名空间中处理不当。在受影响的用户命名空间中具有`CAP_SYS_ADMIN`权限的用户可以绕过对命名空间外资源的访问控制，例如读取*/etc/shadow*。这是因为对于命名空间到内核方向的ID转换处理正确，但对于内核到命名空间方向则不正确。
+- en: Containers are not inherently “insecure,” but as we saw in [Chapter 2](ch02.xhtml#ch-pod-level-resources),
+    they can leak some information about a host, and a root-owned container runtime
+    is a potential exploitation path for a hostile process or container image.
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器本身并非“不安全”，但正如我们在[第2章](ch02.xhtml#ch-pod-level-resources)中看到的，它们可能会泄漏关于主机的一些信息，而root-owned容器运行时则是敌意进程或容器镜像的潜在利用路径。
+- en: Tip
+  id: totrans-98
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: Operations such as creating network adapters in the host network namespace,
+    and mounting host disks, are historically root-only, which has made rootless containers
+    harder to implement. Rootfull container runtimes were the only viable option for
+    the first decade of popularized container use.
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在主机网络命名空间中创建网络适配器和挂载主机磁盘等操作通常需要具有root权限，这使得非root容器的实现更加困难。在流行的容器使用的第一个十年中，rootfull容器运行时是唯一可行的选择。
+- en: Exploits that have abused this rootfulness include [CVE-2019-5736](https://oreil.ly/ZZyRQ),
+    replacing the `runc` binary from inside a container via */proc/self/exe*, and
+    [CVE-2019-14271](https://oreil.ly/DSKFf), attacking the host from inside a container
+    responding to `docker cp`.
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[利用](https://oreil.ly/ZZyRQ)这一根源问题的攻击包括通过*/proc/self/exe*替换容器内的`runc`二进制文件的[CVE-2019-5736](https://oreil.ly/ZZyRQ)，以及在响应`docker
+    cp`时从容器内部攻击主机的[CVE-2019-14271](https://oreil.ly/DSKFf)。'
+- en: 'Underlying concerns about a root-owned daemon can be assuaged by running rootless
+    containers in “unprivileged user namespaces” mode: creating containers using a
+    nonroot user, within their own user namespace. This is supported in Docker 20.0X
+    and Podman.'
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过在“非特权用户命名空间”模式下运行rootless容器来缓解关于root-owned守护程序的基本问题：使用非root用户在其自己的用户命名空间内创建容器。这在Docker
+    20.0X和Podman中得到支持。
+- en: '*Rootless* means the low-level container runtime process that creates the container
+    is owned by an unprivileged user, and so container breakout via the process tree
+    only escapes to a nonroot user, nullifying some potential attacks.'
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*Rootless*意味着低级别容器运行时进程由非特权用户拥有，因此通过进程树进行的容器突破仅会逃逸到非root用户，从而使一些潜在的攻击失效。'
+- en: Note
+  id: totrans-103
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Rootless containers introduce a hopefully less dangerous risk—user namespaces
+    have historically been a rich source of vulnerabilities. The answer to whether
+    it is riskier to run root-owned daemon or user namespaces isn’t clear-cut, although
+    any reduction of root privileges is likely to be the more effective security boundary.
+    There have been more high-profile breakouts from root-owned Docker, but this may
+    well be down to adoption and widespread use.
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 无根容器引入了一种希望更少危险的风险——用户命名空间在历史上一直是漏洞的丰富源泉。关于运行根所有守护程序还是用户命名空间更危险的问题没有明确答案，尽管任何降低根权限的行为可能是更有效的安全边界。从根守护的
+    Docker 中出现更多突破是因为其被广泛使用和采纳。
+- en: Rootless containers (without a root-owned daemon) provide a security boundary
+    as compared to those with root-owned daemons. When code owned by the host’s root
+    user is compromised by a malicious process, it can potentially read and write
+    other users’ files, attack the network and its traffic, or install malware to
+    the host.
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 无根容器（没有根所有守护程序）与拥有根所有守护程序相比，提供了安全边界。当主机的根用户拥有的代码被恶意进程compromise时，它可能读取和写入其他用户的文件，攻击网络及其流量，或向主机安装恶意软件。
+- en: The mapping of user identifiers (UIDs) in the guest to actual users on the host
+    depends on the user mappings of the host user namespace, container user namespace,
+    and rootless runtime, as shown in [Figure 3-11](#runtime-userns-and-rootles).
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在宿主用户命名空间、容器用户命名空间和无根运行时的用户映射中，用户标识符（UIDs）的映射依赖于宿主用户命名空间和容器用户命名空间的用户映射，如 [图3-11](#runtime-userns-and-rootles)
+    所示。
+- en: '![User mapping for Rootless and User Namespace containers](Images/haku_0311.png)'
+  id: totrans-107
+  prefs: []
+  type: TYPE_IMG
+  zh: '![无根和用户命名空间容器的用户映射](Images/haku_0311.png)'
+- en: 'Figure 3-11\. Container abstractions; source: [“Experimenting with Rootless
+    Docker”](https://oreil.ly/B2KzQ)'
+  id: totrans-108
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图3-11\. 容器抽象；来源：[“Rootless Docker 实验”](https://oreil.ly/B2KzQ)
+- en: User namespaces allow nonroot users to pretend to be the host’s root user. The
+    “root-in-userns” user can have a “fake” UID 0 and permission to create new namespaces
+    (mount, net, uts, ipc), change the container’s hostname, and mount points.
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用户命名空间允许非根用户假装成宿主的根用户。“在用户命名空间中的根” 用户可以拥有“假” UID 0，并且有权限创建新的命名空间（挂载、网络、uts、ipc）、更改容器的主机名和挂载点。
+- en: 'This allows root-in-userns, which is unprivileged in the host namespace, to
+    create new containers. To achieve this, additional work must be done: network
+    connections into the host network namespace can only be created by the host’s
+    root. For rootless containers, an unprivileged *slirp4netns* networking device
+    (guarded by `seccomp`) is used to create a virtual network device.'
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这使得在用户命名空间中的根用户，即在宿主命名空间中无特权的用户，可以创建新的容器。为了实现这一点，需要进行额外的工作：只有宿主的根用户才能创建进入宿主网络命名空间的网络连接。对于无根容器，使用一个非特权的
+    *slirp4netns* 网络设备（由 `seccomp` 保护）来创建一个虚拟网络设备。
+- en: Unfortunately, mounting remote filesystems becomes difficult when the remote
+    system, e.g., NFS home directories, does not understand the host’s user namespaces.
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不幸的是，当远程系统（例如 NFS 主目录）不理解主机的用户命名空间时，挂载远程文件系统变得困难。
+- en: 'In the [rootless Podman guide](https://oreil.ly/YjwLF), [Dan Walsh](https://oreil.ly/QzBhv)
+    says:'
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 [无根 Podman 指南](https://oreil.ly/YjwLF) 中，[Dan Walsh](https://oreil.ly/QzBhv)
+    表示：
+- en: If you have a normal process creating files on an NFS share and not taking advantage
+    of user-namespaced capabilities, everything works fine. The problem comes in when
+    the root process inside the container needs to do something on the NFS share that
+    requires special capability access. In that case, the remote kernel will not know
+    about the capability and will most likely deny access.
+  id: totrans-113
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 如果正常进程在 NFS 共享上创建文件，并且没有利用用户命名空间功能，那么一切都正常工作。问题出现在容器内的根进程需要在需要特殊能力访问 NFS 共享上执行某些操作时。在这种情况下，远程内核将不会了解这种能力，并且很可能拒绝访问。
+- en: While rootless Podman has SELinux support (and dynamic profile support via [udica](https://oreil.ly/AuSMF)),
+    rootless Docker does not yet support AppArmor and, for both runtimes, CRIU (Checkpoint/Restore
+    In Userspace, a feature to freeze running applications) is disabled.
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然无根 Podman 支持 SELinux（以及通过 [udica](https://oreil.ly/AuSMF) 支持动态配置文件支持），但无根
+    Docker 尚不支持 AppArmor，对于这两种运行时，都禁用了 CRIU（用户空间的检查点/恢复，用于冻结运行中的应用程序）。
+- en: 'Both rootless runtimes require configuration for some networking features:
+    `CAP_NET_BIND_SERVICE` is required by the kernel to bind to ports below 1024 (historically
+    considered a privileged boundary), and ping is not supported for users with high
+    UIDs if the ID is not in */proc/sys/net/ipv4/ping_group_range* (although this
+    can be changed by host root). Host networking is not permitted (as it breaks the
+    network isolation), `cgroups` v2 are functional but only when running under `systemd`,
+    and `cgroup` v1 is not supported by either rootless implementation. There are
+    more details in the docs for [shortcomings of rootless Podman](https://oreil.ly/3SWtT).'
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 两种无根运行时都需要对一些网络功能进行配置：内核要求`CAP_NET_BIND_SERVICE`用于绑定到低于1024的端口（历来被视为特权边界），如果高UID用户不在*/proc/sys/net/ipv4/ping_group_range*中，则不支持ping（尽管主机根用户可以更改此设置）。不允许使用主机网络（因为这会破坏网络隔离），`cgroups`
+    v2在`systemd`下运行时是有效的，但两种无根实现都不支持`cgroup` v1。关于[rootless Podman的不足之处](https://oreil.ly/3SWtT)有更多细节。
+- en: Docker and Podman share similar performance and features as both use `runc`,
+    although Docker has an established networking model that doesn’t support host
+    networking in rootless mode, whereas Podman reuses Kubernetes’ Container Network
+    Interface (CNI)) plug-ins for greater networking deployment flexibility.
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Docker和Podman使用`runc`，因此它们在性能和功能上相似，尽管Docker具有已建立的网络模型，在无根模式下不支持主机网络，而Podman则重用Kubernetes的容器网络接口（CNI）插件，提供更大的网络部署灵活性。
+- en: Rootless containers decrease the risk of running your container images. Rootlessness
+    prevents an exploit escalating to root via many host interactions (although some
+    use of `SETUID` and `SETGID` binaries is often needed by software aiming to avoid
+    running processes as root).
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 无根容器降低了运行容器映像的风险。无根性阻止利用漏洞升级到根权限，尽管某些软件通常需要使用`SETUID`和`SETGID`二进制文件来避免以根身份运行进程。
+- en: While rootless containers protect the host from the container, it may still
+    be possible to read some data from the host, although an adversary will find this
+    a lot less useful. Root capabilities are needed to interact with potential privilege
+    escalation points including */proc*, host devices, and the kernel interface, among
+    others.
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然无根容器可以保护主机免受容器的影响，但仍可能从主机读取某些数据，尽管对于对手而言这将大大减少其用途。与潜在特权升级点（包括*/proc*、主机设备和内核接口等）的交互需要根权限。
+- en: Throughout these layers of abstraction, system calls are still ultimately handled
+    by software written in potentially unsafe C. Is the rootless runtime’s exposure
+    to C-based system calls in the Linux kernel really that bad? Well, the C language
+    powers the internet (and world?) and has done so for decades, but its lack of
+    memory management leads to the same critical bugs occurring over and over again.
+    When the kernel, OpenSSL, and other critical software are written in C, we just
+    want to move everything as far away from trusted kernel space as possible.
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这些抽象层面中，系统调用仍由潜在不安全的C语言编写的软件最终处理。在Linux内核中，无根运行时是否暴露于基于C的系统调用真的很糟糕吗？嗯，C语言驱动着互联网（和世界？）已有几十年，但其缺乏内存管理导致同样的关键漏洞一次又一次地发生。当内核、OpenSSL和其他关键软件都采用C语言编写时，我们只想尽可能远离信任的内核空间。
+- en: Note
+  id: totrans-120
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: '[Whitesource suggests](https://oreil.ly/yyD5o) that C has accounted for 47%
+    of all reported vulnerabilities in the last 10 years. This may largely be due
+    to its proliferation and longevity, but highlights the inherent risk.'
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Whitesource建议](https://oreil.ly/yyD5o)，在过去的10年中，C语言占所有报告的漏洞的47%。这可能主要是由于其广泛应用和长寿命，但也突显了固有的风险。'
+- en: While “trimmed-down” kernels exist (like unikernels and rump kernels), many
+    traditional and legacy applications are portable onto a container runtime without
+    code modifications. To achieve this feat for a unikernel would require the application
+    to be ported to the new reduced kernel. Containerizing an application is a generally
+    frictionless developer experience, which has contributed to the success of containers.
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然“精简版”内核存在（如unikernels和rump kernels），许多传统和遗留应用程序可以在不修改代码的情况下移植到容器运行时环境中。要实现unikernel的这一壮举，需要将应用程序移植到新的精简内核上。容器化应用程序通常是开发者无阻力的体验，这一点促成了容器的成功。
+- en: Sandboxing
+  id: totrans-123
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 沙箱化
+- en: If a process can exploit the kernel, it can take over the system the kernel
+    is running. This is a risk that adversaries like Captian Hashjack will attempt
+    to exploit, and so cloud providers and hardware vendors have been pioneering different
+    approaches to moving away from Linux system call interaction for the guest.
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果一个进程能够利用内核，它就能接管运行该内核的系统。这是像 Hashjack 队长这样的对手试图利用的风险，因此云提供商和硬件供应商一直在开发不同的方法，以减少客户机与
+    Linux 系统调用的交互。
+- en: Linux containers are a lightweight form of isolation as they allow workloads
+    to use kernel APIs directly, minimizing the layers of abstraction. Sandboxes take
+    a variety of other approaches, and generally use container techniques as well.
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linux 容器是一种轻量级的隔离形式，允许工作负载直接使用内核 API，最小化抽象层。沙箱采用多种其他方法，通常也使用容器技术。
+- en: Tip
+  id: totrans-126
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: 'Linux’s Kernel Virtual Machine (KVM) is a module that allows the kernel to
+    run a nested version of itself as a hypervisor. It uses the processor’s hardware
+    virtualization commands and allows each “guest” to run a full Linux or Windows
+    operating system in the virtual machine with private, virtualized hardware. A
+    virtual machine differs from a container as the guest’s processes are running
+    on their own kernel: container processes always share the host kernel.'
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linux 的内核虚拟机（KVM）是一个允许内核作为 hypervisor 运行其自身嵌套版本的模块。它使用处理器的硬件虚拟化命令，并允许每个“客户机”在虚拟机中运行一个完整的
+    Linux 或 Windows 操作系统，具有私有的虚拟化硬件。虚拟机与容器不同，因为客户机的进程在其自己的内核上运行：容器进程始终共享主机内核。
+- en: Sandboxes combine the best of virtualization and container isolation to optimize
+    for specific use cases.
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 沙箱结合了虚拟化和容器隔离的优点，以优化特定的使用场景。
+- en: gVisor and Firecracker (written in Golang and Rust, respectively) both operate
+    on the premise that their statically typed system call proxying (between the workload/guest
+    process and the host kernel) is more secure for consumption by untrusted workloads
+    than the Linux kernel itself, and that performance is not significantly impacted.
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: gVisor 和 Firecracker（分别使用 Golang 和 Rust 编写）都基于这样的假设运行：它们的静态类型化系统调用代理（在工作负载/客户进程与主机内核之间）比
+    Linux 内核本身更安全，而性能影响不大。
+- en: gVisor starts a KVM or operates in `ptrace` mode (using a debug `ptrace` system
+    call to monitor and control its guest), and inside starts a userspace kernel,
+    which proxies system calls down to the host using a “sentry” process. This trusted
+    process reimplements 237 Linux system calls and only needs 53 host system calls
+    to operate. It is constrained to that list of system calls by `seccomp`. It also
+    starts a companion “filesystem interaction” side process called Gofer to prevent
+    a compromised sentry process interacting with the host’s filesystem, and finally
+    implements its own userspace networking stack to isolate it from bugs in the Linux
+    TCP/IP stack.
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: gVisor 启动 KVM 或以 `ptrace` 模式运行（使用调试 `ptrace` 系统调用来监视和控制其客户机），在内部启动一个用户空间内核，它通过一个“哨兵”进程将系统调用代理到主机。这个受信任的进程重新实现了
+    237 个 Linux 系统调用，只需要 53 个主机系统调用来操作。它通过 `seccomp` 来限制系统调用的列表。它还启动一个配套的“文件系统交互”边缘进程称为
+    Gofer，以防止被攻陷的哨兵进程与主机文件系统交互，并最终实现了自己的用户空间网络堆栈以隔离其与 Linux TCP/IP 堆栈中的错误。
+- en: Firecracker, on the other hand, while also using KVM, starts a stripped-down
+    device emulator instead of implementing the heavyweight QEMU process to emulate
+    devices (as traditional Linux virtual machines do). This reduces the host’s attack
+    surface and removes unnecessary code, requiring 36 system calls itself to function.
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一方面，Firecracker 使用 KVM 同样启动一个精简的设备仿真器，而不是像传统的 Linux 虚拟机那样实现庞大的 QEMU 进程来仿真设备。这减少了主机的攻击面，并去除了不必要的代码，自身只需要
+    36 个系统调用来运行。
+- en: And finally, at the other end of the diagram in [Figure 3-12](#runtime-virtualisation-spectrum),
+    KVM/QEMU VMs emulate hardware and so provide a guest kernel and full device emulation,
+    which increases startup times and memory footprint.
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，在图 3-12 的另一端，KVM/QEMU 虚拟机仿真硬件，因此提供了客户机内核和完整设备仿真，这增加了启动时间和内存占用。
+- en: '![image](Images/haku_0312.png)'
+  id: totrans-133
+  prefs: []
+  type: TYPE_IMG
+  zh: '![image](Images/haku_0312.png)'
+- en: Figure 3-12\. Spectrum of isolation
+  id: totrans-134
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-12\. 隔离的谱系
+- en: Virtualization provides better hardware isolation through CPU integration, but
+    is slower to start and run due to the abstraction layer between the guest and
+    the underlying host.
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虚拟化通过 CPU 集成提供更好的硬件隔离，但由于客户机与底层主机之间的抽象层，启动和运行速度较慢。
+- en: 'Containers are lightweight and suitably secure for most workloads. They run
+    in production for multinational organizations around the world. But high-sensitivity
+    workloads and data need greater isolation. You can categorize workloads by risk:'
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器轻便且适合大多数工作负载的安全需求。它们已在世界各地的跨国组织中生产使用。但高敏感度的工作负载和数据需要更高的隔离性。您可以按风险对工作负载进行分类：
+- en: Does this application access a sensitive or high-value asset?
+  id: totrans-137
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 此应用程序是否访问敏感或高价值资产？
+- en: Is this application able to receive untrusted traffic or input?
+  id: totrans-138
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 此应用程序能否接收不受信任的流量或输入？
+- en: Have there been vulnerabilities or bugs in this application before?
+  id: totrans-139
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 此应用程序以前有过漏洞或错误吗？
+- en: If the answer to any of those is yes, you may want to consider a next-generation
+    sandboxing technology to further isolate workloads.
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果答案是肯定的，您可能希望考虑使用下一代沙盒技术进一步隔离工作负载。
+- en: gVisor, Firecracker, and Kata Containers all take different approaches to virtual
+    machine isolation, while sharing the aim of challenging the perception of slow
+    startup time and high memory overhead.
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: gVisor、Firecracker和Kata Containers各自采用不同的虚拟机隔离方法，但目标都是挑战慢启动时间和高内存开销的看法。
+- en: Note
+  id: totrans-142
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Kata Containers is a container runtime that starts a VM and runs a container
+    inside. It is widely compatible and can run `firecracker` as a guest.
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kata Containers是一个容器运行时，启动一个虚拟机并在其中运行一个容器。它具有广泛的兼容性，并可以将`firecracker`作为客户端运行。
+- en: '[Table 3-1](#runtime-virtualisation-comparison) compares these sandboxes and
+    some key features.'
+  id: totrans-144
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[表 3-1](#runtime-virtualisation-comparison) 比较了这些沙盒技术及其一些关键特性。'
+- en: 'Table 3-1\. Comparison of sandbox features; source: [“Making Containers More
+    Isolated: An Overview of Sandboxed Container Technologies”](https://oreil.ly/vpKaB)'
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表3-1. 沙盒功能比较；来源：[“增强容器隔离性：沙盒化容器技术概述”](https://oreil.ly/vpKaB)
+- en: '|  | Supported container platforms | Dedicated guest kernel | Support different
+    guest kernels | Open source | Hot-plug | Direct access to HW | Required hypervisors
+    | Backed by |'
+  id: totrans-146
+  prefs: []
+  type: TYPE_TB
+  zh: '|  | 支持的容器平台 | 专用客户端内核 | 支持不同的客户端内核 | 开源 | 热插拔 | 直接访问硬件 | 所需的虚拟化管理程序 | 由...支持
+    |'
+- en: '| --- | --- | --- | --- | --- | --- | --- | --- | --- |'
+  id: totrans-147
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- | --- | --- | --- | --- | --- | --- |'
+- en: '| gVisor | Docker, K8s | Yes | No | Yes | No | No | None | Google |'
+  id: totrans-148
+  prefs: []
+  type: TYPE_TB
+  zh: '| gVisor | Docker, K8s | Yes | No | Yes | No | No | None | Google |'
+- en: '| Firecracker | Docker | Yes | Yes | Yes | No | No | KVM | Amazon |'
+  id: totrans-149
+  prefs: []
+  type: TYPE_TB
+  zh: '| Firecracker | Docker | Yes | Yes | Yes | No | No | KVM | Amazon |'
+- en: '| Kata | Docker, K8s | Yes | Yes | Yes | Yes | Yes | KVM or Xen | OpenStack
+    |'
+  id: totrans-150
+  prefs: []
+  type: TYPE_TB
+  zh: '| Kata | Docker, K8s | Yes | Yes | Yes | Yes | Yes | KVM或Xen | OpenStack |'
+- en: 'Each sandbox combines virtual machine and container technologies: some VMM
+    process, a Linux kernel within the virtual machine, a Linux userspace in which
+    to run the process once the kernel has booted, and some mix of kernel-based isolation
+    (that is, container-style namespaces, `cgroups`, or `seccomp`) either within the
+    VM, around the VMM, or some combination thereof.'
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个沙盒结合了虚拟机和容器技术：一些虚拟机管理进程，在虚拟机内核内运行Linux内核，Linux用户空间在内核引导后运行进程，以及一些内核基础的隔离（例如容器风格的命名空间、`cgroups`或`seccomp`），这些隔离要么在虚拟机内部，要么在虚拟机管理程序周围，或者两者的组合。
+- en: Let’s have a closer look at each one.
+  id: totrans-152
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们仔细看看每个技术。
+- en: gVisor
+  id: totrans-153
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: gVisor
+- en: 'Google’s gVisor was originally built to allow untrusted, customer-supplied
+    workloads to run in AppEngine on Borg, Google’s internal orchestrator and the
+    progenitor to Kubernetes. It now protects Google Cloud products: App Engine standard
+    environment, Cloud Functions, Cloud ML Engine, and Cloud Run, and it has been
+    modified to run in GKE. It has the best Docker and Kubernetes integrations from
+    among this chapter’s sandboxing technologies.'
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Google的gVisor最初是为了允许不受信任的、由客户提供的工作负载在Borg上的App Engine中运行而构建的，Borg是Google的内部编排器和Kubernetes的前身。它现在保护Google
+    Cloud产品：App Engine标准环境、Cloud Functions、Cloud ML Engine和Cloud Run，并已修改以在GKE中运行。在本章的沙盒技术中，它具有最好的Docker和Kubernetes集成。
+- en: Note
+  id: totrans-155
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: To run the examples, the gVisor runtime binary [must be installed](https://oreil.ly/Tj3hX)
+    on the host or worker node.
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要运行这些示例，必须在主机或工作节点上安装[gVisor运行时二进制文件](https://oreil.ly/Tj3hX)。
+- en: 'Docker supports pluggable container runtimes, and a simple `docker run -it
+    --runtime=runsc` starts a gVisor sandboxed OCI container. Let’s have a look at
+    what’s in */proc* in a vanilla gVisor container to compare it with standard `runc`:'
+  id: totrans-157
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Docker支持可插拔的容器运行时，简单的`docker run -it --runtime=runsc`启动了一个gVisor隔离的OCI容器。让我们看看在一个普通的gVisor容器中*/proc*目录中有什么，以便与标准的`runc`进行比较：
+- en: '[PRE0]'
+  id: totrans-158
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: Note
+  id: totrans-159
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Removing special files from this directory prevents a hostile process from accessing
+    the relevant feature in the underlying host kernel.
+  id: totrans-160
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从此目录中删除特殊文件可防止恶意进程访问底层主机内核中相关功能。
+- en: 'There are far fewer entries in */proc* than in a `runc` container, as this
+    diff shows:'
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*/proc*中的条目比`runc`容器中少得多，如此差异显示：'
+- en: '[PRE1]'
+  id: totrans-162
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: The sentry process that [simulates the Linux system call interface](https://oreil.ly/MRraT)
+    reimplements over 235 of the ~350 possible system calls in Linux 5.3.11\. This
+    shows you a “masked” view of the */proc* and */dev* virtual filesystems. These
+    filesystems have historically leaked the container abstraction by sharing information
+    from the host (memory, devices, processes, etc.) so are an area of special concern.
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 模拟Linux系统调用接口的Sentry进程重新实现了Linux 5.3.11版本中约350个可能的系统调用中的超过235个。这向你展示了*/proc*和*/dev*虚拟文件系统的“屏蔽”视图。这些文件系统历来通过从主机共享信息（内存、设备、进程等）泄露容器抽象，因此是一个特别关注的领域。
+- en: 'Let’s look at system devices under */dev* in gVisor and `runc`:'
+  id: totrans-164
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们看看gVisor和`runc`下*/dev*中的系统设备：
+- en: '[PRE2]'
+  id: totrans-165
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: We can see that the `runsc` gVisor runtime drops the `console` and `core` devices,
+    but includes a `/dev/net/tun` device (under the *net/* directory) for its `netstack`
+    networking stack, which also runs inside Sentry. Netstack can be bypassed for
+    direct host network access (at the cost of some isolation), or host networking
+    disabled entirely for fully host-isolated networking (depending on the CNI or
+    other network configured within the sandbox).
+  id: totrans-166
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以看到`runsc` gVisor运行时去除了`console`和`core`设备，但在*/dev/net/tun*目录（在*net/*目录下）中包含了一个`/dev/net/tun`设备，用于其`netstack`网络堆栈，该堆栈也运行在Sentry内。Netstack可以被绕过以进行直接主机网络访问（牺牲一些隔离性），或者完全禁用主机网络以实现完全主机隔离的网络（取决于在沙箱中配置的CNI或其他网络）。
+- en: 'Apart from these giveaways, gVisor is kind enough to identify itself at boot
+    time, which you can see in a container with `dmesg`:'
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了这些线索，gVisor在启动时很好地标识自己，你可以在使用`dmesg`查看容器时看到：
+- en: '[PRE3]'
+  id: totrans-168
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'Notably this is not the real time it takes to start the container, and the
+    quirky messages are randomized—don’t rely on them for automation. If we `time`
+    the process we can see it start faster than it claims:'
+  id: totrans-169
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 值得注意的是这不是启动容器所需的真实时间，而且古怪的消息是随机生成的—不要依赖它们进行自动化。如果我们计时该过程，我们会看到它比它声称的启动得更快：
+- en: '[PRE4]'
+  id: totrans-170
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: Unless an application running in a sandbox explicitly checks for these features
+    of the environment, it will be unaware that it is in a sandbox. Your application
+    makes the same system calls as it would to a normal Linux kernel, but the Sentry
+    process intercepts the system calls as shown in [Figure 3-13](#runtime-gvisor-boundaries).
+  id: totrans-171
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除非运行在沙箱中的应用程序明确检查环境的这些特性，否则它将不知道自己在沙箱中。你的应用程序与普通的Linux内核做同样的系统调用，但是Sentry进程拦截这些系统调用，如[图3-13](#runtime-gvisor-boundaries)所示。
+- en: '![image](Images/haku_0313.png)'
+  id: totrans-172
+  prefs: []
+  type: TYPE_IMG
+  zh: '![image](Images/haku_0313.png)'
+- en: Figure 3-13\. gVisor container components and privilege boundaries
+  id: totrans-173
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图3-13\. gVisor容器组件和权限边界
+- en: Sentry prevents the application interacting directly with the host kernel, and
+    has a `seccomp` profile that limits its possible host system calls. This helps
+    prevent escalation in case a tenant breaks into Sentry and attempts to attack
+    the host kernel.
+  id: totrans-174
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Sentry阻止应用程序直接与主机内核交互，并具有`seccomp`配置文件，限制其可能的主机系统调用。这有助于防止在租户突破Sentry并尝试攻击主机内核时的升级。
+- en: Implementing a userspace kernel is a Herculean undertaking and does not cover
+    every system call. This means some applications are not able to run in gvisor,
+    although in practice this doesn’t happen very often and there are millions of
+    workloads running on GCP under gVisor.
+  id: totrans-175
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 实现用户空间内核是一项艰巨的任务，它并未覆盖每个系统调用。这意味着一些应用程序无法在gVisor中运行，尽管实际情况下这种情况并不经常发生，在Google
+    Cloud Platform的gVisor下运行着数百万的工作负载。
+- en: The Sentry has a side process called Gofer. It handles disks and devices, which
+    are historically common VM attack vectors. Separating out these responsibilities
+    increases your resistance to compromise; if Sentry has an exploitable bug, it
+    can’t be used to attack the host’s devices directly because they’re all proxied
+    through Gofer.
+  id: totrans-176
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Sentry有一个名为Gofer的附属进程。它处理磁盘和设备，这些设备通常是常见的虚拟机攻击向量。分离这些责任增加了你的抵抗力；如果Sentry存在漏洞，它无法直接攻击主机设备，因为所有设备都通过Gofer代理。
+- en: Note
+  id: totrans-177
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: gVisor is written in [Go](https://Golang.org) to avoid security pitfalls that
+    can plague kernels. Go is strongly typed, with built-in bounds checks, no uninitialized
+    variables, no use-after-free bugs, no stack overflow bugs, and a built-in race
+    detector. However, using Go has its challenges, and the runtime often introduces
+    a little performance overhead.
+  id: totrans-178
+  prefs: []
+  type: TYPE_NORMAL
+  zh: gVisor 使用[Go](https://Golang.org)编写，以避免可能影响内核安全性的问题。Go 是强类型语言，具有内置的边界检查，没有未初始化的变量，没有使用后释放的
+    bug，没有栈溢出 bug，并内置了竞态检测器。然而，使用 Go 也面临挑战，而运行时通常会引入一些性能开销。
+- en: However, this comes at the cost of some reduced application compatibility and
+    a high per-system-call overhead. Of course, not all applications make a lot of
+    system calls, so this depends on usage.
+  id: totrans-179
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，这种方式的代价是降低了一些应用程序的兼容性，并增加了每个系统调用的开销。当然，并不是所有的应用程序都会大量使用系统调用，因此这取决于使用方式。
+- en: Application system calls are redirected to Sentry by a Platform Syscall Switcher,
+    which intercepts the application when it tries to make system calls to the kernel.
+    Sentry then makes the required system calls to the host for the containerized
+    process, as shown in [Figure 3-14](#runtime-gvisor-privilege). This proxying prevents
+    the application from directly controlling system calls.
+  id: totrans-180
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用程序系统调用通过平台系统调用切换器重定向到 Sentry，在应用程序尝试向内核进行系统调用时拦截应用程序。然后 Sentry 为容器化进程向宿主进行所需的系统调用，如图[3-14](#runtime-gvisor-privilege)所示。这种代理方式阻止了应用程序直接控制系统调用。
+- en: '![image](Images/haku_0314.png)'
+  id: totrans-181
+  prefs: []
+  type: TYPE_IMG
+  zh: '![image](Images/haku_0314.png)'
+- en: Figure 3-14\. gVisor container components and privilege levels
+  id: totrans-182
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-14\. gVisor 容器组件和权限级别
+- en: Sentry sits in a loop waiting for a system call to be generated by the application,
+    as shown in [Figure 3-15](#runtime-gvisor-sentry-loop).
+  id: totrans-183
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Sentry 在一个循环中等待应用程序生成系统调用，如图[3-15](#runtime-gvisor-sentry-loop)所示。
+- en: '![image](Images/haku_0315.png)'
+  id: totrans-184
+  prefs: []
+  type: TYPE_IMG
+  zh: '![image](Images/haku_0315.png)'
+- en: 'Figure 3-15\. gVisor sentry pseudocode; source: [Resource Sharing](https://oreil.ly/s1DjO)'
+  id: totrans-185
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-15\. gVisor sentry 伪代码；来源：[资源共享](https://oreil.ly/s1DjO)
+- en: It captures the system call with `ptrace`, handles it, and returns a response
+    to the process (often without making the expected system call to the host). This
+    simple model protects the underlying kernel from any direct interaction with the
+    process inside the container.
+  id: totrans-186
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 它使用 `ptrace` 捕获系统调用，处理并返回响应给进程（通常无需向宿主进行预期的系统调用）。这种简单模型保护了底层内核免受容器内部进程的直接交互。
+- en: The decreasing number of permitted calls shown in [Figure 3-16](#runtime-gvisor-syscall-hierarchy)
+    limits the exploitable interface of the underlying host kernel to 68 system calls,
+    while the containerized application process believes it has access to all ~350
+    kernel calls.
+  id: totrans-187
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 减少的允许调用次数如图[3-16](#runtime-gvisor-syscall-hierarchy)所示，限制了底层宿主内核的可利用接口为 68 个系统调用，而容器化应用程序进程则认为它可以访问所有约
+    350 个内核调用。
+- en: 'The Platform Syscall Switcher, gVisor’s system call interceptor, has two modes:
+    `ptrace` and KVM. The `ptrace` (“process trace”) system call provides a mechanism
+    for a parent process to observe and modify another process’s behavior. `PTRACE_SYSEMU`
+    forces the traced process to stop on entry to the next syscall, and gVisor is
+    able to respond to it or proxy the request to the host kernel, going via Gofer
+    if I/O is required.'
+  id: totrans-188
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 平台系统调用切换器，gVisor 的系统调用拦截器，有两种模式：`ptrace` 和 KVM。`ptrace`（“进程跟踪”）系统调用提供了一种机制，让父进程观察和修改另一个进程的行为。`PTRACE_SYSEMU`
+    强制跟踪的进程在进入下一个系统调用时停止，并且 gVisor 能够对其作出响应或者通过 Gofer 代理请求到宿主内核进行处理。
+- en: '![image](Images/haku_0316.png)'
+  id: totrans-189
+  prefs: []
+  type: TYPE_IMG
+  zh: '![image](Images/haku_0316.png)'
+- en: Figure 3-16\. gVisor system call hierarchy
+  id: totrans-190
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-16\. gVisor 系统调用层次结构
+- en: Firecracker
+  id: totrans-191
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Firecracker
+- en: Firecracker is a virtual machine monitor (VMM) that boots a dedicated VM for
+    its guest using KVM. Instead of using KVM’s traditional device emulation pairing
+    with QEMU, Firecracker implements its own memory management and device emulation.
+    It has no BIOS (instead implementing Linux Boot Protocol), no PCI support, and
+    stripped down, simple, virtualized devices with a single network device, a block
+    I/O device, timer, clock, serial console, and keyboard device that only simulates
+    Ctrl-Alt-Del to reset the VM, as shown in [Figure 3-17](#runtime-firecracker-1).
+  id: totrans-192
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Firecracker 是一个虚拟机监视器（VMM），它使用 KVM 为其客户端启动专用 VM。与使用 KVM 的传统设备仿真配对 QEMU 不同，Firecracker
+    实现了自己的内存管理和设备仿真。它没有 BIOS（而是实现了 Linux Boot Protocol），不支持 PCI，并且简化了虚拟化设备，仅具有单个网络设备、块
+    I/O 设备、定时器、时钟、串行控制台和键盘设备，仅模拟 Ctrl-Alt-Del 以重置 VM，如图[3-17](#runtime-firecracker-1)所示。
+- en: '![image](Images/haku_0317.png)'
+  id: totrans-193
+  prefs: []
+  type: TYPE_IMG
+  zh: '![image](Images/haku_0317.png)'
+- en: 'Figure 3-17\. Firecracker and KVM interaction; source: [Resource Sharing](https://oreil.ly/s1DjO)'
+  id: totrans-194
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-17\. Firecracker 与 KVM 交互；来源：[资源共享](https://oreil.ly/s1DjO)
+- en: The Firecracker VMM process that starts the guest virtual machine is in turn
+    started by a *jailer* process. The jailer configures the security configuration
+    of the VMM sandbox (GID and UID assignment, network namespaces, create chroot,
+    create `cgroups`), then terminates and passes control to Firecracker, where `seccomp`
+    is enforced around the KVM guest kernel and userspace that it boots.
+  id: totrans-195
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 启动客户端虚拟机的 Firecracker VMM 进程又由 *jailer* 进程启动。 *jailer* 配置 VMM 沙箱的安全配置（GID 和
+    UID 分配、网络命名空间、创建 chroot、创建 `cgroups`），然后终止并将控制权传递给 Firecracker，在客户端内核和启动的用户空间周围执行
+    `seccomp`。
+- en: Instead of using a second process for I/O like gVisor, Firecracker uses the
+    KVM’s virtio drivers to proxy from the guest’s Firecracker process to the host
+    kernel, via the VMM (shown in [Figure 3-18](#runtime-firecracker-2)). When the
+    Firecracker VM image starts, it boots into protected mode in the guest kernel,
+    never running in its real mode.
+  id: totrans-196
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Firecracker 不像 gVisor 那样使用第二进程进行 I/O，而是使用 KVM 的 virtio 驱动程序通过 VMM（如 [图 3-18](#runtime-firecracker-2)
+    中所示）从客户端的 Firecracker 进程代理到主机内核。当 Firecracker VM 镜像启动时，它会在客户端内核的保护模式下启动，永远不会在其真实模式下运行。
+- en: '![image](Images/haku_0318.png)'
+  id: totrans-197
+  prefs: []
+  type: TYPE_IMG
+  zh: '![image](Images/haku_0318.png)'
+- en: Figure 3-18\. Firecracker sandboxing the guest kernel from the host
+  id: totrans-198
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-18\. Firecracker 将客户端内核与主机隔离
+- en: Tip
+  id: totrans-199
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: Firecracker is compatible with Kubernetes and OCI using the [firecracker-containerd
+    shim](https://oreil.ly/rRswg).
+  id: totrans-200
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Firecracker 可与 Kubernetes 和 OCI 兼容，使用 [firecracker-containerd shim](https://oreil.ly/rRswg)。
+- en: Firecracker invokes far less host kernel code than traditional LXC or gVisor
+    once it has started, although they all touch similar amounts of kernel code to
+    start their sandboxes.
+  id: totrans-201
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦启动，Firecracker 比传统的 LXC 或 gVisor 调用更少的主机内核代码，尽管它们在启动其沙箱时都会触及类似数量的内核代码。
+- en: 'Performance improvements are gained from an isolated memory stack, and lazily
+    flushing data to the page cache instead of disk to increase filesystem performance.
+    It supports arbitrary Linux binaries but does not support generic Linux kernels.
+    It was created for AWS’s Lambda service, forked from Google’s ChromeOS VMM, crosvm:'
+  id: totrans-202
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过隔离内存栈和将数据延迟刷新到页缓存而不是磁盘，提高文件系统性能。它支持任意 Linux 二进制文件，但不支持通用 Linux 内核。它是为 AWS
+    Lambda 服务创建的，是从 Google 的 ChromeOS VMM，crosvm 中分叉出来的：
+- en: What makes crosvm unique is a focus on safety within the programming language
+    and a sandbox around the virtual devices to protect the kernel from attack in
+    case of an exploit in the devices.
+  id: totrans-203
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: crosvm 的独特之处在于其专注于编程语言内的安全性，并在虚拟设备周围创建沙箱，以保护内核免受设备漏洞利用的攻击。
+- en: ''
+  id: totrans-204
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+- en: '[Chrome OS Virtual Machine Monitor](https://oreil.ly/dbaZ5)'
+  id: totrans-205
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: '[Chrome OS 虚拟机监视器](https://oreil.ly/dbaZ5)'
+- en: Firecracker is a statically linked Rust binary that is compatible with Kata
+    Containers, [Weave Ignite](https://oreil.ly/lUQ4Y), [firekube](https://oreil.ly/zn0Nc),
+    and [firecracker-containerd](https://oreil.ly/pluqR). It provides soft allocation
+    (not allocating memory until it’s actually used) for more aggressive “bin packing,”
+    and so greater resource utilization.
+  id: totrans-206
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Firecracker 是一个静态链接的 Rust 二进制文件，与 Kata Containers、[Weave Ignite](https://oreil.ly/lUQ4Y)、[firekube](https://oreil.ly/zn0Nc)
+    和 [firecracker-containerd](https://oreil.ly/pluqR) 兼容。它提供软分配（直到实际使用时才分配内存）以实现更激进的“二进制包装”，从而实现更高的资源利用率。
+- en: Kata Containers
+  id: totrans-207
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Kata Containers
+- en: Finally, Kata Containers consists of lightweight VMs containing a container
+    engine. They are highly optimized for running containers. They are also the oldest,
+    and most mature, of the recent sandboxes. Compatibility is wide, with support
+    for most container orchestrators.
+  id: totrans-208
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，Kata Containers 包含一个轻量级虚拟机，其中包含一个容器引擎。它们被高度优化以运行容器。它们也是最古老、最成熟的最新沙箱技术之一。它们兼容性广泛，支持大多数容器编排器。
+- en: 'Grown from a combination of Intel Clear Containers and Hyper.sh RunV, Kata
+    Containers ([Figure 3-19](#runtime-kata-1)) wraps containers with a dedicated
+    KVM virtual machine and device emulation from a pluggable backend: QEMU, QEMU-lite,
+    NEMU (a custom stripped-down QEMU), or Firecracker. It is an OCI runtime and so
+    supports Kubernetes.'
+  id: totrans-209
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kata Containers（[图 3-19](#runtime-kata-1)）从 Intel Clear Containers 和 Hyper.sh
+    RunV 的组合中发展而来，用一个专用的 KVM 虚拟机包装容器，并从可插拔后端（QEMU、QEMU-lite、NEMU（一种定制的精简 QEMU）、或 Firecracker）进行设备仿真。它是一个
+    OCI 运行时，因此支持 Kubernetes。
+- en: '![image](Images/haku_0319.png)'
+  id: totrans-210
+  prefs: []
+  type: TYPE_IMG
+  zh: '![image](Images/haku_0319.png)'
+- en: Figure 3-19\. Kata Containers architecture
+  id: totrans-211
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-19\. Kata Containers 架构
+- en: The Kata Containers runtime launches each container on a guest Linux kernel.
+    Each Linux system is on its own hardware-isolated VM, as you can see in [Figure 3-20](#runtime-kata-2).
+  id: totrans-212
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kata Containers运行时在客户机Linux内核上启动每个容器。每个Linux系统都在其自己的硬件隔离VM上，正如您在[图3-20](#runtime-kata-2)中所见。
+- en: The `kata-runtime` process is the VMM, and the interface to the OCI runtime.
+    `kata-proxy` handles I/O for the `kata-agent` (and therefore the application)
+    using KVM’s `virtio-serial`, and multiplexes a command channel over the same connection.
+  id: totrans-213
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kata-runtime`进程是VMM，也是OCI运行时的接口。`kata-proxy`通过KVM的`virtio-serial`处理`kata-agent`（因此也处理应用程序）的I/O，并在同一连接上多路复用命令通道。'
+- en: '`kata-shim` is the interface to the container engine, handling container lifecycles,
+    signals, and logs.'
+  id: totrans-214
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kata-shim`是容器引擎的接口，处理容器的生命周期、信号和日志。'
+- en: '![image](Images/haku_0320.png)'
+  id: totrans-215
+  prefs: []
+  type: TYPE_IMG
+  zh: '![image](Images/haku_0320.png)'
+- en: Figure 3-20\. Kata Containers components
+  id: totrans-216
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图3-20。Kata Containers组件
+- en: The guest is started using KVM and either QEMU or Firecracker. The project has
+    forked QEMU twice to experiment with lightweight start times and has reimplemented
+    a number of features back into QEMU, which is now preferred to NEMU (the most
+    recent fork).
+  id: totrans-217
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 客户机使用KVM和QEMU或Firecracker启动。该项目曾两次分支QEMU以尝试轻量级启动时间，并重新实现了一些功能到QEMU，现在QEMU已优先于NEMU（最近的分支）。
+- en: Inside the VM, QEMU boots an optimized kernel, and `systemd` starts the `kata-agent`
+    process. `kata-agent`, which uses `libcontainer` and so shares a lot of code with
+    `runc`, manages the containers running inside the VM.
+  id: totrans-218
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在VM内部，QEMU引导了一个优化过的内核，`systemd`启动了`kata-agent`进程。`kata-agent`使用`libcontainer`管理在VM内部运行的容器，并与`runc`共享大量代码。
+- en: Networking is provided by integrating with CNI (or Docker’s CNM), and a network
+    namespace is created for each VM. Because of its networking model, the host network
+    can’t be joined.
+  id: totrans-219
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 网络由集成CNI（或Docker的CNM）提供，并为每个VM创建一个网络命名空间。由于其网络模型，无法加入主机网络。
+- en: SELinux and AppArmor are not currently implemented, and some OCI inconsistencies
+    [limit the Docker integration](https://oreil.ly/VUz84).
+  id: totrans-220
+  prefs: []
+  type: TYPE_NORMAL
+  zh: SELinux和AppArmor目前未实现，并且某些OCI不一致性[限制了Docker集成](https://oreil.ly/VUz84)。
+- en: rust-vmm
+  id: totrans-221
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: rust-vmm
+- en: Many new VMM technologies have some Rustlang components. So is Rust any good?
+  id: totrans-222
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 许多新的VMM技术都有一些Rustlang组件。那么，Rust是否好用呢？
+- en: It is similar to Golang in that it is memory safe (memory model, virtio, etc.)
+    but it is built atop a memory ownership model, which avoids whole classes of bugs
+    including use after free, double free, and dangling pointer issues.
+  id: totrans-223
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 它与Golang类似，具有内存安全性（内存模型、virtio等），但建立在内存所有权模型之上，避免了包括释放后使用、双重释放和悬空指针问题在内的整类错误。
+- en: It has safe and simple concurrency and no garbage collector (which may incur
+    some virtualization overhead and latency), instead using build-time analysis to
+    find segmentation faults and memory issues.
+  id: totrans-224
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 它具有安全且简单的并发性，没有垃圾收集器（可能会带来一些虚拟化开销和延迟），而是使用构建时分析来发现分段错误和内存问题。
+- en: '[rust-vmm](https://oreil.ly/vs5f7) is a development toolkit for new VMMs as
+    shown in [Figure 3-21](#runtime-rust-vmm-1). It is a collection of building blocks
+    (Rust packages, or “crates”) comprised of virtualization components. These are
+    well tested (and therefore better secured) and provide a simple, clean interface.
+    For example, the `vm-memory` crate is a guest memory abstraction, providing a
+    guest address, memory regions, and guest shared memory.'
+  id: totrans-225
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[rust-vmm](https://oreil.ly/vs5f7)是一个新的VMM开发工具包，如[图3-21](#runtime-rust-vmm-1)所示。它由虚拟化组件构成的一组构建块（Rust包或“crate”）组成。这些组件经过了充分测试（因此更安全），并提供了简单、干净的接口。例如，`vm-memory`
+    crate是一个客户端内存抽象，提供客户端地址、内存区域和客户端共享内存。'
+- en: '![image](Images/haku_0321.png)'
+  id: totrans-226
+  prefs: []
+  type: TYPE_IMG
+  zh: '![image](Images/haku_0321.png)'
+- en: 'Figure 3-21\. Kata Containers components; source: [Resource Sharing](https://oreil.ly/s1DjO)'
+  id: totrans-227
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图3-21。Kata Containers组件；来源：[资源共享](https://oreil.ly/s1DjO)
+- en: The project was birthed from ChromeOS’s `cross-vm` (`crosvm`), which was forked
+    by Firecracker and subsequently abstracted into “hypervisor from scratch” Rust
+    crates. This approach will enable the development of a plug-and-play hypervisor
+    architecture.
+  id: totrans-228
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 该项目起源于ChromeOS的`cross-vm`（`crosvm`），后来被Firecracker分支，并被抽象为“从头开始”的Rust crate虚拟化管理程序。这种方法将支持即插即用的Hypervisor架构的开发。
+- en: Note
+  id: totrans-229
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: To see how a runtime is built, you can check out [Youki](https://oreil.ly/z4PmV).
+    It’s an experimental container runtime written in Rust that implements the `runc`
+    [runtime-spec](https://oreil.ly/MBWS0).
+  id: totrans-230
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要了解运行时是如何构建的，您可以查看[Youki](https://oreil.ly/z4PmV)。它是一个用Rust编写的实验性容器运行时，实现了`runc`的[runtime-spec](https://oreil.ly/MBWS0)。
+- en: Risks of Sandboxing
+  id: totrans-231
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 风险沙箱化
+- en: The degree of access and privilege that a guest process has to host features,
+    or virtualized versions of them, impacts the attack surface available to an attacker
+    in control of the guest process.
+  id: totrans-232
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 客户进程对主机功能或其虚拟化版本的访问权限和特权程度会影响攻击者在控制客户进程时可用的攻击面。
+- en: This new tranche of sandbox technologies is under active development. It’s code,
+    and like all new code, is at risk of exploitable bugs. This is a fact of software,
+    however, and is infinitely better than no new software at all!
+  id: totrans-233
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些新的沙盒技术正在积极开发中。它是代码，像所有新代码一样，存在可利用的漏洞风险。然而，这是软件的事实，远比完全没有新软件要好得多！
+- en: It may be that these sandboxes are not yet a target for attackers. The level
+    of innovation and baseline knowledge to contribute means the barrier to entry
+    is set high. Captain Hashjack is likely to prioritize easier targets.
+  id: totrans-234
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可能这些沙盒尚未成为攻击目标。创新程度和基础知识的要求意味着进入门槛较高。Hashjack船长可能会优先选择更容易的目标。
+- en: From an administrator’s perspective, modifying or debugging applications within
+    the sandbox becomes slightly more difficult, similar to the difference between
+    bare metal and containerized processes. These difficulties are not insurmountable
+    but require administrator familiarization with the underlying runtime.
+  id: totrans-235
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从管理员的角度来看，在沙盒中修改或调试应用程序会稍微复杂一些，类似于裸金属和容器化进程之间的区别。这些困难并非不可克服，但需要管理员熟悉底层运行时。
+- en: It is still possible to run [privileged sandboxes](https://oreil.ly/xxRnE) that
+    have elevated capabilities within the guest. And although the risks are fewer
+    than for privileged containers, users should be aware that any reduction of isolation
+    increases the risk of running the process inside the sandbox.
+  id: totrans-236
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 仍然可以运行[特权沙盒](https://oreil.ly/xxRnE)，在客户中具有提升的功能。尽管与特权容器相比风险较少，但用户应注意，任何隔离减少都会增加在沙盒内运行进程的风险。
+- en: Kubernetes Runtime Class
+  id: totrans-237
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Kubernetes运行时类
+- en: Kubernetes and Docker support running multiple container runtimes simultaneously;
+    in Kubernetes, [Runtime Class](https://oreil.ly/dRHzA) is stable from v1.20 on.
+    This means a Kubernetes worker node can host pods running under different Container
+    Runtime Interfaces (CRIs), which greatly enhances workload separation.
+  id: totrans-238
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes和Docker支持同时运行多个容器运行时；在Kubernetes中，[Runtime Class](https://oreil.ly/dRHzA)从v1.20版本开始稳定。这意味着Kubernetes工作节点可以托管在不同容器运行时接口（CRIs）下运行的Pod，极大地增强了工作负载的隔离性。
+- en: With `spec.template.spec.runtimeClassName` you can target a sandbox for a Kubernetes
+    workload via CRI.
+  id: totrans-239
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用`spec.template.spec.runtimeClassName`可以通过CRI为Kubernetes工作负载目标指定一个沙盒。
+- en: Docker is able to run any OCI-compliant runtime (e.g., `runc`, `runsc`), but
+    the Kubernetes `kubelet` uses CRI. While Kubernetes has not yet distinguished
+    between types of sandboxes, we can still set node affinity and toleration so pods
+    are scheduled on to nodes that have the relevant sandbox technology installed.
+  id: totrans-240
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Docker能够运行任何符合OCI标准的运行时（例如`runc`、`runsc`），但Kubernetes使用CRI。尽管Kubernetes尚未区分沙盒类型，我们仍然可以设置节点亲和性和容忍度，以便将Pod调度到已安装相关沙盒技术的节点上。
+- en: 'To use a new CRI runtime in Kubernetes, create a non-namespaced `RuntimeClass`:'
+  id: totrans-241
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要在Kubernetes中使用新的CRI运行时，请创建一个非命名空间的`RuntimeClass`：
+- en: '[PRE5]'
+  id: totrans-242
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'Then reference the CRI runtime class in the pod definition:'
+  id: totrans-243
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后在Pod定义中引用CRI运行时类：
+- en: '[PRE6]'
+  id: totrans-244
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: This has started a new pod using `gvisor`. Remember that `runsc` (gVisor’s runtime
+    component) must be installed on the node that the pod is scheduled on.
+  id: totrans-245
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用`gvisor`启动了一个新的Pod。请记住，Pod所在的节点上必须安装`runsc`（gVisor的运行时组件）。
+- en: Conclusion
+  id: totrans-246
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 结论
+- en: Generally sandboxes are more secure, and containers are less complex.
+  id: totrans-247
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常沙盒更安全，容器则较为简单。
+- en: When running sensitive or untrusted workloads, you want to narrow the interface
+    between a sandboxed process and the host. There are trade-offs—debugging a rogue
+    process becomes much harder, and traditional tracing tools may not have good compatibility.
+  id: totrans-248
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在运行敏感或不受信任的工作负载时，您希望缩小沙盒进程与主机之间的接口。这里有一些权衡——调试一个恶意进程变得更加困难，传统的跟踪工具可能不太兼容。
+- en: There is a general, minor performance overhead for sandboxes over containers
+    (~50–200ms startup), which may be negligible for some workloads, and benchmarking
+    is strongly encouraged. Options may also be limited by platform or nested virtualization
+    options.
+  id: totrans-249
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 沙盒与容器相比有一般性的性能开销（启动时间约为50-200ms），对某些工作负载可能是可以忽略不计的，强烈建议进行基准测试。选项也可能受平台或嵌套虚拟化选项的限制。
+- en: As next-generation runtimes have focused on stripping down legacy compatibility,
+    they are very small and very fast to start up (compared to traditional VMs)—not
+    as fast as LXC or `runc`, but fast enough for FaaS providers to offer aggressive
+    scale rates.
+  id: totrans-250
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 随着下一代运行时专注于剥离传统兼容性，它们非常小且启动速度非常快（与传统虚拟机相比）—虽然不及LXC或`runc`快，但对于FaaS提供商来说足够快速扩展规模。
+- en: Note
+  id: totrans-251
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Traditional container runtimes like LXC and `runc` are faster to start as they
+    run a process on an existing kernel. Sandboxes need to configure their own guest
+    kernel, which leads to slightly longer start times.
+  id: totrans-252
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 传统的容器运行时，如LXC和`runc`，启动速度更快，因为它们在现有内核上运行进程。沙箱需要配置自己的客户内核，这导致启动时间稍长。
+- en: Managed services are easiest to adopt, with gVisor in GKE and Firecracker in
+    AWS Fargate. Both of them, and Kata, will run anywhere virtualization is supported,
+    and the future is bright with the `rust-vmm` library promising many more runtimes
+    to keep valuable workloads safe.
+  id: totrans-253
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 管理服务最易于采用，GKE中的gVisor和AWS Fargate中的Firecracker。它们两者，以及Kata，将在任何支持虚拟化的地方运行，并且未来光明，`rust-vmm`库承诺提供更多运行时以确保有价值的工作负载安全。
+- en: Segregating the most sensitive workloads on dedicated nodes in sandboxes gives
+    your systems the greatest resistance to practical compromise.
+  id: totrans-254
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在沙箱中将最敏感的工作负载隔离在专用节点上，可以使您的系统对实际妥协具有最大的抵抗力。

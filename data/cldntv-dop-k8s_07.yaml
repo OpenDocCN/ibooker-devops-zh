@@ -1,0 +1,2175 @@
+- en: Chapter 5\. Managing Resources
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第5章 管理资源
+- en: Nothing is enough to the man for whom enough is too little.
+  id: totrans-1
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 对于那个对于他来说，有的从来不算多。
+- en: ''
+  id: totrans-2
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+- en: Epicurus
+  id: totrans-3
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 伊壁鸠鲁
+- en: 'In this chapter, we’ll look at how to make the most of your cluster: how to
+    manage and optimize resource usage, how to manage the life cycle of containers,
+    and how to partition the cluster using namespaces. We’ll also outline some techniques
+    and best practices for keeping down the cost of your cluster, while getting the
+    most for your money.'
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们将看看如何充分利用您的集群：如何管理和优化资源使用，如何管理容器的生命周期，以及如何使用命名空间来分区集群。我们还将概述一些技术和最佳实践，以降低集群成本，同时尽可能地发挥其性能。
+- en: You’ll learn how to use resource requests, limits, and defaults, and how to
+    optimize them with the Vertical Pod Autoscaler; how to use readiness probes, liveness
+    probes, and Pod disruption budgets to manage containers; how to optimize cloud
+    storage; and how and when to use preemptible or reserved instances to control
+    costs.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您将学习如何使用资源请求、限制和默认设置，以及如何通过垂直 Pod 自动缩放器优化它们；如何使用就绪探针、存活探针和 Pod 破坏预算来管理容器；如何优化云存储；以及何时如何使用可抢占或预留实例来控制成本。
+- en: Understanding Resources
+  id: totrans-6
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 理解资源
+- en: Suppose you have a Kubernetes cluster of a given capacity, with a reasonable
+    number of nodes of the right kind of size. How do you get the most bang for your
+    buck out of it? That is, how do you get the best possible utilization of the available
+    cluster resources for your workload, while still ensuring that you have enough
+    headroom to deal with demand spikes, node failures, and bad deployments?
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设您有一个具有一定容量的 Kubernetes 集群，并且具有适当大小的节点数量。如何从中获得最大的性价比？也就是说，在确保有足够的余地应对需求峰值、节点故障和糟糕的部署的同时，如何为您的工作负载充分利用可用的集群资源？
+- en: To answer this, put yourself in the place of the Kubernetes scheduler and try
+    to see things from its point of view. The scheduler’s job is to decide where to
+    run a given Pod. Are there any nodes with enough free resources to run the Pod?
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要回答这个问题，把自己放在 Kubernetes 调度器的位置上，试着从它的角度看事物。调度器的工作是决定在哪个节点上运行特定的 Pod。是否有任何节点有足够的空闲资源来运行这个
+    Pod？
+- en: This question is impossible to answer unless the scheduler knows how many resources
+    the Pod will need to run. A Pod that needs 1 GiB of memory cannot be scheduled
+    on a node with only one hundred MiB of free memory.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除非调度器知道 Pod 需要多少资源才能运行，否则无法回答这个问题。一个需要 1 GiB 内存的 Pod 无法被调度到只剩下一百 MiB 空闲内存的节点上。
+- en: Similarly, the scheduler has to be able to take action when a greedy Pod is
+    grabbing too many resources and starving other Pods on the same node. But how
+    much is too much? In order to schedule Pods effectively, the scheduler has to
+    know the minimum and maximum allowable resource requirements for each Pod.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 同样，当一个贪婪的 Pod 占用了太多资源并使同一节点上的其他 Pod 饥饿时，调度器必须能够采取行动。但太多是多少？为了有效地调度 Pod，调度器必须了解每个
+    Pod 的最小和最大允许的资源需求。
+- en: 'That’s where Kubernetes resource requests and limits come in. Kubernetes understands
+    how to manage two kinds of resources: CPU and memory. There are other important
+    types of resources, too, such as network bandwidth, disk I/O operations (IOPS),
+    and disk space, and these may cause contention in the cluster, but Kubernetes
+    doesn’t yet have a way to describe Pods’ requirements for these.'
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这就是 Kubernetes 资源请求和限制发挥作用的地方。Kubernetes 理解如何管理两种资源：CPU 和内存。还有其他重要类型的资源，比如网络带宽、磁盘
+    I/O 操作（IOPS）和磁盘空间，这些可能在集群中引起争用，但 Kubernetes 还没有一种方法来描述 Pod 对这些资源的需求。
+- en: Resource Units
+  id: totrans-12
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 资源单位
+- en: CPU usage for Pods is expressed, as you might expect, in units of CPUs. One
+    Kubernetes CPU unit is equivalent to one AWS virtual CPU (vCPU), one Google Cloud
+    Core, one Azure vCore, or one *hyperthread* on a bare-metal processor that supports
+    hyperthreading. In other words, *1 CPU* in Kubernetes terms means what you think
+    it does.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod 的 CPU 使用量通常用 CPU 单位来表示，就像你预期的那样。在 Kubernetes 中，1个 CPU 单位等同于一个 AWS 虚拟 CPU（vCPU）、一个
+    Google Cloud Core、一个 Azure vCore，或者支持超线程的裸金属处理器上的一个超线程。换句话说，Kubernetes 术语中的 *1
+    CPU* 意味着你认为的那样。
+- en: Because most Pods don’t need a whole CPU, requests and limits are usually expressed
+    in *millicpus* (sometimes called *millicores*). Memory is measured in bytes, or
+    more handily, *mebibytes* (MiB).
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因为大多数 Pod 不需要整个 CPU，请求和限制通常用 *millicpus*（有时称为 *millicores*）表示。内存以字节为单位进行测量，或者更方便地，以
+    *mebibytes*（MiB）为单位。
+- en: Resource Requests
+  id: totrans-15
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 资源请求
+- en: A Kubernetes *resource request* specifies the minimum amount of that resource
+    that the Pod needs to run. For example, a resource request of `100m` (100 millicpus)
+    and `250Mi` (250 MiB of memory) means that the Pod cannot be scheduled on a node
+    with less than those resources available. If there isn’t any node with enough
+    capacity available, the Pod will remain in a `pending` state until there is.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 的 *资源请求* 指定了 Pod 运行所需的最小资源量。例如，请求 `100m`（100 毫核）和 `250Mi`（250 MiB
+    内存）意味着 Pod 不能被调度到没有足够这些资源的节点上。如果没有足够容量的节点可用，Pod 将保持在 `pending` 状态，直到有足够的资源为止。
+- en: For example, if all your cluster nodes have two CPU cores and 4 GiB of memory,
+    a container that requests 2.5 CPUs will never be scheduled, and neither will one
+    that requests 5 GiB of memory.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，如果所有集群节点都有两个 CPU 内核和 4 GiB 内存，那么请求 2.5 个 CPU 的容器将永远无法被调度，请求 5 GiB 内存的容器也是如此。
+- en: 'Let’s see what resource requests would look like, applied to our demo application:'
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们看看资源请求应用到我们的演示应用会是什么样子：
+- en: '[PRE0]'
+  id: totrans-19
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: Resource Limits
+  id: totrans-20
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 资源限制
+- en: A *resource limit* specifies the maximum amount of resource that a Pod is allowed
+    to use. A Pod that tries to use more than its allocated CPU limit will be *throttled*,
+    reducing its performance.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*资源限制* 指定了 Pod 允许使用的最大资源量。尝试使用超过其分配的 CPU 限制的 Pod 将被 *限制*，从而降低其性能。'
+- en: A Pod that tries to use more than the allowed memory limit, though, will be
+    terminated. If the terminated Pod can be rescheduled, it will be. In practice,
+    this may mean that the Pod is simply restarted on the same node.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尝试使用超过允许的内存限制的 Pod 将被终止。如果可以重新调度终止的 Pod，那么就会重新调度。实际上，这可能意味着 Pod 只是在同一节点上重新启动。
+- en: Some applications, such as network servers, can consume more and more resources
+    over time in response to increasing demand. Specifying resource limits is a good
+    way to prevent such hungry Pods from using more than their fair share of the cluster’s
+    capacity.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有些应用程序，如网络服务器，可以根据需求的增加而随时间消耗更多资源。指定资源限制是防止这些资源需求大的 Pod 使用超过集群容量的公平份额的好方法。
+- en: 'Here’s an example of setting resource limits on the demo application:'
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里是一个在演示应用上设置资源限制的例子：
+- en: '[PRE1]'
+  id: totrans-25
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: Knowing what limits to set for a particular application is a matter of observation
+    and judgment (see [“Optimizing Pods”](#optimizingpods)).
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 确定为特定应用设置什么样的限制是观察和判断的问题（见[“优化 Pods”](#optimizingpods)）。
+- en: 'Kubernetes allows resources to be *overcommitted*; that is, the sum of all
+    the resource limits of containers on a node can exceed the total resources of
+    that node. This is a kind of gamble: the scheduler is betting that, most of the
+    time, most containers will not need to hit their resource limits.'
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 允许资源 *过度提交*；也就是说，节点上所有容器的资源限制总和可以超过该节点的总资源。这是一种赌博：调度程序打赌，大多数情况下，大多数容器不需要达到其资源限制。
+- en: If this gamble fails, and total resource usage starts approaching the maximum
+    capacity of the node, Kubernetes will start being more aggressive in terminating
+    containers. Under conditions of resource pressure, containers that have exceeded
+    their requests, but not their limits, may still be terminated.
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果这种赌博失败，并且总资源使用接近节点的最大容量时，Kubernetes 将开始更积极地终止容器。在资源压力条件下，已超过其请求但未达到限制的容器可能仍会被终止。
+- en: Quality of Service
+  id: totrans-29
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 服务质量
+- en: 'Based on the requests and limits of a Pod, Kubernetes will classify it as one
+    of the following [Quality of Service (QoS) classes](https://oreil.ly/x0m1T): *Guaranteed*,
+    *Burstable*, or *BestEffort*.'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 根据 Pod 的请求和限制，Kubernetes 将其分类为以下几种[服务质量（QoS）类](https://oreil.ly/x0m1T)之一：*Guaranteed*、*Burstable*
+    或 *BestEffort*。
+- en: When requests match limits, a Pod is classified in the Guaranteed class, meaning
+    it is considered by the control plane to be among the most important Pods to schedule,
+    and it will do its best to ensure the Pod is only killed if it exceeds the specified
+    limits. For highly critical production workloads you may want to consider setting
+    your limits and requests to match in order to prioritize scheduling these containers.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当请求匹配限制时，一个 Pod 被分类为 Guaranteed 类，意味着控制平面认为它是最重要的 Pod 之一，将尽最大努力确保 Pod 只有在超过指定限制时才会被终止。对于高度关键的生产工作负载，您可能希望考虑设置限制和请求以匹配，以便优先调度这些容器。
+- en: Burstable Pods have lower priority than Guaranteed Pods, and Kubernetes will
+    allow them to “burst” above their request up to their limit if capacity on the
+    node is available. If the Pod is using more resources than requested, the Pod
+    *may* be killed, if the control plane needs to make way for scheduling a Pod of
+    a higher QoS class.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 突发型 Pod 的优先级低于保证型 Pod，如果节点上有空余容量，Kubernetes 将允许它们“突发”超出其请求直至其限制。如果 Pod 使用的资源超过了请求，如果控制平面需要为更高
+    QoS 类别的 Pod 腾出位置，则可能会终止 Pod。
+- en: If a Pod does not specify any requests or limits, it is considered to be *Best-Effort*,
+    which is the lowest priority. Pods are allowed to use whatever CPU and memory
+    is available on the node, but it would be the first to be killed when the cluster
+    needs to make room for higher QoS Pods.
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果 Pod 没有指定任何请求或限制，它被视为*最佳努力*，这是最低优先级。允许 Pod 使用节点上可用的任何 CPU 和内存，但当集群需要为更高的 QoS
+    Pod 腾出空间时，它将首先被终止。
+- en: Best Practice
+  id: totrans-34
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: Always specify resource requests and limits for your containers. This helps
+    Kubernetes schedule and manage your Pods properly.
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于您的容器，始终指定资源请求和限制。这有助于 Kubernetes 适当地调度和管理您的 Pod。
+- en: Managing the Container Life Cycle
+  id: totrans-36
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 管理容器生命周期
+- en: 'We’ve seen that Kubernetes can best manage your Pods when it knows what their
+    CPU and memory requirements are. But it also has to know when a container is working:
+    that is, when it’s functioning properly and ready to handle requests.'
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们已经看到，当 Kubernetes 知道 Pod 的 CPU 和内存需求时，它可以最好地管理您的 Pod。但它还必须知道容器何时工作：即，当它正常运行并准备好处理请求时。
+- en: It’s quite common for containerized applications to get into a stuck state,
+    where the process is still running, but it’s not serving any requests. Kubernetes
+    needs a way to detect this situation so that it can restart the container to fix
+    the problem.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器化应用程序经常会进入卡住状态，此时进程仍在运行，但没有提供任何请求服务。Kubernetes 需要一种方法来检测此情况，以便重新启动容器以解决问题。
+- en: Liveness Probes
+  id: totrans-39
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 存活探针
+- en: 'Kubernetes lets you specify a *liveness* probe as part of the container spec:
+    a health check that determines whether or not the container is alive (that is,
+    working).'
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 允许您在容器规范的一部分指定一个*存活*探针：一个健康检查，用于确定容器是否存活（即，正在工作）。
+- en: 'For an HTTP server container, the liveness probe specification usually looks
+    something like this:'
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于 HTTP 服务器容器，存活探针规范通常看起来像这样：
+- en: '[PRE2]'
+  id: totrans-42
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: The `httpGet` probe makes an HTTP request to a URI and port you specify; in
+    this case, `/healthz` on port 8888.
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`httpGet` 探针对您指定的 URI 和端口进行 HTTP 请求；在这种情况下是对端口 8888 上的 `/healthz`。'
+- en: If your application doesn’t have a specific endpoint for a health check, you
+    could use `/`, or any valid URL for your application. It’s common practice, though,
+    to create a `/healthz` endpoint just for this purpose. (Why the `z`? Just to make
+    sure it doesn’t collide with an existing path like `health`, which could be a
+    page about health information, for example).
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您的应用程序没有用于健康检查的特定端点，您可以使用 `/` 或应用程序的任何有效 URL。不过，通常的做法是专门创建一个 `/healthz` 端点以此为目的。（为什么是
+    `z`？只是为了确保它不会与类似 `health` 的现有路径发生冲突，比如可能是关于健康信息的页面）。
+- en: If the application responds with an HTTP 2xx or 3xx status code, Kubernetes
+    considers it alive. If it responds with anything else, or doesn’t respond at all,
+    the container is considered dead, and will be restarted.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果应用程序响应 HTTP 2xx 或 3xx 状态码，Kubernetes 将认为它是存活的。如果它响应其他任何内容，或者根本没有响应，则容器被视为死亡，并将重新启动。
+- en: Probe Delay and Frequency
+  id: totrans-46
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 探测延迟和频率
+- en: How soon should Kubernetes start checking your liveness probe? No application
+    can start instantly. If Kubernetes tried the liveness probe immediately after
+    starting the container, it would probably fail, causing the container to be restarted—and
+    this loop would repeat forever!
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 应该多快开始检查您的存活探针？没有应用可以立即启动。如果 Kubernetes 在启动容器后立即尝试存活探针，很可能会失败，导致容器重新启动，这种循环将永远重复！
+- en: The `initialDelaySeconds` field lets you tell Kubernetes how long to wait before
+    trying the first liveness probe, avoiding this *loop of death* situation. As of
+    version 1.20 of Kubernetes, there is also a dedicated `startupProbe` feature for
+    configuring a probe to determine when an application has finished starting up.
+    See [“Startup Probes”](#startup) for more details.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`initialDelaySeconds` 字段让您告诉 Kubernetes 在尝试第一个存活探针之前等待多长时间，避免这种*死循环*的情况。从 Kubernetes
+    1.20 版本开始，还有一个专门的 `startupProbe` 功能，用于配置探测器以确定应用程序何时已完成启动。有关更多详情，请参见 [“启动探针”](#startup)。'
+- en: It wouldn’t be a good idea for Kubernetes to hammer your application with requests
+    for the `healthz` endpoint thousands of times a second. Your health check endpoints
+    should be fast and not add noticeable load to the app. You wouldn’t want your
+    user experience to suffer because your app is otherwise busy responding to a flood
+    of health checks. The `periodSeconds` field specifies how often the liveness probe
+    should be checked; in this example, every three seconds.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes不应该以每秒数千次的频率向您的应用程序发送`healthz`端点的请求，这不是一个好主意。您的健康检查端点应该快速且不会给应用程序增加明显的负载。您不希望因为您的应用程序因应对大量健康检查而繁忙而导致用户体验受损。`periodSeconds`字段指定应定期检查活动探针的频率；在此示例中，每三秒钟检查一次。
+- en: '`failureThreshold` allows you to set how many times the probe can fail before
+    Kubernetes considers the application unhealthy. The default is three, which allows
+    for a few hiccups in your app, but you may need to make that lower or higher depending
+    on how aggressive you want the scheduler to be when making decisions about determining
+    an application’s health.'
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`failureThreshold`允许您设置探测器在Kubernetes将应用程序视为不健康之前可以失败多少次。默认值为三次，这允许应用程序出现一些小问题，但您可能需要根据调度程序在确定应用程序健康性方面做出决策时希望的侵略性来调整此值。'
+- en: Other Types of Probes
+  id: totrans-51
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 其他类型的探针
+- en: '`httpGet` isn’t the only kind of probe available; for network servers that
+    don’t speak HTTP, you can use `tcpSocket`:'
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`httpGet`并不是唯一可用的探针类型；对于不使用HTTP的网络服务器，您可以使用`tcpSocket`：'
+- en: '[PRE3]'
+  id: totrans-53
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: If a TCP connection to the specified port succeeds, the container is alive.
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果到指定端口的TCP连接成功，则容器处于运行状态。
+- en: 'You can also run an arbitrary command on the container, using an `exec` probe:'
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您还可以在容器内运行任意命令，使用`exec`探针：
+- en: '[PRE4]'
+  id: totrans-56
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: The `exec` probe runs the specified command inside the container, and the probe
+    succeeds if the command succeeds (that is, exits with a zero status). `exec` is
+    usually more useful as a readiness probe, and we’ll see how they’re used in the
+    next section.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`exec`探针在容器内部运行指定的命令，并且如果命令成功（即以零状态退出），则探针成功。通常情况下，`exec`更适用作为就绪探针，我们将在下一节中看到它们的用法。'
+- en: Readiness Probes
+  id: totrans-58
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 就绪探针
+- en: Related to the liveness probe, but with different semantics, is the *readiness
+    probe*. Sometimes an application needs to signal to Kubernetes that it’s temporarily
+    unable to handle requests; perhaps because it’s performing some lengthy initialization
+    process, or waiting for some subprocess to complete. The readiness probe serves
+    this function.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与活动探针相关但语义不同的是*就绪探针*。有时，应用程序需要向Kubernetes发出信号，表示它暂时无法处理请求；可能是因为它正在执行一些长时间的初始化过程，或者在等待某个子进程完成。就绪探针用于执行此功能。
+- en: 'If your application doesn’t start listening for HTTP until it’s ready to serve,
+    your readiness probe can be the same as your liveness probe:'
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您的应用程序在准备好服务之前不开始侦听HTTP，则您的就绪探针可以与活动探针相同：
+- en: '[PRE5]'
+  id: totrans-61
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'A container that fails its readiness probe will be removed from any Services
+    that match the Pod. This is like taking a failing node out of a load balancer
+    pool: no traffic will be sent to the Pod until its readiness probe starts succeeding
+    again. Note that this is different from a `livenessProbe` because a failing `readinessProbe`
+    does not kill and restart the Pod.'
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果容器未能通过其就绪探针，则将其从匹配Pod的任何服务中移除。这就像从负载均衡池中移除失败节点一样：在就绪探针再次成功之前，不会向Pod发送任何流量。请注意，这与`livenessProbe`不同，因为失败的`readinessProbe`不会杀死并重新启动Pod。
+- en: Normally, when a Pod starts, Kubernetes will start sending it traffic as soon
+    as the container is in a running state. However, if the container has a readiness
+    probe, Kubernetes will wait until the probe succeeds before sending it any requests
+    so that users won’t see errors from unready containers. This is critically important
+    for zero-downtime upgrades (see [“Deployment Strategies”](ch13.html#deploymentstrategies)
+    for more about these).
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常情况下，当Pod启动时，Kubernetes会在容器进入运行状态后立即开始向其发送流量。然而，如果容器有就绪探针，则Kubernetes会等待探针成功之后再开始向其发送任何请求，以确保用户不会看到来自未就绪容器的错误。这对于零停机升级非常重要（有关详细信息，请参阅[“部署策略”](ch13.html#deploymentstrategies)）。
+- en: 'A container that is not ready will still be shown as `Running`, but the `READY`
+    column will show one or more unready containers in the Pod:'
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个未准备好的容器仍将显示为`Running`，但`READY`列将显示一个或多个未准备好的容器在Pod中：
+- en: '[PRE6]'
+  id: totrans-65
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: Note
+  id: totrans-66
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Readiness probes should only return HTTP `200 OK` status. Although Kubernetes
+    itself considers both 2xx and 3xx status codes as *ready*, cloud load balancers
+    may not. If you’re using an Ingress resource coupled with a cloud load balancer
+    (see [“Ingress”](ch09.html#ingress)), and your readiness probe returns a 301 redirect,
+    for example, the load balancer may flag all your Pods as unhealthy. Make sure
+    your readiness probes only return a 200 status code.
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 就绪性探针应该仅返回HTTP `200 OK`状态。虽然Kubernetes本身将2xx和3xx状态码都视为*就绪*，但云负载均衡器可能不会这样。如果您正在使用与云负载均衡器配对的Ingress资源（参见[“Ingress”](ch09.html#ingress)），并且您的就绪性探针返回301重定向，负载均衡器可能标记所有您的Pod为不健康。确保您的就绪性探针只返回200状态码。
+- en: Startup Probes
+  id: totrans-68
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 启动探针
+- en: In addition to liveness probes with `initialDelaySeconds`, Kubernetes offers
+    another way to determine when an application has finished starting up. Some applications
+    require a longer period of time to initialize, or maybe you would like to instrument
+    a special endpoint in your application for checking startup status that is different
+    from your other liveness and readiness checks.
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了具有`initialDelaySeconds`的活跃性探针外，Kubernetes还提供了另一种确定应用程序何时完成启动的方法。某些应用程序需要更长的初始化时间，或者您可能希望在应用程序中的一个特殊端点中仪表化检查启动状态，这与其他活跃性和就绪性检查不同。
+- en: When a `startupProbe` is configured, the `livenessProbe` will wait on it to
+    succeed before beginning the liveness checks. If it never succeeds, Kubernetes
+    will kill and restart the Pod.
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当配置了`startupProbe`时，`livenessProbe`将等待它成功后才开始进行活跃性检查。如果它从未成功过，则Kubernetes将杀死并重启Pod。
+- en: 'The syntax for a `startupProbe` is similar to liveness and readiness probes:'
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`startupProbe`的语法与活跃性和就绪性探测类似：'
+- en: '[PRE7]'
+  id: totrans-72
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: 'In this example, notice how our `livenessProbe` will consider the Pod as unhealthy
+    after two failures because of the `failureThreshold`, but we are giving the application
+    more time to start with `failureThreshold: 10` in the `startupProbe`. This would
+    hopefully prevent the situation where the Pod may not start quickly enough and
+    the livenessProbe would otherwise give up and restart it before it has a chance
+    to run.'
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '在这个例子中，注意我们的`livenessProbe`将在`failureThreshold`达到两次失败后将Pod标记为不健康，但我们在`startupProbe`中为应用程序提供更多启动时间，例如`failureThreshold:
+    10`。这希望能防止Pod可能启动不够快速，否则`livenessProbe`可能会在其有机会运行之前放弃并重新启动它。'
+- en: gRPC Probes
+  id: totrans-74
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: gRPC探针
+- en: Although many applications and services communicate via HTTP, it’s increasingly
+    popular to use the [Google Remote Procedure Call (gRPC)](https://grpc.io) protocol
+    instead, especially for microservices. gRPC is an efficient, portable, binary
+    network protocol developed by Google and hosted by the Cloud Native Computing
+    Foundation.
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管许多应用程序和服务通过HTTP进行通信，但现在越来越流行使用[Google远程过程调用（gRPC）](https://grpc.io)协议，特别是用于微服务。gRPC是由Google开发并由Cloud
+    Native Computing Foundation托管的高效、可移植的二进制网络协议。
+- en: '`httpGet` probes will not work with gRPC servers, and although you could use
+    a `tcpSocket` probe instead, that only tells you that you can make a connection
+    to the socket, not that the server itself is working.'
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`httpGet`探针在gRPC服务器上无法工作，虽然你可以使用`tcpSocket`探针，但这只能告诉你能否连接到套接字，而不能确认服务器本身是否工作。'
+- en: gRPC has a standard health-checking protocol, which most gRPC services support,
+    and to interrogate this health check with a Kubernetes liveness probe you can
+    use the [`grpc-health-probe` tool](https://oreil.ly/sJp7V). If you add the tool
+    to your container, you can check it using an `exec` probe.
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: gRPC有一个标准的健康检查协议，大多数gRPC服务支持。要使用Kubernetes的活跃性探针来查询此健康检查，您可以使用[`grpc-health-probe`工具](https://oreil.ly/sJp7V)。如果将该工具添加到您的容器中，您可以使用`exec`探针进行检查。
+- en: File-Based Readiness Probes
+  id: totrans-78
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 基于文件的就绪性探针
+- en: Alternatively, you could have the application create a file on the container’s
+    filesystem called something like */tmp/healthy*, and use an `exec` readiness probe
+    to check for the presence of that file.
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 或者，您可以让应用程序在容器文件系统上创建一个名为*/tmp/healthy*之类的文件，并使用`exec`就绪性探针检查该文件是否存在。
+- en: 'This kind of readiness probe can be useful because if you want to take the
+    container temporarily out of service to debug a problem, you can attach to the
+    container and delete the */tmp/healthy* file. The next readiness probe will fail,
+    and Kubernetes will remove the container from any matching Services. (A better
+    way to do this, though, is to adjust the container’s labels so that it no longer
+    matches the service: see [“Service Resources”](ch04.html#services).)'
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种就绪探针非常有用，因为如果您想临时将容器停止以调试问题，您可以附加到容器并删除*/tmp/healthy*文件。下一个就绪探针将失败，Kubernetes将从任何匹配的服务中删除容器。（然而，更好的方法是调整容器的标签，使其不再匹配服务：参见[“服务资源”](ch04.html#services)。）
+- en: You can now inspect and troubleshoot the container at your leisure. Once you’re
+    done, you can either terminate the container and deploy a fixed version, or put
+    the probe file back in place so that the container will start receiving traffic
+    again.
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您现在可以随意检查和排除容器故障。完成后，您可以终止容器并部署修复版本，或者将探针文件放回原位，以便容器可以再次开始接收流量。
+- en: Best Practice
+  id: totrans-82
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: Use readiness probes and liveness probes to let Kubernetes know when your application
+    is ready to handle requests, or when it has a problem and needs to be restarted.
+    It is also important to think about how your application functions in the context
+    of the broader ecosystem and what should happen when it fails. You can end up
+    in a cascading failure scenario if your probes are interconnected and share dependencies.
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用就绪探针和存活探针告知Kubernetes何时准备好处理请求，或者何时出现问题需要重新启动。还要考虑在更广泛的生态系统中您的应用程序如何运行以及失败时应采取的措施。如果您的探针相互连接并共享依赖关系，可能会导致级联失败场景。
+- en: minReadySeconds
+  id: totrans-84
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: minReadySeconds
+- en: By default, a container or Pod is considered ready the moment its readiness
+    probe succeeds. In some cases, you may want to run the container for a short while
+    to make sure it is stable. During a deployment, Kubernetes waits until each new
+    Pod is ready before starting the next (see [“Rolling Updates”](ch13.html#rollingupdate)).
+    If a faulty container crashes straightaway, this will halt the rollout, but if
+    it takes a few seconds to crash, all its replicas might be rolled out before you
+    discover the problem.
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，容器或Pod在其就绪探针成功时被视为就绪。在某些情况下，您可能希望运行容器一段时间以确保其稳定。在部署期间，Kubernetes会等到每个新Pod准备就绪后再启动下一个（参见[“滚动更新”](ch13.html#rollingupdate)）。如果有一个有问题的容器立即崩溃，这将停止滚动更新，但如果它需要几秒钟才能崩溃，所有它的副本可能会在您发现问题之前完成部署。
+- en: To avoid this, you can set the `minReadySeconds` field on the container. A container
+    or Pod will not be considered ready until its readiness probe has been up for
+    `minReadySeconds` (default 0).
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了避免这种情况，您可以在容器上设置`minReadySeconds`字段。容器或Pod在其就绪探针运行了`minReadySeconds`（默认为0）之后才被认为是就绪的。
+- en: Pod Disruption Budgets
+  id: totrans-87
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Pod中断预算
+- en: Sometimes Kubernetes needs to stop your Pods even though they’re alive and ready
+    (a process called *eviction*). Perhaps the node they’re running on is being drained
+    prior to an upgrade, for example, and the Pods need to be moved to another node.
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有时候，尽管Pod仍然活着并且就绪（称为*驱逐*过程），Kubernetes也需要停止它们。例如，在升级之前可能会排空它们所在的节点，需要将Pod迁移到另一个节点。
+- en: However, this needn’t result in downtime for your application, provided enough
+    replicas can be kept running. You can use the `PodDisruptionBudget` resource to
+    specify, for a given application, how many Pods you can afford to lose at any
+    given time.
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，这不一定会导致应用程序的停机时间，只要保持足够的副本运行即可。您可以使用`PodDisruptionBudget`资源来指定对于给定应用程序，您可以在任何给定时间内失去多少个Pod。
+- en: For example, you might specify that no more than 10% of your application’s Pods
+    can be disrupted at once. Or perhaps you want to specify that Kubernetes can evict
+    any number of Pods, provided that at least three replicas are always running.
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，您可能会指定一次不超过应用程序Pod总数的10%可以被中断。或者您可能希望指定，只要至少有三个副本始终运行，Kubernetes可以驱逐任意数量的Pod。
+- en: minAvailable
+  id: totrans-91
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: minAvailable
+- en: 'Here’s an example of a PodDisruptionBudget that specifies a minimum number
+    of Pods to be kept running, using the `minAvailable` field:'
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下面是一个PodDisruptionBudget的示例，使用`minAvailable`字段指定要保持运行的最小Pod数量：
+- en: '[PRE8]'
+  id: totrans-93
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: 'In this example, `minAvailable: 3` specifies that at least three Pods matching
+    the label `app: demo` should always be running. Kubernetes can evict as many `demo`
+    Pods as it wants, so long as there are always at least three left.'
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '在这个示例中，`minAvailable: 3`指定了至少需要三个匹配标签`app: demo`的Pod始终运行。Kubernetes可以驱逐尽可能多的`demo`
+    Pod，只要始终保留至少三个。'
+- en: maxUnavailable
+  id: totrans-95
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: maxUnavailable
+- en: 'Conversely, you can use `maxUnavailable` to limit the total number or percentage
+    of Pods that Kubernetes is allowed to evict:'
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 相反，您可以使用 `maxUnavailable` 来限制 Kubernetes 可以驱逐的 Pod 的总数或百分比：
+- en: '[PRE9]'
+  id: totrans-97
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: Here, no more than 10% of `demo` Pods are allowed to be evicted at any one time.
+    This only applies to so-called *voluntary evictions*, though; that is to say,
+    evictions initiated by Kubernetes. If a node suffers a hardware failure or gets
+    deleted, for example, the Pods on it will be involuntarily evicted, even if that
+    would violate the disruption budget.
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这里，不允许一次驱逐超过 10% 的 `demo` Pod。不过，这仅适用于所谓的 *自愿驱逐*；也就是说，由 Kubernetes 启动的驱逐。例如，如果一个节点遭遇硬件故障或被删除，那么其上的
+    Pod 将被迫驱逐，即使这可能违反了中断预算。
+- en: Since Kubernetes will tend to spread Pods evenly across nodes, all other things
+    being equal, this is worth bearing in mind when considering how many nodes your
+    cluster needs. If you have three nodes, the failure of one could result in the
+    loss of a third of all your Pods, and that may not leave enough to maintain an
+    acceptable level of service (see [“High Availability”](ch03.html#highavailability)).
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于 Kubernetes 倾向于在节点之间均匀分布 Pod，其他条件相同的情况下，考虑集群需要多少个节点时，这是值得注意的。如果您有三个节点，其中一个节点的故障可能导致您失去三分之一的所有
+    Pod，并且这可能不足以维持可接受的服务水平（参见 [“高可用性”](ch03.html#highavailability)）。
+- en: Best Practice
+  id: totrans-100
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: Set PodDisruptionBudgets for your business-critical applications to make sure
+    there are always enough replicas to maintain the service, even when Pods are evicted.
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为您的业务关键应用程序设置 PodDisruptionBudgets，以确保始终有足够的副本来维护服务，即使 Pod 被驱逐。
+- en: Using Namespaces
+  id: totrans-102
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用命名空间
+- en: Another very useful way of managing resource usage across your cluster is to
+    use *namespaces*. A Kubernetes namespace is a way of partitioning your cluster
+    into separate subdivisions, for whatever purpose you like.
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个管理集群资源使用的非常有用的方法是使用 *namespaces*。Kubernetes 命名空间是将集群分区为不同子部分的一种方式，您可以根据需要来使用它们。
+- en: For example, you might have different namespaces for testing out different versions
+    of an application, or a separate namespace per team. As the term *namespace* suggests,
+    names in one namespace are not visible from a different namespace.
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，您可能为应用程序的不同版本测试而拥有不同的命名空间，或者每个团队单独一个命名空间。正如 *namespace* 这个术语所暗示的那样，一个命名空间中的名称对另一个命名空间是不可见的。
+- en: This means that you could have a service called `demo` in the `prod` namespace,
+    and a different service called `demo` in the `test` namespace, and there won’t
+    be any conflict.
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这意味着您可以在 `prod` 命名空间中有一个名为 `demo` 的服务，而在 `test` 命名空间中有另一个名为 `demo` 的服务，它们之间不会有任何冲突。
+- en: 'To see the namespaces that exist on your cluster, run the following command:'
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要查看集群上存在的命名空间，请运行以下命令：
+- en: '[PRE10]'
+  id: totrans-107
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: You can think of namespaces as being a bit like folders on your computer’s hard
+    disk. While you *could* keep all your files in the same folder, it would be inconvenient.
+    Looking for a particular file would be time-consuming, and it wouldn’t be easy
+    to see which files belong with which others. A namespace groups related resources
+    together, and makes it easier to work with them. Unlike folders, however, namespaces
+    can’t be nested.
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以将命名空间视为计算机硬盘上的文件夹。虽然您*可以*将所有文件放在同一个文件夹中，但这会很不方便。查找特定文件会耗费时间，而且很难看出哪些文件与其他文件属于同一组。命名空间将相关资源分组在一起，并使其更容易处理。但与文件夹不同，命名空间不能嵌套。
+- en: Working with Namespaces
+  id: totrans-109
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用命名空间
+- en: So far, when working with Kubernetes we’ve always used the *default namespace*.
+    If you don’t specify a namespace when running a `kubectl` command, such as `kubectl
+    run`, your command will operate on the default namespace. If you’re wondering
+    what the `kube-system` namespace is, that’s where the Kubernetes internal system
+    components run so that they’re segregated from your own applications.
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，在使用 Kubernetes 时，我们总是使用 *default namespace*。如果在运行 `kubectl` 命令时未指定命名空间（例如
+    `kubectl run`），则命令将在默认命名空间上运行。如果您想知道 `kube-system` 命名空间是什么，请注意 Kubernetes 内部系统组件运行在这里，以使它们与您自己的应用程序分开。
+- en: 'If, instead, you specify a namespace with the `--namespace` flag (or `-n` for
+    short), your command will use that namespace. For example, to get a list of Pods
+    in the `prod` namespace, run:'
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 相反，如果您使用 `--namespace` 标志（或简称 `-n`）指定了命名空间，那么您的命令将使用该命名空间。例如，要获取 `prod` 命名空间中
+    Pod 的列表，请运行：
+- en: '[PRE11]'
+  id: totrans-112
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: What Namespaces Should I Use?
+  id: totrans-113
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 我应该使用什么样的命名空间？
+- en: 'It’s entirely up to you how to divide your cluster into namespaces. One idea
+    that makes intuitive sense is to have one namespace per application, or per team.
+    For example, you might create a `demo` namespace to run the demo application in.
+    You can create a namespace using a Kubernetes namespace resource like the following:'
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您完全可以自行决定如何将您的集群划分为命名空间。一个直观的想法是为每个应用程序或团队创建一个命名空间。例如，您可以创建一个`demo`命名空间来运行演示应用程序。您可以使用类似以下内容的
+    Kubernetes 命名空间资源创建命名空间：
+- en: '[PRE12]'
+  id: totrans-115
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: 'To apply this resource manifest, use the `kubectl apply -f` command (see [“Resource
+    Manifests in YAML Format”](ch04.html#applying) for more about this.) You’ll find
+    the YAML manifests for all the examples in this section in the demo application
+    repo, in the *hello-namespace* directory:'
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要应用此资源清单，请使用`kubectl apply -f`命令（有关此命令的更多信息，请参阅[“YAML 格式的资源清单”](ch04.html#applying)）。您可以在演示应用程序仓库的*hello-namespace*目录中找到本节所有示例的
+    YAML 清单：
+- en: '[PRE13]'
+  id: totrans-117
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: You could go further and create namespaces for each environment your app runs
+    in, such as `demo-prod`, `demo-staging`, `demo-test`, and so on. You could use
+    a namespace as a kind of temporary *virtual cluster*, and delete the namespace
+    when you’re finished with it. But be careful! Deleting a namespace deletes all
+    the resources within it. You really don’t want to run that command against the
+    wrong namespace. (See [“Introducing Role-Based Access Control (RBAC)”](ch11.html#rbac)
+    for how to grant or deny user permissions on individual namespaces.)
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您还可以进一步为应用程序在每个环境中运行创建命名空间，例如`demo-prod`、`demo-staging`、`demo-test`等。您可以使用命名空间作为一种临时的*虚拟集群*，并在完成后删除命名空间。但是要小心！删除命名空间会删除其中的所有资源。您真的不希望对错误的命名空间运行该命令。（请参阅[“引入基于角色的访问控制（RBAC）”](ch11.html#rbac)了解如何在单个命名空间上授予或拒绝用户权限。）
+- en: In the current version of Kubernetes, there is no way to *protect* a resource
+    such as a namespace from being deleted (though a [proposal](https://oreil.ly/vk69W)
+    for such a feature is under discussion). So don’t delete namespaces unless they
+    really are temporary and you’re sure they don’t contain any production resources.
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在当前版本的Kubernetes中，目前没有办法*保护*诸如命名空间之类的资源免受删除（尽管有关于此功能的[提案](https://oreil.ly/vk69W)正在讨论中）。因此，请不要删除命名空间，除非它们确实是临时的，并且您确定它们不包含任何生产资源。
+- en: Best Practice
+  id: totrans-120
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: 'Create separate namespaces for each of your applications or each logical component
+    of your infrastructure. Don’t use the default namespace: it’s too easy to make
+    mistakes.'
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为您的每个应用程序或基础架构的每个逻辑组件创建单独的命名空间。不要使用默认命名空间：这样做容易出错。
+- en: If you need to block all network traffic in or out of a particular namespace,
+    you can use [Kubernetes Network Policies](https://oreil.ly/WOiKZ) to enforce this.
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您需要阻止特定命名空间中的所有网络流量的进出，您可以使用[Kubernetes 网络策略](https://oreil.ly/WOiKZ)来强制执行此操作。
+- en: Service Addresses
+  id: totrans-123
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 服务地址
+- en: Although namespaces are logically isolated from one another, they can still
+    communicate with Services in other namespaces. You may recall from [“Service Resources”](ch04.html#services)
+    that every Kubernetes Service has an associated DNS name that you can use to talk
+    to it. Connecting to the hostname `demo` will connect you to the Service whose
+    name is `demo`. How does that work across different namespaces?
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管命名空间在逻辑上相互隔离，它们仍然可以与其他命名空间中的服务通信。您可能还记得从[“服务资源”](ch04.html#services)中，每个 Kubernetes
+    服务都有一个关联的 DNS 名称，您可以使用它来与之通信。连接到主机名`demo`将连接到其名称为`demo`的服务。这在不同命名空间之间是如何工作的？
+- en: 'Service DNS names always follow this pattern:'
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 服务 DNS 名称始终遵循此模式：
+- en: '[PRE14]'
+  id: totrans-126
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: 'The `.svc.cluster.local` part is optional, and so is the namespace. But if
+    you want to talk to the `demo` Service in the `prod` namespace, for example, you
+    can use:'
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`.svc.cluster.local` 部分是可选的，命名空间也是如此。但是，如果您想与`prod`命名空间中的`demo`服务通信，例如，您可以使用：'
+- en: '[PRE15]'
+  id: totrans-128
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: Even if you have a dozen different Services called `demo`, each in its own namespace,
+    you can add the namespace to the DNS name for the Service to specify exactly which
+    one you mean.
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 即使您有一打名为`demo`的不同服务，每个服务都在自己的命名空间中，您可以将命名空间添加到服务的 DNS 名称中，以明确指定您要使用的服务。
+- en: Resource Quotas
+  id: totrans-130
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 资源配额
+- en: As well as restricting the CPU and memory usage of individual containers, which
+    you learned about in [“Resource Requests”](#resourcerequests), you can (and should)
+    restrict the resource usage of a given namespace. The way to do this is to create
+    a ResourceQuota in the namespace.
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了限制单个容器的 CPU 和内存使用量外（您可以在[“资源请求”](#resourcerequests)中了解更多信息），您还可以（并且应该）限制给定命名空间的资源使用情况。做法是在命名空间中创建一个ResourceQuota。
+- en: 'Here’s an example ResourceQuota:'
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里是一个ResourceQuota示例：
+- en: '[PRE16]'
+  id: totrans-133
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: Applying this manifest to a particular namespace (for example, `demo`) sets
+    a hard limit of one hundred Pods running at once in that namespace. (Note that
+    the `metadata.name` of the ResourceQuota can be anything you like. The namespaces
+    it affects depends on which namespaces you apply the manifest to.)
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将此清单应用于特定命名空间（例如 `demo`）会在该命名空间内设置一次性运行的一百个 Pod 的硬限制。（请注意，ResourceQuota 的 `metadata.name`
+    可以是您喜欢的任何内容。它影响的命名空间取决于您将清单应用于哪些命名空间。）
+- en: '[PRE17]'
+  id: totrans-135
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: 'Now Kubernetes will block any API operations in the `demo` namespace that would
+    exceed the quota. The example ResourceQuota limits the namespace to 100 Pods,
+    so if there are 100 Pods already running and you try to start a new one, you will
+    see an error message like this:'
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，Kubernetes 将阻止任何可能超出 `demo` 命名空间配额的 API 操作。例如，ResourceQuota 的示例将该命名空间的 Pod
+    限制为 100 个，因此如果已经有 100 个 Pod 在运行，并且尝试启动一个新的 Pod，您将看到如下错误消息：
+- en: '[PRE18]'
+  id: totrans-137
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: Using ResourceQuotas is a good way to stop applications in one namespace from
+    grabbing too many resources and starving those in other parts of the cluster.
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 ResourceQuotas 是阻止一个命名空间中的应用程序获取过多资源并使集群其他部分资源匮乏的好方法。
+- en: You can also limit the total CPU and memory usage of Pods in a namespace. This
+    can be useful for budgeting in large organizations where many different teams
+    are sharing a Kubernetes cluster. Teams could be required to set the number of
+    CPUs they will use for their namespace, and if they exceed that quota, they will
+    not be able to use more cluster resources until the ResourceQuota is increased.
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您还可以限制命名空间中 Pod 的总 CPU 和内存使用量。这对于在许多不同团队共享 Kubernetes 集群的大型组织中进行预算编制非常有用。团队可能需要设置他们将用于其命名空间的
+    CPU 数量，如果超出配额，他们将无法使用更多集群资源，直到增加 ResourceQuota。
+- en: A Pod limit can be useful to prevent a misconfiguration or typing error from
+    generating a potentially unlimited number of Pods. It’s easy to forget to clean
+    up some object from a regular task, and find one day that you’ve got thousands
+    of them clogging up your cluster.
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod 限制对于防止配置错误或输入错误导致生成大量可能无限的 Pod 非常有用。很容易忘记从常规任务中清理某些对象，并且有一天发现您的集群中有成千上万个这样的对象。
+- en: Best Practice
+  id: totrans-141
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: Use ResourceQuotas in each namespace to enforce a limit on the number of Pods
+    that can run in the namespace.
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在每个命名空间使用 ResourceQuotas 来强制限制可以在该命名空间运行的 Pod 数量。
+- en: 'To check if a ResourceQuota is active in a particular namespace, use the `kubectl
+    describe resourcequotas` command:'
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要检查特定命名空间中是否激活了 ResourceQuota，请使用 `kubectl describe resourcequotas` 命令：
+- en: '[PRE19]'
+  id: totrans-144
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: Default Resource Requests and Limits
+  id: totrans-145
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 默认资源请求和限制
+- en: 'It’s not always easy to know what your container’s resource requirements are
+    going to be in advance. You can set default requests and limits for all containers
+    in a namespace using a LimitRange resource:'
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 预先了解您的容器资源需求并不总是容易的。您可以使用 LimitRange 资源为命名空间中的所有容器设置默认请求和限制：
+- en: '[PRE20]'
+  id: totrans-147
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: Tip
+  id: totrans-148
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: As with ResourceQuotas, the `metadata.name` of the LimitRange can be whatever
+    you want. It doesn’t correspond to a Kubernetes namespace, for example. A LimitRange
+    or ResourceQuota takes effect in a particular namespace only when you apply the
+    manifest to that namespace.
+  id: totrans-149
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与 ResourceQuotas 类似，LimitRange 的 `metadata.name` 可以是您想要的任何内容。例如，它不对应 Kubernetes
+    命名空间。只有在您将清单应用于特定命名空间时，LimitRange 或 ResourceQuota 才会生效。
+- en: Any container in the namespace that doesn’t specify a resource limit or request
+    will inherit the default value from the `LimitRange`. For example, a container
+    with no `cpu` request specified will inherit the value of `200m` from the `LimitRange`.
+    Similarly, a container with no `memory` limit specified will inherit the value
+    of `256Mi` from the LimitRange.
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 任何在命名空间中不指定资源限制或请求的容器将从 LimitRange 继承默认值。例如，未指定 `cpu` 请求的容器将从 LimitRange 继承
+    `200m` 的值。类似地，未指定 `memory` 限制的容器将从 LimitRange 继承 `256Mi` 的值。
+- en: 'In theory, then, you could set the defaults in a LimitRange and not bother
+    to specify requests or limits for individual containers. However, this isn’t good
+    practice: it should be possible to look at a container spec and see what its requests
+    and limits are, without having to know whether or not a LimitRange is in effect.
+    Use the LimitRange only as a backstop to prevent problems with containers whose
+    owners forgot to specify requests and limits.'
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 理论上，您可以在 LimitRange 中设置默认值，而不必为各个容器指定请求或限制。但这并不是好的做法：应该能够查看容器规范并了解其请求和限制，而不必知道是否存在
+    LimitRange。只使用 LimitRange 作为防范措施，以防容器所有者忘记指定请求和限制而产生问题。
+- en: Best Practice
+  id: totrans-152
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: Use LimitRanges in each namespace to set default resource requests and limits
+    for containers, but don’t rely on them; treat them as a backstop. Always specify
+    explicit requests and limits in the container spec itself.
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在每个命名空间中使用 LimitRanges 设置容器的默认资源请求和限制，但不要依赖它们；把它们视为最后的手段。始终在容器规范本身中指定明确的请求和限制。
+- en: Optimizing Cluster Costs
+  id: totrans-154
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 优化集群成本
+- en: In [“Cluster Sizing and Scaling”](ch06.html#sizing), we outlined some considerations
+    for choosing the initial size of your cluster, and scaling it over time as your
+    workloads evolve. But, assuming that your cluster is correctly sized and has sufficient
+    capacity, how should you run it in the most cost-effective way?
+  id: totrans-155
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在《集群大小和扩展》（ch06.html#sizing）中，我们概述了选择集群初始大小以及随着工作负载演变而进行扩展的一些考虑因素。但是，假设您的集群大小正确，并且具有足够的容量，那么如何以最具成本效益的方式运行它呢？
+- en: Kubecost
+  id: totrans-156
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Kubecost
+- en: It can often be difficult to get an overall sense of the cost involved with
+    running the Kubernetes infrastructure when there are several applications and
+    teams all sharing the same clusters.
+  id: totrans-157
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当多个应用程序和团队共享同一集群时，了解运行 Kubernetes 基础设施所涉及的总成本往往是困难的。
+- en: Fortunately there is a tool called [Kubecost](https://oreil.ly/j4ppy) for tracking
+    costs per namespace, label, or even down to the container level. [Kubecost](https://www.kubecost.com)
+    is currently free for a single cluster, and there are paid versions with support
+    for larger environments.
+  id: totrans-158
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 幸运的是，有一个名为 [Kubecost](https://oreil.ly/j4ppy) 的工具可用于跟踪每个命名空间、标签甚至容器级别的成本。 [Kubecost](https://www.kubecost.com)
+    目前免费提供单个集群版本，并提供支持更大环境的付费版本。
+- en: Optimizing Deployments
+  id: totrans-159
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 优化部署
+- en: Do you really need quite so many replicas? It may seem an obvious point, but
+    every Pod in your cluster uses up some resources that are thus unavailable to
+    some other Pod.
+  id: totrans-160
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你真的需要这么多副本吗？这似乎是一个显而易见的问题，但是集群中的每个 Pod 都会使用一些资源，这些资源因此无法提供给其他一些 Pod。
+- en: It can be tempting to run a large number of replicas for everything so that
+    quality of service will never be reduced if individual Pods fail, or during rolling
+    upgrades. Also, the more replicas, the more traffic your apps can handle.
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有时为了确保个别 Pods 失效时服务质量不会降低，或在滚动升级期间，会诱人地为所有内容运行大量副本。此外，副本越多，您的应用程序可以处理的流量就越多。
+- en: But you should use replicas wisely. Your cluster can only run a finite number
+    of Pods. Give them to applications that really need maximum availability and performance.
+  id: totrans-162
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 但是您应该明智地使用副本。您的集群只能运行有限数量的 Pods。将它们分配给真正需要最大可用性和性能的应用程序。
+- en: If it really doesn’t matter that a given Deployment is down for a few seconds
+    during an upgrade, it doesn’t need a lot of replicas. A surprisingly large number
+    of applications and services can get by perfectly well with one or two replicas.
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果在升级期间某个 Deployment 短暂下线并不重要，那么它就不需要很多副本。令人惊讶的是，大量的应用程序和服务完全可以仅靠一个或两个副本运行得非常好。
+- en: 'Review the number of replicas configured for each Deployment, and ask:'
+  id: totrans-164
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 检查每个 Deployment 配置的副本数量，并询问：
+- en: What are the business requirements for performance and availability for this
+    service?
+  id: totrans-165
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 这项服务的性能和可用性的业务需求是什么？
+- en: Can we meet those requirements with fewer replicas?
+  id: totrans-166
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 我们能用更少的副本满足这些要求吗？
+- en: If an app is struggling to handle demand, or users get too many errors when
+    you upgrade the Deployment, it needs more replicas. But in many cases you can
+    reduce the size of a Deployment considerably before you get to the point where
+    the degradation starts to be noticeable.
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果一个应用程序在处理需求时遇到困难，或者在升级 Deployment 时用户遇到太多错误，那么它需要更多副本。但在许多情况下，在性能下降开始显著之前，您可以显著减少
+    Deployment 的规模。
+- en: Later on in [“Autoscaling”](ch06.html#autoscaling), we will cover ways you can
+    leverage autoscaling to save costs at times when you know your usage is low.
+  id: totrans-168
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在《自动扩展》（ch06.html#autoscaling）的后续部分中，我们将介绍如何利用自动缩放在您知道使用率低时节省成本的方法。
+- en: Best Practice
+  id: totrans-169
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: Use the minimum number of Pods for a given Deployment that will satisfy your
+    performance and availability requirements. Gradually reduce the number of replicas
+    to just above the point where your service level objectives are met.
+  id: totrans-170
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于满足性能和可用性需求的给定 Deployment，请使用最少数量的 Pods。逐渐减少副本数量，直到刚好满足您的服务级别目标为止。
+- en: Optimizing Pods
+  id: totrans-171
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 优化 Pods
+- en: 'Earlier in this chapter, in [“Resource Requests”](#resourcerequests), we emphasized
+    the importance of setting the correct resource requests and limits for your containers.
+    If the resource requests are too small, you’ll soon know about it: Pods will start
+    failing. If they are too large, however, the first time you find out about it
+    may be when you get your monthly cloud bill.'
+  id: totrans-172
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章的前面，我们强调了为容器设置正确的资源请求和限制的重要性，在[“资源请求”](#resourcerequests)部分。如果资源请求过小，你很快就会知道：Pods
+    开始失败。然而，如果它们过大，你第一次知道可能是在收到每月的云账单时。
+- en: You should regularly review the resource requests and limits for your various
+    workloads, and compare them against what was actually used.
+  id: totrans-173
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你应该定期审查各种工作负载的资源请求和限制，并将它们与实际使用情况进行比较。
+- en: Most managed Kubernetes services offer some kind of dashboard showing the CPU
+    and memory usage of your containers over time—we’ll see more about this in [“Monitoring
+    Cluster Status”](ch11.html#clustermonitoring).
+  id: totrans-174
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大多数托管的 Kubernetes 服务都提供一种仪表板，显示容器随时间的 CPU 和内存使用情况——我们将在[“监控集群状态”](ch11.html#clustermonitoring)中详细了解更多。
+- en: You can also build your own dashboards and statistics using Prometheus and Grafana,
+    and we’ll cover this in detail in [Chapter 15](ch15.html#observability).
+  id: totrans-175
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你也可以使用 Prometheus 和 Grafana 构建自己的仪表板和统计信息，我们将在[第15章](ch15.html#observability)中详细介绍这一点。
+- en: Setting the optimal resource requests and limits is something of an art, and
+    the answer will be different for every kind of workload. Some containers may be
+    idle most of the time, occasionally spiking their resource usage to handle a request;
+    others may be constantly busy, and gradually use more and more memory until they
+    hit their limits.
+  id: totrans-176
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 设置最佳的资源请求和限制有点像艺术，对每种工作负载的答案都会有所不同。有些容器可能大部分时间处于空闲状态，偶尔会因处理请求而使资源使用率急剧上升；而其他一些可能会持续忙碌，并逐渐使用更多内存直至达到限制。
+- en: In general, you should set the resource limits for a container to a little above
+    the maximum it uses in normal operation. For example, if a given container’s memory
+    usage over a few days never exceeds 500 MiB of memory, you might set its memory
+    limit to 600 MiB.
+  id: totrans-177
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一般情况下，你应该将容器的资源限制设置在它在正常运行中使用的最大值略高一点。例如，如果某个容器在几天内的内存使用从未超过500 MiB，你可以将其内存限制设置为600
+    MiB。
+- en: Note
+  id: totrans-178
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Should containers have limits at all? One school of thought says that containers
+    should have *no* limits in production, or that the limits should be set so high
+    that the containers will never exceed them. With very large and resource-hungry
+    containers that are expensive to restart, this may make some sense, but we think
+    it’s better to set limits anyway. Without them, a container that has a memory
+    leak, or that uses too much CPU, can gobble up all the resources available on
+    a node, starving other containers.
+  id: totrans-179
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到底应不应该为容器设置限制？一派观点认为，在生产环境中容器不应该有任何限制，或者限制应该设置得非常高，以至于容器永远不会超过它们。对于非常大和资源密集型的容器而言，这可能有些道理，但我们认为还是最好设置限制。没有限制的话，一个有内存泄漏或使用过多
+    CPU 的容器可能会吞噬节点上所有可用的资源，从而使其他容器陷入饥饿状态。
+- en: To avoid this *resource Pac-Man* scenario, set a container’s limits to a little
+    more than 100% of normal usage. This will ensure it’s not killed as long as it’s
+    working properly, but still minimize the blast radius if something goes wrong.
+  id: totrans-180
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了避免“资源吞噬者”的情况，将容器的限制设置为正常使用量的略高一点。这将确保只要容器正常工作，就不会被杀死，但如果出现问题，仍会最大限度地减少影响范围。
+- en: Request settings are less critical than limits, but they still should not be
+    set too high (as the Pod will never be scheduled), or too low (as Pods that exceed
+    their requests are first in line for eviction).
+  id: totrans-181
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请求设置比限制更不那么关键，但也不应设置得过高（因为 Pod 将永远不会被调度），或者过低（因为超出请求的 Pods 会首先被驱逐）。
+- en: Vertical Pod Autoscaler
+  id: totrans-182
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 垂直 Pod 自动缩放器
+- en: There is a Kubernetes add-on called the [Vertical Pod Autoscaler](https://oreil.ly/lQtDN),
+    which can help you work out the ideal values for resource requests. It will watch
+    a specified Deployment and automatically adjust the resource requests for its
+    Pods based on what they actually use. It has a dry-run mode that will just make
+    suggestions, without actually modifying the running Pods, and this can be helpful.
+  id: totrans-183
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes有一个名为[垂直 Pod 自动缩放器](https://oreil.ly/lQtDN)的插件，可以帮助你确定资源请求的理想值。它会监视指定的部署，并根据实际使用情况自动调整其
+    Pod 的资源请求。它有一个 dry-run 模式，只会提出建议，而不会实际修改正在运行的 Pods，这可能非常有帮助。
+- en: Optimizing Nodes
+  id: totrans-184
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 优化节点
+- en: Kubernetes can work with a wide range of node sizes, but some will perform better
+    than others. To get the best cluster capacity for your money, you need to observe
+    how your nodes perform in practice, under real-demand conditions, with your specific
+    workloads. This will help you determine the most cost-effective instance types.
+  id: totrans-185
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 可以处理各种节点大小，但某些节点的性能可能会优于其他节点。为了获得最佳的集群容量性价比，你需要观察你的节点在实际需求条件下的表现，特别是在特定的工作负载下。这将帮助你确定最具成本效益的实例类型。
+- en: It’s worth remembering that every node has to have an operating system on it,
+    which consumes disk, memory, and CPU resources. So do the Kubernetes system components
+    and the container runtime. The smaller the node, the bigger a proportion of its
+    total resources this overhead represents.
+  id: totrans-186
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 值得记住的是，每个节点都必须安装操作系统，这会消耗磁盘、内存和CPU资源。Kubernetes 系统组件和容器运行时也是如此。节点越小，这些开销在其总资源中所占比例越大。
+- en: Larger nodes, therefore, can be more cost-effective, because a greater proportion
+    of their resources are available for your workloads. The trade-off is that losing
+    an individual node has a bigger effect on your cluster’s available capacity.
+  id: totrans-187
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，较大的节点可以更具成本效益，因为它们的更多资源可用于你的工作负载。但需要注意的是，丢失一个单独的节点会对集群的可用容量产生更大的影响。
+- en: 'Small nodes also have a higher percentage of *stranded resources*: chunks of
+    memory space and CPU time that are unused, but too small for any existing Pod
+    to claim them.'
+  id: totrans-188
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 较小的节点还具有更高百分比的*滞留资源*：未使用的内存空间和CPU时间的片段，但任何现有的 Pod 都无法使用它们。
+- en: A good [rule of thumb](https://oreil.ly/tTwpL) is that nodes should be big enough
+    to run at least five of your typical Pods, keeping the proportion of stranded
+    resources to around 10% or less. If the node can run 10 or more Pods, stranded
+    resources will be below 5%.
+  id: totrans-189
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个很好的[经验法则](https://oreil.ly/tTwpL)是节点应该足够大，可以运行至少五个典型的 Pod，以保持被滞留资源的比例在 10%或更低。如果节点可以运行
+    10 个或更多的 Pod，则滞留资源将低于 5%。
+- en: The default limit in Kubernetes is 110 Pods per node. Although you can increase
+    this limit by adjusting the `--max-pods` setting of the `kubelet`, this may not
+    be possible with some managed services, and it’s a good idea to stick to the Kubernetes
+    defaults unless there is a strong reason to change them.
+  id: totrans-190
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 的默认限制是每个节点最多支持 110 个 Pod。尽管可以通过调整`kubelet`的`--max-pods`设置来增加此限制，但某些托管服务可能不支持此操作，建议除非有强烈理由，否则最好遵循
+    Kubernetes 的默认设置。
+- en: The Pods-per-node limit means that you may not be able to take advantage of
+    your cloud provider’s largest instance sizes. Instead, consider running a [larger
+    number of smaller nodes](https://oreil.ly/e3Sim) to get better utilization. For
+    example, instead of 6 nodes with 8 vCPUs, run 12 nodes with 4 vCPUs.
+  id: totrans-191
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个节点的 Pod 限制意味着你可能无法利用云服务提供商的最大实例大小。相反，考虑运行一些更多的较小节点，以获得更好的利用率。例如，与其运行 8 vCPUs
+    的 6 个节点，不如运行 4 vCPUs 的 12 个节点。
+- en: Tip
+  id: totrans-192
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: Look at the percentage resource utilization of each node, using your cloud provider’s
+    dashboard or `kubectl top nodes`. The bigger the percentage of CPU in use, the
+    better the utilization. If the larger nodes in your cluster have better utilization,
+    you may be well advised to remove some of the smaller nodes and replace them with
+    larger ones.
+  id: totrans-193
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 查看每个节点的资源利用率百分比，可以使用你的云服务提供商的仪表板或`kubectl top nodes`命令。使用中央处理器（CPU）百分比越大，利用率就越高。如果你的集群中较大的节点利用率更高，你可能会建议移除一些较小的节点，并用较大的节点替换它们。
+- en: On the other hand, if larger nodes have low utilization, your cluster may be
+    over capacity and you can therefore either remove some nodes or make them smaller,
+    reducing the total bill.
+  id: totrans-194
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一方面，如果较大的节点利用率低，你的集群可能过载，因此可以移除一些节点或将其变小，从而减少总成本。
+- en: Best Practice
+  id: totrans-195
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: Larger nodes tend to be more cost-effective, because less of their resources
+    are consumed by system overhead. Size your nodes by looking at real-world utilization
+    figures for your cluster, aiming for between 10 and 100 Pods per node.
+  id: totrans-196
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 较大的节点通常更具成本效益，因为系统开销消耗它们资源的比例较低。根据你的集群的实际使用情况来选择节点大小，目标是每个节点支持 10 到 100 个 Pod。
+- en: Optimizing Storage
+  id: totrans-197
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 优化存储
+- en: One cloud cost that is often overlooked is that of disk storage. Cloud providers
+    offer varying amounts of disk space with each of their instance sizes, and the
+    price of large-scale storage varies too.
+  id: totrans-198
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个经常被忽视的云成本是磁盘存储的成本。云服务提供商为其不同的实例大小提供不同数量的磁盘空间，并且大规模存储的价格也不同。
+- en: While it’s possible to achieve quite high CPU and memory utilization using Kubernetes
+    resource requests and limits, the same is not true of storage, and many cluster
+    nodes are significantly over-provisioned with disk space.
+  id: totrans-199
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然通过 Kubernetes 的资源请求和限制可以实现相当高的 CPU 和内存利用率，但对于存储来说却并非如此，许多集群节点在磁盘空间方面明显过度配置。
+- en: Not only do many nodes have more storage space than they need, but the class
+    of storage can also be a factor. Most cloud providers offer different classes
+    of storage depending on the number of I/O operations per second (IOPS), or bandwidth,
+    allocated.
+  id: totrans-200
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不仅许多节点的存储空间超过了他们的需求，存储类别也可能是一个因素。大多数云提供商根据每秒 I/O 操作数（IOPS）或带宽分配不同类别的存储。
+- en: For example, databases that use persistent disk volumes often need a very high
+    IOPS rating, for fast, high-throughput storage access. This is expensive. You
+    can save on cloud costs by provisioning low-IOPS storage for workloads that don’t
+    need so much bandwidth. On the other hand, if your application is performing poorly
+    because it’s spending a lot of time waiting for storage I/O, you may want to provision
+    more IOPS to handle this.
+  id: totrans-201
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，使用持久磁盘卷的数据库通常需要非常高的 IOPS 评级，以便快速、高吞吐量地访问存储。这是昂贵的。通过为不需要那么多带宽的工作负载提供低 IOPS
+    存储，你可以节省云成本。另一方面，如果你的应用因为花费大量时间等待存储 I/O 而表现不佳，你可能需要提供更多的 IOPS 来处理这个问题。
+- en: Your cloud or Kubernetes provider console can usually show you how many IOPS
+    are actually being used on your nodes, and you can use these figures to help you
+    decide where to cut costs.
+  id: totrans-202
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你的云端或 Kubernetes 提供商控制台通常可以显示你的节点实际使用了多少 IOPS，你可以利用这些数据来帮助决定在哪里削减成本。
+- en: Ideally, you would be able to set resource requests for containers that need
+    high bandwidth or large amounts of storage. However, Kubernetes does not currently
+    support this, though support for IOPS requests may be added in the future.
+  id: totrans-203
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 理想情况下，你应该能够为需要高带宽或大量存储的容器设置资源请求。然而，目前 Kubernetes 并不支持这一点，尽管未来可能会添加对 IOPS 请求的支持。
+- en: Best Practice
+  id: totrans-204
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: Don’t use instance types with more storage than you need. Provision the smallest,
+    lowest-IOPS disk volumes you can, based on the throughput and space that you actually
+    use.
+  id: totrans-205
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不要使用比你实际需要更多存储的实例类型。根据你实际使用的吞吐量和空间，提供尽可能小的、IOPS 最低的磁盘卷。
+- en: Cleaning Up Unused Resources
+  id: totrans-206
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 清理未使用的资源
+- en: As your Kubernetes clusters grow, you will find many unused, or *lost* resources
+    hanging around in dark corners. Over time, if these lost resources are not cleaned
+    up, they will start to represent a significant fraction of your overall costs.
+  id: totrans-207
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 随着你的 Kubernetes 集群的扩展，你会发现许多未使用或者*遗失*的资源潜伏在黑暗的角落里。随着时间的推移，如果这些遗失的资源不被清理掉，它们将开始占据你整体成本的重要部分。
+- en: At the highest level, you may find cloud instances that are not part of any
+    cluster; it’s easy to forget to terminate a machine when it’s no longer in use.
+  id: totrans-208
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在最高层面上，你可能会发现一些云实例并不属于任何一个集群；当一台机器不再使用时，很容易忘记终止它。
+- en: Other types of cloud resources, such as load balancers, public IPs, and disk
+    volumes, also cost you money even though they’re not in use. You should regularly
+    review your usage of each type of resource to find and remove unused instances.
+  id: totrans-209
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 其他类型的云资源，如负载均衡器、公共 IP 和磁盘卷，即使未被使用也会花费你的资金。你应定期审查每种资源类型的使用情况，以找到并移除未使用的实例。
+- en: Similarly, there may be Deployments and Pods in your Kubernetes cluster that
+    are not actually referenced by any Service, and so cannot receive traffic.
+  id: totrans-210
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 同样地，在你的 Kubernetes 集群中可能有一些 Deployments 和 Pods 实际上并没有被任何 Service 引用，因此无法接收流量。
+- en: Even container images that are not running take up disk space on your nodes.
+    Fortunately, Kubernetes will automatically clean up unused images when the node
+    starts running short of disk space.^([1](ch05.html#idm45979387576368))
+  id: totrans-211
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 即使未运行的容器镜像也会占据节点的磁盘空间。幸运的是，当节点开始磁盘空间不足时，Kubernetes 会自动清理未使用的镜像。^([1](ch05.html#idm45979387576368))
+- en: Using owner metadata
+  id: totrans-212
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 使用所有者元数据
+- en: One helpful way to minimize unused resources is to have an organization-wide
+    policy that each resource must be tagged with information about its owner. You
+    can use Kubernetes annotations to do this (see [“Labels and Annotations”](ch09.html#labelsandannotations)).
+  id: totrans-213
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 减少未使用资源的一个有用方法是制定一个组织范围的政策，要求每个资源都必须附带有关其所有者的信息标签。你可以使用 Kubernetes 的注解来实现这一点（参见[“标签和注解”](ch09.html#labelsandannotations)）。
+- en: 'For example, you could annotate each Deployment like this:'
+  id: totrans-214
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，你可以像这样为每个 Deployment 添加注解：
+- en: '[PRE21]'
+  id: totrans-215
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: The owner metadata should specify the person or team to be contacted about this
+    resource. This is useful anyway, but it’s especially handy for identifying abandoned
+    or unused resources. (Note that it’s a good idea to prefix custom annotations
+    with the domain name of your company, such as `example.com`, to prevent collisions
+    with other annotations that might have the same name.)
+  id: totrans-216
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有者元数据应指定联系此资源的人员或团队。这无论如何都很有用，但对于识别被弃用或未使用的资源尤为方便。（请注意，最好使用您公司的域名作为自定义注释的前缀，例如`example.com`，以防止与其他可能具有相同名称的注释发生冲突。）
+- en: 'You can regularly query the cluster for all resources that do not have an owner
+    annotation and make a list of them for potential termination. An especially strict
+    policy might terminate all unowned resources immediately. Don’t be too strict,
+    though, especially at first: developer goodwill is as important a resource as
+    cluster capacity, if not more so.'
+  id: totrans-217
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以定期查询集群中所有没有所有者注释的资源，并列出它们以供潜在终止。特别严格的政策可能会立即终止所有没有所有者的资源。但是，刚开始时不要太严格：开发者的好意至关重要，甚至比集群容量更为重要。
+- en: Best Practice
+  id: totrans-218
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: Set owner annotations on all your resources, giving information about who to
+    contact if there’s a problem with this resource, or if it seems abandoned and
+    liable for termination.
+  id: totrans-219
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在所有资源上设置所有者注释，提供有关在资源出现问题时应联系的人员信息，或者如果看起来资源已被弃用且可能要终止。
+- en: Finding underutilized resources
+  id: totrans-220
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 查找未充分利用的资源
+- en: Some resources may be receiving very low levels of traffic, or none at all.
+    Perhaps they became disconnected from a Service frontend due to a change in labels,
+    or maybe they were temporary or experimental.
+  id: totrans-221
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一些资源可能接收到非常低水平的流量，甚至没有。也许它们由于标签变更而与服务前端断开连接，或者可能是临时的或实验性的。
+- en: Every Pod should expose the number of requests it receives as a metric (see
+    [Chapter 16](ch16.html#metrics) for more about this). Use these metrics to find
+    Pods that are getting low or zero traffic, and make a list of resources that can
+    potentially be terminated.
+  id: totrans-222
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个 Pod 应该公开其接收请求的数量作为指标（参见[第16章](ch16.html#metrics)了解更多信息）。利用这些指标找出接收流量低或零的
+    Pods，并列出可能可以终止的资源。
+- en: You can also check the CPU and memory utilization figures for each Pod in your
+    web console and find the least-utilized Pods in your cluster. Pods that don’t
+    do anything probably aren’t a good use of resources.
+  id: totrans-223
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您还可以在网页控制台上检查每个 Pod 的 CPU 和内存利用率，并找出集群中利用率最低的 Pods。那些什么也不做的 Pods 可能不是资源的好利用方式。
+- en: If the Pods have owner metadata, contact their owners to find out whether these
+    Pods are actually needed (for example, they might be for an application still
+    in development).
+  id: totrans-224
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果 Pods 具有所有者元数据，请联系它们的所有者，了解这些 Pods 是否真的需要（例如，它们可能是一个仍在开发中的应用程序）。
+- en: You could use another custom Kubernetes annotation (`example.com/lowtraffic`
+    perhaps) to identify Pods that receive no requests but are still needed for one
+    reason or another.
+  id: totrans-225
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用另一个自定义的 Kubernetes 注释（例如 `example.com/lowtraffic`）来识别未收到请求但由于某种原因仍然需要的
+    Pods。
+- en: Best Practice
+  id: totrans-226
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: Regularly review your cluster to find underutilized or abandoned resources and
+    eliminate them. Owner annotations can help.
+  id: totrans-227
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 定期审查您的集群，找出未充分利用或被遗弃的资源并将其清理。所有者注释可以提供帮助。
+- en: Cleaning up completed Jobs
+  id: totrans-228
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 清理已完成的作业
+- en: 'Kubernetes Jobs (see [“Jobs”](ch09.html#jobs)) are Pods that run once to completion
+    and are not restarted. However, the Job objects still exist in the Kubernetes
+    database, and once there are a significant number of completed Jobs, this can
+    affect API performance. You can tell Kubernetes to automatically remove Jobs after
+    they have finished with the `ttlSecondsAfterFinished` setting:'
+  id: totrans-229
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 作业（参见[“作业”](ch09.html#jobs)）是只运行一次并且不会重新启动的 Pods。然而，作业对象仍然存在于 Kubernetes
+    数据库中，一旦完成的作业数量达到一定量，这可能会影响 API 的性能。您可以通过 `ttlSecondsAfterFinished` 设置告诉 Kubernetes
+    在作业完成后自动删除它们：
+- en: '[PRE22]'
+  id: totrans-230
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: In this example, when your Job finishes, it will automatically be deleted after
+    60 seconds.
+  id: totrans-231
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这个例子中，当您的作业完成时，将在60秒后自动删除。
+- en: Checking Spare Capacity
+  id: totrans-232
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 检查备用容量
+- en: There should always be enough spare capacity in the cluster to handle the failure
+    of a single worker node. To check this, try draining your biggest node (see [“Scaling
+    down”](ch06.html#drain)). Once all Pods have been evicted from the node, check
+    that all your applications are still in a working state with the configured number
+    of replicas. If this is not the case, you need to add more capacity to the cluster.
+  id: totrans-233
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 集群中应始终保留足够的备用容量以处理单个工作节点的故障。要检查这一点，请尝试排空您的最大节点（参见 [“缩减”](ch06.html#drain)）。一旦所有Pod已从节点驱逐出去，请检查所有应用程序是否仍然以配置的副本数处于工作状态。如果不是这样，则需要向集群添加更多的容量。
+- en: If there isn’t room to reschedule its workloads when a node fails, your services
+    could be degraded at best, and unavailable at worst.
+  id: totrans-234
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果在节点故障时没有足够的空间重新安排其工作负载，您的服务最多可能会受到降级，最坏情况下可能会不可用。
+- en: Using Reserved Instances
+  id: totrans-235
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用预留实例
+- en: Some cloud providers offer different instance classes depending on the machine’s
+    life cycle. *Reserved* instances offer a trade-off between price and flexibility.
+  id: totrans-236
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一些云服务提供商根据机器的生命周期提供不同的实例类别。*预留* 实例在价格和灵活性之间进行权衡。
+- en: 'For example, AWS reserved instances are about half the price of *on-demand*
+    instances (the default type). You can reserve instances for various periods: a
+    year, three years, and so on. AWS reserved instances have a fixed size, so if
+    it turns out in three months’ time that you need a larger instance, your reservation
+    will be mostly wasted.'
+  id: totrans-237
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，AWS 的预留实例价格约为 *按需* 实例（默认类型）的一半。您可以为不同的时间段（一年、三年等）预留实例。AWS 的预留实例具有固定的大小，因此如果在三个月后发现需要更大的实例，您的预订将大部分被浪费。
+- en: The Google Cloud equivalent of reserved instances is *Committed Use Discounts*,
+    which allow you to prepay for a certain number of vCPUs and an amount of memory.
+    This is more flexible than AWS reservations, as you can use more resources than
+    you have reserved; you just pay the normal on-demand price for anything not covered
+    by your reservation.
+  id: totrans-238
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Google Cloud 的预留实例等同于 *承诺使用折扣*，允许您预付一定数量的虚拟CPU和内存。这比AWS的预约更加灵活，因为您可以使用比预定资源更多的资源；您只需为未被预订的部分支付正常的按需价格。
+- en: Reserved instances and Committed Use Discounts can be a good choice when you
+    know your requirements for the foreseeable future. However, there’s no refund
+    for reservations that you don’t end up using, and you have to pay up front for
+    the whole reservation period. So you should only choose to reserve instances for
+    a period over which your requirements aren’t likely to change significantly.
+  id: totrans-239
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您知道未来的需求时，预留实例和承诺使用折扣可能是一个不错的选择。然而，对于您最终没有使用的预订，没有退款，并且您必须提前支付整个预订期限的费用。因此，您应该只选择预订实例的期限，期间您的需求不太可能发生显著变化。
+- en: If you can plan a year or two ahead, however, using reserved instances could
+    deliver a considerable saving.
+  id: totrans-240
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，如果您能提前一两年进行规划，使用预留实例可能会带来可观的节省。
+- en: Best Practice
+  id: totrans-241
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: Use reserved instances when your needs aren’t likely to change for a year or
+    two—but choose your reservations wisely, because they can’t be altered or refunded
+    once they’re made.
+  id: totrans-242
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您的需求未来一两年内不太可能改变时，请使用预留实例——但明智地选择您的预订，因为一旦进行了预订，它们就无法更改或退款。
+- en: Using Preemptible (Spot) Instances
+  id: totrans-243
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用抢先（竞价）实例
+- en: '*Spot* instances, as AWS calls them, or *preemptible VMs* in Google’s terminology,
+    provide no availability guarantees, and are often limited in life span. Thus,
+    they represent a trade-off between price and availability.'
+  id: totrans-244
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*竞价* 实例（AWS 的称呼）或谷歌术语中的 *抢先 VM* 提供了不保证可用性的服务，并且其生命周期通常有限。因此，它们代表了价格和可用性之间的权衡。'
+- en: A spot instance is cheap, but may be paused or resumed at any time, and may
+    be terminated altogether. Fortunately, Kubernetes is designed to provide high-availability
+    services despite the loss of individual cluster nodes.
+  id: totrans-245
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 竞价实例价格便宜，但可能随时暂停或恢复，并可能完全终止。幸运的是，Kubernetes 设计为在失去单个集群节点时提供高可用性服务。
+- en: Variable price or variable preemption
+  id: totrans-246
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 可变价格或可变抢占
+- en: Spot instances can therefore be a cost-effective choice for your cluster. With
+    AWS spot instances, the per-hour pricing varies according to demand. When demand
+    is high for a given instance type in a particular region and availability zone,
+    the price will rise.
+  id: totrans-247
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，竞价实例可以是您集群的一种具有成本效益的选择。对于AWS竞价实例，每小时的定价根据需求变化。当某个特定区域和可用性区域内某种实例类型的需求高时，价格将上涨。
+- en: Google Cloud’s preemptible VMs, on the other hand, are billed at a fixed rate,
+    but the rate of preemption varies. Google says that on average, [about 5–15% of
+    your nodes will be preempted in a given week](https://oreil.ly/egdN8). However,
+    preemptible VMs can be up to 80% cheaper than on-demand, depending on the instance
+    type.
+  id: totrans-248
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一方面，Google Cloud 的抢占式 VM 是按固定费率计费，但抢占率会有所变化。Google 表示，平均而言，[每周大约有 5-15% 的节点会被抢占](https://oreil.ly/egdN8)。但抢占式
+    VM 的价格可能比按需实例便宜高达 80%，具体取决于实例类型。
+- en: Preemptible nodes can halve your costs
+  id: totrans-249
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 抢占节点可以将您的成本减少一半
+- en: Using preemptible nodes for your Kubernetes cluster, then, can be a very effective
+    way to reduce costs. While you may need to run a few more nodes to make sure that
+    your workloads can survive preemption, anecdotal evidence suggests that an overall
+    50% reduction in the cost per node is achievable.
+  id: totrans-250
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，使用抢占节点来减少 Kubernetes 集群的成本可以是一种非常有效的方法。虽然您可能需要运行更多的节点来确保您的工作负载能够抵御抢占，但有人说总体而言每个节点的成本可以降低
+    50%。
+- en: You may also find that using preemptible nodes is a good way to build a little
+    chaos engineering into your cluster (see [“Chaos Testing”](ch06.html#chaos))—provided
+    that your application is ready for chaos testing in the first place.
+  id: totrans-251
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可能还会发现使用抢占节点是将一些混乱工程引入您的集群的好方法（参见[“混乱测试”](ch06.html#chaos)）—前提是您的应用程序首先准备好接受混乱测试。
+- en: Bear in mind, though, that you should always have enough nonpreemptible nodes
+    to handle your cluster’s minimum workload. Never bet more than you can afford
+    to lose. If you have a lot of preemptible nodes, it might be a good idea to use
+    cluster autoscaling to make sure any preempted nodes are replaced as soon as possible
+    (see [“Autoscaling”](ch06.html#autoscaling)).
+  id: totrans-252
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请记住，您始终应该有足够的非抢占节点来处理集群的最小工作负载。永远不要赌上您无法承受失去的东西。如果您有大量抢占节点，可能最好使用集群自动缩放，以确保任何抢占的节点尽快被替换（参见[“自动缩放”](ch06.html#autoscaling)）。
+- en: In theory, *all* your preemptible nodes could disappear at the same time. Despite
+    the cost savings, therefore, it’s a good idea to limit your preemptible nodes
+    to no more than, say, two-thirds of your cluster.
+  id: totrans-253
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 理论上，*所有*您的抢占节点可能会同时消失。因此，尽管可以节省成本，但建议将您的抢占节点数量限制在集群的三分之二以下，比如说。
+- en: Best Practice
+  id: totrans-254
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: Keep costs down by using preemptible or spot instances for some of your nodes,
+    but no more than you can afford to lose. Always keep some nonpreemptible nodes
+    in the mix, too.
+  id: totrans-255
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过使用抢占式或 spot 实例来降低成本，但不要超出您能承受的范围。也始终保留一些非抢占节点。
+- en: Using node affinities to control scheduling
+  id: totrans-256
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 使用节点亲和性来控制调度
+- en: You can use Kubernetes *node affinities* to make sure Pods that can’t tolerate
+    failure are [not scheduled on preemptible nodes](https://oreil.ly/i52Wu) (see
+    [“Node Affinities”](ch09.html#nodeaffinities)).
+  id: totrans-257
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用 Kubernetes *节点亲和性* 来确保无法容忍故障的 Pod 不会被[调度到抢占节点上](https://oreil.ly/i52Wu)（参见[“节点亲和性”](ch09.html#nodeaffinities)）。
+- en: 'For example, Google Kubernetes Engine (GKE) preemptible nodes carry the label
+    `cloud.google.com/gke-preemptible`. To tell Kubernetes to never schedule a Pod
+    on one of these nodes, add the following to the Pod or Deployment spec:'
+  id: totrans-258
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，Google Kubernetes Engine (GKE) 的抢占节点带有标签 `cloud.google.com/gke-preemptible`。要告诉
+    Kubernetes 永远不要在这些节点上调度 Pod，请将以下内容添加到 Pod 或 Deployment 规范中：
+- en: '[PRE23]'
+  id: totrans-259
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: 'The `requiredDuringScheduling...` affinity is mandatory: a Pod with this affinity
+    will *never* be scheduled on a node that does not match the selector expression
+    (known as a *hard affinity*).'
+  id: totrans-260
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`requiredDuringScheduling...` 亲和性是强制性的：具有此亲和性的 Pod 将*永远*不会被调度到不匹配选择器表达式的节点上（称为*硬亲和性*）。'
+- en: 'Alternatively, you might want to tell Kubernetes that some of your less critical
+    Pods, which can tolerate occasional failures, should preferentially be scheduled
+    on preemptible nodes. In this case, you can use a *soft affinity* with the opposite
+    sense:'
+  id: totrans-261
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 或者，您可能希望告诉 Kubernetes 您的一些次要 Pod，可以容忍偶尔的故障，应优先在抢占节点上调度。在这种情况下，您可以使用相反意义的*软亲和性*：
+- en: '[PRE24]'
+  id: totrans-262
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: This effectively means “Please schedule this Pod on a preemptible node if you
+    can; if not, it doesn’t matter.”
+  id: totrans-263
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这实际上意味着“如果可以的话，请在可抢占节点上调度此 Pod；如果不行，那也无妨。”
+- en: Best Practice
+  id: totrans-264
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最佳实践
+- en: If you’re running preemptible nodes, use Kubernetes node affinities to make
+    sure critical workloads are not preempted.
+  id: totrans-265
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您正在运行抢占节点，请使用 Kubernetes 节点亲和性确保关键工作负载不会被抢占。
+- en: Keeping Your Workloads Balanced
+  id: totrans-266
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 保持工作负载的平衡
+- en: We’ve talked about the work that the Kubernetes scheduler does ensuring that
+    workloads are distributed fairly across as many nodes as possible, and trying
+    to place replica Pods on different nodes for high availability.
+  id: totrans-267
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们已经讨论了 Kubernetes 调度器所做的工作，确保工作负载尽可能平均地分布在许多节点上，并尝试将副本 Pod 放置在不同的节点上以实现高可用性。
+- en: In general, the scheduler does a great job, but there are some edge cases you
+    need to watch out for.
+  id: totrans-268
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 总体而言，调度器表现出色，但还有一些边缘情况需要注意。
+- en: For example, suppose you have two nodes, and two services, A and B, each with
+    two replicas. In a balanced cluster, there will be one replica of service A on
+    each node, and one of service B on each node ([Figure 5-1](#img-unbalance1)).
+    If one node should fail, both A and B will still be available.
+  id: totrans-269
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 举个例子，假设你有两个节点，以及两个服务 A 和 B，每个服务都有两个副本。在一个平衡的集群中，每个节点上会有一个服务 A 的副本，以及一个服务 B 的副本（[图
+    5-1](#img-unbalance1)）。如果一个节点发生故障，服务 A 和 B 仍然可用。
+- en: '![Diagram showing two nodes, each with replicas of Service A and B](assets/cndk_0501.png)'
+  id: totrans-270
+  prefs: []
+  type: TYPE_IMG
+  zh: '![显示两个节点的图表，每个节点都有服务 A 和 B 的副本](assets/cndk_0501.png)'
+- en: Figure 5-1\. Services A and B are balanced across the available nodes
+  id: totrans-271
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-1\. 服务 A 和 B 在可用节点上保持平衡
+- en: So far, so good. But suppose Node 2 does fail. The scheduler will notice that
+    both A and B need an extra replica, and there’s only one node for it to create
+    them on, so it does. Now Node 1 is running two replicas of service A, and two
+    of service B.
+  id: totrans-272
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，一切都很好。但假设节点 2 确实发生故障。调度器会注意到服务 A 和 B 都需要一个额外的副本，而现在只有一个节点可以为它们创建，因此它就这么做了。现在节点
+    1 上运行着两个服务 A 的副本和两个服务 B 的副本。
+- en: Now suppose we spin up a new node to replace the failed Node 2\. Even once it’s
+    available, there will be no Pods on it. The scheduler never moves running Pods
+    from one node to another.
+  id: totrans-273
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在假设我们启动一个新节点来取代故障的节点 2。即使它可用，上面也不会有任何 Pod。调度器从不将正在运行的 Pod 从一个节点移动到另一个节点。
+- en: We now have an [unbalanced cluster](https://oreil.ly/JWbpO), where all the Pods
+    are on Node 1, and none are on Node 2 ([Figure 5-2](#img-unbalance2)).
+  id: totrans-274
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们有一个[不平衡的集群](https://oreil.ly/JWbpO)，所有的 Pod 都在节点 1 上，而节点 2 上没有任何 Pod（[图
+    5-2](#img-unbalance2)）。
+- en: '![Diagram showing two nodes, one with replicas of Service A and B, and the
+    other with no services](assets/cndk_0502.png)'
+  id: totrans-275
+  prefs: []
+  type: TYPE_IMG
+  zh: '![显示两个节点的图表，一个节点上有服务 A 和 B 的副本，另一个节点上没有服务](assets/cndk_0502.png)'
+- en: Figure 5-2\. After the failure of Node 2, all replicas have moved to Node 1
+  id: totrans-276
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-2\. 节点 2 故障后，所有副本都迁移到节点 1
+- en: But it gets worse. Suppose you deploy a rolling update to service A (let’s call
+    the new version service A*). The scheduler needs to start two new replicas for
+    service A*, wait for them to come up, and then terminate the old ones. Where will
+    it start the new replicas? On the new Node 2, because it’s idle, while Node 1
+    is already running four Pods. So two new service A* replicas are started on Node
+    2, and the old ones removed from Node 1 ([Figure 5-3](#img-unbalance3)).
+  id: totrans-277
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 更糟糕的是，假设你对服务 A 部署了一个滚动更新（我们称新版本为服务 A*）。调度器需要为服务 A* 启动两个新的副本，等待它们启动完成，然后终止旧的副本。新的副本将在哪里启动？在新的节点
+    2 上，因为它是空闲的，而节点 1 已经运行了四个 Pod。因此，两个新的服务 A* 的副本在节点 2 上启动，而旧的副本从节点 1 上移除（[图 5-3](#img-unbalance3)）。
+- en: '![Diagram showing two nodes, one with two replicas of service B, and the other
+    with two replicas of service A*](assets/cndk_0503.png)'
+  id: totrans-278
+  prefs: []
+  type: TYPE_IMG
+  zh: '![显示两个节点的图表，一个节点上有两个服务 B 的副本，另一个节点上有两个服务 A* 的副本](assets/cndk_0503.png)'
+- en: Figure 5-3\. After the rollout of service A*, the cluster is still unbalanced
+  id: totrans-279
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-3\. 在服务 A* 上线后，集群仍然不平衡
+- en: Now you’re in a bad situation, because both replicas of service B are on the
+    same node (Node 1), while both replicas of service A* are also on the same node
+    (Node 2). Although you have two nodes, you have no high availability. The failure
+    of either Node 1 or Node 2 will result in a service outage.
+  id: totrans-280
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在你处于一个糟糕的情况中，因为服务 B 的两个副本都在同一个节点（节点 1），而服务 A* 的两个副本也在同一个节点（节点 2）。虽然你有两个节点，但没有高可用性。无论是节点
+    1 还是节点 2 的故障都会导致服务中断。
+- en: The key to this problem is that the scheduler never moves Pods from one node
+    to another unless they are restarted for some reason. Also, the scheduler’s goal
+    of placing workloads evenly across nodes is sometimes in conflict with maintaining
+    high availability for individual services.
+  id: totrans-281
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个问题的关键在于，调度器永远不会将运行中的 Pod 从一个节点移动到另一个节点，除非出于某种原因需要重新启动。此外，调度器旨在将工作负载均匀分布在节点上的目标，有时会与维护个别服务的高可用性发生冲突。
+- en: One way around this is to use a tool called [Descheduler](https://oreil.ly/hCSK9).
+    You can run this tool every so often, as a Kubernetes Job, and it will do its
+    best to rebalance the cluster by finding Pods that need to be moved, and killing
+    them.
+  id: totrans-282
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 解决这个问题的一种方法是使用名为[Descheduler](https://oreil.ly/hCSK9)的工具。您可以定期运行此工具作为 Kubernetes
+    作业，它将尽力通过找到需要移动的 Pod 并杀死它们来重新平衡集群。
+- en: Descheduler has various strategies and policies that you can configure. For
+    example, one policy looks for underutilized nodes, and kills Pods on other nodes
+    to force them to be rescheduled on the idle nodes.
+  id: totrans-283
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Descheduler 具有各种您可以配置的策略和政策。例如，一个策略寻找未充分利用的节点，并杀死其他节点上的 Pod 以强制它们重新调度到空闲节点上。
+- en: Another policy looks for duplicate Pods, where two or more replicas of the same
+    Pod are running on the same node, and evicts them. This fixes the problem that
+    arose in our example, where workloads were nominally balanced, but in fact neither
+    service was highly available.
+  id: totrans-284
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个策略寻找重复的 Pod，即在同一节点上运行两个或更多个相同 Pod 的副本，并将其驱逐。这解决了我们示例中出现的问题，即工作负载在名义上平衡，但实际上两个服务都不是高度可用的。
+- en: Summary
+  id: totrans-285
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 摘要
+- en: Kubernetes is pretty good at running workloads for you in a reliable, efficient
+    way with no real need for manual intervention. Providing you give the scheduler
+    accurate estimates of your containers’ resource needs, you can largely leave Kubernetes
+    to get on with it.
+  id: totrans-286
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 在可靠、高效的方式下运行工作负载方面做得相当不错，几乎不需要手动干预。只要提供给调度器准确的容器资源需求估计，您基本上可以让 Kubernetes
+    自行处理。
+- en: The time you would have spent fixing operations issues can thus be put to better
+    use, like developing applications. Thanks, Kubernetes!
+  id: totrans-287
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您本来会花在解决运营问题上的时间现在可以更好地利用，比如开发应用程序。谢谢，Kubernetes！
+- en: 'Understanding how Kubernetes manages resources is key to building and running
+    your cluster correctly. The most important points to take away:'
+  id: totrans-288
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 了解 Kubernetes 如何管理资源是构建和正确运行集群的关键。最重要的要点是：
+- en: Kubernetes allocates CPU and memory resources to containers on the basis of
+    *requests* and *limits*.
+  id: totrans-289
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Kubernetes 根据请求和限制为容器分配 CPU 和内存资源。
+- en: A container’s requests are the minimum amounts of resources it needs to run.
+    Its limits specify the maximum amount it’s allowed to use.
+  id: totrans-290
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 容器的请求是其运行所需的最小资源量。其限制指定其允许使用的最大量。
+- en: Minimal container images are faster to build, push, deploy, and start. The smaller
+    the container, the fewer the potential security vulnerabilities.
+  id: totrans-291
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 最小化的容器镜像构建、推送、部署和启动速度更快。容器越小，潜在的安全漏洞就越少。
+- en: Liveness probes tell Kubernetes whether the container is working properly. If
+    a container’s liveness probe fails, it will be killed and restarted.
+  id: totrans-292
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 存活探针告诉 Kubernetes 容器是否正常工作。如果容器的存活探针失败，它将被杀死并重新启动。
+- en: Readiness probes tell Kubernetes that the container is ready and able to serve
+    requests. If the readiness probe fails, the container will be removed from any
+    Services that reference it, disconnecting it from user traffic.
+  id: totrans-293
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 就绪探针告诉 Kubernetes 容器已准备好并能够提供请求。如果就绪探针失败，容器将从引用它的任何服务中移除，使其与用户流量断开连接。
+- en: Startup probes are like liveness probes, but are only used for determining if
+    an application has finished starting and is ready for the liveness probe to take
+    over for checking the status.
+  id: totrans-294
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 启动探针类似于存活探针，但仅用于确定应用程序是否已完成启动并准备好存活探针接管检查状态。
+- en: PodDisruptionBudgets let you limit the number of Pods that can be stopped at
+    once during *evictions*, preserving high availability for your application.
+  id: totrans-295
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: PodDisruptionBudgets 允许您限制一次停止的 Pod 数量，以保持应用程序的高可用性。
+- en: Namespaces are a way of logically partitioning your cluster. You might create
+    a namespace for each application, or group of related applications.
+  id: totrans-296
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 命名空间是逻辑上划分集群的一种方式。您可以为每个应用程序或一组相关应用程序创建一个命名空间。
+- en: 'To refer to a Service in another namespace, you can use a DNS address like
+    this: *`SERVICE.NAMESPACE`*.'
+  id: totrans-297
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 要引用另一个命名空间中的服务，您可以使用类似于这样的 DNS 地址：*`SERVICE.NAMESPACE`*。
+- en: ResourceQuotas let you set overall resource limits for a given namespace.
+  id: totrans-298
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: ResourceQuotas 允许您为给定命名空间设置整体资源限制。
+- en: LimitRanges specify default resource requests and limits for containers in a
+    namespace.
+  id: totrans-299
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: LimitRanges 指定命名空间中容器的默认资源请求和限制。
+- en: Set resource limits so that your applications almost, but don’t quite, exceed
+    them in normal usage.
+  id: totrans-300
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 设置资源限制，使您的应用程序几乎达到但不超过正常使用中的限制。
+- en: Don’t allocate more cloud storage than you need, and don’t provision high-bandwidth
+    storage unless it’s critical for your application’s performance.
+  id: totrans-301
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 不要分配比您所需更多的云存储，并且除非对您的应用程序性能至关重要，否则不要配置高带宽存储。
+- en: Set owner annotations on all your resources, and scan the cluster regularly
+    for unowned resources.
+  id: totrans-302
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在所有资源上设置所有者注释，并定期扫描集群以查找无主资源。
+- en: Find and clean up resources that aren’t being used (but check with their owners).
+  id: totrans-303
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 查找并清理不再使用的资源（但请与它们的所有者确认）。
+- en: Reserved instances can save you money if you can plan your usage long term.
+  id: totrans-304
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如果能够长期规划您的使用情况，预留实例可以为您节省费用。
+- en: Preemptible instances can save you money right now, but be ready for them to
+    vanish on short notice. Use node affinities to keep failure-sensitive Pods away
+    from preemptible nodes.
+  id: totrans-305
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 预留实例可以立即为您节省费用，但要做好它们突然消失的准备。使用节点亲和性，将对故障敏感的 Pod 保持远离预留节点。
+- en: ^([1](ch05.html#idm45979387576368-marker)) You can customize this behavior by
+    adjusting the [`kubelet` garbage collection](https://oreil.ly/Pjfrj) settings.
+  id: totrans-306
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([1](ch05.html#idm45979387576368-marker)) 您可以通过调整[`kubelet`垃圾回收](https://oreil.ly/Pjfrj)设置来自定义此行为。

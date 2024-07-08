@@ -1,0 +1,1425 @@
+- en: Chapter 14\. Continuous Deployment in Kubernetes
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第14章。Kubernetes 中的持续部署
+- en: Tao does not do, but nothing is not done.
+  id: totrans-1
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 道不远，无不为，无不作。
+- en: ''
+  id: totrans-2
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+- en: Lao Tzu
+  id: totrans-3
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 老子
+- en: In this chapter, we’ll look at a key DevOps principle—*continuous integration*
+    and *continuous deployment* (CI/CD) and see how we can achieve this in a cloud
+    native, Kubernetes-based environment. We outline some of the options for setting
+    up continuous deployment pipelines to work with Kubernetes, and show you a fully
+    worked example using Google’s Cloud Build. We will also cover the concept of GitOps
+    and walk through how to automatically deploy to Kubernetes using a GitOps tool
+    called Flux.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们将探讨一个关键的 DevOps 原则——*持续集成* 和 *持续部署* (CI/CD)，并看看如何在云原生、基于 Kubernetes 的环境中实现这一点。我们概述了一些设置持续部署流水线以与
+    Kubernetes 配合工作的选项，并展示了一个完整的示例，使用了 Google 的 Cloud Build。我们还将涵盖 GitOps 的概念，并演示如何使用名为
+    Flux 的 GitOps 工具自动部署到 Kubernetes。
+- en: What Is Continuous Deployment?
+  id: totrans-5
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 什么是持续部署？
+- en: '*Continuous deployment* (CD) is the automatic deployment of successful builds
+    to production. Like the test suite, deployment should also be managed centrally
+    and automated. Developers should be able to deploy new versions by either pushing
+    a button, or merging a merge request, or pushing a Git release tag.'
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*持续部署* (CD) 是将成功构建自动部署到生产环境。与测试套件一样，部署也应该是集中管理和自动化的。开发人员可以通过点击按钮、合并合并请求或推送
+    Git 发布标签来部署新版本。'
+- en: 'CD is often associated with *continuous integration* (CI): the automatic integration
+    and testing of developers’ changes against the mainline branch. The idea is that
+    if you’re making changes on a branch that would break the build when merged to
+    the mainline, continuous integration will let you know that right away, rather
+    than waiting until you finish your branch and do the final merge. The combination
+    of continuous integration and deployment is often referred to as *CI/CD*.'
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CD 通常与*持续集成* (CI) 相关联：开发人员的更改会自动集成和测试到主线分支。这个想法是，如果你在一个分支上进行的更改会在合并到主线时破坏构建，持续集成会立即让你知道这一点，而不是等到你完成分支并做最终合并时才发现。持续集成和部署的组合通常被称为*CI/CD*。
+- en: 'The machinery of continuous deployment is often referred to as a *pipeline*:
+    a series of automated actions that take code from the developer’s workstation
+    to production, via a sequence of test and acceptance stages.'
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 持续部署的机制通常被称为*流水线*：一系列自动化操作，通过一系列测试和验收阶段，将代码从开发人员的工作站传送到生产环境。
+- en: 'A typical pipeline for containerized applications might look like the following:'
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器化应用程序的典型流水线可能如下所示：
+- en: A developer pushes their code changes to the repository.
+  id: totrans-10
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 开发人员将其代码更改推送到存储库。
+- en: The build system automatically builds the current version of the code and runs
+    tests.
+  id: totrans-11
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 构建系统会自动构建当前版本的代码并运行测试。
+- en: If all tests pass, the container image will be published into the central container
+    registry.
+  id: totrans-12
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 如果所有测试通过，容器图像将被发布到中央容器注册表。
+- en: The newly built container is deployed automatically to a staging environment.
+  id: totrans-13
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 新构建的容器会自动部署到预备环境。
+- en: The staging environment undergoes some automated and/or manual acceptance tests.
+  id: totrans-14
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 预备环境会经历一些自动化和/或手动接受测试。
+- en: The verified container image is deployed to production.
+  id: totrans-15
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 验证过的容器映像将被部署到生产环境。
+- en: A key point is that the artifact that is tested and deployed through your various
+    environments is not the *source code*, but the *container*. There are many ways
+    for errors to creep in between source code and a running binary, and testing the
+    container instead of the code can help catch a lot of these.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个关键点是通过您的各个环境测试和部署的工件不是*源代码*，而是*容器*。在源代码和运行的二进制文件之间存在许多错误产生的方式，而测试容器而不是代码可以帮助捕捉到其中很多错误。
+- en: The great benefit of CD is *no surprises in production*; nothing gets deployed
+    unless the exact binary image has already been successfully tested in staging.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CD 的最大好处是*在生产中没有意外*；除非确切的二进制图像已在预备环境成功测试过，否则不会部署任何东西。
+- en: You can see a detailed example of a CD pipeline like this in [“A CI/CD Pipeline
+    with Cloud Build”](#cloudbuild-example).
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在[“使用 Cloud Build 的 CI/CD 流水线”](#cloudbuild-example)中看到此类 CD 流水线的详细示例。
+- en: Which CD Tool Should I Use?
+  id: totrans-19
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 我应该使用哪个 CD 工具？
+- en: As usual, the problem is not a shortage of available tools, but the sheer range
+    of choices. There are several new CI/CD tools designed specifically for cloud
+    native applications, and long-established traditional build tools such as Jenkins
+    also now have plug-ins to allow them to work with Kubernetes and containers.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 和往常一样，问题并不是可用工具的短缺，而是选择的范围之广。有几个专门为云原生应用程序设计的新的 CI/CD 工具，而长期存在的传统构建工具如 Jenkins
+    也现在有插件允许它们与 Kubernetes 和容器一起工作。
+- en: As a result, if you are already doing CI/CD, you probably don’t need to switch
+    to a whole new system. If you are migrating existing applications to Kubernetes,
+    you can likely do this with a few small tweaks to your existing pipelines.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，如果您已经在进行CI/CD，您可能不需要切换到全新的系统。如果您正在将现有应用程序迁移到Kubernetes，您可能只需对现有的流水线进行少量调整即可。
+- en: In the next section, we will briefly cover some of the popular hosted and self-hosted
+    options for CI/CD tools. We certainly won’t be able to cover them all, but here
+    is a quick list that should get you started in your search.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在下一节中，我们将简要介绍一些受欢迎的托管和自托管 CI/CD 工具选项。我们当然不可能覆盖所有工具，但这里有一个快速列表，应该能帮助您开始搜索。
+- en: Hosted CI/CD Tools
+  id: totrans-23
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 托管 CI/CD 工具
+- en: If you are looking for an out-of-the-box solution for your CI/CD pipelines where
+    you do not need to maintain the underlying infrastructure, then you should consider
+    using a hosted offering. The main cloud providers all offer CI/CD tools that integrate
+    well within their ecosystems, so it would be worth first exploring the tools that
+    are already part of your cloud account.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您正在寻找一个开箱即用的解决方案用于您的 CI/CD 流水线，而您不需要维护底层基础设施，那么您应该考虑使用托管服务。主要的云提供商都提供了与其生态系统良好集成的
+    CI/CD 工具，因此首先探索一下已经包含在您云账户中的工具是值得的。
+- en: Azure Pipelines
+  id: totrans-25
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Azure 流水线
+- en: Microsoft’s Azure DevOps service (formerly known as Visual Studio Team Services)
+    includes a continuous delivery pipeline facility, called [Azure Pipelines](https://oreil.ly/pVbMb),
+    similar to Google Cloud Build.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Microsoft 的 Azure DevOps 服务（以前称为 Visual Studio Team Services）包括一个持续交付管道工具，称为
+    [Azure 流水线](https://oreil.ly/pVbMb)，类似于 Google Cloud Build。
+- en: Google Cloud Build
+  id: totrans-27
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Google Cloud Build
+- en: If you run your infrastructure on Google Cloud Platform, then you should look
+    at [Cloud Build](https://cloud.google.com/build). It runs containers as the various
+    build steps and the configuration YAML for the pipeline lives in your code repository.
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您在 Google Cloud Platform 上运行您的基础设施，那么您应该看看 [Cloud Build](https://cloud.google.com/build)。它作为各种构建步骤运行容器，并且流水线的配置
+    YAML 存储在您的代码仓库中。
+- en: You can configure Cloud Build to watch your Git repository. When a preset condition
+    is triggered, such as pushing to a certain branch or tag, Cloud Build will run
+    your specified pipeline, such as building a new container image, running your
+    test suite, publishing the image, and perhaps deploying the new version to Kubernetes.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以配置 Cloud Build 来监视您的 Git 仓库。当触发预设条件时，比如推送到特定分支或标签时，Cloud Build 将运行您指定的流水线，比如构建新的容器镜像，运行您的测试套件，发布镜像，甚至部署新版本到
+    Kubernetes。
+- en: For a complete working example of a CD pipeline in Cloud Build, see [“A CI/CD
+    Pipeline with Cloud Build”](#cloudbuild-example).
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要查看 Cloud Build 中完整的工作示例，请参阅 [“使用 Cloud Build 的 CI/CD 流水线”](#cloudbuild-example)。
+- en: Codefresh
+  id: totrans-31
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Codefresh
+- en: '[Codefresh](https://codefresh.io) is a managed service for testing and deploying
+    applications to Kubernetes. One interesting feature is the ability to deploy temporary
+    staging environments for every feature branch.'
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Codefresh](https://codefresh.io) 是一个用于测试和部署应用程序到 Kubernetes 的托管服务。一个有趣的特性是能够为每个功能分支部署临时的
+    staging 环境。'
+- en: Using containers, Codefresh can build, test, and deploy on-demand environments,
+    and then you can configure how you would like to deploy your containers into various
+    environments in your clusters.
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用容器，Codefresh 可以按需构建、测试和部署环境，然后您可以配置如何将您的容器部署到集群中的各种环境中。
+- en: GitHub Actions
+  id: totrans-34
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: GitHub Actions
+- en: '[GitHub Actions](https://oreil.ly/eeWSL) is integrated into the popular hosted
+    Git repository site. Actions are shared using GitHub repos, making it very easy
+    to mix and match and share build tools across different applications. Azure has
+    published a [popular GitHub Action](https://oreil.ly/GcHam) for deploying to Kubernetes
+    clusters.'
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[GitHub Actions](https://oreil.ly/eeWSL) 已经整合到流行的托管 Git 仓库站点中。通过 GitHub 仓库共享
+    Actions，可以非常容易地混合和匹配并在不同应用程序之间共享构建工具。Azure 发布了一个用于部署到 Kubernetes 集群的 [热门 GitHub
+    Action](https://oreil.ly/GcHam)。'
+- en: GitHub also offers the option to run GitHub Action runners locally on your own
+    servers to keep your builds inside of your network.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: GitHub 还提供了在您自己的服务器上本地运行 GitHub Action runners 的选项，以保持构建在您的网络内部进行。
+- en: GitLab CI
+  id: totrans-37
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: GitLab CI
+- en: GitLab is a popular alternative to GitHub for hosting Git repositories. You
+    can use their hosted offering, or you can run GitLab yourself on your own infrastructure.
+    It comes with a powerful built-in CI/CD tool, [GitLab CI](https://oreil.ly/e5f11),
+    that can be used for testing and deploying your code. If you are already using
+    GitLab, it makes sense to look at GitLab CI for implementing your continuous deployment
+    pipeline.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: GitLab 是一个流行的替代品，用于托管 Git 仓库，与 GitHub 类似。您可以使用他们的托管服务，或在自己的基础设施上运行 GitLab。它自带强大的内置
+    CI/CD 工具，[GitLab CI](https://oreil.ly/e5f11)，可用于测试和部署代码。如果您已经在使用 GitLab，那么使用 GitLab
+    CI 来实现您的持续部署流水线是有意义的。
+- en: Self-Hosted CI/CD Tools
+  id: totrans-39
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 自托管的 CI/CD 工具
+- en: If you would rather own more of the underlying infrastructure for your pipeline,
+    then there are also several good options for CI/CD tools that you can run wherever
+    you like. Some of these tools have been around long before Kubernetes, and some
+    have been developed specifically for Kubernetes-based CI/CD pipelines.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您更倾向于拥有更多基础设施的管控权以用于您的流水线，那么还有几个很好的选择可供您在任何地方运行。其中一些工具在 Kubernetes 出现之前就存在，一些则是专门为基于
+    Kubernetes 的 CI/CD 流水线开发的。
+- en: Jenkins
+  id: totrans-41
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Jenkins
+- en: '[Jenkins](https://jenkins.io) is a very widely adopted CI/CD tool and has been
+    around for years. It has plug-ins for just about everything you could want to
+    use in a workflow, including Docker, `kubectl`, and Helm. There is also a newer
+    dedicated project for running Jenkins in Kubernetes called [JenkinsX](https://jenkins-x.io).'
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Jenkins](https://jenkins.io) 是一个非常广泛采纳的 CI/CD 工具，存在多年。它有几乎可以想到的所有工作流程插件，包括
+    Docker、`kubectl` 和 Helm。还有一个专门用于在 Kubernetes 中运行 Jenkins 的新项目，称为 [JenkinsX](https://jenkins-x.io)。'
+- en: Drone
+  id: totrans-43
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Drone
+- en: '[Drone](https://oreil.ly/qtXoR) is a tool built with, and for, containers.
+    It is simple and lightweight, with the pipeline defined by a single YAML file.
+    Since each build step consists of running a container, it means that anything
+    you can run in a container you can run on Drone.'
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Drone](https://oreil.ly/qtXoR) 是一个使用容器构建的工具。它简单轻量，流水线由单个 YAML 文件定义。由于每个构建步骤都是运行容器，这意味着您可以在
+    Drone 上运行可以在容器中运行的任何东西。'
+- en: Tekton
+  id: totrans-45
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Tekton
+- en: '[Tekton](https://tekton.dev) introduces an interesting concept where CI/CD
+    components actually consist of Kubernetes CRDs. You can therefore construct your
+    build, test, and deployment steps using native Kubernetes resources, and manage
+    the pipeline the same way you manage anything else in your Kubernetes clusters.'
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Tekton](https://tekton.dev) 引入了一个有趣的概念，即 CI/CD 组件实际上由 Kubernetes CRD 组成。因此，您可以使用原生
+    Kubernetes 资源构建您的构建、测试和部署步骤，并像管理 Kubernetes 集群中的其他内容一样管理流水线。'
+- en: Concourse
+  id: totrans-47
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Concourse
+- en: '[Concourse](https://concourse-ci.org) is an open source CD tool written in
+    Go. It also adopts the declarative pipeline approach, much like Drone and Cloud
+    Build, using a YAML file to define and execute build steps. Concourse provides
+    an [official Helm chart](https://oreil.ly/UCvPz) to deploy it on Kubernetes, making
+    it easy to get a containerized pipeline up and running quickly.'
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Concourse](https://concourse-ci.org) 是一个用 Go 编写的开源 CD 工具。它也采用了声明式流水线的方法，类似于
+    Drone 和 Cloud Build，使用 YAML 文件来定义和执行构建步骤。Concourse 提供了一个[官方的 Helm chart](https://oreil.ly/UCvPz)，可以在
+    Kubernetes 上部署它，从而轻松快速地启动一个容器化的流水线。'
+- en: Spinnaker
+  id: totrans-49
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Spinnaker
+- en: '[Spinnaker](https://spinnaker.io) is very powerful and flexible, but can be
+    a little daunting at first glance. Developed originally by Netflix, it excels
+    at large-scale and complex deployments, such as blue/green deployments (see [“Blue/Green
+    Deployments”](ch13.html#bluegreen)). There is a free ebook about Spinnaker, titled
+    [*Continuous Delivery with Spinnaker*](https://oreil.ly/hkb64) (O’Reilly), that
+    should give you some idea whether Spinnaker fits your needs.'
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Spinnaker](https://spinnaker.io) 非常强大和灵活，但乍一看可能有点令人生畏。最初由 Netflix 开发，特别擅长大规模和复杂的部署，例如蓝/绿部署（参见[“蓝/绿部署”](ch13.html#bluegreen)）。有一本关于
+    Spinnaker 的免费电子书，名为 [*Continuous Delivery with Spinnaker*](https://oreil.ly/hkb64)（O’Reilly），可以帮助您了解
+    Spinnaker 是否符合您的需求。'
+- en: Argo
+  id: totrans-51
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Argo
+- en: '[Argo CD](https://oreil.ly/8FmGn) is a GitOps tool similar to Flux (see [“GitOps”](#gitops))
+    that automates deployments by syncing what is running in Kubernetes with manifests
+    stored in a central Git repo. Rather than “pushing” changes via `kubectl` or `helm`,
+    Argo continuously “pulls” in changes from the Git repo and applies them from within
+    the cluster. Argo also offers a [popular pipeline tool](https://argoproj.github.io)
+    for running any sort of pipeline workflows, not necessarily just for CI/CD.'
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Argo CD](https://oreil.ly/8FmGn)是一个类似于Flux的GitOps工具（参见[“GitOps”](#gitops)），它通过将运行在Kubernetes中的内容与存储在中央Git仓库中的清单进行同步，自动化部署。Argo不像使用`kubectl`或`helm`“推送”变更，而是持续从Git仓库中“拉取”变更，并在集群内应用它们。Argo还提供了一个[流行的流水线工具](https://argoproj.github.io)，用于运行各种流水线工作流，不仅仅是用于CI/CD。'
+- en: Keel
+  id: totrans-53
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Keel
+- en: '[Keel](https://keel.sh) is not a full end-to-end CI/CD tool but is solely concerned
+    with deploying new container images when they are published into a container registry.
+    It can be configured to respond to webhooks, send and receive Slack messages,
+    and wait for approvals before deploying to a new environment. If you already have
+    a CI process that works well for you but just need a way to automate the CD part,
+    then Keel may be worth evaluating.'
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Keel](https://keel.sh)并不是一个完整的端到端CI/CD工具，它仅关注于当发布新的容器镜像到容器注册表时部署它们。它可以配置响应webhook、发送和接收Slack消息，并在部署到新环境之前等待批准。如果你已经有一个适合你的CI流程，但只需要自动化CD部分的方法，那么Keel可能值得评估。'
+- en: A CI/CD Pipeline with Cloud Build
+  id: totrans-55
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用Cloud Build的CI/CD流水线
+- en: Now that you know the general principles of CI/CD, and have learned about some
+    of the tooling options, let’s look at a complete, end-to-end example of a demo
+    pipeline.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在你已经了解了CI/CD的一般原则，并学习了一些工具选项，让我们来看一个完整的端到端演示流水线的例子。
+- en: The idea is not that you should necessarily use exactly the same tools and configuration
+    as we have here; rather, we hope you’ll get a sense of how everything fits together,
+    and can adapt some parts of this example to suit your own environment.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们的想法并不是你一定要像我们这里使用完全相同的工具和配置；相反，我们希望你能够了解如何将所有东西组合起来，并可以调整这个示例的某些部分以适应你自己的环境。
+- en: In this example, we’ll be using GitHub, Google Kubernetes Engine (GKE) clusters,
+    and Google Cloud Build, but we don’t rely on any specific features of those products.
+    You can replicate this kind of pipeline using whatever tools you prefer.
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这个例子中，我们将使用GitHub、Google Kubernetes Engine (GKE)集群和Google Cloud Build，但我们不依赖于这些产品的任何特定功能。你可以使用你喜欢的任何工具复制这种类型的流水线。
+- en: If you’d like to work through this example using your own GCP account, please
+    bear in mind that it uses some billable resources. You’ll want to delete and clean
+    up any test cloud resources afterward to make sure you don’t get charged unexpectedly.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你想使用自己的GCP账户来完成这个示例，请记住它会使用一些可计费资源。你会希望在测试完云资源后删除和清理它们，以确保不会意外收费。
+- en: If you’d rather try out a CI/CD example locally without using any Google Cloud
+    resources, skip down to [“GitOps”](#gitops).
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你宁愿在本地尝试一个CI/CD示例而不使用任何Google Cloud资源，请跳到[“GitOps”](#gitops)。
+- en: Setting Up Google Cloud and GKE
+  id: totrans-61
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 设置Google Cloud和GKE
+- en: If you are signing up for a new Google Cloud account for the first time, you’ll
+    be eligible for some free credits, which should enable you to run a Kubernetes
+    cluster, and other cloud resources, without being billed for a few months. However,
+    you should definitely monitor your usage when trying out any cloud service to
+    make sure that you aren’t accruing any unexpected charges. You can find out more
+    about the free-tier offering and create an account at the [Google Cloud Platform
+    site](https://cloud.google.com/free).
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你是第一次注册新的Google Cloud账户，你将有资格获得一些免费的积分，这些积分可以让你在几个月内运行一个Kubernetes集群和其他云资源，而不会被收费。但是，在尝试任何云服务时，你一定要监控你的使用情况，以确保不会产生任何意外的费用。你可以在[Google
+    Cloud平台网站](https://cloud.google.com/free)了解更多关于免费套餐的信息并创建一个账户。
+- en: Once you are signed up and logged into your own Google Cloud project, create
+    a GKE cluster following [these instructions](https://oreil.ly/zcLVd). An Autopilot
+    cluster will be fine for this example, and choose a region that is close to your
+    location. You’ll also need to enable the [Cloud Build](https://oreil.ly/O8ZNV)
+    and [Artifact Registry](https://oreil.ly/b86m9) APIs in your new project, as we’ll
+    be using those services along with GKE.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦您注册并登录到您自己的 Google Cloud 项目中，请按照 [这些说明](https://oreil.ly/zcLVd) 创建 GKE 集群。对于此示例来说，Autopilot
+    集群将是合适的选择，并选择一个靠近您位置的区域。您还需要在新项目中启用 [Cloud Build](https://oreil.ly/O8ZNV) 和 [Artifact
+    Registry](https://oreil.ly/b86m9) API，因为我们将与 GKE 一起使用这些服务。
+- en: 'Next we’ll walk you through the following steps to prepare for creating the
+    pipeline:'
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，我们将引导您完成以下准备创建流水线的步骤：
+- en: Fork the demo repository into your own personal GitHub account.
+  id: totrans-65
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: Fork demo 仓库到您自己的个人 GitHub 帐户中。
+- en: Create a container repository in Artifact Registry.
+  id: totrans-66
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 在 Artifact Registry 中创建一个容器仓库。
+- en: Authenticate Cloud Build to use Artifact Registry and GKE.
+  id: totrans-67
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 验证 Cloud Build 以使用 Artifact Registry 和 GKE。
+- en: Create a Cloud Build trigger for building and testing on a push to any Git branch.
+  id: totrans-68
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 为在推送到任何 Git 分支时构建和测试创建 Cloud Build 触发器。
+- en: Create a trigger for deploying to GKE based on Git tags.
+  id: totrans-69
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 创建基于 Git 标签部署到 GKE 的触发器。
+- en: Forking the Demo Repository
+  id: totrans-70
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Fork Demo Repository
+- en: Using your GitHub account, use the GitHub interface to fork the [demo repo](https://oreil.ly/LAI8f).
+    If you are unfamiliar with a repo fork, you can learn more about it in the [GitHub
+    docs](https://oreil.ly/S37E1).
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用您的 GitHub 帐户，在 GitHub 界面上 fork [demo repo](https://oreil.ly/LAI8f)。如果您对 repo
+    fork 不熟悉，您可以在 [GitHub docs](https://oreil.ly/S37E1) 中了解更多信息。
+- en: Create Artifact Registry Container Repository
+  id: totrans-72
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 创建 Artifact Registry 容器仓库
+- en: GCP offers a private artifact repository tool called Artifact Registry that
+    can store Docker containers, Python packages, npm packages, and other types of
+    artifacts. We will use this for hosting the demo container image that we will
+    build.
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: GCP 提供了一个名为 Artifact Registry 的私有 artifact 仓库工具，可存储 Docker 容器、Python 包、npm 包和其他类型的
+    artifact。我们将使用它来托管我们将构建的 demo 容器映像。
+- en: Browse to the Artifact Registry page in the [Google Cloud web console](https://oreil.ly/aIZet)
+    and create a new Docker repository called `demo` following [these instructions](https://oreil.ly/sBY0O).
+    Create it in the same Google Cloud region where you created your GKE cluster.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 [Google Cloud web 控制台](https://oreil.ly/aIZet) 的 Artifact Registry 页面创建名为
+    `demo` 的新 Docker 仓库，按照 [这些说明](https://oreil.ly/sBY0O)。在创建 GKE 集群的同一 Google Cloud
+    区域中创建。
+- en: You will also need to authorize the Cloud Build service account to have permission
+    to make changes to your Kubernetes Engine cluster. Under the IAM section in GCP,
+    grant the service account for Cloud Build—the *Kubernetes Engine Developer* and
+    *Artifact Registry Repository Administrator*—IAM roles in your project following
+    [the instructions in the GCP docs](https://oreil.ly/tMtAR).
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您还需要授权 Cloud Build 服务帐户具有权限更改您的 Kubernetes Engine 集群。在 GCP 的 IAM 部分，按照 [GCP
+    文档中的说明](https://oreil.ly/tMtAR) 为 Cloud Build 服务帐户授予 *Kubernetes Engine Developer*
+    和 *Artifact Registry Repository Administrator* IAM 角色。
+- en: Configuring Cloud Build
+  id: totrans-76
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 配置 Cloud Build
+- en: Now let’s look at the steps in our build pipeline. In many modern CI/CD platforms,
+    each step of a pipeline consists of running a container. The build steps are defined
+    using a YAML file that lives in your Git repo. Using containers for each step
+    means that you can easily package, version, and share common tools and scripts
+    between different pipelines.
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在让我们看看构建流水线中的步骤。在许多现代 CI/CD 平台中，流水线的每个步骤都是运行一个容器。使用 YAML 文件在您的 Git repo 中定义构建步骤。每个步骤使用容器意味着您可以轻松地打包、版本化和共享不同流水线之间的通用工具和脚本。
+- en: Inside the demo repository, there is a directory called *hello-cloudbuild-v2*.
+    Inside that directory, you will find the *cloudbuild.yaml* file that defines our
+    Cloud Build pipeline.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 demo 仓库内，有一个名为 *hello-cloudbuild-v2* 的目录。在该目录中，您会找到定义我们 Cloud Build 流水线的 *cloudbuild.yaml*
+    文件。
+- en: Note
+  id: totrans-79
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Notice the *-v2* in the directory name for *hello-cloudbuild-v2*. There are
+    some changes here for the second edition of the book that do not match the first
+    edition. In order to avoid breaking any of the examples used in the first edition,
+    we are using a completely different directory for this example.
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注意在 *hello-cloudbuild-v2* 目录名中的 *-v2*。这里有一些第二版书籍的更改，与第一版不匹配。为了避免破坏第一版中使用的任何示例，我们在此示例中使用了完全不同的目录。
+- en: Let’s look at each of the build steps in this file in turn.
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们依次查看此文件中的每个构建步骤。
+- en: Building the Test Container
+  id: totrans-82
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 构建测试容器
+- en: 'Here’s the first step:'
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是第一步：
+- en: '[PRE0]'
+  id: totrans-84
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'Like all Cloud Build steps, this consists of a set of YAML key-value pairs:'
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与所有Cloud Build步骤一样，这由一组YAML键值对组成：
+- en: '`id` gives a human-friendly label to the build step.'
+  id: totrans-86
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`id`为构建步骤提供了一个人性化标签。'
+- en: '`dir` specifies the subdirectory of the Git repo to work in.'
+  id: totrans-87
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`dir`指定要在Git仓库中工作的子目录。'
+- en: '`name` identifies the container to run for this step.'
+  id: totrans-88
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`name`标识要为此步骤运行的容器。'
+- en: '`entrypoint` specifies the command to run in the container, if not the default.'
+  id: totrans-89
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`entrypoint`指定在容器中运行的命令，如果不是默认值。'
+- en: '`args` gives the necessary arguments to the entrypoint command. (We’re using
+    a little trick here with `bash -c |` to keep our `args` together on a single line,
+    just to make it easier to read.)'
+  id: totrans-90
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`args`提供了传递给入口点命令的必要参数。（我们在这里使用`bash -c |`的小技巧，将我们的`args`保持在一行上，这样更容易阅读。）'
+- en: The purpose of this first step is to build a container that we can use to run
+    our application’s tests. Since we are using a multistage build (see [“Understanding
+    Dockerfiles”](ch02.html#multistagedockerfile)), we want to build only the first
+    stage for now. So we are using the `--target build` argument, which tells Docker
+    to only build the part in the Dockerfile under `FROM golang:1.17-alpine AS build`
+    and stop before moving on to the next step.
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 第一步的目的是构建一个我们可以用来运行应用程序测试的容器。由于我们使用了多阶段构建（参见[“理解Dockerfile”](ch02.html#multistagedockerfile)），我们现在只想构建第一个阶段。因此，我们使用`--target
+    build`参数，告诉Docker只构建Dockerfile中`FROM golang:1.17-alpine AS build`下的部分，并在继续下一步之前停止。
+- en: This means that the resulting container will still have Go installed, along
+    with any of the packages or files used in the step labeled `...AS build`, which
+    means that we can use this image to run the test suite. It is often the case that
+    you need packages in your container for running tests that you do not want to
+    be in your final production images. Here we are essentially building a throwaway
+    container that is only used for running the test suite, and is discarded afterwards.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这意味着生成的容器仍然安装有Go，以及标记为`...AS build`的步骤中使用的任何包或文件，这意味着我们可以使用此镜像来运行测试套件。通常情况下，您需要在容器中安装运行测试所需的包，但不希望这些包出现在最终的生产镜像中。在这里，我们实际上正在构建一个一次性容器，仅用于运行测试套件，之后将其丢弃。
+- en: Running the Tests
+  id: totrans-93
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 运行测试
+- en: 'Here’s the next step in our `cloudbuild.yaml`:'
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是我们`cloudbuild.yaml`中的下一步：
+- en: '[PRE1]'
+  id: totrans-95
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: Since we tagged our throwaway container as `demo:test`, that temporary image
+    will still be available for the rest of this build inside Cloud Build. This step
+    will run the `go test` command against that container. If any tests fail, this
+    step will fail and the build will exit. Otherwise, it will continue on to the
+    next step.
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于我们将我们的一次性容器标记为`demo:test`，在Cloud Build中此临时镜像将在本次构建的其余过程中仍然可用。此步骤将对该容器运行`go
+    test`命令。如果任何测试失败，此步骤将失败，并且构建将退出。否则，它将继续进行到下一步。
+- en: Building the Application Container
+  id: totrans-97
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 构建应用程序容器
+- en: 'Here we run `docker build` again, but without the `--target` flag so that we
+    run the entire multistage build, ending up with the final application container:'
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这里，我们再次运行`docker build`，但没有使用`--target`标志，因此我们运行整个多阶段构建，最终得到最终的应用程序容器：
+- en: '[PRE2]'
+  id: totrans-99
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: Substitution Variables
+  id: totrans-100
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 替换变量
+- en: In order to make Cloud Build pipeline files reusable and flexible we use variables,
+    or what Cloud Build calls *substitutions*. Anything that begins with a `$` will
+    be substituted when the pipeline runs. For example, `$PROJECT_ID` will interpolate
+    as the Google Cloud Project where a particular build is running, and `$COMMIT_SHA`
+    is the specific Git commit SHA that triggered this build. User-defined substitutions
+    in Cloud Build must begin with an underscore character (`_`) and use only uppercase
+    letters and numbers. We will use the `${_REGION}` substitution variable below
+    when we create the build trigger.
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了使Cloud Build管道文件可重用和灵活，我们使用变量，或者Cloud Build称之为*替换*。任何以`$`开头的内容在管道运行时都将被替换。例如，`$PROJECT_ID`将插入为Google
+    Cloud项目，在特定构建运行时，`$COMMIT_SHA`是触发此构建的特定Git提交SHA。在Cloud Build中，用户定义的替换必须以下划线字符(`_`)开头，并且只能使用大写字母和数字。我们将在创建构建触发器时使用`${_REGION}`替换变量。
+- en: Git SHA Tags
+  id: totrans-102
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Git SHA标签
+- en: You may ask why we are using `$COMMIT_SHA` for our container image tag. In Git,
+    every commit has a unique identifier, called a SHA (named for the Secure Hash
+    Algorithm that generates it). A SHA is a long string of hex digits, like `5ba6bfd64a31eb4013ccaba27d95cddd15d50ba3`.
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可能会问为什么我们在容器映像标签中使用了`$COMMIT_SHA`。在Git中，每个提交都有一个唯一标识符，称为SHA（以生成它的安全哈希算法命名）。SHA是一串长的十六进制数字，如`5ba6bfd64a31eb4013ccaba27d95cddd15d50ba3`。
+- en: If you use this SHA to tag your image, it provides a link to the exact Git commit
+    that generated it—which is also a complete snapshot of the code that is in the
+    container. The nice thing about tagging build artifacts with the originating Git
+    SHA is that you can build and test lots of feature branches simultaneously, without
+    any conflicts.
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您使用此 SHA 标记您的镜像，它将提供一个链接到生成它的确切 Git 提交的链接，这也是容器中代码的完整快照。使用带有源 Git SHA 标记的构建工件的好处在于，您可以同时构建和测试许多特性分支，而不会出现任何冲突。
+- en: Validating the Kubernetes Manifests
+  id: totrans-105
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 验证 Kubernetes 清单
+- en: 'At this point in the pipeline, we have built a new container that has passed
+    tests and is ready to deploy. But before we do, we’d also like to do a quick check
+    to make sure that our Kubernetes manifests are valid. In this final step of the
+    build, we’ll run `helm template` to generate the rendered version of our Helm
+    chart, and then pipe that to the `kubeval` tool (see [“kubeval”](ch12.html#kubeval))
+    to check for any issues:'
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在管道的这一步骤中，我们已经构建了一个通过测试的新容器，并且准备部署。但在我们部署之前，我们还希望快速检查一下我们的 Kubernetes 清单是否有效。在构建的最后一步中，我们将运行`helm
+    template`生成我们的 Helm 图表的渲染版本，然后将其传输到`kubeval`工具（参见[“kubeval”](ch12.html#kubeval)）以检查是否存在任何问题：
+- en: '[PRE3]'
+  id: totrans-107
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: Note
+  id: totrans-108
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Note that we’re using our own Helm container image here (`cloudnatived/helm-cloudbuilder`),
+    which contains `helm` and `kubeval`, but you could also create and use your own
+    “builder images,” containing any additional build or testing tools that you use.
+    Just remember that it’s important to keep your builder images small and lean (see
+    [“Minimal Container Images”](ch02.html#minimalcontainers-intro)). When you’re
+    running tens or hundreds of builds a day, the increased pull time of large containers
+    can really add up.
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，我们在这里使用自己的 Helm 容器镜像（`cloudnatived/helm-cloudbuilder`），其中包含 `helm` 和 `kubeval`，但您也可以创建和使用自己的“构建镜像”，其中包含您使用的任何其他构建或测试工具。只需记住，保持构建镜像的小巧和精简很重要（参见[“最小化容器镜像”](ch02.html#minimalcontainers-intro)）。当您每天运行数十甚至数百个构建时，大容器的拉取时间会累积增加。
+- en: Publishing the Image
+  id: totrans-110
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 发布镜像
+- en: 'Assuming each step in the pipeline completes successfully, Cloud Build can
+    then publish the resulting container image to the Artifact Registry repository
+    you created earlier. To specify which images from the build that you want to publish,
+    list them under `images` in the Cloud Build file:'
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设管道中的每个步骤都成功完成，Cloud Build 然后可以将生成的容器镜像发布到您之前创建的 Artifact Registry 存储库中。要指定要发布的构建中的哪些镜像，请在
+    Cloud Build 文件的`images`下列出它们：
+- en: '[PRE4]'
+  id: totrans-112
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: Creating the First Build Trigger
+  id: totrans-113
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 创建第一个构建触发器
+- en: Now that you’ve seen how the pipeline works, let’s create the build triggers
+    in Google Cloud that will actually execute the pipeline, based on our specified
+    conditions. A Cloud Build trigger specifies a Git repo to watch, a condition on
+    which to activate (such as pushing to a particular branch or tag), and a pipeline
+    file to execute.
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在您已经了解了管道的工作原理，请在 Google Cloud 中创建实际执行管道的构建触发器，基于我们指定的条件。Cloud Build 触发器指定要监视的
+    Git 存储库，激活的条件（例如推送到特定分支或标签），以及要执行的管道文件。
+- en: Go ahead and create a new Cloud Build trigger now. Log in to your Google Cloud
+    project and browse to the [Cloud Build triggers page](https://oreil.ly/LLuWt).
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在继续创建新的 Cloud Build 触发器。登录到您的 Google Cloud 项目，并浏览到[Cloud Build 触发器页面](https://oreil.ly/LLuWt)。
+- en: Click the Add Trigger button to make a new build trigger, and select GitHub
+    as the source repository. You’ll be asked to grant permission for Google Cloud
+    to access your GitHub repo. Select `YOUR_GITHUB_USERNAME/demo` and Google Cloud
+    will link to your forked copy of the demo repository. You can name the trigger
+    whatever you like.
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 单击“添加触发器”按钮以创建新的构建触发器，并选择 GitHub 作为源代码库。系统将要求您授权 Google Cloud 访问您的 GitHub 存储库。选择`YOUR_GITHUB_USERNAME/demo`，Google
+    Cloud 将链接到您 fork 的演示存储库的副本。您可以随意命名触发器。
+- en: Under the Branch section, select `.*` so that it will match any branch.
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在分支部分下，选择`.*`以匹配任何分支。
+- en: Under the Configuration section, choose the Cloud Build configuration file and
+    set the location to *hello-cloudbuild-v2/cloudbuild.yaml*, which is where the
+    file lives in the demo repo.
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在配置部分，选择云构建配置文件，并将位置设置为*hello-cloudbuild-v2/cloudbuild.yaml*，这是演示存储库中文件所在的位置。
+- en: Finally, we need to create some substitution variables so that we can reuse
+    this same *cloudbuild.yaml* file for different builds.
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，我们需要创建一些替换变量，以便我们可以为不同的构建重复使用相同的*cloudbuild.yaml*文件。
+- en: 'For this example, you’ll need to add the following substitution variable to
+    your trigger:'
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于此示例，您需要向触发器添加以下替换变量：
+- en: '`_REGION` should be the GCP region where you deployed your Artifact Registry
+    and GKE cluster, such as `us-central1`, or `southamerica-east1`.'
+  id: totrans-121
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`_REGION` 应该是您部署 Artifact Registry 和 GKE 集群的 GCP 区域，如 `us-central1` 或 `southamerica-east1`。'
+- en: Click the Create trigger button when you are done. You’re now ready to test
+    the trigger and see what happens!
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您完成时，点击创建触发器按钮。现在，您可以测试触发器并查看发生了什么！
+- en: Testing the Trigger
+  id: totrans-123
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 测试触发器
+- en: 'Go ahead and make a change to your forked copy of the demo repository. Edit
+    both *main.go* and *main_test.go*, replacing `Hello` with `Hola`, or whatever
+    you like, and save both files (we’ll use `sed` in the example below). You can
+    also run the tests locally, if you have Golang installed, to make sure that the
+    test suite still passes. When ready, commit and push the changes to your forked
+    copy of the Git repo:'
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 继续对您分叉的演示库进行更改。编辑 *main.go* 和 *main_test.go*，用 `Hola` 替换 `Hello` 或您喜欢的任何内容，并保存这两个文件（我们将在下面的示例中使用
+    `sed`）。如果您安装了 Golang，您还可以在本地运行测试，以确保测试套件仍然通过。准备好后，提交并推送更改到您分叉的 Git 存储库：
+- en: '[PRE5]'
+  id: totrans-125
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: If you look in the [Cloud Build web UI](https://oreil.ly/YAc9a), you will see
+    the list of recent builds in your project. You should see one at the top of the
+    list for the current change you just pushed. It may be still running, or it may
+    have already finished.
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您查看 [Cloud Build Web UI](https://oreil.ly/YAc9a)，您会看到项目中最近构建的列表。您应该看到列表顶部有一个当前刚刚推送的当前更改的构建。它可能仍在运行中，也可能已经完成。
+- en: Hopefully you will see a green check indicating that all steps passed. If not,
+    check the log output in the build and see what failed.
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 希望您会看到一个绿色勾 indicating that all steps passed。如果没有，请检查构建中的日志输出，看看是什么失败了。
+- en: Assuming it passed, a container should have been published into your private
+    Google Artifact Registry tagged with the Git commit SHA of your change.
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设它通过了，一个容器应该已经发布到您的私有 Google Artifact Registry，并标记有您更改的 Git 提交 SHA。
+- en: Deploying from a CI/CD Pipeline
+  id: totrans-129
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 从 CI/CD 管道部署
+- en: Now that you can trigger a build with a Git push, run tests, and publish the
+    final container to the registry, you are ready to deploy that container to Kubernetes.
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在您可以通过 Git 推送触发构建、运行测试并发布最终容器到注册表，您已准备好将该容器部署到 Kubernetes。
+- en: 'For this example we will imagine there are two environments, one for `production`,
+    and one for `staging`, and we will deploy them into separate namespaces: `staging-demo`
+    and `production-demo`. Both will run in the same GKE cluster (although you would
+    probably want to use separate clusters for your real applications).'
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于此示例，我们将假设有两个环境，一个用于 `production`，一个用于 `staging`，并将它们部署到单独的命名空间：`staging-demo`
+    和 `production-demo`。两者将在同一个 GKE 集群中运行（尽管您可能希望为您的真实应用程序使用单独的集群）。
+- en: To keep things simple, we’re going to use the Git tags `production` and `staging`
+    for triggering deployments to each environment. You may have your own process
+    for managing versions, such as using semantic version ([SemVer](https://semver.org)),
+    release tags, or automatically deploying to a staging environment whenever the
+    main or trunk branch is updated. Feel free to adapt these examples to your own
+    situation.
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了简化事务，我们将使用 Git 标签 `production` 和 `staging` 触发对每个环境的部署。您可能有自己的版本管理过程，如使用语义化版本（[SemVer](https://semver.org)）、发布标签或在更新主分支或主干分支时自动部署到暂存环境。请随意根据您自己的情况调整这些示例。
+- en: 'We will configure Cloud Build to deploy to staging when the `staging` Git tag
+    is pushed to the repo, and to production when the `production` tag is pushed.
+    This requires a new pipeline that uses a different Cloud Build YAML file, *cloudbuild-deploy.yaml*.
+    Let’s take a look at the steps that are in our deploy pipepline:'
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将配置 Cloud Build 在将 `staging` Git 标签推送到仓库时部署到暂存，将 `production` 标签推送时部署到生产。这需要一个使用不同
+    Cloud Build YAML 文件 *cloudbuild-deploy.yaml* 的新管道。让我们看看我们部署管道中的步骤：
+- en: Getting credentials for the Kubernetes cluster
+  id: totrans-134
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 获取 Kubernetes 集群的凭据
+- en: 'To deploy to Kubernetes with Cloud Build, the build will need a working `KUBECONFIG`,
+    which we can get with `kubectl`:'
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要使用 Cloud Build 部署到 Kubernetes，构建将需要一个有效的 `KUBECONFIG`，我们可以使用 `kubectl` 获取它：
+- en: '[PRE6]'
+  id: totrans-136
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: Deploying to the cluster
+  id: totrans-137
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 部署到集群
+- en: 'Once the build is authenticated, it can run Helm to actually upgrade (or install)
+    the application in the cluster:'
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦构建经过身份验证，它可以运行 Helm 实际在集群中升级（或安装）应用程序：
+- en: '[PRE7]'
+  id: totrans-139
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: 'We are passing a few additional flags to the `helm upgrade` command:'
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们向 `helm upgrade` 命令传递了一些额外的标志：
+- en: '`namespace`'
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`namespace`'
+- en: The namespace where the application should be deployed
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应部署应用程序的命名空间
+- en: '`values`'
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`values`'
+- en: The Helm values file to use for this environment
+  id: totrans-144
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用于此环境的 Helm 值文件
+- en: '`set container.image`'
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`set container.image`'
+- en: Sets the container name to deploy
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 设置部署容器的名称
+- en: '`set container.tag`'
+  id: totrans-147
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`set container.tag`'
+- en: Deploys the image with this specific tag (the originating Git SHA)
+  id: totrans-148
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用具体标签（源Git SHA）部署图像
+- en: Creating a Deploy Trigger
+  id: totrans-149
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 创建一个部署触发器
+- en: Now let’s create a new Cloud Build trigger for deploying to our imaginary `staging`
+    environment.
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在让我们为我们想象中的`staging`环境创建一个新的Cloud Build触发器。
+- en: Create a new trigger in the Cloud Build web UI just as you did in [“Creating
+    the First Build Trigger”](#create-build-trigger). The repo will be the same, but
+    this time configure it to trigger when a *tag* is pushed instead of a branch,
+    and set the tag name to match *staging*.
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在Cloud Build Web UI中创建一个新的触发器，就像您在[“创建第一个构建触发器”](#create-build-trigger)中所做的那样。仓库将保持不变，但这次配置它在推送*tag*而不是分支时触发，并设置标签名称与*staging*匹配。
+- en: Also, instead of using the *cloudbuild.yaml* file, for this build we will use
+    `*hello-cloudbuild-v2/cloudbuild-deploy.yaml*`.
+  id: totrans-152
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此次构建将不再使用*cloudbuild.yaml*文件，而是使用`*hello-cloudbuild-v2/cloudbuild-deploy.yaml*`。
+- en: 'In the `Substitution variables` section, we’ll set some values that are specific
+    to the deploy builds:'
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在`替代变量`部分，我们将设置一些特定于部署构建的值：
+- en: '`_REGION` will be the same as you used in the first trigger. It should match
+    the GCP availability region where you created your GKE cluster and Artifact Registry
+    repo.'
+  id: totrans-154
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`_REGION`将与您在第一个触发器中使用的相同。它应该与您创建GKE集群和Artifact Registry仓库的GCP可用区域匹配。'
+- en: '`_CLOUDSDK_CONTAINER_CLUSTER` is the name of your GKE cluster.'
+  id: totrans-155
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`_CLOUDSDK_CONTAINER_CLUSTER`是您的GKE集群的名称。'
+- en: Using these variables here means that we can use the same YAML file for deploying
+    both staging and production, even if those environments were in separate clusters,
+    or in separate GCP projects.
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这里使用这些变量意味着，即使这些环境位于不同的集群或不同的GCP项目中，我们也可以使用相同的YAML文件来部署分别用于临时和生产环境。
+- en: 'Once you have created the trigger for the `staging` tag, go ahead and try it
+    out by pushing a `staging` tag to the repo:'
+  id: totrans-157
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦为`staging`标签创建了触发器，请继续通过将`staging`标签推送到仓库来尝试它：
+- en: '[PRE8]'
+  id: totrans-158
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: As before, you can watch the [build progress](https://oreil.ly/UQmGq) in the
+    Cloud Build UI. If all goes as planned, Cloud Build should successfully authenticate
+    to your GKE cluster and deploy the staging version of your application into the
+    `staging-demo` namespace. You can verify this by checking the [GKE dashboard](https://oreil.ly/LbLjU)
+    (or use `helm status`).
+  id: totrans-159
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与以往一样，您可以在云构建UI中查看[构建进度](https://oreil.ly/UQmGq)。如果一切顺利，Cloud Build应能够成功验证到您的GKE集群，并将应用程序的临时版本部署到`staging-demo`命名空间。您可以通过检查[GKE仪表板](https://oreil.ly/LbLjU)（或使用`helm
+    status`）来验证此操作。
+- en: Finally, follow the same steps to create a separate Cloud Build trigger that
+    deploys to production on a push to the `production` tag. If all goes well, you’ll
+    have another copy of the app running in a new `production-demo` namespace. Again,
+    in this example we deployed both environments to the same GKE cluster but for
+    real applications you would likely want to keep these separate.
+  id: totrans-160
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，按照相同的步骤创建一个单独的Cloud Build触发器，以便在推送到`production`标签时部署到生产环境。如果一切顺利，您将在新的`production-demo`命名空间中运行该应用程序的另一份副本。在此示例中，我们将两个环境都部署到同一个GKE集群，但对于真实应用程序，您可能希望将它们分开。
+- en: Adapting the Example Pipeline
+  id: totrans-161
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 调整示例流水线
+- en: When you are done trying out the demo pipeline you will want to delete any of
+    the GCP resources you created for testing, including the GKE cluster, the `demo`
+    Artifact Registry repository, and your Cloud Build triggers.
+  id: totrans-162
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您完成尝试演示流水线时，您将希望删除为测试创建的任何GCP资源，包括GKE集群、`demo`Artifact Registry仓库和您的Cloud Build触发器。
+- en: We hope this example demonstrates the key concepts of a CI/CD pipeline. If you’re
+    using Cloud Build, you can use these examples as a starting point for setting
+    up your own pipelines. If you’re using other tools, we hope you can easily adapt
+    the patterns we’ve shown here to work in your own environment. Automating the
+    build, test, and deployment steps for your applications will greatly improve the
+    experience of creating and deploying software for everyone involved.
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们希望此示例演示了CI/CD流水线的关键概念。如果您使用Cloud Build，则可以将这些示例用作设置自己流水线的起点。如果您使用其他工具，希望您能轻松地调整我们在此展示的模式，以适应您自己的环境。自动化应用程序的构建、测试和部署步骤将极大地提高所有参与者创建和部署软件的体验。
+- en: GitOps
+  id: totrans-164
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: GitOps
+- en: As we mentioned in [“Infrastructure as Code”](ch01.html#infra-as-code), an integral
+    part of the industry’s shift toward DevOps was the need to manage infrastructure
+    by means of code and source control. “GitOps” is a newer term that seems to mean
+    something slightly different depending on who you ask. But a high-level GitOps
+    involves using source control (Git being one of the more popular source control
+    tools) to track and manage infrastructure in an automated way. Imagine the Kubernetes
+    reconciliation loop but applied in a broader sense, where any and all infrastructure
+    is configured and deployed solely by pushing changes to a Git repo. A number of
+    existing CI/CD tools have rebranded themselves as being “GitOps” tools and we
+    expect this concept to grow and evolve rapidly throughout the software industry
+    in the coming years.
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如我们在[“基础设施即代码”](ch01.html#infra-as-code)章节中提到的，作为行业向 DevOps 转变的一部分，管理基础设施需要通过代码和源代码控制来进行。
+    “GitOps” 是一个较新的术语，根据不同的理解，其含义可能有所不同。但在高层次上，GitOps 使用源代码控制（Git 是较流行的源代码控制工具之一）来以自动化方式跟踪和管理基础设施。想象一下
+    Kubernetes 协调循环，但应用于更广泛的范围，即通过推送变更到 Git 存储库来配置和部署任何和所有基础设施。一些现有的 CI/CD 工具已经重新定位自己为“GitOps”工具，我们预计这个概念将在未来几年内在软件行业中快速发展和演变。
+- en: In this section, we will use a tool called Flux to automatically deploy the
+    demo application to a local Kubernetes cluster by pushing changes to a GitHub
+    repository.
+  id: totrans-166
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本节中，我们将使用一个名为 Flux 的工具，通过将更改推送到 GitHub 存储库，自动将演示应用程序部署到本地 Kubernetes 集群。
+- en: Flux
+  id: totrans-167
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Flux
+- en: Weaveworks (the creators of [`eksctl`](https://eksctl.io)) may have been the
+    first to coin the [GitOps term](https://oreil.ly/Bjd3D). They have also built
+    one of the more popular GitOps tools called [Flux](https://oreil.ly/Eoqs6). It
+    can be used to automatically deploy changes to a Kubernetes cluster by polling
+    a Git repo, watching for any changes, and automatically applying the changes from
+    the Flux Pods running inside of the cluster. Let’s try out an example to see how
+    it works.
+  id: totrans-168
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Weaveworks（[`eksctl`](https://eksctl.io)的创建者）可能是首先创造[GitOps术语](https://oreil.ly/Bjd3D)的人。他们还构建了一个名为[Flux](https://oreil.ly/Eoqs6)的较受欢迎的
+    GitOps 工具。它可以通过轮询 Git 存储库、监视任何更改并自动应用 Flux Pods 内部运行的更改来自动将更改部署到 Kubernetes 集群。让我们尝试一个示例，看看它如何工作。
+- en: Set Up Flux
+  id: totrans-169
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 设置 Flux
+- en: '`flux` is the CLI tool used for interacting with Flux and can also be used
+    to install the Flux components in Kubernetes. Follow the [installation instructions](https://oreil.ly/erpNZ)
+    for your operating system and point your `kubectl` at your test Kubernetes cluster.'
+  id: totrans-170
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`flux` 是与 Flux 进行交互的 CLI 工具，也可用于在 Kubernetes 中安装 Flux 组件。请按照您操作系统的[安装说明](https://oreil.ly/erpNZ)设置，并将您的
+    `kubectl` 指向测试 Kubernetes 集群。'
+- en: You will need to create a GitHub personal access token so that Flux can talk
+    securely to GitHub. You can generate one in the Settings page of your GitHub profile
+    under the Developer Settings section. It will need the `repo` permission and you
+    should decide if you want to have it automatically expire on a schedule, or set
+    it to never expire. For this example either is fine, but in a real production
+    system you should always have a process to rotate any credentials on a regular
+    basis.
+  id: totrans-171
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您需要创建一个 GitHub 个人访问令牌，以便 Flux 可以安全地与 GitHub 进行通信。您可以在 GitHub 个人资料的设置页面的开发者设置部分生成一个。它将需要
+    `repo` 权限，并且您可以决定是否希望它定期自动过期，或者设置为永不过期。对于本示例，任何一种方式都可以，但在真实的生产系统中，您应始终具有定期轮换凭据的流程。
+- en: 'Follow the [GitHub instructions](https://oreil.ly/amjIN) to generate a personal
+    access token, export it into your environment along with your username, and check
+    to see if Flux is ready to install using the `flux check` command:'
+  id: totrans-172
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请按照[GitHub说明](https://oreil.ly/amjIN)生成个人访问令牌，并将其导出到您的环境，同时附上您的用户名，然后使用 `flux
+    check` 命令检查 Flux 是否准备好安装：
+- en: '[PRE9]'
+  id: totrans-173
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: Install Flux
+  id: totrans-174
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 安装 Flux
+- en: 'Assuming the check passes, you are ready to install Flux! As part of the process
+    it will use your personal access token to automatically create a new GitHub repo
+    in your account and then use that repo for managing your cluster going forward:'
+  id: totrans-175
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设检查通过，您现在可以安装 Flux 了！作为过程的一部分，它将使用您的个人访问令牌自动在您的帐户中创建一个新的 GitHub 存储库，然后将该存储库用于管理您的集群。
+- en: '[PRE10]'
+  id: totrans-176
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: Among other things, you should see that Flux successfully connected to your
+    repo. You can browse to your new repo and see that inside of this repo Flux created
+    a directory called *clusters/demo-cluster/flux-system* containing all of the Flux
+    Kubernetes manifests that are now running in your cluster in the new `flux-system`
+    namespace.
+  id: totrans-177
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此外，您应该看到Flux成功连接到您的仓库。您可以浏览到您的新仓库，并看到在这个仓库内，Flux创建了一个名为*clusters/demo-cluster/flux-system*的目录，其中包含所有在新`flux-system`命名空间中运行的Flux
+    Kubernetes清单。
+- en: Create a New Deployment Using Flux
+  id: totrans-178
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 使用Flux创建新部署
+- en: 'Now let’s use Flux to automatically deploy a new namespace and deployment to
+    your cluster. In proper GitOps fashion we will do this only by pushing changes
+    to the Git repo. You’ll need to clone the new repo that Flux created, which means
+    you will need to set up your credentials with GitHub in order to push new commits.
+    If you have not done this yet, you can follow [these instructions from GitHub](https://oreil.ly/UVcoA).
+    Once you have your repo cloned, make a new directory alongside `flux-system` for
+    our new `flux-demo` Deployment:'
+  id: totrans-179
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在让我们使用Flux自动部署一个新的命名空间和部署到您的集群中。按照适当的GitOps方式，我们只需将更改推送到Git仓库即可完成此操作。您需要克隆Flux创建的新仓库，这意味着您需要设置GitHub凭据以推送新的提交。如果您尚未完成此操作，可以按照[GitHub提供的这些说明](https://oreil.ly/UVcoA)进行操作。克隆仓库后，在`flux-system`旁边为我们的新`flux-demo`部署创建一个新目录：
+- en: '[PRE11]'
+  id: totrans-180
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: 'Next we will generate the YAML needed for a new Namespace and Deployment called
+    `flux-demo` using `kubectl` and the `--dry-run` flag. After saving those to new
+    manifest files, we will commit and push them to the repo:'
+  id: totrans-181
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，我们将使用`kubectl`和`--dry-run`标志生成一个新命名空间和名为`flux-demo`的部署所需的YAML。保存这些到新的清单文件后，我们将其提交并推送到仓库：
+- en: '[PRE12]'
+  id: totrans-182
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: 'Since Flux is regularly polling the Git repo and watching for any changes,
+    it will automatically create and deploy your new `flux-demo` manifests when it
+    detects the new files:'
+  id: totrans-183
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于Flux定期轮询Git仓库并监视任何更改，当它检测到新文件时，它将自动创建和部署您的新`flux-demo`清单：
+- en: '[PRE13]'
+  id: totrans-184
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: In addition to plain Kubernetes manifests, Flux can manage Helm releases, and
+    manifests that use kustomize. You can also configure Flux to poll your container
+    registry and automatically deploy new images. It will then make a new Git commit
+    back to the repo, tracking the image version that it deployed, keeping your Git
+    repo in sync with what is actually running in the cluster.
+  id: totrans-185
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了普通的Kubernetes清单外，Flux还可以管理Helm发布和使用kustomize的清单。您还可以配置Flux轮询您的容器注册表，并自动部署新的镜像。然后，它将向仓库进行新的Git提交，跟踪它部署的镜像版本，使您的Git仓库与实际在集群中运行的内容保持同步。
+- en: Also, just like the Kubernetes reconciliation loop, Flux continuously monitors
+    for any manual changes to the resources that it manages. It will attempt to keep
+    the cluster in sync with what is in the Git repo. This way any manual changes
+    to anything managed with Flux should automatically be rolled back, allowing you
+    to better trust your Git repo as the ultimate source, or truth, for what should
+    be running in your cluster.
+  id: totrans-186
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此外，就像Kubernetes的协调循环一样，Flux持续监视其管理的资源是否有任何手动更改。它将尝试保持集群与Git仓库中的内容同步。这样，任何使用Flux管理的手动更改应该会自动回滚，使您更加信任Git仓库作为集群中应该运行的最终来源或真实数据源。
+- en: 'This is one of the main goals of GitOps: that you should be able to manage
+    Kubernetes automatically using code that is tracked in Git. Pushing changes to
+    this repo is the only way you should ever make changes to your clusters when using
+    Flux. Using Git to manage your infrastructure means that you will have a record
+    of all changes in your commit history, and also that all changes can be peer-reviewed
+    as part of your team’s merge-request process.'
+  id: totrans-187
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是GitOps的主要目标之一：您应该能够使用在Git中跟踪的代码自动管理Kubernetes。在使用Flux时，将更改推送到此仓库是您唯一应该对集群进行更改的方式。使用Git来管理您的基础设施意味着您将在提交历史中有所有更改的记录，同时所有更改也可以作为团队合并请求流程的一部分进行同行评审。
+- en: Summary
+  id: totrans-188
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 概述
+- en: Setting up a continuous deployment pipeline for your applications allows you
+    to deploy software consistently, reliably, and quickly. Ideally, developers should
+    be able to push code to the source control repository and all of the build, test,
+    and deploy phases happen automatically in a centralized pipeline.
+  id: totrans-189
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为您的应用程序设置持续部署流水线可以让您以一致、可靠和快速的方式部署软件。理想情况下，开发人员应该能够将代码推送到源代码控制库，所有构建、测试和部署阶段都在一个集中的流水线中自动完成。
+- en: 'Because there are so many options for CI/CD software and techniques, we can’t
+    give you a single recipe that’ll work for everybody. Instead, we’ve aimed to show
+    you how and why CD is beneficial, and give you a few important things to think
+    about when you come to implement it in your own organization:'
+  id: totrans-190
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于有许多 CI/CD 软件和技术选择，我们无法给出适用于所有人的单一配方。相反，我们的目标是向您展示 CD 为何有益，并在您组织内实施时提供一些重要的思考要点：
+- en: Deciding which CI/CD tools to use is an important process when building a new
+    pipeline. All of the tools we mention throughout this book could likely be incorporated
+    into almost any existing environment.
+  id: totrans-191
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在构建新管道时，决定使用哪些 CI/CD 工具是一个重要的过程。我们在本书中提到的所有工具都可能被整合到几乎任何现有环境中。
+- en: Jenkins, GitHub Actions, GitLab, Drone, Cloud Build, and Spinnaker are just
+    a few of the popular CI/CD tools that work well with Kubernetes.
+  id: totrans-192
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Jenkins、GitHub Actions、GitLab、Drone、Cloud Build 和 Spinnaker 只是一些与 Kubernetes
+    配合良好的热门 CI/CD 工具。
+- en: Defining the build pipeline steps with code allows you to track and modify these
+    steps alongside application code.
+  id: totrans-193
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用代码定义构建管道步骤使您能够与应用代码一起跟踪和修改这些步骤。
+- en: Containers enable developers to promote build artifacts up through environments,
+    such as testing, staging, and eventually production, ideally without having to
+    rebuild a new container.
+  id: totrans-194
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 容器使开发人员能够将构建产物推广至各种环境，例如测试、预发布，最终到生产环境，理想情况下无需重新构建新的容器。
+- en: Our example pipeline using Cloud Build should be easily adaptable for other
+    tools and types of applications. The overall build, test, and deploy steps are
+    largely the same in any CI/CD pipeline, regardless of the tools used or type of
+    software.
+  id: totrans-195
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 我们使用 Cloud Build 的示例管道应该很容易适应其他工具和应用程序类型。无论使用的工具或软件类型如何，CI/CD 管道的总体构建、测试和部署步骤基本相同。
+- en: GitOps is a newer term used when talking about CI/CD pipelines. The main idea
+    is that deployments and infrastructure changes should be managed using code that
+    is tracked in source control (Git).
+  id: totrans-196
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: GitOps 是谈论 CI/CD 管道时使用的较新术语。其主要理念是部署和基础设施变更应使用在源代码控制（Git）中跟踪的代码进行管理。
+- en: Flux and Argo have popular GitOps tools that can automatically apply changes
+    to your clusters whenever you push code changes to a Git repo.
+  id: totrans-197
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Flux 和 Argo 是流行的 GitOps 工具，可以在您将代码更改推送到 Git 存储库时自动应用更改到您的集群。

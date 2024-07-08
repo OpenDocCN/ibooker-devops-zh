@@ -1,0 +1,1842 @@
+- en: Chapter 6\. Integrating Data Infrastructure in a Kubernetes Stack
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第6章 在 Kubernetes 堆栈中集成数据基础设施
+- en: In this book, we are illuminating a future of modern, cloud native applications
+    that run on Kubernetes. Up until this point, we’ve noted that historically, data
+    has been one of the hardest parts of making this a reality. In previous chapters,
+    we’ve introduced the primitives Kubernetes provides for managing compute, network,
+    and storage ([Chapter 2](ch02.html#managing_data_storage_on_kubernetes)) resources,
+    and considered how databases ([Chapter 3](ch03.html#databases_on_kubernetes_the_hard_way))
+    can be deployed on Kubernetes using these resources. We’ve also examined the automation
+    of infrastructure using controllers and the operator pattern ([Chapter 4](ch04.html#automating_database_deployment_on_kuber)).
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本书中，我们展示了运行在 Kubernetes 上的现代化、云原生应用程序的未来。直到此刻，我们指出历史上数据一直是实现这一现实的最困难部分之一。在之前的章节中，我们介绍了
+    Kubernetes 提供的用于管理计算、网络和存储资源的原语（[第二章](ch02.html#managing_data_storage_on_kubernetes)），并考虑了如何使用这些资源在
+    Kubernetes 上部署数据库（[第三章](ch03.html#databases_on_kubernetes_the_hard_way)）。我们还研究了使用控制器和操作者模式自动化基础设施（[第四章](ch04.html#automating_database_deployment_on_kuber)）。
+- en: Now let’s expand our focus to consider how data infrastructure fits into your
+    overall application architecture in Kubernetes. In this chapter, we’ll explore
+    how to assemble the building blocks discussed in previous chapters into integrated
+    data infrastructure stacks that are easy to deploy and tailor to the unique needs
+    of each application. These stacks represent a step toward the vision of the virtual
+    datacenter we introduced in [Chapter 1](ch01.html#introduction_to_cloud_native_data_infra).
+    To learn the considerations involved in building and using these larger assemblies,
+    let’s take an in-depth look at [K8ssandra](https://k8ssandra.io). This open source
+    project provides an integrated data stack based on Apache Cassandra, a database
+    we first discussed in [“Running Apache Cassandra on Kubernetes”](ch03.html#running_apache_cassandra_on_kubernetes).
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在让我们扩展我们的关注点，考虑数据基础设施如何融入你在 Kubernetes 中的整体应用架构。在本章中，我们将探讨如何将前几章讨论的构建模块组合成集成的数据基础设施堆栈，这些堆栈易于部署并根据每个应用的独特需求进行定制。这些堆栈代表了我们在
+    [第一章](ch01.html#introduction_to_cloud_native_data_infra) 中介绍的虚拟数据中心愿景的一步。为了了解构建和使用这些较大组件涉及的考虑因素，让我们深入了解
+    [K8ssandra](https://k8ssandra.io)。这个开源项目提供了一个基于 Apache Cassandra 的集成数据堆栈，我们在 [“在
+    Kubernetes 上运行 Apache Cassandra”](ch03.html#running_apache_cassandra_on_kubernetes)
+    中首次讨论了这个数据库。
+- en: 'K8ssandra: Production-Ready Cassandra on Kubernetes'
+  id: totrans-3
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: K8ssandra：基于 Kubernetes 的生产就绪 Cassandra
+- en: To set the context, let’s consider some of the practical challenges of moving
+    application workloads into Kubernetes. As organizations have begun to migrate
+    existing applications to Kubernetes and create new cloud native applications in
+    Kubernetes, modernizing the data tier is a step that is often deferred. Whatever
+    the causes of these delays—the belief that Kubernetes is not ready for stateful
+    workloads, a lack of development resources, or other factors—the result has been
+    mismatched architectures in which applications are running in Kubernetes with
+    databases and other data infrastructure running externally. This leads to a division
+    of focus for developers and SREs that can limit productivity. It’s also common
+    to see distinct toolsets for monitoring applications and database infrastructure,
+    which increases cloud computing costs.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了设定背景，让我们考虑将应用工作负载迁移到 Kubernetes 中的一些实际挑战。随着组织开始将现有应用迁移到 Kubernetes 并在 Kubernetes
+    中创建新的云原生应用程序，现代化数据层通常被推迟。无论延迟的原因是 Kubernetes 不适合有状态工作负载、缺乏开发资源还是其他因素，其结果都是在 Kubernetes
+    中运行应用程序并使数据库和其他数据基础设施在外部运行的不匹配架构。这导致开发者和 SRE（Site Reliability Engineer）的注意力分散，限制了生产力。同时，我们也经常看到监控应用程序和数据库基础设施采用不同的工具集，增加了云计算成本。
+- en: 'This adoption challenge became evident in the Cassandra community. Despite
+    the growing collaboration and consensus around building a single Cassandra operator
+    as discussed in [Chapter 5](ch05.html#automating_database_management_on_kuber),
+    developers were still confronted with key questions about how the database and
+    operator would fit in the larger application context:'
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种采纳挑战在 Cassandra 社区中变得明显。尽管围绕构建单个 Cassandra 操作者达成共识和增进协作如 [第五章](ch05.html#automating_database_management_on_kuber)
+    所述，开发者仍面临关于数据库和操作者如何适应更大应用上下文的关键问题：
+- en: How can you have an integrated view of the health of your entire stack, including
+    both applications and data?
+  id: totrans-6
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如何才能综合查看整个堆栈（包括应用程序和数据）的健康状态？
+- en: How can you tailor the automation of installation, upgrades, and other operational
+    tasks in a Kubernetes native way that fits the way we manage your Datacenters?
+  id: totrans-7
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如何才能以符合我们管理数据中心方式的Kubernetes本地方式，定制安装、升级和其他运营任务的自动化？
+- en: To help address these questions, John Sanda and a team of engineers at DataStax
+    launched an open source project called K8ssandra with the goal of providing a
+    production-ready deployment of Cassandra that embodies best practices for running
+    Cassandra in Kubernetes. K8ssandra provides custom resources that help manage
+    tasks including cluster deployment, upgrades, scaling up and down, data backup
+    and restore, and more. You can read more about the motivations for the project
+    in Jeff Carpenter’s blog post [“Why K8ssandra?”](https://oreil.ly/dB6mJ).
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了帮助解决这些问题，DataStax的John Sanda和一组工程师启动了一个名为K8ssandra的开源项目，旨在提供一个生产就绪的Cassandra部署，体现了在Kubernetes中运行Cassandra的最佳实践。K8ssandra提供自定义资源，帮助管理包括集群部署、升级、扩展、数据备份和恢复等任务。您可以在Jeff
+    Carpenter的博客文章 [“Why K8ssandra?”](https://oreil.ly/dB6mJ) 中详细了解该项目的动机。
+- en: K8ssandra Architecture
+  id: totrans-9
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: K8ssandra 架构
+- en: 'K8ssandra is deployed in units known as *clusters*, which is similar terminology
+    to that used by Kubernetes and Cassandra. A K8ssandra cluster includes a Cassandra
+    cluster along with additional components depicted in [Figure 6-1](#keightssandra_architecture)
+    to provide a full data management ecosystem. Let’s consider these in roughly clockwise
+    order starting from the top center:'
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: K8ssandra部署为称为 *集群* 的单元，这与Kubernetes和Cassandra使用的术语类似。K8ssandra集群包括一个Cassandra集群以及
+    [图6-1](#keightssandra_architecture) 中所示的其他组件，以提供完整的数据管理生态系统。让我们从顶部中心大致顺时针顺序考虑这些组件：
+- en: Cass Operator
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Cass Operator
+- en: A Kubernetes operator first introduced in [Chapter 5](ch05.html#automating_database_management_on_kuber).
+    It manages the lifecycle of Cassandra nodes on Kubernetes, including provisioning
+    new nodes and storage, and scaling up and down.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 介绍于 [第5章](ch05.html#automating_database_management_on_kuber) 的Kubernetes操作者。它管理在Kubernetes上的Cassandra节点的生命周期，包括提供新节点和存储、扩展和缩减。
+- en: Cassandra Reaper
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Cassandra Reaper
+- en: This manages the details of repairing Cassandra nodes in order to maintain high
+    data consistency.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这管理维护Cassandra节点的详细信息，以保持高数据一致性。
+- en: Cassandra Medusa
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Cassandra Medusa
+- en: Provides backup and restore for data stored in Cassandra.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 提供对存储在Cassandra中的数据的备份和恢复功能。
+- en: Prometheus and Grafana
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Prometheus 和 Grafana
+- en: Used for the collection and visualization of metrics.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用于收集和可视化指标。
+- en: Stargate
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Stargate
+- en: A data gateway that provides API access to client applications as an alternative
+    to CQL.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为对CQL的替代，提供API访问客户端应用程序的数据网关。
+- en: K8ssandra Operator
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: K8ssandra 操作者
+- en: Orchestrates all of the other components, including multicluster support for
+    managing Cassandra clusters that span multiple Kubernetes clusters.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 管理所有其他组件，包括用于管理跨多个Kubernetes集群的Cassandra集群的多集群支持。
+- en: '![K8ssandra architecture](assets/mcdk_0601.png)'
+  id: totrans-23
+  prefs: []
+  type: TYPE_IMG
+  zh: '![K8ssandra 架构](assets/mcdk_0601.png)'
+- en: Figure 6-1\. K8ssandra architecture
+  id: totrans-24
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-1\. K8ssandra 架构
+- en: In the following sections, we’ll take a look at each component of the K8ssandra
+    project to understand the role that it plays within the architecture and its relationship
+    to other components.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在接下来的部分中，我们将逐个查看K8ssandra项目的每个组件，以了解其在架构中的作用及与其他组件的关系。
+- en: Installing the K8ssandra Operator
+  id: totrans-26
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 安装K8ssandra操作者
+- en: Let’s dive in with some hands-on experience of installing K8ssandra. To get
+    a basic installation of K8ssandra running that fully demonstrates the power of
+    the operator, you’ll need a Kubernetes cluster with several Worker Nodes.
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们通过安装K8ssandra的实际操作经验来深入了解。要运行基本的K8ssandra安装，以完全展示操作者的功能，您需要一个具有多个工作节点的Kubernetes集群。
+- en: To make the deployment simpler, the K8ssandra team has provided scripts to automate
+    the process of creating Kubernetes clusters and then deploying the operator to
+    these clusters. These scripts use [kind clusters](https://kind.sigs.k8s.io) for
+    simplicity, so you’ll want to make sure you have this installed before starting.
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了使部署更简单，K8ssandra团队提供了脚本来自动化创建Kubernetes集群的过程，然后在这些集群上部署操作者。这些脚本使用 [kind clusters](https://kind.sigs.k8s.io)
+    来简化，所以在开始之前，请确保已安装它。
+- en: Instructions for installing on various clouds are also available on the K8ssandra
+    website. The instructions we provide here are based on an [installation guide](https://oreil.ly/4z2oH)
+    in the K8ssandra Operator [repository](https://oreil.ly/kgeWY).
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 K8ssandra 网站上还提供了在各种云平台上安装的说明。我们在这里提供的说明基于 K8ssandra Operator 仓库中的 [安装指南](https://oreil.ly/4z2oH)。
+- en: K8ssandra 2.0 Release Status
+  id: totrans-30
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: K8ssandra 2.0 发布状态
+- en: This chapter focuses on the K8ssandra 2.0 release, including the K8ssandra Operator.
+    At the time of writing, K8ssandra 2.0 is still in beta status. As K8ssandra 2.0
+    moves toward a full GA release, the instructions on the [“Get Started” section
+    of the K8ssandra website](https://oreil.ly/nT1n5) will be updated to reference
+    the new version.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本章重点介绍 K8ssandra 2.0 发布，包括 K8ssandra Operator。在撰写本文时，K8ssandra 2.0 仍处于 beta
+    状态。随着 K8ssandra 2.0 向全面 GA 发布迈进，将更新 [K8ssandra 网站上的“入门”部分](https://oreil.ly/nT1n5)
+    中的说明，以引用新版本。
+- en: 'First, start by cloning the K8ssandra operator repository from GitHub:'
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，从 GitHub 上克隆 K8ssandra operator 仓库：
+- en: '[PRE0]'
+  id: totrans-33
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'Next, you’ll want to use the provided Makefile to create a Kubernetes cluster
+    and deploy the K8ssandra Operator into it (this assumes you have `make` installed):'
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，您需要使用提供的 Makefile 创建一个 Kubernetes 集群，并将 K8ssandra Operator 部署到其中（假设您已安装
+    `make`）：
+- en: '[PRE1]'
+  id: totrans-35
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: 'If you examine the Makefile, you’ll notice the operator is installed using
+    Kustomize, which we discussed in [“Additional Deployment Tools: Kustomize and
+    Skaffold”](ch04.html#additional_deployment_tools_kustomize_a). The target you
+    just executed creates a kind cluster with four Worker Nodes and changes your current
+    context to point to that cluster, as you can see by running the following:'
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您查看 Makefile，会注意到操作员是使用 Kustomize 安装的，我们在 [“附加部署工具：Kustomize 和 Skaffold”](ch04.html#additional_deployment_tools_kustomize_a)
+    中讨论过这个工具。刚刚执行的目标会创建一个具有四个工作节点的 kind 集群，并更改当前上下文以指向该集群，您可以通过以下方式进行验证：
+- en: '[PRE2]'
+  id: totrans-37
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'Now examine the list of CRDs that have been created:'
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在来检查已创建的 CRD 列表：
+- en: '[PRE3]'
+  id: totrans-39
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: As you can see, several CRDs are associated with the cert-manager and K8ssandra.
+    There is also the CassandraDatacenter CRD used by Cass Operator. The K8ssandra
+    and Cass Operator CRDs are all Namespaced, which you can verify using the `kubectl
+    api-resources` command, meaning that resources created according to these definitions
+    are assigned to a specific Namespace. That command will also show you the acceptable
+    abbreviations for each resource type (for example, `k8c` for `k8ssandracluster`).
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如您所见，与 cert-manager 和 K8ssandra 相关联的几个 CRD。还有 Cass Operator 使用的 CassandraDatacenter
+    CRD。K8ssandra 和 Cass Operator 的 CRD 都是命名空间的，您可以使用 `kubectl api-resources` 命令进行验证，这意味着根据这些定义创建的资源将被分配到特定的命名空间。该命令还将显示每种资源类型的可接受缩写（例如
+    `k8c` 表示 `k8ssandracluster`）。
+- en: 'Next, you can examine the contents that have been installed within the kind
+    cluster. If you list the Namespaces using `kubectl get ns`, you’ll note two new
+    Namespaces: `cert-manager` and `k8ssandra-operator`. As you may suspect, K8ssandra
+    is using the same cert-manager project as Pulsar, as described in [“Securing Communications
+    by Default with cert-manager”](ch08.html#securing_communications_by_default_with).
+    Let’s examine the contents of the `k8ssandra-operator` Namespace, which are summarized
+    in [Figure 6-2](#keightssandra_operator_architecture) along with related K8ssandra
+    CRDs.'
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，您可以检查已安装在 kind 集群中的内容。如果使用 `kubectl get ns` 列出命名空间，您会注意到两个新的命名空间：`cert-manager`
+    和 `k8ssandra-operator`。正如您可能猜到的那样，K8ssandra 使用与 Pulsar 相同的 cert-manager 项目，如 [“使用
+    cert-manager 默认安全通信”](ch08.html#securing_communications_by_default_with) 中描述的那样。让我们检查
+    `k8ssandra-operator` 命名空间中的内容，这些内容在 [图 6-2](#keightssandra_operator_architecture)
+    中概述，以及相关的 K8ssandra CRD。
+- en: 'Examine the workloads and you’ll notice that two Deployments have been created:
+    one for the K8ssandra Operator and one for Cass Operator. Take a look at the K8ssandra
+    Operator source code, and you’ll see that it contains multiple controllers, while
+    the Cass Operator consists of a single controller. This packaging reflects the
+    fact that Cass Operator is an independent project which can be used by itself
+    without having to adopt the entire K8ssandra framework—otherwise, it could have
+    been included as a controller within the K8ssandra Operator.'
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 检查工作负载，您会注意到已创建了两个部署：一个用于 K8ssandra Operator，另一个用于 Cass Operator。查看 K8ssandra
+    Operator 的源代码，您会看到它包含多个控制器，而 Cass Operator 则由单个控制器组成。这种打包反映了 Cass Operator 是一个独立项目的事实，可以单独使用，而无需采用整个
+    K8ssandra 框架，否则它可能已作为 K8ssandra Operator 中的一个控制器包含。
+- en: '![K8ssandra Operator architecture](assets/mcdk_0602.png)'
+  id: totrans-43
+  prefs: []
+  type: TYPE_IMG
+  zh: '![K8ssandra Operator 架构](assets/mcdk_0602.png)'
+- en: Figure 6-2\. K8ssandra Operator architecture
+  id: totrans-44
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-2\. K8ssandra Operator 架构
+- en: '[Table 6-1](#mapping_keightssandra_crds_to_controlle) describes the mapping
+    of these various controllers to the key resources with which they interact.'
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[表 6-1](#mapping_keightssandra_crds_to_controlle) 描述了这些各种控制器与它们交互的关键资源的映射。'
+- en: Table 6-1\. Mapping K8ssandra CRDs to controllers
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 6-1\. 将 K8ssandra CRD 映射到控制器
+- en: '| Operator | Controller | Key custom resources |'
+  id: totrans-47
+  prefs: []
+  type: TYPE_TB
+  zh: '| Operator | Controller | 关键自定义资源 |'
+- en: '| --- | --- | --- |'
+  id: totrans-48
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- |'
+- en: '| K8ssandra Operator | K8ssandra controller | `K8ssandraCluster`, `CassandraDatacenter`
+    |'
+  id: totrans-49
+  prefs: []
+  type: TYPE_TB
+  zh: '| K8ssandra Operator | K8ssandra 控制器 | `K8ssandraCluster`, `CassandraDatacenter`
+    |'
+- en: '| Medusa controller | `CassandraBackup`, `CassandraRestore` |'
+  id: totrans-50
+  prefs: []
+  type: TYPE_TB
+  zh: '| Medusa 控制器 | `CassandraBackup`, `CassandraRestore` |'
+- en: '| Reaper controller | `Reaper` |'
+  id: totrans-51
+  prefs: []
+  type: TYPE_TB
+  zh: '| Reaper 控制器 | `Reaper` |'
+- en: '| Replication controller | `ClientConfig`, `ReplicatedSecret` |'
+  id: totrans-52
+  prefs: []
+  type: TYPE_TB
+  zh: '| Replication 控制器 | `ClientConfig`, `ReplicatedSecret` |'
+- en: '| Stargate controller | `Stargate` |'
+  id: totrans-53
+  prefs: []
+  type: TYPE_TB
+  zh: '| Stargate 控制器 | `Stargate` |'
+- en: '| Cass Operator | Cass Operator controller manager | `CassandraDatacenter`
+    |'
+  id: totrans-54
+  prefs: []
+  type: TYPE_TB
+  zh: '| Cass Operator | Cass Operator 控制器管理器 | `CassandraDatacenter` |'
+- en: 'We’ll introduce each K8ssandra and Cass Operator CRD in more detail in the
+    followiing sections:'
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将在接下来的章节中详细介绍每个 K8ssandra 和 Cass Operator CRD：
+- en: Creating a K8ssandraCluster
+  id: totrans-56
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 创建 K8ssandraCluster
+- en: 'Once you’ve installed the K8ssandra Operator, the next step is to create a
+    K8ssandraCluster. The source code used in this section is available in the [“Vitess
+    Operator Example” section of the book’s repository](https://oreil.ly/1n3k7), based
+    on samples available in the [K8ssandra Operator GitHub repo](https://oreil.ly/5WxRO).
+    First, have a look at the *k8ssandra-cluster.yaml* file:'
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦安装了 K8ssandra Operator，下一步就是创建一个 K8ssandraCluster。本节中使用的源代码在书的存储库的 [“Vitess
+    Operator Example” 部分](https://oreil.ly/1n3k7) 中可用，基于 [K8ssandra Operator GitHub
+    存储库](https://oreil.ly/5WxRO) 中提供的示例。首先，请查看 *k8ssandra-cluster.yaml* 文件：
+- en: '[PRE4]'
+  id: totrans-58
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: 'This code specifies a K8ssandraCluster resource consisting of a single Datacenter
+    `dc1` running three nodes of Cassandra 4.0.1, where the Pod specification for
+    each Cassandra node requests 1 GB of storage using a PersistentVolumeClaim that
+    references the `standard` StorageClass. This configuration also includes a single
+    Stargate node to provide API access to the Cassandra cluster. This is a minimal
+    configuration that accepts the chart defaults for most of the other components.
+    Create the `demo` K8ssandraCluster in the `k8ssandra-operator` Namespace with
+    this command:'
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此代码指定了一个 K8ssandraCluster 资源，由一个运行三个 Cassandra 4.0.1 节点的单个数据中心 `dc1` 组成，其中每个
+    Cassandra 节点的 Pod 规范请求使用引用 `standard` StorageClass 的 PersistentVolumeClaim 的 1
+    GB 存储。此配置还包括一个单独的 Stargate 节点，以提供对 Cassandra 集群的 API 访问。这是一个接受大多数其他组件的默认配置的最小配置。使用以下命令在
+    `k8ssandra-operator` 命名空间中创建 `demo` K8ssandraCluster：
+- en: '[PRE5]'
+  id: totrans-60
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: Once the command completes, you can check on the installation of the K8ssandraCluster
+    using commands such as `kubectl get k8ssandraclusters` (or `kubectl get k8c` for
+    short). [Figure 6-3](#a_simple_keightssandracluster) depicts some of the key compute,
+    network, and storage resources that the operator built on your behalf when you
+    created the `demo` K8ssandraCluster.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦命令完成，您可以使用诸如 `kubectl get k8ssandraclusters`（或简写为 `kubectl get k8c`）之类的命令来检查
+    K8ssandraCluster 的安装情况。[图 6-3](#a_simple_keightssandracluster) 描述了在创建 `demo` K8ssandraCluster
+    时操作员为您建立的一些关键计算、网络和存储资源。
+- en: '![A simple K8ssandraCluster](assets/mcdk_0603.png)'
+  id: totrans-62
+  prefs: []
+  type: TYPE_IMG
+  zh: '![一个简单的 K8ssandraCluster](assets/mcdk_0603.png)'
+- en: Figure 6-3\. A simple K8ssandraCluster
+  id: totrans-63
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-3\. 一个简单的 K8ssandraCluster
+- en: 'Here are some key items to note:'
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下是一些需要注意的关键项目：
+- en: A single StatefulSet has been created to represent the Cassandra Datacenter
+    `dc1`, with three Pods containing the replicas you specified. As you’ll learn
+    in the next section, K8ssandra uses a CassandraDatacenter CRD to manage this StatefulSet
+    via the Cass Operator.
+  id: totrans-65
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 已创建一个单独的 StatefulSet 以表示 Cassandra 数据中心 `dc1`，其中包含了您指定的三个副本 Pod。正如您将在下一节中了解到的那样，K8ssandra
+    使用 CassandraDatacenter CRD 通过 Cass Operator 管理此 StatefulSet。
+- en: While the figure shows a single Service `demo-dc1-service` exposing access to
+    the Cassandra cluster as a single endpoint, this is a simplification. You will
+    find multiple Services configured to provide access for various clients.
+  id: totrans-66
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 虽然图中显示了一个名为 `demo-dc1-service` 的单个 Service，用作将 Cassandra 集群公开为单个端点的访问点，但这只是一个简化。您会发现配置了多个服务以为各种客户端提供访问。
+- en: There is a Deployment managing a single Stargate Pod, as well as Services that
+    provide client endpoints to the various API services provided by Stargate. This
+    is another simplification, and we’ll explore this part of configuration in more
+    detail in [“Enabling Developer Productivity with Stargate APIs”](#enabling_developer_productivity_with_st).
+  id: totrans-67
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 有一个部署管理单个 Stargate Pod，以及提供 Stargate 提供的各种 API 服务的客户端终端的服务。这是另一种简化，我们将在 [“使用
+    Stargate API 提升开发者的生产力”](#enabling_developer_productivity_with_st) 中更详细地探讨这部分配置。
+- en: Similar to examples of infrastructure we’ve shown in previous chapters, the
+    K8ssandra Operator also creates additional supporting security resources such
+    as ServiceAccounts, Roles, and RoleBindings.
+  id: totrans-68
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 类似于我们在前几章中展示的基础设施示例，K8ssandra Operator 还会创建额外的支持安全资源，如 ServiceAccounts、Roles
+    和 RoleBindings。
+- en: Once you have a K8ssandraCluster created, you can point client applications
+    at the Cassandra interfaces and Stargate APIs, and perform cluster maintenance
+    operations. You can remove a K8ssandraCluster just by deleting its resource, but
+    you won’t want to do that yet as we have a lot more to explore! We’ll describe
+    several of these interactions as we examine each of the K8ssandra components in
+    more detail. Along the way, we’ll make sure to note some of the interesting design
+    choices made by contributors to K8ssandra and related projects in terms of how
+    they use Kubernetes resources and how they adapt data infrastructure that predates
+    Kubernetes into the Kubernetes way of doing things.
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦创建了一个 K8ssandraCluster，您可以将客户端应用程序指向 Cassandra 接口和 Stargate API，并执行集群维护操作。只需删除其资源即可删除
+    K8ssandraCluster，但由于我们还有很多内容要探索，您不会想这么做！随着我们更详细地检查每个 K8ssandra 组件，我们将描述其中几个交互。在此过程中，我们将确保记录
+    K8ssandra 和相关项目的贡献者在如何使用 Kubernetes 资源以及如何将 Kubernetes 之前的数据基础设施适应 Kubernetes
+    方式做事方面所做的一些有趣的设计选择。
+- en: 'StackGres: An Integrated Kubernetes Stack for Postgres'
+  id: totrans-70
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 'StackGres: 一个集成的 Kubernetes Stack，用于 Postgres'
+- en: The K8ssandra project is not the only instance of an integrated data stack that
+    runs on Kubernetes. Another example can be found in [StackGres](https://stackgres.io),
+    a project managed by OnGres. StackGres uses [Patroni](https://github.com/zalando/patroni)
+    to support clustered, highly available Postgres deployments and adds automated
+    backup functionality. StackGres supports integration with Prometheus and Grafana
+    for metrics aggregation and visualization, along with an optional Envoy proxy
+    for getting more fine-grained metrics at the protocol level. StackGres is composed
+    of open source components and uses the [AGPLv3 License](https://www.gnu.org/licenses/agpl-3.0.en.html)
+    for its community edition.
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: K8ssandra 项目并不是在 Kubernetes 上运行的集成数据堆栈的唯一实例。另一个例子可以在 [StackGres](https://stackgres.io)
+    中找到，这是由 OnGres 管理的项目。StackGres 使用 [Patroni](https://github.com/zalando/patroni)
+    支持集群化、高可用性的 Postgres 部署，并添加了自动备份功能。StackGres 支持与 Prometheus 和 Grafana 的集成，用于指标聚合和可视化，还可以选择使用
+    Envoy 代理来获取协议级别的更详细的指标。StackGres 由开源组件组成，并使用 [AGPLv3 许可证](https://www.gnu.org/licenses/agpl-3.0.en.html)
+    进行其社区版的发布。
+- en: Managing Cassandra in Kubernetes with Cass Operator
+  id: totrans-72
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用 Cass Operator 在 Kubernetes 中管理 Cassandra
+- en: '*Cass Operator* is the shorthand name for the DataStax Kubernetes Operator
+    for Apache Cassandra. This open source project available on [GitHub](https://oreil.ly/xWjZr)
+    was brought under the umbrella of the K8ssandra project in 2021, replacing its
+    previous home under the [DataStax GitHub organization](https://oreil.ly/JAF3Y).'
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*Cass Operator* 是 DataStax 为 Apache Cassandra 提供的 Kubernetes Operator 的简称。这个开源项目可以在
+    [GitHub](https://oreil.ly/xWjZr) 找到，于 2021 年并入了 K8ssandra 项目，取代了其之前在 [DataStax
+    GitHub 组织](https://oreil.ly/JAF3Y) 下的位置。'
+- en: Cass Operator is a key part of K8ssandra, since a Cassandra cluster is the basic
+    data infrastructure around which all the other infrastructure elements and tools
+    are added. However, Cass Operator was developed before K8ssandra and will continue
+    to exist as a separately deployable project. This is helpful since not every capability
+    of Cass Operator is exposed via K8ssandra, especially more advanced Cassandra
+    configuration options. Cass Operator is listed as its own project in [Operator
+    Hub](https://oreil.ly/gPtl3) and can be installed via Kustomize.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Cass Operator 是 K8ssandra 的关键组成部分，因为 Cassandra 集群是其他所有基础设施元素和工具的基础数据基础设施。然而，Cass
+    Operator 在 K8ssandra 之前就已经开发，并将继续作为一个可单独部署的项目存在。这非常有帮助，因为并非所有 Cass Operator 的功能都通过
+    K8ssandra 暴露出来，特别是更高级的 Cassandra 配置选项。Cass Operator 在 [Operator Hub](https://oreil.ly/gPtl3)
+    中列为其自己的项目，可以通过 Kustomize 进行安装。
+- en: Cass Operator provides a mapping of Cassandra’s topology concepts including
+    clusters, Datacenters, racks, and nodes onto Kubernetes resources. The key construct
+    is the CassandraDatacenter CRD, which represents a Datacenter within the topology
+    of a Cassandra cluster. (Reference [Chapter 3](ch03.html#databases_on_kubernetes_the_hard_way)
+    if you need a refresher on Cassandra topology.)
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Cass Operator 提供了Cassandra拓扑概念的映射，包括集群、数据中心、机架和节点到Kubernetes资源的映射。关键构造是CassandraDatacenter
+    CRD，它表示Cassandra集群拓扑中的一个数据中心。（如果您需要关于Cassandra拓扑的复习，请参考[第三章](ch03.html#databases_on_kubernetes_the_hard_way)。）
+- en: 'When you created a K8ssandraCluster resource in the previous section, the K8ssandra
+    Operator created a single CassandraDatacenter resource, which would have looked
+    something like this:'
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在前一节创建K8ssandraCluster资源时，K8ssandra Operator创建了一个单个的CassandraDatacenter资源，它看起来可能是这样的：
+- en: '[PRE6]'
+  id: totrans-77
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: Since you didn’t specify a rack in the K8ssandraCluster definition, K8ssandra
+    interprets this as a single rack named `default`. By creating the CassandraDatacenter,
+    K8ssandra Operator is delegating the operation of the Cassandra nodes in this
+    Datacenter to Cass Operator.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于您在K8ssandraCluster定义中没有指定机架，K8ssandra将其解释为名为`default`的单个机架。通过创建CassandraDatacenter，K8ssandra
+    Operator委托Cass Operator操作此数据中心中的Cassandra节点。
+- en: Cass Operator and Multiple Datacenters
+  id: totrans-79
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Cass Operator 和多数据中心
+- en: You may be wondering why Cass Operator does not define a CRD representing a
+    Cassandra cluster. From the perspective of the Cass Operator, the Cassandra cluster
+    is basically just a piece of metadata—the CassandraDatacenter’s `clusterName`—rather
+    than an actual resource. This reflects the convention that Cassandra clusters
+    used in production systems are typically deployed across multiple physical datacenters,
+    which is beyond the scope of a Kubernetes cluster.
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可能想知道为什么Cass Operator没有定义表示Cassandra集群的CRD。从Cass Operator的角度来看，Cassandra集群基本上只是一个元数据片段——即CassandraDatacenter的`clusterName`，而不是一个实际的资源。这反映了在生产系统中使用的Cassandra集群通常部署在跨多个物理数据中心的情况，这超出了Kubernetes集群的范围。
+- en: While you can certainly create multiple CassandraDatacenters and link them together
+    using the same `clusterName`, they must be in the same Kuberneters cluster for
+    Cass Operator to be able to manage them. It’s also recommended to use a separate
+    Namespace to install a dedicated instance of Cass Operator to manage each cluster.
+    You’ll see how K8ssandra supports the ability to create Cassandra clusters that
+    span multiple physical datacenters (and Kubernetes clusters) in multicluster topologies.
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然您可以确实创建多个CassandraDatacenter并使用相同的`clusterName`将它们链接在一起，但它们必须位于同一个Kubernetes集群中，以便Cass
+    Operator能够管理它们。建议使用单独的Namespace来安装Cass Operator的专用实例以管理每个集群。您将看到K8ssandra如何支持创建跨多个物理数据中心（和Kubernetes集群）的Cassandra集群，形成多集群拓扑结构。
+- en: When Cass Operator is notified by the API server of the creation of the CassandraDatacenter
+    resource, it creates resources used to implement the datacenter, including a StatefulSet
+    to manage the nodes in each rack, as well as various Services and security-related
+    resources. The StatefulSet will start the requested number of Pods in parallel.
+    This brings up a situation in which Cass Operator provides logic to adapt between
+    how Cassandra and Kubernetes operate.
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当API服务器通知Cass Operator创建CassandraDatacenter资源时，它将创建用于实施数据中心的资源，包括用于在每个机架中管理节点的StatefulSet，以及各种服务和安全相关资源。StatefulSet将并行启动请求的Pod数目。这带来了这样一个情况，即Cass
+    Operator提供了适应Cassandra和Kubernetes操作方式之间的逻辑。
+- en: If you have worked with Cassandra previously, you may be aware that the best
+    practice for adding nodes to a cluster is to do so one one at a time, to simplify
+    the process of a node joining the cluster. This process, called *bootstrapping*,
+    includes the step of negotiating which data the node will be responsible for,
+    and may include streaming data from other nodes to the new node. However, since
+    the StatefulSet is not aware of these constraints, how can adding multiple nodes
+    to a new or existing cluster one at a time be accomplished?
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您之前曾使用过Cassandra，可能已经了解到向集群添加节点的最佳实践是逐个添加，以简化节点加入集群的过程。这个过程被称为*引导*，包括协商节点将负责的数据以及可能从其他节点流式传输数据到新节点的步骤。然而，由于StatefulSet不知道这些约束条件，如何实现向新集群或现有集群逐个添加多个节点呢？
+- en: The answer lies in the composition of the Pod specification that Cass Operator
+    passes to the StatefulSet, which is then used to create each Cassandra node, as
+    shown in [Figure 6-4](#cass_operator_interactions_with_cassand).
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 答案在于Cass Operator传递给StatefulSet的Pod规范的组合，然后用于创建每个Cassandra节点，如[图6-4](#cass_operator_interactions_with_cassand)所示。
+- en: '![Cass Operator interactions with Cassandra Pods](assets/mcdk_0604.png)'
+  id: totrans-85
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Cass Operator与Cassandra Pods的交互](assets/mcdk_0604.png)'
+- en: Figure 6-4\. Cass Operator interactions with Cassandra Pods
+  id: totrans-86
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图6-4. Cass Operator与Cassandra Pods的交互
+- en: 'Cass Operator deploys a custom image of Cassandra in each Cassandra Pod that
+    it manages. The Pod specification includes at least two containers: an init container
+    called `server-config-init` and a Cassandra container called `cassandra`.'
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Cass Operator在其管理的每个Cassandra Pod中部署了Cassandra的自定义镜像。Pod规范至少包括两个容器：一个名为`server-config-init`的初始化容器和一个名为`cassandra`的Cassandra容器。
+- en: As an init container, `server-config-init` is started before the Cassandra container.
+    It’s responsible for generating the *cassandra.yaml* configuration file based
+    on the selected configuration options for the CassandraDatacenter. You can specify
+    additional configuration values using the `config` section of the CassandraDatacenter
+    resource, as described in the [K8ssandra documentation](https://oreil.ly/SlN0F).
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为初始化容器，`server-config-init`在Cassandra容器之前启动。它负责基于CassandraDatacenter的选择配置选项生成*cassandra.yaml*配置文件。你可以使用CassandraDatacenter资源的`config`部分指定额外的配置值，如[K8ssandra文档](https://oreil.ly/SlN0F)中所述。
+- en: Additional Sidecar Containers in Cassandra Pods
+  id: totrans-89
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Cassandra Pods中的额外Sidecar容器
+- en: As you’ll learn in the following sections, the Cassandra Pod may have additional
+    sidecar containers when deployed in a K8ssandraCluster, depending on which of
+    the additional K8ssandra components you have enabled. For right now, though, we
+    are focusing on the most basic installation.
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如你将在接下来的章节中学到的，当在K8ssandraCluster中部署时，Cassandra Pod可能会有额外的Sidecar容器，具体取决于你是否启用了其他K8ssandra组件。但目前，我们只关注最基本的安装。
+- en: 'The `cassandra` container actually contains two separate processes: the daemon
+    that runs the Cassandra instance and a Management API. This goes somewhat against
+    the traditional best practice of running a single process per container, but there
+    is a good reason for this exception.'
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`cassandra`容器实际上包含两个独立的进程：运行Cassandra实例的守护进程和一个管理API。这在某种程度上违反了每个容器运行单一进程的传统最佳实践，但这个例外有其充分的理由。'
+- en: Cassandra’s management interface is exposed via the Java Management Extensions
+    (JMX). While this was a legitimate design choice for a Java-based application
+    like Cassandra when the project was just starting out, JMX has fallen out of favor
+    because of its complexity and security issues. While there has been some progress
+    toward an alternate management interface for Cassandra, the work is not yet complete,
+    so the developers of Cass Operator decided to integrate another open source project,
+    the [Management API for Apache Cassandra](https://oreil.ly/1XIPi).
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Cassandra的管理接口通过Java Management Extensions（JMX）暴露。当项目刚开始时，这对于像Cassandra这样的基于Java的应用程序来说是一个合理的设计选择，但由于其复杂性和安全问题，JMX已经不再受欢迎。尽管Cassandra的备选管理接口已经取得了一些进展，但工作尚未完成，因此Cass
+    Operator的开发人员决定集成另一个开源项目，[Apache Cassandra的管理API](https://oreil.ly/1XIPi)。
+- en: The Management API project provides a RESTful API that translates HTTP-based
+    invocations into calls on Cassandra’s legacy JMX interface. By running the Management
+    API inside the Cassandra container, we avoid having to expose the JMX port outside
+    of the Cassandra containers. This is an instance of a pattern frequently used
+    in cloud native architectures to adapt custom protocols into HTTP-based interfaces,
+    for which there is much better support for routing and security in ingress controllers.
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 管理API项目提供了一个RESTful API，将基于HTTP的调用转换为Cassandra传统的JMX接口调用。通过在Cassandra容器内部运行管理API，我们避免了将JMX端口暴露在Cassandra容器外部。这是云原生架构中经常使用的模式的一个实例，用于将自定义协议适配为基于HTTP的接口，因为在入口控制器中，这些接口有更好的路由和安全性支持。
+- en: Cass Operator discovers and connects to the Management API on each Cassandra
+    Pod in order to perform management operations that are not related to Kubernetes.
+    When adding new nodes, this involves the simple action of using the Management
+    API to verify that the node is up and running successfully and updating the CassandraDatacenter’s
+    status accordingly. This sequence is described in more detail in the [K8ssandra
+    documentation](https://oreil.ly/T7io1).
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Cass Operator 在每个 Cassandra Pod 上发现并连接到管理 API，以执行与 Kubernetes 无关的管理操作。在添加新节点时，这涉及使用管理
+    API 简单地验证节点是否正常运行，并相应地更新 Cassandra 数据中心的状态。这个过程在 [K8ssandra 文档](https://oreil.ly/T7io1)
+    中有更详细的描述。
+- en: Customizing the Cassandra Image Used by Cass Operator
+  id: totrans-95
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 定制 Cass Operator 使用的 Cassandra 镜像
+- en: The Management API project provides images for recent Cassandra versions in
+    the 3.*x* and 4.*x* series, which are available on [Docker Hub](https://oreil.ly/FQa3q).
+    While it is possible to override the Cassandra image that Cass Operator uses with
+    one of your own, Cass Operator does require that the Management API is available
+    on each Cassandra Pod. If you need to build your own custom image including the
+    Management API, you could use the Dockerfiles and supporting scripts from the
+    [GitHub repository](https://oreil.ly/GKRP1) as a starting point.
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 管理 API 项目为最近的 Cassandra 3.*x* 和 4.*x* 系列版本提供镜像，这些镜像可以在 [Docker Hub](https://oreil.ly/FQa3q)
+    上获取。虽然可以使用自定义的 Cassandra 镜像来覆盖 Cass Operator 使用的镜像，但 Cass Operator 要求每个 Cassandra
+    Pod 上都能够访问管理 API。如果需要构建包含管理 API 的自定义镜像，可以使用 [GitHub 仓库](https://oreil.ly/GKRP1)
+    中的 Dockerfiles 和支持脚本作为起点。
+- en: 'While this section focused largely on the startup and scaling of Cassandra
+    clusters just described, Cass Operator provides several features for deploying
+    and managing Cassandra clusters:'
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然本节主要关注刚刚描述的启动和扩展 Cassandra 集群，但 Cass Operator 提供了多个功能来部署和管理 Cassandra 集群：
+- en: Topology management
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 拓扑管理
+- en: Cass Operator uses Kubernetes affinity principles to manage the placement of
+    Cassandra nodes (Pods) across Kubernetes Worker Nodes to maximize availability
+    of your data.
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Cass Operator 使用 Kubernetes 亲和性原则来管理 Cassandra 节点（Pod）在 Kubernetes Worker 节点上的放置，以最大化数据的可用性。
+- en: Scaling down
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 缩减规模
+- en: Just as nodes are added one at a time to scale up, Cass Operator manages scaling
+    down one node at a time.
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 就像逐个添加节点以扩展一样，Cass Operator 管理逐个减少节点以进行缩减。
+- en: Replacing nodes
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 替换节点
+- en: If a Cassandra node is lost because it crashes or the Worker Node on which it
+    is running goes down, Cass Operator relies on the StatefulSet to replace the node
+    and bind the new node to the appropriate PersistentVolumeClaim.
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果 Cassandra 节点由于崩溃或其所在的 Worker Node 关闭而丢失，Cass Operator 依赖 StatefulSet 来替换节点，并将新节点绑定到适当的
+    PersistentVolumeClaim。
+- en: Upgrading images
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 升级镜像
+- en: Cass Operator also leverages the capabilities of StatefulSet to perform rolling
+    upgrades of the images used by the Cassandra Pods.
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Cass Operator 还利用 StatefulSet 的能力来对 Cassandra Pods 使用的镜像执行滚动升级。
+- en: Managing seed nodes
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 管理种子节点
+- en: Cass Operator creates Kubernetes Services to expose the seed nodes in each Datacenter
+    according to Cassandra’s recommended conventions of one seed node per rack, for
+    a minimum of three per Datacenter.
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Cass Operator 创建 Kubernetes 服务来暴露每个数据中心中的种子节点，根据 Cassandra 建议的每个机架一个种子节点的约定，每个数据中心至少为三个。
+- en: You can read about these and other features in the [Cass Operator documentation](https://oreil.ly/UafkF).
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在 [Cass Operator 文档](https://oreil.ly/UafkF) 中阅读关于这些以及其他功能的信息。
+- en: Enabling Developer Productivity with Stargate APIs
+  id: totrans-109
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用 Stargate APIs 提升开发者的生产力
+- en: Our focus so far in this book has been primarily on deployment of data infrastructure
+    such as databases in Kubernetes, more than on the way that infrastructure is used
+    in cloud native applications. The usage of [Stargate](https://stargate.io) in
+    K8ssandra gives us a good opportunity to have that discussion.
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，本书的重点主要集中在 Kubernetes 中部署数据基础设施（如数据库），而不是云原生应用程序中基础设施的使用方式。在 K8ssandra
+    中使用 [Stargate](https://stargate.io) 给我们提供了一个很好的机会来讨论这个问题。
+- en: In many organizations, there is an ongoing conversation about the pros and cons
+    of direct application access to databases versus abstracting the details of database
+    interactions. This debate occurs especially frequently in larger organizations
+    that divide responsibilities between application development teams and teams that
+    manage platforms including data infrastructure. However, it can also be observed
+    in organizations that employ modern practices including DevOps and microservice
+    architectures, where each microservice may have a different data store behind
+    it.
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在许多组织中，关于直接应用访问数据库与抽象数据库交互细节的利弊正在持续讨论。这场辩论尤其频繁出现在那些将应用开发团队和管理包括数据基础设施的平台团队分开的大型组织中。然而，在采用包括DevOps和微服务架构在内的现代实践的组织中，也可以观察到这种情况，其中每个微服务可能背后都有不同的数据存储。
+- en: The idea of providing abstractions over direct database access has taken many
+    forms over the years. Even in the days of monolithic client-server applications,
+    it was common to use stored procedures or isolate data access and complex query
+    logic behind object-relational mapping tools such as Hibernate, or to use patterns
+    like data access objects (DAOs).
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 多年来，提供对直接数据库访问的抽象化的想法采取了许多形式。即使在单片客户端-服务器应用程序时代，通常也会使用存储过程或通过对象关系映射工具（如Hibernate）隔离数据访问和复杂查询逻辑，或者使用数据访问对象（DAO）等模式。
+- en: More recently, as the software industry has moved toward service oriented architecture
+    (SOA) and microservices, similar patterns for abstracting data access have appeared.
+    As described in Jeff’s article [“Data Services for the Masses”](https://oreil.ly/u6K58),
+    many teams have found themselves creating a layer of microservices in their architecture
+    dedicated to data access, providing create, read, update, and delete (CRUD) operations
+    on specific data types or entities. These services abstract the details of interacting
+    with a specific database backend, and if well executed and maintained, can help
+    increase developer productivity and facilitate migration to a different database
+    when needed.
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 更近些年来，随着软件行业向面向服务的架构（SOA）和微服务迈进，类似的用于抽象数据访问的模式也开始出现。正如Jeff在他的文章["大众数据服务"](https://oreil.ly/u6K58)中所描述的，许多团队发现自己在架构中创建了一层专门用于数据访问的微服务，提供对特定数据类型或实体的创建、读取、更新和删除（CRUD）操作。这些服务抽象了与特定数据库后端交互的细节，如果执行和维护良好，可以帮助提高开发人员的生产力，并在需要时促进迁移到不同的数据库。
+- en: The Stargate project was born out of the realization that multiple teams were
+    building very similar abstraction layers to provide data access via APIs. The
+    goal of the Stargate project is to provide an open source *data API gateway—*a
+    common set of APIs for data access to help eliminate the need for teams to develop
+    and maintain their own custom API layers. While the initial implementation of
+    Stargate is based on Cassandra, the goal of the project is to support multiple
+    database backends, and even other types of data infrastructure such as caches
+    and streaming.
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 星门项目诞生于认识到多个团队正在构建非常相似的抽象层以通过API提供数据访问的事实。星门项目的目标是提供一个开源的*数据API网关*——一套通用的数据访问API，以帮助消除团队开发和维护自己的定制API层的需求。尽管星门的初始实现基于Cassandra，但该项目的目标是支持多个数据库后端，甚至支持缓存和流处理等其他类型的数据基础设施。
+- en: With Cassandra used as the backend data store, the Stargate architecture can
+    be described as having three layers, as shown in [Figure 6-5](#stargate_conceptual_architecture_with_c).
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为后端数据存储使用Cassandra，星门架构可以描述为具有三层，如[图 6-5](#stargate_conceptual_architecture_with_c)所示。
+- en: '![Stargate conceptual architecture with Cassandra](assets/mcdk_0605.png)'
+  id: totrans-116
+  prefs: []
+  type: TYPE_IMG
+  zh: '![带有Cassandra的星门概念架构](assets/mcdk_0605.png)'
+- en: Figure 6-5\. Stargate conceptual architecture with Cassandra
+  id: totrans-117
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-5\. 带有Cassandra的星门概念架构
+- en: The *API layer* is the outermost layer, consisting of services that implement
+    various APIs on top of the underlying Cassandra cluster. Available APIs include
+    a [REST API](https://oreil.ly/qTEY6), a [Document API](https://oreil.ly/ekhlV)
+    that provides access to JSON documents over HTTP, a [GraphQL API](https://oreil.ly/BescX),
+    and a [gRPC API](https://oreil.ly/k2fNY). The *routing layer* (or *coordination
+    layer*) consists of a set of nodes that act as Cassandra nodes, but perform only
+    routing of queries, not data storage. The *storage layer* consists of a traditional
+    Cassandra cluster, which can currently be Cassandra 3.11, Cassandra 4.0, or DataStax
+    Enterprise 6.8.
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*API 层* 是最外层，由实现在基础 Cassandra 集群上的各种 API 的服务组成。可用的 API 包括 [REST API](https://oreil.ly/qTEY6)，通过
+    HTTP 提供对 JSON 文档的访问的 [文档 API](https://oreil.ly/ekhlV)，[GraphQL API](https://oreil.ly/BescX)
+    和 [gRPC API](https://oreil.ly/k2fNY)。*路由层*（或 *协调层*）由一组节点组成，这些节点充当 Cassandra 节点，但仅执行查询的路由，不存储数据。*存储层*
+    包括传统的 Cassandra 集群，目前可以是 Cassandra 3.11、Cassandra 4.0 或 DataStax Enterprise 6.8。'
+- en: 'One of the key benefits of this architecture is that it recognizes the separation
+    of concerns for managing usage of compute and storage resources and provides the
+    ability to scale this usage independently based on the needs of client applications:'
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 该架构的关键优势之一在于，它识别了管理计算和存储资源使用的责任分离，并提供根据客户应用需求独立扩展此使用的能力：
+- en: The number of storage nodes can be scaled up or down to provide the storage
+    capacity required by the application.
+  id: totrans-120
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 可以根据应用程序所需的存储容量增加或减少存储节点的数量。
+- en: The number of coordinator nodes and API instances can be scaled up or down to
+    match the application’s read and write load and optimize throughput.
+  id: totrans-121
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 协调节点和 API 实例的数量可以根据应用的读写负载进行增减，并优化吞吐量。
+- en: APIs that are not used by the application can be scaled to zero (disabled) to
+    reduce resource consumption.
+  id: totrans-122
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 应用未使用的 API 可以缩减至零（禁用），以减少资源消耗。
+- en: K8ssandra supports the provision of Stargate on top of an underlying Cassandra
+    cluster via the Stargate CRD. The CassandraDatacenter deployed by Cass Operator
+    serves as the storage layer, and the Stargate CRD specifies the configuration
+    of the routing and API layers. An example configuration is shown in [Figure 6-6](#stargate_deployment_on_kubernetes).
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: K8ssandra 支持通过 Stargate CRD 在基础 Cassandra 集群的顶部部署 Stargate。由 Cass Operator 部署的
+    CassandraDatacenter 充当存储层，而 Stargate CRD 指定了路由和 API 层的配置。示例配置如 [图 6-6](#stargate_deployment_on_kubernetes)
+    所示。
+- en: '![Stargate deployment on Kubernetes](assets/mcdk_0606.png)'
+  id: totrans-124
+  prefs: []
+  type: TYPE_IMG
+  zh: '![在 Kubernetes 上部署的 Stargate](assets/mcdk_0606.png)'
+- en: Figure 6-6\. Stargate deployment on Kubernetes
+  id: totrans-125
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-6\. 在 Kubernetes 上部署 Stargate
+- en: The installation includes a Deployment to manage the coordinator nodes, and
+    a Service to provide access to the Bridge API, a private gRPC interface exposed
+    on the coordinator nodes that can be used to create new API implementations. See
+    the [Stargate v2 design](https://oreil.ly/6ct5m) for more details on the Bridge
+    API. There is also a Deployment for each of the APIs that is enabled in the installation,
+    along with a Service to provide access to client applications.
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安装包括一个部署来管理协调节点，以及一个服务来提供对 Bridge API 的访问，Bridge API 是在协调节点上公开的私有 gRPC 接口，可用于创建新的
+    API 实现。详细信息请参阅 [Stargate v2 设计](https://oreil.ly/6ct5m)。每个已启用的 API 在安装中也包括一个部署，并提供对客户应用程序的访问的服务。
+- en: As you can see, the Stargate project provides a promising framework for extending
+    your data infrastructure with developer-friendly APIs that can scale along with
+    the underlying database.
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如您所见，Stargate 项目为扩展您的数据基础设施提供了一个有前景的框架，该框架具有与底层数据库一起扩展的开发人员友好的 API。
+- en: Unified Monitoring Infrastructure with Prometheus and Grafana
+  id: totrans-128
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用 Prometheus 和 Grafana 的统一监控基础设施
+- en: Now that we’ve considered the addition of infrastructure that makes life easier
+    for application developers, let’s look at some of the more operations-focused
+    aspects of integrating data infrastructure in a Kubernetes stack. We’ll start
+    with monitoring.
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们考虑了为应用开发人员提供更轻松的基础设施之后，让我们来看看在 Kubernetes 堆栈中集成数据基础设施的更多操作重点。我们将从监控开始。
+- en: 'Observability is a key attribute of any application deployed on Kubernetes,
+    since it has implications for your awareness of its availability, performance,
+    and cost. Your goal should be to have an integrated view across both your application
+    and the infrastructure it depends on. Observability is often described as consisting
+    of three types of data: metrics, logs, and tracing. Kubernetes itself provides
+    capabilities for logging as well as associating events with resources, and you’ve
+    already learned how the Cass Operator facilitates the collection of logs from
+    Cassandra nodes.'
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可观测性是部署在 Kubernetes 上的任何应用程序的关键属性，因为它影响您对其可用性、性能和成本的感知。您的目标应该是在应用程序和其依赖的基础设施之间实现集成视图。可观测性通常被描述为由三种类型的数据组成：指标、日志和跟踪。Kubernetes
+    本身提供了日志记录的能力，并能将事件与资源关联起来，您已经了解了 Cass Operator 如何促进从 Cassandra 节点收集日志。
+- en: In this section, we’ll focus on how K8ssandra incorporates the Prometheus/Grafana
+    stack, which provides metrics. *Prometheus* is a popular open source monitoring
+    platform. It supports a variety of interfaces for collecting data from applications
+    and services and stores them in a time series database which can be queried efficiently
+    using the Prometheus Query Language (PromQL). It also includes an Alertmanager
+    which generates alerts and other notifications based on metric thresholds.
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本节中，我们将重点介绍 K8ssandra 如何集成 Prometheus/Grafana 栈，以提供指标。*Prometheus* 是一个流行的开源监控平台。它支持多种接口用于从应用程序和服务收集数据，并将其存储在时间序列数据库中，可以使用
+    Prometheus 查询语言（PromQL）高效查询。它还包括 Alertmanager，根据指标阈值生成警报和其他通知。
+- en: While previous releases of K8ssandra in the 1.*x* series incorporated the Prometheus
+    stack as part of a K8ssandra, K8ssandra 2.*x* provides the capability to integrate
+    with an existing Prometheus installation.
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 K8ssandra 1.*x* 系列的先前版本中，将 Prometheus 栈作为 K8ssandra 的一部分进行集成，而 K8ssandra 2.*x*
+    则提供了与现有 Prometheus 安装集成的能力。
+- en: One easy way to install the Prometheus Operator is to use [kube-prometheus](https://oreil.ly/tzDmJ),
+    a repository provided as part of the Prometheus Operator project. Kube-prometheus
+    is intended as a comprehensive monitoring stack for Kubernetes including the control
+    plane and applications. You can clone this repository and use the library of manifests
+    (YAML files) that it contains to install the integrated stack of components shown
+    in [Figure 6-7](#components_of_the_kube_prometheus_stack).
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安装 Prometheus Operator 的一种简单方法是使用 [kube-prometheus](https://oreil.ly/tzDmJ)，这是
+    Prometheus Operator 项目的一部分提供的存储库。Kube-prometheus 旨在作为 Kubernetes 的综合监控栈，包括控制平面和应用程序。您可以克隆此存储库，并使用其中包含的清单（YAML
+    文件）库安装显示在 [Figure 6-7](#components_of_the_kube_prometheus_stack) 中的集成组件堆栈。
+- en: '![Components of the kube-prometheus stack](assets/mcdk_0607.png)'
+  id: totrans-134
+  prefs: []
+  type: TYPE_IMG
+  zh: '![kube-prometheus 栈的组件](assets/mcdk_0607.png)'
+- en: Figure 6-7\. Components of the kube-prometheus stack
+  id: totrans-135
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-7\. kube-prometheus 栈的组件
+- en: 'These components include the following:'
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些组件包括以下内容：
+- en: Prometheus Operator
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Prometheus Operator
+- en: The operator, which is set apart in the figure, manages the other components.
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 图中单独设置的 Operator 管理其他组件。
+- en: Prometheus
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Prometheus
+- en: The metrics database is run in a high-availability configuration managed via
+    a StatefulSet. Prometheus stores data using a time series database with a backing
+    PersistentVolume.
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 指标数据库以高可用性配置运行，通过 StatefulSet 进行管理。Prometheus 使用具有后备 PersistentVolume 的时间序列数据库存储数据。
+- en: Node exporter
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Node exporter
+- en: The [node exporter](https://oreil.ly/Yt0YO) runs on each Kubernetes Worker Node,
+    allowing Prometheus to pull operating system metrics via HTTP.
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[node exporter](https://oreil.ly/Yt0YO) 在每个 Kubernetes Worker 节点上运行，允许 Prometheus
+    通过 HTTP 拉取操作系统指标。'
+- en: Client library
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 客户端库
+- en: Applications can embed a Prometheus client library, which allows Prometheus
+    to pull metrics via HTTP.
+  id: totrans-144
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用程序可以嵌入 Prometheus 客户端库，允许 Prometheus 通过 HTTP 拉取指标。
+- en: Alert manager
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 警报管理器
+- en: This can be configured to generate alerts based on thresholds for specific metrics
+    for delivery via email or third-party tools such as PagerDuty. The kube-prometheus
+    stack comes with built-in alerts for the Kubernetes cluster; application-specific
+    alerts can also be added.
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这可以配置为基于特定指标的阈值生成警报，通过电子邮件或 PagerDuty 等第三方工具进行传递。kube-prometheus 栈内置了用于 Kubernetes
+    集群的警报；还可以添加特定于应用程序的警报。
+- en: Grafana
+  id: totrans-147
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Grafana
+- en: This is deployed to provide charts that are used to display metrics to human
+    operators. Grafana uses PromQL to access metrics from Prometheus, and this interface
+    is available to other clients as well.
+  id: totrans-148
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此部署用于提供图表，用于向人类操作员显示指标。Grafana 使用 PromQL 从 Prometheus 访问指标，这个接口也对其他客户端可用。
+- en: While not shown in the figure, the stack also includes the [Prometheus Adapter
+    for Kubernetes Metrics APIs](https://oreil.ly/g033n), an optional component that
+    exposes metrics collected by Prometheus to the Kubernetes control plane so that
+    they can be used to auto-scale applications.
+  id: totrans-149
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然在图中未显示，该堆栈还包括[Kubernetes Metrics APIs的Prometheus适配器](https://oreil.ly/g033n)，这是一个可选组件，用于将Prometheus收集的指标公开给Kubernetes控制平面，以便用于自动扩展应用程序。
+- en: Connecting K8ssandra with Prometheus can be accomplished in a few quick steps.
+    The [instructions](https://oreil.ly/UOt4t) in the K8ssandra documentation walk
+    you through installing the Prometheus Operator using kube-prometheus if you do
+    not have it already. Since kube-prometheus installs Prometheus Operator in its
+    own Namespace, you’ll want to make sure the operator has permissions to manage
+    resources in other Namespaces.
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将K8ssandra与Prometheus连接可以通过几个快速步骤完成。K8ssandra文档中的[说明](https://oreil.ly/UOt4t)指导您安装Prometheus
+    Operator，如果您尚未安装kube-prometheus。由于kube-prometheus在自己的命名空间中安装Prometheus Operator，您需要确保操作员有权限管理其他命名空间中的资源。
+- en: 'To integrate K8ssandra with Prometheus, you set attributes on your K8ssandraCluster
+    resource to enable monitoring on Cassandra and Stargate nodes. For example, you
+    could do something like the following to enable monitoring for nodes in all Datacenters
+    in the cluster:'
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要将K8ssandra与Prometheus集成，您可以在K8ssandraCluster资源上设置属性，以启用对Cassandra和Stargate节点的监控。例如，您可以像以下示例那样为集群中所有数据中心的节点启用监控：
+- en: '[PRE7]'
+  id: totrans-152
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: It’s also possible to selectively enable monitoring on individual datacenters.
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 也可以选择性地在单个数据中心上启用监控。
+- en: Let’s take a look at how the integration works. First, let’s consider how the
+    Cassandra nodes expose metrics. As discussed in [“Managing Cassandra in Kubernetes
+    with Cass Operator”](#managing_cassandra_in_kubernetes_with_c), Cassandra exposes
+    management capabilities via JMX, and this includes metrics reporting. The [Metric
+    Collector for Apache Cassandra (MCAC)](https://oreil.ly/CHNMQ) is an open source
+    project that exposes metrics so that they can be accessed by Prometheus or other
+    backends that use the Prometheus protocol via HTTP. K8ssandra and Cass Operator
+    use a Cassandra Docker image that includes MCAC as well as the Management API
+    as additional processes that run in the Cassandra container. This configuration
+    is shown on the left side of [Figure 6-8](#monitoring_cassandra_with_kube_promethe).
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们看看集成是如何工作的。首先，让我们考虑Cassandra节点如何公开指标。如["在Kubernetes中使用Cass Operator管理Cassandra"](#managing_cassandra_in_kubernetes_with_c)中讨论的，Cassandra通过JMX公开管理功能，包括指标报告。[Apache
+    Cassandra的Metric Collector (MCAC)](https://oreil.ly/CHNMQ)是一个开源项目，公开指标以便Prometheus或其他使用Prometheus协议通过HTTP访问的后端。K8ssandra和Cass
+    Operator使用包含MCAC以及作为附加进程运行在Cassandra容器中的管理API的Cassandra Docker镜像。这个配置显示在[图 6-8](#monitoring_cassandra_with_kube_promethe)的左侧。
+- en: '![Monitoring Cassandra with kube-prometheus stack](assets/mcdk_0608.png)'
+  id: totrans-155
+  prefs: []
+  type: TYPE_IMG
+  zh: '![使用kube-prometheus堆栈监控Cassandra](assets/mcdk_0608.png)'
+- en: Figure 6-8\. Monitoring Cassandra with the kube-prometheus stack
+  id: totrans-156
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图6-8\. 使用kube-prometheus堆栈监控Cassandra
+- en: 'The right side of [Figure 6-8](#monitoring_cassandra_with_kube_promethe) shows
+    how Prometheus and Grafana are configured to consume and expose the Cassandra
+    metrics. The K8ssandra Operator creates ServiceMonitor resources for each CassandraDatacenter
+    for which monitoring has been enabled. The ServiceMonitor, a CRD defined by the
+    Prometheus Operator, contains configuration details describing how to collect
+    metrics from a set of Pods, including the following:'
+  id: totrans-157
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 6-8](#monitoring_cassandra_with_kube_promethe)的右侧显示了如何配置Prometheus和Grafana以消费和公开Cassandra指标。K8ssandra
+    Operator为每个启用监控的CassandraDatacenter创建ServiceMonitor资源。ServiceMonitor是由Prometheus
+    Operator定义的CRD，包含了从一组Pod收集指标的配置细节，包括以下内容：'
+- en: A `selector` referencing the name of a label which identifies the Pods
+  id: totrans-158
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 引用标识Pod的标签名称的`selector`
+- en: Connection information such as the `scheme` (protocol), `port`, and `path` to
+    use to gather metrics from each Pod
+  id: totrans-159
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 连接信息，例如从每个Pod收集指标所需的`scheme`（协议）、`port`和`path`
+- en: The `interval` at which metrics should be pulled
+  id: totrans-160
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 应该拉取指标的`interval`
+- en: Optional `metricRelabelings`, which are instructions that indicate any desired
+    renaming of metrics, or even indicate metrics that should be dropped and not ingested
+    by Prometheus
+  id: totrans-161
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 可选的`metricRelabelings`，这些指令指示任何想要重命名指标的需求，甚至指示应该删除的指标，以避免被Prometheus采集
+- en: K8ssandra creates separate ServiceMonitor instances for Cassandra and Stargate
+    nodes, since the metrics exposed are slightly different. To observe the ServiceMonitors
+    deployed in your cluster, you can execute a command such as `kubectl get servicemonitors
+    -n monitoring`.
+  id: totrans-162
+  prefs: []
+  type: TYPE_NORMAL
+  zh: K8ssandra为Cassandra和Stargate节点创建单独的ServiceMonitor实例，因为暴露的指标略有不同。要观察部署在您的集群中的ServiceMonitors，您可以执行诸如`kubectl
+    get servicemonitors -n monitoring`之类的命令。
+- en: Prometheus provides access to its metrics to Grafana and other tools via a PromQL
+    endpoint exposed as a Kubernetes service. The kube-prometheus installation configures
+    an instance of Grafana to connect to Prometheus using an instance of the Grafana
+    Datasource CRD. Grafana accepts dashboards defined using YAML files, which you
+    can provide as ConfigMaps. See the K8ssandra [documentation](https://oreil.ly/vCfmR)
+    for guidance on loading dashboard definitions that display Cassandra and Stargate
+    metrics. You may also wish to create dashboards that display your application
+    metrics alongside the data tier metrics provided by K8ssandra for an integrated
+    view of application performance.
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Prometheus通过一个作为Kubernetes服务公开的PromQL端点向Grafana和其他工具提供其指标的访问。kube-prometheus安装配置了一个Grafana实例，以使用Grafana
+    Datasource CRD的实例连接到Prometheus。Grafana接受使用YAML文件定义的仪表板，并作为ConfigMaps提供。请参阅K8ssandra
+    [文档](https://oreil.ly/vCfmR) 了解如何加载显示Cassandra和Stargate指标的仪表板定义。您可能还希望创建显示应用程序指标和K8ssandra提供的数据层指标的仪表板，以集成查看应用程序性能。
+- en: As you can see, kube-prometheus provides a comprehensive and extensible monitoring
+    stack for Kubernetes clusters, much as K8ssandra provides a stack for data management.
+    The integration of K8ssandra with kube-prometheus is a great example of how you
+    can assemble integrated stacks of Kubernetes resources to form even more powerful
+    applications.
+  id: totrans-164
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如你所见，kube-prometheus为Kubernetes集群提供了一个全面且可扩展的监控堆栈，就像K8ssandra为数据管理提供了一个堆栈一样。K8ssandra与kube-prometheus的集成是如何组装集成的Kubernetes资源以形成更强大的应用程序的一个很好的例子。
+- en: Performing Repairs with Cassandra Reaper
+  id: totrans-165
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用Cassandra Reaper执行修复
+- en: As a NoSQL database, Cassandra emphasizes high performance (especially for writes)
+    and high availability by default. If you’re familiar with the CAP theorem, you’ll
+    understand that this means that sometimes Cassandra will temporarily sacrifice
+    consistency of data across nodes in order to deliver this high performance and
+    high availability at scale, an approach known as *eventual consistency*. Cassandra
+    does provide the ability to tune the amount of consistency to your needs via options
+    for specifying replication strategies and the consistency level required per query.
+    Users and administrators should be aware of these options and their behavior in
+    order to use Cassandra effectively.
+  id: totrans-166
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为一种NoSQL数据库，Cassandra 默认强调高性能（特别是写入操作）和高可用性。如果你熟悉CAP定理，你就会理解这意味着有时候Cassandra会暂时牺牲节点间数据一致性，以便在规模化时提供高性能和高可用性，这种方法被称为*最终一致性*。通过指定复制策略和每个查询所需的一致性级别，Cassandra确实提供了调整一致性程度以满足需求的能力。用户和管理员应了解这些选项及其行为，以有效使用Cassandra。
+- en: Cassandra has multiple built-in “anti-entropy” mechanisms such as hinted handoff
+    and repair that help maintain consistency of data between nodes over time. Repair
+    is a background process by which a node compares a portion of the data it owns
+    with the latest contents of other nodes that are also responsible for that data.
+    While these checks can be somewhat optimized through the use of checksums, repair
+    can still be a performance-intensive process and is best performed when a cluster
+    is under reduced or off-peak load. Combined with the fact that multiple options
+    are available, including full and incremental repairs, executing repairs has traditionally
+    required some tailoring for each cluster. It also has tended to be a manual process
+    that was unfortunately frequently neglected by some Cassandra cluster administrators.
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Cassandra具有多种内置的“反熵”机制，如提示协作和修复，这有助于随着时间推移在节点之间保持数据的一致性。修复是一个后台过程，节点通过该过程比较它所拥有的数据的一部分与其他也负责该数据的节点的最新内容。尽管可以通过使用校验和来优化这些检查，但修复仍然可能是一个性能密集型的过程，并且最好在集群负载减少或低峰期执行。结合多种选项，包括全面和增量修复，执行修复通常需要针对每个集群进行一些定制。它也倾向于是一个手动过程，不幸的是，一些Cassandra集群管理员经常忽视它。
+- en: More Detail on Repairs in Cassandra
+  id: totrans-168
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Cassandra中关于修复的更多详细信息
+- en: 'For a deeper treatment of repair, see [*Cassandra: The* *Definitive* *Guide*](https://learning.oreilly.com/library/view/cassandra-the-definitive/9781492097136),
+    where repair concepts and the available options are described in Chapters 6 and
+    12, respectively.'
+  id: totrans-169
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '有关修复的更深入的处理，请参阅 [*Cassandra: The* *Definitive* *Guide*](https://learning.oreilly.com/library/view/cassandra-the-definitive/9781492097136)，其中第6章和第12章分别描述了修复概念和可用选项。'
+- en: '[Cassandra Reaper](http://cassandra-reaper.io) was created to take the difficulty
+    out of executing repairs on Cassandra clusters and optimize repair performance
+    to minimize the impact of running repairs on heavily used clusters. Reaper was
+    created by Spotify and enhanced by The Last Pickle, which currently manages the
+    project on [GitHub](https://oreil.ly/2MttB). Reaper exposes a RESTful API for
+    configuring repair schedules for one or more Cassandra clusters, and also provides
+    a command-line tool and web interface which guides administrators through the
+    process of creating schedules.'
+  id: totrans-170
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Cassandra Reaper](http://cassandra-reaper.io) 的创建旨在简化在 Cassandra 集群上执行修复的难度，并优化修复性能，以最小化对高度使用的集群运行修复的影响。Reaper
+    由 Spotify 创建，并由 The Last Pickle 增强，目前在 [GitHub](https://oreil.ly/2MttB) 上进行项目管理。Reaper
+    提供了一个 RESTful API，用于为一个或多个 Cassandra 集群配置修复计划，并提供命令行工具和 Web 界面，指导管理员完成创建计划的过程。'
+- en: K8ssandra provides the option to incorporate an instance of Cassandra Reaper
+    as part of a K8ssandraCluster. The K8ssandra Operator includes a Reaper controller
+    that is responsible for managing the local Cassandra Reaper manager process through
+    its associated Reaper CRD. By default, enabling Reaper in a K8ssandraCluster will
+    cause an instance of Reaper to be installed in each Kubernetes cluster represented
+    in the installation, but you can also use a single instance of Reaper to manage
+    repairs across multiple Datacenters, or even across multiple Cassandra clusters,
+    provided they are accessible via the network.
+  id: totrans-171
+  prefs: []
+  type: TYPE_NORMAL
+  zh: K8ssandra 提供了将 Cassandra Reaper 实例作为 K8ssandraCluster 的一部分进行集成的选项。K8ssandra
+    Operator 包括一个 Reaper 控制器，负责通过其相关的 Reaper CRD 管理本地 Cassandra Reaper 管理进程。默认情况下，在
+    K8ssandraCluster 中启用 Reaper 将导致在每个安装中表示的 Kubernetes 集群中安装一个 Reaper 实例，但您也可以使用单个
+    Reaper 实例来管理跨多个数据中心甚至跨多个 Cassandra 集群的修复，只要它们可以通过网络访问。
+- en: Backing Up and Restoring Data with Cassandra Medusa
+  id: totrans-172
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用 Cassandra Medusa 进行数据备份和恢复
+- en: Managing backups is an important part of maintaining high availability and disaster
+    recovery planning for any system that stores data. Cassandra supports both full
+    and differential backups by creating hard links to the SSTable files it uses for
+    data persistence. Cassandra itself does not take responsibility for copying the
+    SSTable files to backup storage. Instead, this is left to the user. Similarly,
+    recovering from backup involves copying the SSTable files to the Cassandra node
+    where the data is to be reloaded; then Cassandra can be pointed to the local files
+    to restore their contents.
+  id: totrans-173
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 管理备份是维护任何存储数据系统高可用性和灾难恢复计划的重要组成部分。Cassandra 支持通过创建指向用于数据持久化的 SSTable 文件的硬链接来进行完整和差异备份。Cassandra
+    本身不负责将 SSTable 文件复制到备份存储中，而是由用户来完成这一任务。同样，从备份恢复涉及将 SSTable 文件复制到要重新加载数据的 Cassandra
+    节点，然后可以指向本地文件以恢复其内容。
+- en: Cassandra’s backup and restore operations are traditionally executed on individual
+    nodes using nodetool, a command-line tool that leverages Cassandra’s JMX interface.
+    [Cassandra Medusa](https://oreil.ly/tmP91) is an open source command-line tool
+    created by Spotify and The Last Pickle that executes nodetool commands to perform
+    backups, including synchronization of backups across multiple nodes. Medusa supports
+    Amazon S3, Google Cloud Storage (GCS), Azure Storage, and S3-compatible storage
+    such as MinIO and Ceph Object Gateway, and can be extended to support other storage
+    providers via the Apache Libcloud project.
+  id: totrans-174
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Cassandra 的备份和恢复操作通常通过单个节点上的 nodetool 执行，这是一个命令行工具，利用 Cassandra 的 JMX 接口。[Cassandra
+    Medusa](https://oreil.ly/tmP91) 是由 Spotify 和 The Last Pickle 创建的开源命令行工具，用于执行 nodetool
+    命令来执行备份操作，包括跨多个节点同步备份。Medusa 支持 Amazon S3、Google Cloud Storage (GCS)、Azure Storage，以及像
+    MinIO 和 Ceph Object Gateway 这样的 S3 兼容存储，还可以通过 Apache Libcloud 项目扩展支持其他存储提供商。
+- en: Medusa can restore either individual nodes to support fast replacement of a
+    downed node, or entire clusters in a disaster recovery scenario. Restoring to
+    a cluster can either be to the original cluster or to a new cluster. Medusa is
+    able to restore data to a cluster with a different size or topology than the original
+    cluster, which has traditionally been a challenge to figure out manually.
+  id: totrans-175
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Medusa可以恢复单个节点，以支持快速替换掉线节点，或在灾难恢复场景下恢复整个集群。恢复到集群可以是原始集群，也可以是新集群。Medusa能够将数据恢复到比原始集群具有不同大小或拓扑的集群，这在传统上是手动解决的一个挑战。
+- en: 'K8ssandra has incorporated Medusa in order to provide backup and restore capabilities
+    for Cassandra clusters running in Kubernetes. To configure the use of Medusa in
+    a K8ssandraCluster, you’ll want to configure the `medusa` properties:'
+  id: totrans-176
+  prefs: []
+  type: TYPE_NORMAL
+  zh: K8ssandra已整合Medusa，以提供在Kubernetes中运行的Cassandra集群的备份和恢复功能。要配置K8ssandraCluster中Medusa的使用，您需要配置`medusa`属性：
+- en: '[PRE8]'
+  id: totrans-177
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: The options shown here include the storage provider, the bucket to use for backups,
+    an optional prefix to add to directory names used to organize backup files, and
+    the name of a Kubernetes Secret containing login credentials for the bucket. See
+    the [documentation](https://oreil.ly/ujZYw) for details on the contents of the
+    Secret. Other available options include enabling SSL on the bucket connection,
+    and setting the policies for purging old backups such as a maximum age or number
+    of backups.
+  id: totrans-178
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此处显示的选项包括存储提供程序、用于备份的bucket、用于组织备份文件的目录名称的可选前缀，以及包含bucket登录凭据的Kubernetes Secret的名称。有关Secret内容的详细信息，请参阅[文档](https://oreil.ly/ujZYw)。其他可用选项包括在bucket连接上启用SSL，并设置清除旧备份的策略，如最大年龄或备份数量。
+- en: Creating a Backup
+  id: totrans-179
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 创建备份
+- en: 'Once the K8ssandraCluster has been started, you can create backups using the
+    CassandraBackup CRD. For example, you could initiate a backup of the CassandraDatacenter
+    `dc1` using a command like this:'
+  id: totrans-180
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦启动了K8ssandraCluster，您可以使用CassandraBackup CRD创建备份。例如，您可以使用以下命令启动对CassandraDatacenter
+    `dc1`的备份：
+- en: '[PRE9]'
+  id: totrans-181
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: The steps in processing of this resource are shown in [Figure 6-9](#performing_a_datacenter_backup_using_me).
+  id: totrans-182
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此资源的处理步骤如[图6-9](#performing_a_datacenter_backup_using_me)所示。
+- en: '![Performing a Datacenter backup using Medusa](assets/mcdk_0609.png)'
+  id: totrans-183
+  prefs: []
+  type: TYPE_IMG
+  zh: '![使用Medusa执行Datacenter备份](assets/mcdk_0609.png)'
+- en: Figure 6-9\. Performing a Datacenter backup using Medusa
+  id: totrans-184
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图6-9\. 使用Medusa执行Datacenter备份
+- en: When you apply the resource definition (1), `kubectl` registers the resource
+    with the API Server (2). The API server notifies the Medusa Controller running
+    as part of the K8ssandra Operator (3).
+  id: totrans-185
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您应用资源定义（1）时，`kubectl`将资源注册到API服务器（2）。API服务器通知作为K8ssandra Operator的一部分运行的Medusa控制器（3）。
+- en: The Medusa Controller contacts a sidecar container (4), which K8ssandra has
+    injected into the Cassandra Pod because you chose to enable Medusa on the K8ssandraCluster.
+    The Medusa sidecar container uses nodetool commands to a backup on the Cassandra
+    node via JMX (5) (the JMX interface is exposed only within the Pod).
+  id: totrans-186
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Medusa控制器联系一个sidecar容器（4），该容器已由K8ssandra注入到Cassandra Pod中，因为您选择在K8ssandraCluster上启用了Medusa。Medusa
+    sidecar容器使用nodetool命令通过JMX在Cassandra节点上执行备份（5）（JMX接口仅在Pod内部暴露）。
+- en: Cassandra performs a backup (6), marking the SSTable files on the PersistentVolume
+    that mark the current snapshot. The Medusa sidecar copies the snapshot files from
+    the PV to the bucket (7). Steps 4–7 are repeated for each Cassandra Pod in the
+    CassandraDatacenter.
+  id: totrans-187
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Cassandra执行备份（6），标记PersistentVolume上标记当前快照的SSTable文件。Medusa sidecar将快照文件从PV复制到bucket（7）。步骤4-7将为CassandraDatacenter中的每个Cassandra
+    Pod重复执行。
+- en: 'You can monitor the progress of the backup by checking the status of the resource:'
+  id: totrans-188
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以通过检查资源的状态来监视备份的进度：
+- en: '[PRE10]'
+  id: totrans-189
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: You’ll know the backup is complete when the `finishTime` attribute is populated.
+    The Pods that have been backed up are listed under the `finished` attribute.
+  id: totrans-190
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当`finishTime`属性填充时，您将知道备份已完成。已备份的Pod将列在`finished`属性下。
+- en: Restoring from Backup
+  id: totrans-191
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 从备份恢复
+- en: 'The process of restoring data from a backup is similar. To restore an entire
+    Datacenter from backed-up data, you could create a CassandraRestore resource like
+    this:'
+  id: totrans-192
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从备份恢复数据的过程类似。要从备份数据中恢复整个Datacenter，您可以创建类似以下的CassandraRestore资源：
+- en: '[PRE11]'
+  id: totrans-193
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: When the Medusa Controller is notified of the new resource, it locates the CassandraDatacenter
+    and updates the Pod spec template within the StatefulSet that is managing the
+    Cassandra Pods. The updates consist of adding a new init container called `medusa-restore`
+    and setting environment variables that `medusa-restore` will use to locate the
+    datafiles that are to be restored. The update to the Pod spec template causes
+    the StatefulSet controller to perform a rolling update of the Cassandra Pods in
+    the StatefulSet. As each Pod restarts, `medusa-restore` copies the files from
+    object storage onto the PersistentVolume for the node, and then the Cassandra
+    container starts as usual. You can monitor the progress of the restore by checking
+    the status of the CassandraRestore resource.
+  id: totrans-194
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当 Medusa 控制器收到新资源通知时，它会定位 CassandraDatacenter 并更新管理 Cassandra Pod 的 StatefulSet
+    内的 Pod 模板。更新包括添加一个名为 `medusa-restore` 的新初始化容器，并设置 `medusa-restore` 将用于定位要恢复的数据文件的环境变量。对
+    Pod 模板的更新会导致 StatefulSet 控制器对 StatefulSet 中的 Cassandra Pod 执行滚动更新。随着每个 Pod 重新启动，`medusa-restore`
+    将文件从对象存储复制到节点的 PersistentVolume 上，然后 Cassandra 容器像往常一样启动。您可以通过检查 CassandraRestore
+    资源的状态来监视恢复的进度。
+- en: A Common Language for Data Recovery?
+  id: totrans-195
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 数据恢复的通用语言？
+- en: It is interesting to note the similarities and differences between the ways
+    backup and restore operations are supported by the K8ssandra Operator we’ve discussed
+    in this chapter and the Vitess Operator discussed in [Chapter 5](ch05.html#automating_database_management_on_kuber).
+  id: totrans-196
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有趣的是注意到本章讨论的 K8ssandra 操作员和第五章讨论的 Vitess 操作员在支持备份和恢复操作方面的相似性和差异。
+- en: In K8ssandra, the CassandraBackup and CassandraRestore resources function in
+    a manner similar to Kubernetes Jobs—they represent a task that you would like
+    to have performed as well as the results of the task. In contrast, the VitessBackup
+    resource represents a record of a backup that the Vitess Operator has performed
+    based on the configuration of a VitessCluster resource. There is no equivalent
+    resource to the CassandraRestore operator in Vitess.
+  id: totrans-197
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 K8ssandra 中，CassandraBackup 和 CassandraRestore 资源的功能方式类似于 Kubernetes Job ——
+    它们表示您希望执行的任务以及任务的结果。相比之下，VitessBackup 资源表示 Vitess 操作员根据 VitessCluster 资源的配置执行的备份记录。在
+    Vitess 中没有等效于 CassandraRestore 操作员的资源。
+- en: Although K8ssandra and Vitess differ significantly in their approach to managing
+    backups, both represent each backup task as a resource. Perhaps this common ground
+    could be the starting point toward the development of common resource definitions
+    for backup and restore operations, helping fulfill the vision introduced in [Chapter 5](ch05.html#automating_database_management_on_kuber).
+  id: totrans-198
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然 K8ssandra 和 Vitess 在备份管理方法上有显著差异，但两者都将每个备份任务表示为资源。也许这种共同点可以成为开发通用资源定义以进行备份和恢复操作的起点，有助于实现第五章介绍的愿景（[第五章](ch05.html#automating_database_management_on_kuber)）。
+- en: Similar to the behavior of Cassandra Reaper, a single instance of Medusa can
+    be configured to manage backup and restore operations across multiple Datacenters
+    or Cassandra clusters. See the K8ssandra [documentation](https://oreil.ly/Y2EkE)
+    for more details on performing backup and restore operations with Medusa.
+  id: totrans-199
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与 Cassandra Reaper 的行为类似，单个 Medusa 实例可以配置为跨多个数据中心或 Cassandra 集群管理备份和恢复操作。有关使用
+    Medusa 执行备份和恢复操作的更多详细信息，请参阅 K8ssandra [文档](https://oreil.ly/Y2EkE)。
+- en: Deploying Multicluster Applications in Kubernetes
+  id: totrans-200
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 中部署多集群应用程序
+- en: One of the main selling points of a distributed database like Cassandra is its
+    ability to support deployments across multiple Datacenters. Many users take advantage
+    of this in order to promote high availability across geographically distributed
+    Datacenters, to provide lower-latency reads and writes for applications and their
+    users.
+  id: totrans-201
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 像 Cassandra 这样的分布式数据库的一个主要卖点之一是其支持跨多个数据中心的部署。许多用户利用这一点来促进地理分布的数据中心之间的高可用性，以为应用程序和其用户提供更低延迟的读写服务。
+- en: However, Kubernetes itself was not originally designed to support applications
+    that span multiple Kubernetes clusters. This has traditionally meant that creating
+    such multiregion applications leaves a lot of work to development teams.
+  id: totrans-202
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，Kubernetes 本身最初并不是设计用于支持跨多个 Kubernetes 集群的应用程序。这通常意味着创建这种多地区应用程序会留下大量工作给开发团队。
+- en: 'This work takes two main forms: creating the network infrastructure to connect
+    the Kubernetes clusters, and coordinating interactions between resources in those
+    clusters. Let’s examine these requirements and the implications for an application
+    like Cassandra:'
+  id: totrans-203
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这项工作主要分为两种形式：创建连接 Kubernetes 集群的网络基础设施，以及协调这些集群中资源的交互。让我们详细研究这些要求以及对像 Cassandra
+    这样的应用程序的影响：
+- en: Multicluster networking requirements
+  id: totrans-204
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 多集群网络要求
+- en: From a networking perspective, the key is to have secure, reliable networking
+    between Datacenters. If you’re using a single cloud provider for your application,
+    this may be relatively simple to achieve using VPC capabilities offered by the
+    major cloud vendors.
+  id: totrans-205
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从网络角度来看，关键是在数据中心之间建立安全可靠的网络连接。如果您的应用程序使用单一云提供商，使用主要云供应商提供的 VPC 功能可能相对简单。
+- en: If you’re using multiple clouds, you’ll need a third-party solution. For the
+    most part, Cassandra requires routable IPs between its nodes and does not rely
+    on name resolution, but it is helpful to have DNS in place as well to simplify
+    the process of managing Cassandra’s seed nodes.
+  id: totrans-206
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您使用多个云，则需要一个第三方解决方案。在大多数情况下，Cassandra 需要其节点之间的可路由 IP，不依赖名称解析，但也有助于使用 DNS 简化管理
+    Cassandra 种子节点的过程。
+- en: Jeff’s blog post [“Deploy a Multi-Data Center Cassandra Cluster in Kubernetes”](https://oreil.ly/HpCYX)
+    describes an example configuration in Google Cloud Platform (GCP) using the CloudDNS
+    service, while Raghavan Srinivas’s blog post [“Multi-Region Cassandra on EKS with
+    K8ssandra and Kubefed”](https://oreil.ly/9byYo) describes a similar configuration
+    on Amazon EKS.
+  id: totrans-207
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Jeff 的博文[“在 Kubernetes 中部署多数据中心 Cassandra 集群”](https://oreil.ly/HpCYX)描述了在 Google
+    Cloud Platform（GCP）上使用 CloudDNS 服务的示例配置，而 Raghavan Srinivas 的博文[“在 Amazon EKS
+    上使用 K8ssandra 和 Kubefed 部署多区域 Cassandra”](https://oreil.ly/9byYo)描述了类似配置。
+- en: Multicluster resource coordination requirements
+  id: totrans-208
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 多集群资源协调要求
+- en: Managing an application that spans multiple Kubernetes clusters means that there
+    are distinct resources in each cluster which have no relationship to resources
+    in other clusters that the Kubernetes control plane is aware of. To manage the
+    lifecycle of an application including deployment, upgrade, scaling up and down,
+    and teardown, you need to coordinate resources across multiple Datacenters.
+  id: totrans-209
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 管理跨多个 Kubernetes 集群的应用程序意味着每个集群中存在与 Kubernetes 控制平面无关的不同资源。为了管理应用程序的生命周期，包括部署、升级、扩展和撤销，您需要协调多个数据中心之间的资源。
+- en: The Kubernetes Cluster Federation project ([KubeFed](https://oreil.ly/yvUCm)
+    for short) provides one approach to providing a set of APIs for managing resources
+    across clusters that can be leveraged to build multicluster applications. This
+    includes mechanisms that represent Kubernetes clusters themselves as resources.
+    While KubeFed is still in beta, the K8ssandra Operator uses a similar design approach
+    for managing resources across clusters. We’ll examine this in more detail in [“Kubernetes
+    Cluster Federation”](#kubernetes_cluster_federation).
+  id: totrans-210
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 集群联邦项目（[KubeFed](https://oreil.ly/yvUCm) 简称）提供了一种管理跨集群资源的 API 集合的方法，可用于构建多集群应用程序。这包括将
+    Kubernetes 集群本身表示为资源的机制。尽管 KubeFed 还处于 beta 版，但 K8ssandra Operator 使用了类似的设计方法来管理跨集群资源。我们将在[“Kubernetes
+    集群联邦”](#kubernetes_cluster_federation)中详细探讨这一点。
+- en: 'To achieve a multicluster Kubernetes deployment of Cassandra, you’ll need to
+    establish networking between Datacenters according to your specific situation.
+    Given that foundation, the K8ssandra Operator provides the facilities to manage
+    the lifecycle of resources across the Kubernetes clusters. For a simple example
+    of deploying a multiregion K8ssandraCluster, use the [instructions](https://oreil.ly/bmcil)
+    found in the K8ssandra documentation, again using the Makefile:'
+  id: totrans-211
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要实现 Cassandra 的多集群 Kubernetes 部署，您需要根据具体情况在数据中心之间建立网络连接。在此基础上，K8ssandra Operator
+    提供了管理 Kubernetes 集群之间资源生命周期的功能。要了解如何简单部署多区域 K8ssandraCluster，请参阅 K8ssandra 文档中的[说明](https://oreil.ly/bmcil)，再次使用
+    Makefile：
+- en: '[PRE12]'
+  id: totrans-212
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: This builds two kind clusters, deploys the K8ssandra Operator in each of them,
+    and creates a multicluster K8ssandraCluster. One advantage of using kind for a
+    simple demonstration is that Docker provides the networking between clusters.
+    We’ll walk through some of the key steps in this process in order to describe
+    how the K8ssandra Operator accomplishes this work.
+  id: totrans-213
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这建立了两种集群类型，在每个集群中部署了K8ssandra Operator，并创建了一个多集群的K8ssandraCluster。使用kind进行简单演示的一个优势是Docker提供了集群间的网络连接。我们将逐步介绍此过程中的关键步骤，以描述K8ssandra
+    Operator如何完成这项工作。
+- en: 'The K8ssandra Operator supports two modes of installation: control plane (the
+    default) and data plane. For a multicluster deployment, one Kubernetes cluster
+    must be designated as the control plane cluster, and the others as data plane
+    clusters. The control plane cluster can optionally include a CassandraDatacenter,
+    as in the configuration shown in [Figure 6-10](#keightssandra_multicluster_architecture).'
+  id: totrans-214
+  prefs: []
+  type: TYPE_NORMAL
+  zh: K8ssandra Operator支持两种安装模式：控制平面（默认）和数据平面。对于多集群部署，一个Kubernetes集群必须被指定为控制平面集群，其他的作为数据平面集群。控制平面集群可以选择包含一个CassandraDatacenter，就像在[Figure 6-10](#keightssandra_multicluster_architecture)中显示的配置一样。
+- en: '![K8ssandra multicluster architecture](assets/mcdk_0610.png)'
+  id: totrans-215
+  prefs: []
+  type: TYPE_IMG
+  zh: '![K8ssandra多集群架构](assets/mcdk_0610.png)'
+- en: Figure 6-10\. K8ssandra multicluster architecture
+  id: totrans-216
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图6-10\. K8ssandra多集群架构
+- en: 'When installed in control plane mode, the K8ssandra Operator uses two additional
+    CRDs to manage multicluster deployments: ReplicatedSecret and ClientConfig. You
+    can see evidence of the ClientConfig in the K8ssandraCluster configuration that
+    was used, which looks something like the following:'
+  id: totrans-217
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当安装在控制平面模式时，K8ssandra Operator使用两个额外的CRD来管理多集群部署：ReplicatedSecret和ClientConfig。您可以在使用的K8ssandraCluster配置中看到ClientConfig的证据，其大致如下：
+- en: '[PRE13]'
+  id: totrans-218
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: This configuration specifies a K8ssandraCluster `demo` consisting of two CassandraDatacenters,
+    `dc1` and `dc2`. Each Datacenter has its own configuration so that you can select
+    a different number of Cassandra and Stargate nodes, or different resource allocations
+    for the Pods. In the `demo` configuration, `dc1` is running in the control plane
+    cluster `kind-k8ssandra-0`, and `dc2` is running in the data plane cluster `kind-k8ssandra-1`.
+  id: totrans-219
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此配置指定了一个名为`demo`的K8ssandraCluster，由两个CassandraDatacenter `dc1` 和 `dc2` 组成。每个Datacenter都有自己的配置，因此您可以为Pods选择不同数量的Cassandra和Stargate节点，或者不同的资源分配。在`demo`配置中，`dc1`
+    运行在控制平面集群 `kind-k8ssandra-0` 中，而 `dc2` 运行在数据平面集群 `kind-k8ssandra-1` 中。
+- en: 'Notice the `k8sContext: kind-k8ssandra-1` line in the configuration. This is
+    a reference to a ClientConfig resource that was created by the `make` command.
+    A ClientConfig is a resource that represents the information needed to connect
+    to the API server of another cluster, similar to the way `kubectl` stores information
+    about different clusters on your local machine. The ClientConfig resource references
+    a Secret that is used to store access credentials securely. The K8ssandra Operator
+    repo includes a [convenience script](https://oreil.ly/wPINU) that can be used
+    to create ClientConfig resources for Kubernetes clusters.'
+  id: totrans-220
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '注意配置中的`k8sContext: kind-k8ssandra-1`行。这是对通过`make`命令创建的ClientConfig资源的引用。ClientConfig是一个表示连接到另一个集群API服务器所需信息的资源，类似于`kubectl`在本地机器上存储不同集群信息的方式。ClientConfig资源引用了一个Secret，用于安全存储访问凭据。K8ssandra
+    Operator仓库包含一个[方便脚本](https://oreil.ly/wPINU)，可用于为Kubernetes集群创建ClientConfig资源。'
+- en: When you create a K8ssandraCluster in the control plane cluster, it uses the
+    ClientConfigs to connect to each remote Kubernetes cluster in order to create
+    the specified resources. For the preceding configuration, this includes CassandraDatacenter
+    and Stargate resources, but can also include other resources such as Medusa and
+    Prometheus ServiceMonitor.
+  id: totrans-221
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在控制平面集群中创建K8ssandraCluster时，它使用ClientConfigs连接到每个远程Kubernetes集群，以创建指定的资源。对于前述配置，这包括CassandraDatacenter和Stargate资源，还可以包括其他资源如Medusa和Prometheus
+    ServiceMonitor。
+- en: The ReplicatedSecret is another resource involved in sharing access credentials.
+    The control plane K8ssandra Operator uses this resource to keep track of Secrets
+    that it creates in each remote cluster. These Secrets are used by the various
+    K8ssandra components to securely communicate information such as the default Cassandra
+    administrator credentials with each other. The K8ssandra Operator creates and
+    manages ReplicatedSecret resources itself; you don’t need to interact with them.
+  id: totrans-222
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ReplicatedSecret是另一个涉及共享访问凭证的资源。控制平面的K8ssandra Operator使用此资源来跟踪它在每个远程集群中创建的Secrets。这些Secrets被各种K8ssandra组件用于安全地相互通信，例如默认的Cassandra管理员凭据。K8ssandra
+    Operator自己创建和管理ReplicatedSecret资源；你不需要与它们交互。
+- en: The K8ssandraCluster, ClientConfig, and ReplicatedSecret resources exist only
+    in the control plane cluster, and when the K8ssandra Operator is deployed in data
+    plane mode, it does not even run the controllers associated with those resource
+    types.
+  id: totrans-223
+  prefs: []
+  type: TYPE_NORMAL
+  zh: K8ssandraCluster、ClientConfig和ReplicatedSecret资源仅存在于控制平面集群中，当K8ssandra Operator以数据平面模式部署时，它甚至不运行与这些资源类型相关的控制器。
+- en: More Detail on the K8ssandra Operator
+  id: totrans-224
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: K8ssandra Operator的更多细节
+- en: This is a quick summary of a complex design for a multicluster operator. For
+    more details on the approach, see the K8ssandra Operator [architecture overview](https://oreil.ly/ACAD2)
+    and John Sanda’s [presentation](https://oreil.ly/RMK3E) at the Data on Kubernetes
+    Community (DoKC) meetup.
+  id: totrans-225
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是一个关于多集群操作员复杂设计的快速摘要。有关该方法的更多详细信息，请参阅K8ssandra Operator的[架构概述](https://oreil.ly/ACAD2)和John
+    Sanda在Data on Kubernetes社区（DoKC）聚会上的[演示](https://oreil.ly/RMK3E)。
+- en: Now let’s consider a more general approach to building multicluster applications
+    that we can compare and contrast with K8ssandra’s approach.
+  id: totrans-226
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在让我们考虑一种更通用的构建多集群应用程序的方法，我们可以与K8ssandra的方法进行比较和对比。
+- en: As you can see, there is a lot of potential for growth in the area of Kubernetes
+    federation and the ability to manage resources across Kubernetes cluster boundaries.
+    For example, as a database whose primary superpower is running across multiple
+    Datacenters, Cassandra seems like a great match for a multicluster solution like
+    KubeFed.
+  id: totrans-227
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如你所看到的，Kubernetes联邦领域有很大的增长潜力，可以跨越Kubernetes集群边界管理资源。例如，作为一个主要超能力是在多个数据中心运行的数据库，Cassandra似乎是与类似KubeFed的多集群解决方案非常匹配的选择。
+- en: The K8ssandra Operator and KubeFed have taken similar architectural approaches,
+    where custom “federated” resources provide templates used to define resources
+    in other clusters. This commonality points to the possibility for future collaboration
+    across these projects and others based on similar design principles. Perhaps in
+    the future, CRDs like K8ssandra’s ClientConfig and ReplicatedSecret can be replaced
+    by equivalent functionality provided by KubeFed.
+  id: totrans-228
+  prefs: []
+  type: TYPE_NORMAL
+  zh: K8ssandra Operator和KubeFed采用了类似的架构方法，其中自定义的“联邦”资源提供了在其他集群中定义资源的模板。这种共同点指向了未来在这些项目和其他基于类似设计原则的项目之间进行合作的可能性。也许在未来，像K8ssandra的ClientConfig和ReplicatedSecret这样的CRD可以被KubeFed提供的等效功能所取代。
+- en: Summary
+  id: totrans-229
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 总结
+- en: In this chapter, you’ve learned how data infrastructure can be composed with
+    other infrastructure to build reusable stacks on Kubernetes. Using the K8ssandra
+    project as an example, you’ve learned about aspects including integrating data
+    infrastructure with API gateways and monitoring solutions to provide more full-featured
+    solutions.
+  id: totrans-230
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，你已经学会了如何将数据基础设施与其他基础设施组合起来构建可重复使用的Kubernetes堆栈。以K8ssandra项目为例，你已经了解了集成数据基础设施与API网关和监控解决方案以提供更全面功能解决方案的方面。
+- en: You’ve also learned some of the opportunities and challenges with adapting existing
+    technologies onto Kubernetes and creating multicluster data infrastructure deployments.
+    In the next chapter, we’ll explore how to design new cloud native data infrastructure
+    that takes advantage of everything that Kubernetes provides without requiring
+    adaptation and discover what new possibilities that opens up.
+  id: totrans-231
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你还学会了将现有技术调整到Kubernetes上并创建多集群数据基础设施部署时的一些机遇和挑战。在下一章中，我们将探讨如何设计利用Kubernetes提供的一切而无需适应的新的云原生数据基础设施，并发现这将带来哪些新的可能性。
