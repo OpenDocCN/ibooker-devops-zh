@@ -1,0 +1,3005 @@
+- en: Chapter 7\. Argo CD
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第7章 Argo CD
+- en: In the previous chapter, you learned about Tekton and other engines such as
+    GitHub Actions to implement the continuous integration (CI) part of a project.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在前一章中，您学习了有关 Tekton 和其他引擎（如 GitHub Actions）如何实现项目的持续集成（CI）部分。
+- en: 'Although CI is important because it’s where you build the application and check
+    that nothing has been broken (running unit tests, component tests, etc.), there
+    is still a missing part: how to deploy this application to an environment (a Kubernetes
+    cluster) using the GitOps methodology and not creating a script running `kubectl`/`helm`
+    commands.'
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然 CI 很重要，因为这是构建应用程序并检查是否存在故障（运行单元测试、组件测试等）的地方，但仍有一个缺失的部分：如何使用 GitOps 方法论将此应用程序部署到环境（一个
+    Kubernetes 集群），而不是创建一个运行 `kubectl`/`helm` 命令的脚本。
+- en: As Daniel Bryant puts it, “If you weren’t using SSH in the past to deploy your
+    application in production, don’t use `kubectl` to do it in Kubernetes.”
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如 Daniel Bryant 所说：“如果您以前没有使用 SSH 在生产环境中部署应用程序，请不要使用 `kubectl` 在 Kubernetes
+    中执行此操作。”
+- en: In this chapter, we’ll introduce you to Argo CD, a declarative, GitOps continuous
+    delivery (CD) tool for Kubernetes. In the first part of the section, we’ll see
+    the deployment of an application using Argo CD (Recipes [7.1](#recipe_7_1) and
+    [7.2](#recipe_7_2)).
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们将介绍 Argo CD，这是一个用于 Kubernetes 的声明式 GitOps 连续交付（CD）工具。在本节的第一部分中，我们将看到如何使用
+    Argo CD 部署应用程序（Recipes [7.1](#recipe_7_1) 和 [7.2](#recipe_7_2)）。
+- en: Argo CD not only supports the deployment of plain Kubernetes manifests, but
+    also the deployment of Kustomize projects ([Recipe 7.3](#recipe_7_3)) and Helm
+    projects ([Recipe 7.4](#recipe_7_4)).
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Argo CD 不仅支持普通 Kubernetes 清单的部署，还支持 Kustomize 项目（[Recipe 7.3](#recipe_7_3)）和
+    Helm 项目（[Recipe 7.4](#recipe_7_4)）的部署。
+- en: A typical operation done in Kubernetes is a rolling update to a new version
+    of the container, and Argo CD integrates with another tool to make this process
+    smooth ([Recipe 7.5](#recipe_7_5)).
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 中典型的操作是对容器的新版本进行滚动更新，Argo CD 与另一个工具集成，使此过程更加顺畅（[Recipe 7.5](#recipe_7_5)）。
+- en: Delivering complex applications might require some orchestration on when and
+    how the application must be deployed and released (Recipes [7.7](#recipe_7_7)
+    and [7.8](#recipe_7_8)).
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 交付复杂的应用程序可能需要在何时以及如何部署和发布应用程序时进行一些编排（Recipes [7.7](#recipe_7_7) 和 [7.8](#recipe_7_8)）。
+- en: 'We’ll see how to:'
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将看到如何：
+- en: Install and deploy the first application.
+  id: totrans-9
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 安装并部署第一个应用程序。
+- en: Use automatic deployment and self-healing applications.
+  id: totrans-10
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用自动部署和自愈应用程序。
+- en: Execute a rolling update when a new container is released.
+  id: totrans-11
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 当发布新容器时执行滚动更新。
+- en: Give an order on the execution.
+  id: totrans-12
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 给出执行顺序。
+- en: In this chapter, we are using the `https://github.com/gitops-cookbook/gitops-cookbook-sc.git`
+    GitHub repository as source directory. To run it successfully in this chapter,
+    you should fork it and use it in the YAML files provided in the examples.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们使用 `https://github.com/gitops-cookbook/gitops-cookbook-sc.git` GitHub
+    仓库作为源目录。要在本章中成功运行它，您应该 fork 它并在提供的示例 YAML 文件中使用它。
+- en: 7.1 Deploy an Application Using Argo CD
+  id: totrans-14
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 7.1 使用 Argo CD 部署应用程序
+- en: Problem
+  id: totrans-15
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 问题
+- en: You want Argo CD to deploy an application defined in a Git repository.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您希望 Argo CD 部署在 Git 仓库中定义的应用程序。
+- en: Solution
+  id: totrans-17
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 解决方案
+- en: Create an `Application` resource to set up Argo CD to deploy the application.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建一个 `Application` 资源来设置 Argo CD 以部署该应用程序。
+- en: 'To install Argo CD, create the `argocd` namespace and apply the Argo CD installation
+    manifest:'
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要安装 Argo CD，请创建 `argocd` 命名空间并应用 Argo CD 安装清单：
+- en: '[PRE0]'
+  id: totrans-20
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: Let’s make Argo CD deploy a simple web application showing a box with a configured
+    color. The application is composed of three Kubernetes manifest files, including
+    a `Namespace`, a `Deployment`, and a `Service` definition.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们让 Argo CD 部署一个简单的 Web 应用程序，显示一个配置了颜色的方框。该应用由三个 Kubernetes 清单文件组成，包括一个 `Namespace`、一个
+    `Deployment` 和一个 `Service` 定义。
+- en: The files are located in the [ch07/bgd](https://oreil.ly/DAH50) folder of the
+    book’s repository.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些文件位于书的存储库中的 [ch07/bgd](https://oreil.ly/DAH50) 文件夹中。
+- en: All these files are known as an `Application` in Argo CD. Therefore, you must
+    define it as such to apply these manifests in your cluster.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有这些文件在 Argo CD 中被称为一个 `Application`。因此，您必须将其定义为这样的文件，以将这些清单应用到您的集群中。
+- en: 'Let’s check the Argo CD `Application` resource file used for deploying the
+    application:'
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们检查用于部署应用程序的 Argo CD `Application` 资源文件：
+- en: '[PRE1]'
+  id: totrans-25
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: '[![1](assets/1.png)](#co_argo_cd_CO1-1)'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_argo_cd_CO1-1)'
+- en: Namespace where Argo CD is installed
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安装 Argo CD 的命名空间
+- en: '[![2](assets/2.png)](#co_argo_cd_CO1-2)'
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_argo_cd_CO1-2)'
+- en: Target cluster and namespace
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 目标集群和命名空间
+- en: '[![3](assets/3.png)](#co_argo_cd_CO1-3)'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_argo_cd_CO1-3)'
+- en: Installing the application in Argo CD’s default project
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在Argo CD的默认项目中安装应用程序
+- en: '[![4](assets/4.png)](#co_argo_cd_CO1-4)'
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_argo_cd_CO1-4)'
+- en: The manifest repo where the YAML resides
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: YAML所在的清单仓库
+- en: '[![5](assets/5.png)](#co_argo_cd_CO1-5)'
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#co_argo_cd_CO1-5)'
+- en: The path to look for manifests
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 查找清单的路径
+- en: '[![6](assets/6.png)](#co_argo_cd_CO1-6)'
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![6](assets/6.png)](#co_argo_cd_CO1-6)'
+- en: Branch to checkout
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要检出的分支
+- en: 'In the terminal window, run the following command to register the Argo CD application:'
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在终端窗口中，运行以下命令注册Argo CD应用程序：
+- en: '[PRE2]'
+  id: totrans-39
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: At this point, the application is registered as an Argo CD application.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此时，应用程序已注册为Argo CD应用程序。
+- en: 'You can check the status using either `argocd` or the UI; run the following
+    command to list applications using the CLI too:'
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用`argocd`或UI来检查状态；也可以使用CLI运行以下命令来列出应用程序：
+- en: '[PRE3]'
+  id: totrans-42
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'And the output is something like:'
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 输出如下：
+- en: '[PRE4]'
+  id: totrans-44
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: The important field here is `STATUS`. It’s `OutOfSync`, which means the application
+    is registered, and there is a drift between the current status (in this case,
+    no application deployed) and the content in the Git repository (the application
+    deployment files).
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里重要的字段是`STATUS`。它是`OutOfSync`，这意味着应用程序已注册，当前状态（在本例中为未部署任何应用程序）与Git存储库中的内容（应用程序部署文件）之间存在偏差。
+- en: 'You’ll notice that no pods are running if you get all the pods from the `bgd`
+    namespace:'
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果从`bgd`命名空间获取所有Pod，您会注意到没有正在运行的Pod：
+- en: '[PRE5]'
+  id: totrans-47
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: Argo CD doesn’t synchronize the application automatically by default. It just
+    shows a divergence, and the user is free to fix it by triggering a synchronized
+    operation.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Argo CD默认不会自动同步应用程序。它只显示差异，用户可以通过触发同步操作来修复。
+- en: 'With the CLI, you synchronize the application by running the following command
+    in a terminal:'
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用CLI，在终端中运行以下命令来同步应用程序：
+- en: '[PRE6]'
+  id: totrans-50
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: 'And the ouput of the command shows all the important information regarding
+    the deployment:'
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 命令的输出显示了关于部署的所有重要信息：
+- en: '[PRE7]'
+  id: totrans-52
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: You can synchronize the application from the UI as well, by clicking the `SYNC`
+    button as shown in [Figure 7-1](#fig-711).
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您也可以通过单击UI中显示的`SYNC`按钮来同步应用程序，如[图7-1](#fig-711)所示。
+- en: '![Sync button to synchronize the application](assets/gocb_0701.png)'
+  id: totrans-54
+  prefs: []
+  type: TYPE_IMG
+  zh: '![同步按钮用于同步应用程序](assets/gocb_0701.png)'
+- en: Figure 7-1\. Argo CD web console
+  id: totrans-55
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图7-1\. Argo CD Web控制台
+- en: 'If you get all the pods from the `bgd` namespace, you’ll notice one pod running:'
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果从`bgd`命名空间获取所有Pod，您会注意到有一个Pod正在运行：
+- en: '[PRE8]'
+  id: totrans-57
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: 'And the same for the Service:'
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 同样适用于服务：
+- en: '[PRE9]'
+  id: totrans-59
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: '[![1](assets/1.png)](#co_argo_cd_CO2-1)'
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_argo_cd_CO2-1)'
+- en: Exposed port is 32761
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 暴露的端口为32761
+- en: In the following sections, you’ll need to access the deployed service to validate
+    that it’s deployed. There are several ways to access services deployed to Minikube;
+    for the following chapters, we use the Minikube IP and the exposed port of the
+    service.
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在接下来的章节中，您需要访问部署的服务以验证其部署情况。有几种方法可以访问部署到Minikube的服务；在接下来的章节中，我们使用Minikube IP和服务的暴露端口。
+- en: 'Run the following command in a terminal window to get the Minikube IP:'
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在终端窗口中运行以下命令以获取Minikube IP：
+- en: '[PRE10]'
+  id: totrans-64
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: Open a browser window, set the previous IP followed by the exposed port (in
+    this example `192.168.59.100:32761`), and access the service to validate that
+    the color of the circles in the box is blue, as shown in [Figure 7-2](#fig-712).
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 打开浏览器窗口，设置前面的IP，后面跟上暴露的端口（例如`192.168.59.100:32761`），并访问服务以验证盒子中圆圈的颜色是否为蓝色，如[图7-2](#fig-712)所示。
+- en: '![Blue box application](assets/gocb_0704.png)'
+  id: totrans-66
+  prefs: []
+  type: TYPE_IMG
+  zh: '![蓝色框应用](assets/gocb_0704.png)'
+- en: Figure 7-2\. Deployed application
+  id: totrans-67
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图7-2\. 已部署的应用程序
+- en: Discussion
+  id: totrans-68
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 讨论
+- en: Now it’s time to update the application deployment files. This time we will
+    change the value of an environment variable defined in the *bgd-deployment.yaml*
+    file.
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在是更新应用程序部署文件的时候了。这次我们将更改*bgd-deployment.yaml*文件中定义的环境变量的值。
+- en: 'Open *ch07/bgd/bgd-deployment.yaml* in your file editor and change the `COLOR`
+    environment variable value from `blue` to `green`:'
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在文件编辑器中打开*ch07/bgd/bgd-deployment.yaml*，将`COLOR`环境变量的值从`blue`改为`green`：
+- en: '[PRE11]'
+  id: totrans-71
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: 'In a terminal run the following commands to commit and push the file so the
+    change is available for Argo CD:'
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在终端中运行以下命令来提交并推送文件，以便Argo CD可以使用更改：
+- en: '[PRE12]'
+  id: totrans-73
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: 'With the change pushed, check the status of the application again:'
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 推送更改后，再次检查应用程序的状态：
+- en: '[PRE13]'
+  id: totrans-75
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: 'We see the application status is `Sync`. This happens because Argo CD uses
+    a polling approach to detect divergences between what’s deployed and what’s defined
+    in Git. After some time (by default, it’s 3 minutes), the application status will
+    be `OutOfSync`:'
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们看到应用程序状态为`Sync`。这是因为Argo CD使用轮询方法检测部署和Git定义之间的差异。一段时间后（默认为3分钟），应用程序状态将为`OutOfSync`：
+- en: '[PRE14]'
+  id: totrans-77
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: 'To synchronize the changes, run the `sync` subcommand:'
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要同步更改，请运行`sync`子命令：
+- en: '[PRE15]'
+  id: totrans-79
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: After some seconds, access the service and validate that the circles are green,
+    as shown in [Figure 7-3](#fig-713).
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 几秒钟后，访问服务，并验证圆圈是否为绿色，如[图 7-3](#fig-713)所示。
+- en: '![Green box application](assets/gocb_0705.png)'
+  id: totrans-81
+  prefs: []
+  type: TYPE_IMG
+  zh: '![绿色方框应用](assets/gocb_0705.png)'
+- en: Figure 7-3\. Deployed application
+  id: totrans-82
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 7-3\. 已部署的应用程序
+- en: 'To remove the application, use the CLI tool or the UI:'
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要删除应用程序，请使用CLI工具或UI：
+- en: '[PRE16]'
+  id: totrans-84
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: 'Also, revert the changes done in the Git repository to get the initial version
+    of the application and push them:'
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 同时，撤消Git仓库中所做的更改，以获取应用程序的初始版本并推送它们：
+- en: '[PRE17]'
+  id: totrans-86
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: 7.2 Automatic Synchronization
+  id: totrans-87
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 7.2 自动同步
+- en: Problem
+  id: totrans-88
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 问题
+- en: You want Argo CD to automatically update resources when there are changes.
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您希望Argo CD在有更改时自动更新资源。
+- en: Solution
+  id: totrans-90
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 解决方案
+- en: Use the `syncPolicy` section with an `automated` policy.
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用具有`automated`策略的`syncPolicy`部分。
+- en: Argo CD can automatically synchronize an application when it detects differences
+    between the manifests in Git and the Kubernetes cluster.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当Argo CD检测到Git中的清单与Kubernetes集群中定义的差异时，它可以自动同步应用程序。
+- en: A benefit of automatic sync is that there is no need to log in to the Argo CD
+    API, with the security implications that involves (managing secrets, network,
+    etc.), and the use of the `argocd` tool. Instead, when a manifest is changed and
+    pushed to the Git repository with the changes to the tracking Git repo, the manifests
+    are automatically applied.
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 自动同步的好处是无需登录到Argo CD API，避免了涉及的安全问题（管理秘钥、网络等）和使用`argocd`工具。相反，当清单发生变化并推送到Git仓库时，跟踪Git仓库的清单会自动应用。
+- en: 'Let’s modify the previous Argo CD manifest file (`Application`), adding the
+    `sync​Po⁠licy` section, so changes are deployed automatically:'
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们修改先前的Argo CD清单文件（`Application`），添加`sync​Po⁠licy`部分，以便自动部署更改：
+- en: '[PRE18]'
+  id: totrans-95
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: '[![1](assets/1.png)](#co_argo_cd_CO3-1)'
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_argo_cd_CO3-1)'
+- en: Starts the synchronization policy configuration section
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 启动同步策略配置部分
+- en: '[![2](assets/2.png)](#co_argo_cd_CO3-2)'
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_argo_cd_CO3-2)'
+- en: Argo CD automatically syncs the repo
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Argo CD会自动同步仓库
+- en: 'At this point, we can apply the `Application` file into a running cluster by
+    running the following command:'
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这一点上，我们可以通过运行以下命令将`Application`文件应用到运行中的集群中：
+- en: '[PRE19]'
+  id: totrans-101
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: Now, Argo CD deploys the application without executing any other command.
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，Argo CD部署应用程序，而无需执行任何其他命令。
+- en: 'Run the `kubectl` command or check in the Argo CD UI to validate that the deployment
+    is happening:'
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运行`kubectl`命令或在Argo CD UI中检查，验证部署正在进行：
+- en: '[PRE20]'
+  id: totrans-104
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: Access the service and validate that the circles are blue, as shown in [Figure 7-4](#fig-721).
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 访问服务，并验证圆圈是否为蓝色，如[图 7-4](#fig-721)所示。
+- en: '![Blue box application](assets/gocb_0704.png)'
+  id: totrans-106
+  prefs: []
+  type: TYPE_IMG
+  zh: '![蓝色方框应用](assets/gocb_0704.png)'
+- en: Figure 7-4\. Deployed application
+  id: totrans-107
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 7-4\. 已部署的应用程序
+- en: 'To remove the application, use the CLI tool or the UI:'
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要删除应用程序，请使用CLI工具或UI：
+- en: '[PRE21]'
+  id: totrans-109
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: Discussion
+  id: totrans-110
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 讨论
+- en: Although Argo CD deploys applications automatically, it uses some default conservative
+    strategies for safety reasons.
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管Argo CD会自动部署应用程序，但出于安全考虑，它使用一些默认的保守策略。
+- en: Two of these are the pruning of deleted resources and the self-healing of the
+    application in case a change was made in the Kubernetes cluster directly instead
+    of through Git.
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 其中两个是删除已删除资源的修剪和应用程序的自愈，以防在Kubernetes集群中直接进行更改而不是通过Git。
+- en: By default, Argo CD will not delete (prune) any resource when it detects that
+    it is no longer available in Git, and it will be in an `OutOfSync` status. If
+    you want Argo CD to delete these resources, you can do it in two ways.
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，当Argo CD检测到Git中不再可用时，它不会删除（修剪）任何资源，并且资源状态将是`OutOfSync`。如果希望Argo CD删除这些资源，可以通过两种方式实现。
+- en: 'The first way is by manually invoking a sync with the `-prune` option:'
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 第一种方法是手动使用`-prune`选项调用同步：
+- en: '[PRE22]'
+  id: totrans-115
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: 'The second way is letting Argo CD delete pruned resources automatically by
+    setting the `prune` attribute to `true` in the `automated` section:'
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 第二种方法是通过在`automated`部分中将`prune`属性设置为`true`，让Argo CD自动删除修剪资源：
+- en: '[PRE23]'
+  id: totrans-117
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: '[![1](assets/1.png)](#co_argo_cd_CO4-1)'
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_argo_cd_CO4-1)'
+- en: Enables automatic pruning
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 启用自动修剪
+- en: Another important concept affecting how the application is automatically updated
+    is self-healing.
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个影响应用程序自动更新方式的重要概念是自我修复。
+- en: Argo CD is configured not to correct any drift made manually in the cluster.
+    For example, Argo CD will let the execution of a `kubectl patch` directly in the
+    cluster change any configuration parameter of the application.
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Argo CD 配置为不纠正手动在集群中进行的任何漂移。例如，Argo CD 允许在集群中直接执行 `kubectl patch` 改变应用程序的任何配置参数。
+- en: Let’s see it in action.
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们看看它的效果。
+- en: The color of the circle is set as an environment variable (`COLOR`).
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 圆圈的颜色设定为环境变量（`COLOR`）。
+- en: Now, let’s change the `COLOR` environment variable to `green` using the `kubectl
+    patch` command.
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，让我们使用 `kubectl patch` 命令将 `COLOR` 环境变量改为 `green`。
+- en: 'Run the following command in the terminal:'
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在终端中运行以下命令：
+- en: '[PRE24]'
+  id: totrans-126
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: 'Wait for the rollout to happen:'
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 等待部署完成：
+- en: '[PRE25]'
+  id: totrans-128
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE25]'
+- en: If you refresh the browser, you should see green circles now, as shown in [Figure 7-5](#fig-722).
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果刷新浏览器，您应该看到现在是绿色圆圈，如 [图 7-5](#fig-722) 所示。
+- en: '![Green box application](assets/gocb_0705.png)'
+  id: totrans-130
+  prefs: []
+  type: TYPE_IMG
+  zh: '![绿色方框应用程序](assets/gocb_0705.png)'
+- en: Figure 7-5\. Deployed application
+  id: totrans-131
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 7-5\. 已部署的应用程序
+- en: 'Looking over the Argo CD sync status, you’ll see that it’s `OutOfSync` as the
+    application and the definition in the Git repository (`COLOR: blue`) diverges.'
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '查看 Argo CD 的同步状态，您会看到它处于 `OutOfSync` 状态，因为应用程序与 Git 仓库中定义的定义（`COLOR: blue`）不一致。'
+- en: Argo CD will not roll back to correct this drift as the `selfHeal` property
+    default is set to `false`.
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于 `selfHeal` 属性的默认设置为 `false`，Argo CD 不会回滚以纠正此漂移。
+- en: 'Let’s remove the application and deploy a new one, but set `selfHeal` to `true`
+    in this case:'
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们移除该应用程序并部署一个新的，但在这种情况下将 `selfHeal` 设置为 `true`：
+- en: '[PRE26]'
+  id: totrans-135
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE26]'
+- en: 'Let’s enable the `selfHealing` property, and repeat the experiment:'
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们启用 `selfHealing` 属性，并重复实验：
+- en: '[PRE27]'
+  id: totrans-137
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE27]'
+- en: '[![1](assets/1.png)](#co_argo_cd_CO5-1)'
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_argo_cd_CO5-1)'
+- en: '`selfHeal` set to `true` to correct any drift'
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将 `selfHeal` 设置为 `true` 以纠正任何漂移
+- en: 'And in the terminal apply the resource:'
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后在终端应用该资源：
+- en: '[PRE28]'
+  id: totrans-141
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE28]'
+- en: 'Repeat the previous steps:'
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 重复之前的步骤：
+- en: Open the browser to check that the circles are blue.
+  id: totrans-143
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 打开浏览器检查圆圈是否为蓝色。
+- en: Reexecute the `kubectl -n bgd patch deploy/bgd ...` command.
+  id: totrans-144
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 重新执行 `kubectl -n bgd patch deploy/bgd ...` 命令。
+- en: Refresh the browser and check that the circles are still blue.
+  id: totrans-145
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 刷新浏览器并检查圆圈是否仍然是蓝色。
+- en: Argo CD corrects the drift introduced by the `patch` command, synchronizing
+    the application to the correct state defined in the Git repository.
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Argo CD 通过 `patch` 命令来纠正引入的漂移，将应用程序同步到 Git 仓库中定义的正确状态。
+- en: 'To remove the application, use the CLI tool or the UI:'
+  id: totrans-147
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要移除该应用程序，请使用 CLI 工具或 UI：
+- en: '[PRE29]'
+  id: totrans-148
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE29]'
+- en: See Also
+  id: totrans-149
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 参见
+- en: '[Argo CD Automated Sync Policy](https://oreil.ly/mw4b2)'
+  id: totrans-150
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Argo CD 自动同步策略](https://oreil.ly/mw4b2)'
+- en: '[Argo CD Sync Options](https://oreil.ly/wIleG)'
+  id: totrans-151
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Argo CD 同步选项](https://oreil.ly/wIleG)'
+- en: 7.3 Kustomize Integration
+  id: totrans-152
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 7.3 Kustomize 集成
+- en: Problem
+  id: totrans-153
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 问题
+- en: You want to use Argo CD to deploy Kustomize manifests.
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您希望使用 Argo CD 部署 Kustomize 清单。
+- en: Solution
+  id: totrans-155
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 解决方案
+- en: 'Argo CD supports several different ways in which Kubernetes manifests can be
+    defined:'
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Argo CD 支持多种定义 Kubernetes 清单的方式：
+- en: Kustomize
+  id: totrans-157
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Kustomize
+- en: Helm
+  id: totrans-158
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Helm
+- en: Ksonnet
+  id: totrans-159
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Ksonnet
+- en: Jsonnet
+  id: totrans-160
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Jsonnet
+- en: You can also extend the supported ways to custom ones, but this is out of the
+    scope of this book.
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您也可以将支持的方式扩展到自定义的方式，但这超出了本书的范围。
+- en: 'Argo CD detects a Kustomize project if there are any of the following files:
+    *kustomization.yaml*, *kustomization.yml*, or *Kustomization*.'
+  id: totrans-162
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果存在以下任一文件，则 Argo CD 将检测到 Kustomize 项目：*kustomization.yaml*、*kustomization.yml*
+    或 *Kustomization*。
+- en: Let’s deploy the same BGD application, but in this case, deployed as Kustomize
+    manifests.
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们部署相同的 BGD 应用程序，但这次使用 Kustomize 清单进行部署。
+- en: Moreover, we’ll set `kustomize` to override the `COLOR` environment variable
+    to yellow.
+  id: totrans-164
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此外，我们将设置 `kustomize` 以覆盖 `COLOR` 环境变量为黄色。
+- en: 'The Kustomize file defined in the repository looks like this:'
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 仓库中定义的 Kustomize 文件如下所示：
+- en: '[PRE30]'
+  id: totrans-166
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE30]'
+- en: '[![1](assets/1.png)](#co_argo_cd_CO6-1)'
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_argo_cd_CO6-1)'
+- en: Directory with standard deployment files (blue circles)
+  id: totrans-168
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 包含标准部署文件的目录（蓝色圆圈）
+- en: '[![2](assets/2.png)](#co_argo_cd_CO6-2)'
+  id: totrans-169
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_argo_cd_CO6-2)'
+- en: Specific file for creating a namespace
+  id: totrans-170
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用于创建命名空间的特定文件
+- en: '[![3](assets/3.png)](#co_argo_cd_CO6-3)'
+  id: totrans-171
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_argo_cd_CO6-3)'
+- en: Patches standard deployment files
+  id: totrans-172
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 补丁标准部署文件
+- en: '[![4](assets/4.png)](#co_argo_cd_CO6-4)'
+  id: totrans-173
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_argo_cd_CO6-4)'
+- en: Patches the deployment file
+  id: totrans-174
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对部署文件进行补丁
+- en: '[![5](assets/5.png)](#co_argo_cd_CO6-5)'
+  id: totrans-175
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#co_argo_cd_CO6-5)'
+- en: Overrides the environment variable value to `yellow`
+  id: totrans-176
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将环境变量值覆盖为 `yellow`
+- en: Note
+  id: totrans-177
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: You don’t need to create this file as it’s already stored in the Git repository.
+  id: totrans-178
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您无需创建此文件，因为它已存储在Git存储库中。
+- en: 'Create the following `Application` file to deploy the application:'
+  id: totrans-179
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建以下*Application*文件以部署应用程序：
+- en: '[PRE31]'
+  id: totrans-180
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE31]'
+- en: 'At this point, we can apply the `Application` file to a running cluster by
+    running the following command:'
+  id: totrans-181
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此时，我们可以通过运行以下命令将*Application*文件应用于正在运行的集群：
+- en: '[PRE32]'
+  id: totrans-182
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE32]'
+- en: Access the service and you’ll notice the circles are yellow instead of blue.
+  id: totrans-183
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 访问服务，您会注意到圆圈是黄色而不是蓝色。
+- en: 'To remove the application, use the CLI tool or the UI:'
+  id: totrans-184
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要删除应用程序，请使用CLI工具或UI：
+- en: '[PRE33]'
+  id: totrans-185
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE33]'
+- en: Discussion
+  id: totrans-186
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 讨论
+- en: 'We can explicitly specify which tool to use, overriding the default algorithm
+    used by Argo CD in the `Application` file. For example, we can use a plain directory
+    strategy regarding the presence of the *kustomization.yaml* file:'
+  id: totrans-187
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以明确指定使用哪个工具，覆盖Argo CD在*Application*文件中使用的默认算法。例如，我们可以根据*kustomization.yaml*文件的存在使用简单的目录策略：
+- en: '[PRE34]'
+  id: totrans-188
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE34]'
+- en: '[![1](assets/1.png)](#co_argo_cd_CO7-1)'
+  id: totrans-189
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_argo_cd_CO7-1)'
+- en: Overrides always use a plain directory strategy
+  id: totrans-190
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 覆盖始终使用简单的目录策略
+- en: 'Possible strategies are: `directory`, `chart`, `helm`, `kustomize`, `path`,
+    and `plugin`.'
+  id: totrans-191
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可能的策略包括：`directory`、`chart`、`helm`、`kustomize`、`path`和`plugin`。
+- en: Tip
+  id: totrans-192
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: Everything we’ve seen about Kustomize is valid when using Argo CD.
+  id: totrans-193
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当使用Argo CD时，Kustomize的所有已见内容都是有效的。
+- en: See Also
+  id: totrans-194
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 参见
+- en: '[Chapter 4](ch04.xhtml#ch_Kustomize)'
+  id: totrans-195
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[第4章](ch04.xhtml#ch_Kustomize)'
+- en: '[argo-cd/application-crd.yaml on GitHub](https://oreil.ly/EIxY1)'
+  id: totrans-196
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[argo-cd/application-crd.yaml on GitHub](https://oreil.ly/EIxY1)'
+- en: '[Argo CD Tool Detection](https://oreil.ly/DJbiU)'
+  id: totrans-197
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Argo CD工具检测](https://oreil.ly/DJbiU)'
+- en: 7.4 Helm Integration
+  id: totrans-198
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 7.4 Helm集成
+- en: Problem
+  id: totrans-199
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 问题
+- en: You want to use Argo CD to deploy Helm manifests.
+  id: totrans-200
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您想使用Argo CD来部署Helm清单。
+- en: Solution
+  id: totrans-201
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 解决方案
+- en: Argo CD supports installing Helm Charts to the cluster when it detects a Helm
+    project in the deployment directory (when the *Chart.yaml* file is present).
+  id: totrans-202
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当检测到部署目录中存在Helm项目（即*Chart.yaml*文件存在）时，Argo CD支持将Helm Charts安装到集群中。
+- en: Let’s deploy the same BGD application, but in this case, deployed as a Helm
+    manifest.
+  id: totrans-203
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们部署相同的BGD应用程序，但在这种情况下，部署为Helm清单。
+- en: 'The layout of the project is a simple Helm layout already created in the GitHub
+    repository you’ve cloned previously:'
+  id: totrans-204
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 项目的布局是在您先前克隆的GitHub存储库中已经创建的一个简单的Helm布局：
+- en: '[PRE35]'
+  id: totrans-205
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE35]'
+- en: 'Create a *bgdh/bgdh-app.yaml* file to define the Argo CD application:'
+  id: totrans-206
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建*bgdh/bgdh-app.yaml*文件以定义Argo CD应用程序：
+- en: '[PRE36]'
+  id: totrans-207
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE36]'
+- en: 'At this point, we can apply the `Application` file into a running cluster by
+    running the following command:'
+  id: totrans-208
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此时，我们可以通过运行以下命令将*Application*文件应用到正在运行的集群中：
+- en: '[PRE37]'
+  id: totrans-209
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE37]'
+- en: 'Validate the pod is running in the `bgdh` namespace:'
+  id: totrans-210
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 验证Pod是否在*bgdh*命名空间中运行：
+- en: '[PRE38]'
+  id: totrans-211
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE38]'
+- en: 'To remove the application, use the CLI tool or the UI:'
+  id: totrans-212
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要删除应用程序，请使用CLI工具或UI：
+- en: '[PRE39]'
+  id: totrans-213
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE39]'
+- en: Discussion
+  id: totrans-214
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 讨论
+- en: Argo CD populates build environment variables to Helm manifests (actually also
+    Kustomize, Jsonnet, and custom tools support too).
+  id: totrans-215
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Argo CD将构建环境变量填充到Helm清单中（实际上还支持Kustomize、Jsonnet和自定义工具）。
+- en: 'The following variables are set:'
+  id: totrans-216
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 设置以下变量：
+- en: '`ARGOCD_APP_NAME`'
+  id: totrans-217
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`ARGOCD_APP_NAME`'
+- en: '`ARGOCD_APP_NAMESPACE`'
+  id: totrans-218
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`ARGOCD_APP_NAMESPACE`'
+- en: '`ARGOCD_APP_REVISION`'
+  id: totrans-219
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`ARGOCD_APP_REVISION`'
+- en: '`ARGOCD_APP_SOURCE_PATH`'
+  id: totrans-220
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`ARGOCD_APP_SOURCE_PATH`'
+- en: '`ARGOCD_APP_SOURCE_REPO_URL`'
+  id: totrans-221
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`ARGOCD_APP_SOURCE_REPO_URL`'
+- en: '`ARGOCD_APP_SOURCE_TARGET_REVISION`'
+  id: totrans-222
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`ARGOCD_APP_SOURCE_TARGET_REVISION`'
+- en: '`KUBE_VERSION`'
+  id: totrans-223
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`KUBE_VERSION`'
+- en: '`KUBE_API_VERSIONS`'
+  id: totrans-224
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`KUBE_API_VERSIONS`'
+- en: 'In the following snippet, you can see the usage of the application name:'
+  id: totrans-225
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在以下代码片段中，您可以查看应用程序名称的使用：
+- en: '[PRE40]'
+  id: totrans-226
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE40]'
+- en: '[![1](assets/1.png)](#co_argo_cd_CO8-1)'
+  id: totrans-227
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_argo_cd_CO8-1)'
+- en: Specific Helm section
+  id: totrans-228
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 特定的Helm部分
+- en: '[![2](assets/2.png)](#co_argo_cd_CO8-2)'
+  id: totrans-229
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_argo_cd_CO8-2)'
+- en: Extra parameters to set, same as setting them in *values.yaml*, but high preference
+  id: totrans-230
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 设置额外的参数，与在*values.yaml*中设置它们一样，但更高优先级
+- en: '[![3](assets/3.png)](#co_argo_cd_CO8-3)'
+  id: totrans-231
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_argo_cd_CO8-3)'
+- en: The name of the parameter
+  id: totrans-232
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 参数的名称
+- en: '[![4](assets/4.png)](#co_argo_cd_CO8-4)'
+  id: totrans-233
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_argo_cd_CO8-4)'
+- en: The value of the parameter, in this case from a Build Env var
+  id: totrans-234
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 参数的值，在本例中来自Build Env var
+- en: 'Argo CD can use a different *values.yaml* file or set parameter values to override
+    the ones defined in *values.yaml*:'
+  id: totrans-235
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Argo CD可以使用不同的*values.yaml*文件或设置参数值来覆盖*values.yaml*中定义的值：
+- en: '[PRE41]'
+  id: totrans-236
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE41]'
+- en: Note that values files must be in the same Git repository as the Helm Chart.
+  id: totrans-237
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，值文件必须与Helm Chart存储在同一个Git存储库中。
+- en: Note
+  id: totrans-238
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Argo CD supports Helm hooks too.
+  id: totrans-239
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Argo CD还支持Helm钩子。
+- en: See Also
+  id: totrans-240
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 参见
+- en: '[Chapter 5](ch05.xhtml#ch_Helm)'
+  id: totrans-241
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[第5章](ch05.xhtml#ch_Helm)'
+- en: '[*argo-cd/application-crd.yaml* on GitHub](https://oreil.ly/EIxY1)'
+  id: totrans-242
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[*argo-cd/application-crd.yaml* on GitHub](https://oreil.ly/EIxY1)'
+- en: 7.5 Image Updater
+  id: totrans-243
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 7.5镜像更新器
+- en: Problem
+  id: totrans-244
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 问题
+- en: You want Argo CD to automatically deploy a container image when it’s published.
+  id: totrans-245
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您希望 Argo CD 在发布时自动部署容器镜像。
+- en: Solution
+  id: totrans-246
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 解决方案
+- en: Use [Argo CD Image Updater](https://oreil.ly/kztMq) to detect a change on the
+    container registry and update the deployment files.
+  id: totrans-247
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 [Argo CD Image Updater](https://oreil.ly/kztMq) 检测容器注册表上的更改，并更新部署文件。
+- en: One of the most repetitive tasks during development is deploying a new version
+    of a container image.
+  id: totrans-248
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在开发过程中最重复的任务之一是部署容器镜像的新版本。
+- en: With a pure Argo CD solution, after the container image is published to a container
+    registry, we need to update the Kubernetes/Kustomize/Helm manifest files pointing
+    to the new container image and push the result to the Git repository.
+  id: totrans-249
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用纯 Argo CD 解决方案后，将容器镜像发布到容器注册表后，我们需要更新指向新容器镜像的 Kubernetes/Kustomize/Helm 清单文件，并将结果推送到
+    Git 仓库。
+- en: 'This process implies:'
+  id: totrans-250
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此过程意味着：
+- en: Clone the repo
+  id: totrans-251
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 克隆仓库
+- en: Parse the YAML files and update them accordingly
+  id: totrans-252
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 解析 YAML 文件并相应更新它们
+- en: Commit and Push the changes
+  id: totrans-253
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 提交并推送更改
+- en: These boilerplate tasks should be defined for each repository during the continuous
+    integration phase. Although this approach works, it could be automated so the
+    cluster could detect a new image pushed to the container registry and update the
+    current deployment file pointing to the newer version.
+  id: totrans-254
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在持续集成阶段为每个仓库定义这些样板任务。虽然这种方法有效，但可以自动化，以便集群能够检测到推送到容器注册表的新镜像，并更新指向更新版本的当前部署文件。
+- en: This is exactly what Argo CD Image Updater (*ArgoCD IU*) does. It’s a Kubernetes
+    controller monitoring for a new container version and updating the manifests defined
+    in the Argo CD `Application` file.
+  id: totrans-255
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这正是 Argo CD Image Updater（*ArgoCD IU*）所做的。它是一个 Kubernetes 控制器，监控新的容器版本，并更新在
+    Argo CD `Application` 文件中定义的清单。
+- en: The Argo CD IU lifecycle and its relationship with Argo CD are shown in [Figure 7-6](#fig-751).
+  id: totrans-256
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Argo CD IU 的生命周期及其与 Argo CD 的关系显示在 [图 7-6](#fig-751) 中。
+- en: '![Lifecycle of Argo CD and Argo CD Image Updater](assets/gocb_0706.png)'
+  id: totrans-257
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Argo CD 和 Argo CD Image Updater 的生命周期](assets/gocb_0706.png)'
+- en: Figure 7-6\. Argo CD Image Updater lifecycle
+  id: totrans-258
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 7-6\. Argo CD Image Updater 生命周期
+- en: At this time, Argo CD IU only updates manifests of Kustomize or Helm. In the
+    case of Helm, it needs to support specifying the image’s tag using a parameter
+    (`image.tag`).
+  id: totrans-259
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 目前，Argo CD IU 仅更新 Kustomize 或 Helm 的清单。在 Helm 的情况下，需要支持使用参数（`image.tag`）指定镜像的标签。
+- en: 'Let’s install the controller in the same namespace as Argo CD:'
+  id: totrans-260
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们在与 Argo CD 相同的命名空间中安装控制器：
+- en: '[PRE42]'
+  id: totrans-261
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE42]'
+- en: 'Validate the installation process, checking that the pod status of the controller
+    is `Running`:'
+  id: totrans-262
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 验证安装过程，检查控制器的 Pod 状态是否为 `Running`：
+- en: '[PRE43]'
+  id: totrans-263
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE43]'
+- en: Before using Argo CD IU, we create a Kubernetes Secret representing the Git
+    credentials, so the updated manifests can be pushed to the repository. The secret
+    must be at the Argo CD namespace and, in this case, we name it `git-creds`.
+  id: totrans-264
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在使用 Argo CD IU 之前，我们创建一个代表 Git 凭据的 Kubernetes Secret，以便更新的清单可以推送到仓库。该密钥必须在 Argo
+    CD 命名空间中，并且在本例中，我们将其命名为 `git-creds`。
+- en: '[PRE44]'
+  id: totrans-265
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE44]'
+- en: 'Finally, let’s annotate the `Application` manifest with some special annotations
+    so the controller can start monitoring the registry:'
+  id: totrans-266
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，让我们使用一些特殊的注解来为 `Application` 清单添加注解，以便控制器可以开始监视注册表：
+- en: image-list
+  id: totrans-267
+  prefs: []
+  type: TYPE_NORMAL
+  zh: image-list
+- en: Specify one or more images (comma-separated-value) considered for updates.
+  id: totrans-268
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 指定一个或多个（逗号分隔的）被考虑更新的镜像。
+- en: write-back-method
+  id: totrans-269
+  prefs: []
+  type: TYPE_NORMAL
+  zh: write-back-method
+- en: Methods to propagate new versions. There are `git` and `argocd` methods implemented
+    to update to a newer image. The Git method commits the change to the Git repository.
+    Argo CD uses the Kubernetes/ArgoCD API to update the resource.
+  id: totrans-270
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 传播新版本的方法。实现了 `git` 和 `argocd` 方法以更新到更高版本的镜像。Git 方法将更改提交到 Git 仓库。Argo CD 使用 Kubernetes/ArgoCD
+    API 更新资源。
+- en: There are more configuration options, but the previous ones are the most important
+    to get started.
+  id: totrans-271
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 还有更多配置选项，但前面的是开始的最重要部分。
+- en: 'Let’s create an Argo CD `Application` manifest annotated with Argo CD IU annotations:'
+  id: totrans-272
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们创建一个带有 Argo CD `Application` 注解的清单：
+- en: '[PRE45]'
+  id: totrans-273
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE45]'
+- en: '[![1](assets/1.png)](#co_argo_cd_CO9-1)'
+  id: totrans-274
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_argo_cd_CO9-1)'
+- en: Adds annotations section
+  id: totrans-275
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 添加注解部分
+- en: '[![2](assets/2.png)](#co_argo_cd_CO9-2)'
+  id: totrans-276
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_argo_cd_CO9-2)'
+- en: Sets the monitored image name
+  id: totrans-277
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 设置监视的镜像名称
+- en: '[![3](assets/3.png)](#co_argo_cd_CO9-3)'
+  id: totrans-278
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_argo_cd_CO9-3)'
+- en: Configures to use Git as `write-back-method`, setting the location of the credentials
+    (`<namespace>/<secretname>`)
+  id: totrans-279
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 配置使用 Git 作为 `write-back-method`，设置凭据的位置（`<namespace>/<secretname>`）
+- en: '[![4](assets/4.png)](#co_argo_cd_CO9-4)'
+  id: totrans-280
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_argo_cd_CO9-4)'
+- en: Sets the branch to push changes
+  id: totrans-281
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 设置推送更改的分支
+- en: 'Now apply the manifest to deploy the application’s first version and enable
+    Argo CD IU to update the repository when a new image is pushed to the container
+    registry:'
+  id: totrans-282
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在应用清单以部署应用程序的第一个版本，并启用 Argo CD IU 在推送新镜像到容器注册表时更新仓库：
+- en: '[PRE46]'
+  id: totrans-283
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE46]'
+- en: At this point, version 1.0.0 is up and running in the `bgdk` namespace, and
+    you may access it as we’ve done before. Let’s generate a new container version
+    to validate that the new image is in the repository.
+  id: totrans-284
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此时，版本 `1.0.0` 在 `bgdk` 命名空间中正在运行，您可以像以前一样访问它。让我们生成一个新的容器版本，以验证新图像是否在仓库中。
+- en: To simplify the process, we’ll tag the container with version `1.1.0` as it
+    was a new one.
+  id: totrans-285
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为简化流程，我们将标记容器版本 `1.1.0` 为新版本。
+- en: Go to the Quay repository created at the beginning of this chapter, go to the
+    tags section, push the gear icon, and select `Add New Tag` to create a new container,
+    as shown in [Figure 7-7](#fig-752).
+  id: totrans-286
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 转到本章开头创建的 Quay 仓库，转到标签部分，点击齿轮图标，选择 `Add New Tag` 来创建一个新的容器，如图 [图 7-7](#fig-752)
+    所示。
+- en: '![Creating a new Tag in Quay](assets/gocb_0707.png)'
+  id: totrans-287
+  prefs: []
+  type: TYPE_IMG
+  zh: '![在 Quay 中创建新标签](assets/gocb_0707.png)'
+- en: Figure 7-7\. Tag container
+  id: totrans-288
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 7-7\. 标记容器
+- en: Set the tag to `1.1.0` value as shown in the figure [Figure 7-8](#fig-753).
+  id: totrans-289
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将标签设置为`1.1.0`，如图 [图 7-8](#fig-753) 所示。
+- en: '![Sets the new tag](assets/gocb_0708.png)'
+  id: totrans-290
+  prefs: []
+  type: TYPE_IMG
+  zh: '![设置新标签](assets/gocb_0708.png)'
+- en: Figure 7-8\. Tag container
+  id: totrans-291
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 7-8\. 标记容器
+- en: After this step, you should have a new container created as shown in [Figure 7-9](#fig-754).
+  id: totrans-292
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在此步骤之后，您应该已经创建了一个新容器，如图 [图 7-9](#fig-754) 所示。
+- en: Wait for around two minutes until the change is detected and the controller
+    triggers the repo update.
+  id: totrans-293
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 等待大约两分钟，直到检测到更改并触发仓库更新。
+- en: '![A new container is placed in Quay repo](assets/gocb_0709.png)'
+  id: totrans-294
+  prefs: []
+  type: TYPE_IMG
+  zh: '![在 Quay 仓库中放置一个新容器](assets/gocb_0709.png)'
+- en: Figure 7-9\. Final result
+  id: totrans-295
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 7-9\. 最终结果
+- en: 'To validate the triggering process check the logs of the controller:'
+  id: totrans-296
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要验证触发过程，请检查控制器的日志：
+- en: '[PRE47]'
+  id: totrans-297
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE47]'
+- en: '[![1](assets/1.png)](#co_argo_cd_CO10-1)'
+  id: totrans-298
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_argo_cd_CO10-1)'
+- en: Detects the change and updates the image
+  id: totrans-299
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 检测到更改并更新图像
+- en: After that, if you inspect the repository, you’ll see a new Kustomize file named
+    `.argocd-source-bgdk-app.yaml`, updating the image value to the new container,
+    as shown in [Figure 7-10](#fig-755).
+  id: totrans-300
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 之后，如果检查仓库，您将看到一个名为 `.argocd-source-bgdk-app.yaml` 的新 Kustomize 文件，将图像值更新为新容器，如图
+    [图 7-10](#fig-755) 所示。
+- en: '![New Kustomize file updating to the new container](assets/gocb_0710.png)'
+  id: totrans-301
+  prefs: []
+  type: TYPE_IMG
+  zh: '![更新至新容器的新 Kustomize 文件](assets/gocb_0710.png)'
+- en: Figure 7-10\. New Kustomize file updating to the new container
+  id: totrans-302
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 7-10\. 新 Kustomize 文件更新至新容器
+- en: Now Argo CD can detect the change and update the cluster properly with the new
+    image.
+  id: totrans-303
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在 Argo CD 可以检测到更改并正确地更新集群以适应新的镜像。
+- en: 'To remove the application, use the CLI tool or the UI:'
+  id: totrans-304
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要删除应用程序，请使用 CLI 工具或 UI：
+- en: '[PRE48]'
+  id: totrans-305
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE48]'
+- en: Discussion
+  id: totrans-306
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 讨论
+- en: An update strategy defines how Argo CD IU will find new versions. With no change,
+    Argo CD IU uses a semantic version to detect the latest version.
+  id: totrans-307
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 更新策略定义了 Argo CD IU 如何查找新版本。如果没有更改，Argo CD IU 使用语义版本来检测最新版本。
+- en: 'An optional version constraint field may be added to restrict which versions
+    are allowed to be automatically updated. To only update patch versions, we can
+    change the `image-list` annotation as shown in the following snippet:'
+  id: totrans-308
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以添加一个可选的版本约束字段来限制允许自动更新的版本。要仅更新补丁版本，可以按以下片段更改 `image-list` 注释：
+- en: '[PRE49]'
+  id: totrans-309
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE49]'
+- en: 'Argo CD Image Updater can update to the image that has the most recent build
+    date:'
+  id: totrans-310
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Argo CD Image Updater 可以更新到具有最新构建日期的镜像：
+- en: '[PRE50]'
+  id: totrans-311
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE50]'
+- en: '[![1](assets/1.png)](#co_argo_cd_CO11-1)'
+  id: totrans-312
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_argo_cd_CO11-1)'
+- en: Restricts the tags considered for the update
+  id: totrans-313
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 限制用于更新的标签
+- en: 'The digest update strategy will use image digests to update your applications’
+    image tags:'
+  id: totrans-314
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 摘要更新策略将使用镜像摘要更新应用程序的镜像标签：
+- en: '[PRE51]'
+  id: totrans-315
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE51]'
+- en: So far, the container was stored in a public registry. If the repository is
+    private, Argo CD Image Updater needs read access to the repo to detect any change.
+  id: totrans-316
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，容器存储在公共注册表中。如果仓库是私有的，Argo CD Image Updater 需要读取仓库以检测任何更改。
+- en: 'First of all, create a new secret representing the container registry credentials:'
+  id: totrans-317
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，创建一个新的代表容器注册凭据的秘密：
+- en: '[PRE52]'
+  id: totrans-318
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE52]'
+- en: 'Argo CD Image Updater uses a `ConfigMap` as a configuration source, which is
+    the place to register the private container registry. Create a new `ConfigMap`
+    manifest setting the supported registries:'
+  id: totrans-319
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Argo CD Image Updater 使用 `ConfigMap` 作为配置源，这是注册私有容器注册表的位置。创建一个新的 `ConfigMap`
+    清单设置支持的注册表：
+- en: '[PRE53]'
+  id: totrans-320
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE53]'
+- en: '[![1](assets/1.png)](#co_argo_cd_CO12-1)'
+  id: totrans-321
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_argo_cd_CO12-1)'
+- en: Name of the Argo CD IU `ConfigMap`
+  id: totrans-322
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Argo CD IU 的 `ConfigMap` 名称
+- en: '[![2](assets/2.png)](#co_argo_cd_CO12-2)'
+  id: totrans-323
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_argo_cd_CO12-2)'
+- en: Place to register all registries
+  id: totrans-324
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注册所有注册表的位置
+- en: '[![3](assets/3.png)](#co_argo_cd_CO12-3)'
+  id: totrans-325
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_argo_cd_CO12-3)'
+- en: A name to identify it
+  id: totrans-326
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用于标识的名称
+- en: '[![4](assets/4.png)](#co_argo_cd_CO12-4)'
+  id: totrans-327
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_argo_cd_CO12-4)'
+- en: URL of the service
+  id: totrans-328
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 服务的网址
+- en: '[![5](assets/5.png)](#co_argo_cd_CO12-5)'
+  id: totrans-329
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#co_argo_cd_CO12-5)'
+- en: The prefix used in the container images
+  id: totrans-330
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器镜像中使用的前缀
+- en: '[![6](assets/6.png)](#co_argo_cd_CO12-6)'
+  id: totrans-331
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![6](assets/6.png)](#co_argo_cd_CO12-6)'
+- en: Gets the credentials from the `quayio` secret stored at `argocd` namespace
+  id: totrans-332
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从存储在 `argocd` 命名空间中的 `quayio` 密钥获取凭据
+- en: 'Argo CD Image Updater commits the update with a default message:'
+  id: totrans-333
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Argo CD Image Updater 提交更新，附带默认消息：
+- en: '[PRE54]'
+  id: totrans-334
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE54]'
+- en: 'We can update the default commit message to one that fits your requirements.
+    Configure the `git.commit-message-template` key in ArgoCD IU `argocd-image-updater-config`
+    `ConfigMap` with the message:'
+  id: totrans-335
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以将默认提交消息更新为符合您要求的消息。在 ArgoCD IU `argocd-image-updater-config` `ConfigMap`
+    中配置 `git.commit-message-template` 键与消息：
+- en: '[PRE55]'
+  id: totrans-336
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE55]'
+- en: '[![1](assets/1.png)](#co_argo_cd_CO13-1)'
+  id: totrans-337
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_argo_cd_CO13-1)'
+- en: Argo CD IU `ConfigMap`
+  id: totrans-338
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Argo CD IU `ConfigMap`
+- en: '[![2](assets/2.png)](#co_argo_cd_CO13-2)'
+  id: totrans-339
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_argo_cd_CO13-2)'
+- en: Commit user
+  id: totrans-340
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 提交用户
+- en: '[![3](assets/3.png)](#co_argo_cd_CO13-3)'
+  id: totrans-341
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_argo_cd_CO13-3)'
+- en: Commmit email
+  id: totrans-342
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 提交的电子邮件
+- en: '[![4](assets/4.png)](#co_argo_cd_CO13-4)'
+  id: totrans-343
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_argo_cd_CO13-4)'
+- en: Golang `text/template` content
+  id: totrans-344
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Golang `text/template` 内容
+- en: '[![5](assets/5.png)](#co_argo_cd_CO13-5)'
+  id: totrans-345
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#co_argo_cd_CO13-5)'
+- en: The name of the application
+  id: totrans-346
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用的名称
+- en: '[![6](assets/6.png)](#co_argo_cd_CO13-6)'
+  id: totrans-347
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![6](assets/6.png)](#co_argo_cd_CO13-6)'
+- en: List of changes performed by the update
+  id: totrans-348
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 更新执行的更改列表
+- en: '[![7](assets/7.png)](#co_argo_cd_CO13-7)'
+  id: totrans-349
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![7](assets/7.png)](#co_argo_cd_CO13-7)'
+- en: Image name
+  id: totrans-350
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 镜像名称
+- en: '[![8](assets/8.png)](#co_argo_cd_CO13-8)'
+  id: totrans-351
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![8](assets/8.png)](#co_argo_cd_CO13-8)'
+- en: Previous container tag
+  id: totrans-352
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 先前的容器标签
+- en: '[![9](assets/9.png)](#co_argo_cd_CO13-9)'
+  id: totrans-353
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![9](assets/9.png)](#co_argo_cd_CO13-9)'
+- en: New container tag
+  id: totrans-354
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 新的容器标签
+- en: Note
+  id: totrans-355
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: 'Remember to restart the Argo CD UI controller when the `ConfigMap` is changed:'
+  id: totrans-356
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 `ConfigMap` 更改时，请记得重新启动 Argo CD UI 控制器：
+- en: '[PRE56]'
+  id: totrans-357
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE56]'
+- en: See Also
+  id: totrans-358
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 参见
+- en: '[Argo CD Image Updater](https://oreil.ly/kztMq)'
+  id: totrans-359
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Argo CD Image Updater](https://oreil.ly/kztMq)'
+- en: 7.6 Deploy from a Private Git Repository
+  id: totrans-360
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 7.6 从私有 Git 仓库部署
+- en: Problem
+  id: totrans-361
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 问题
+- en: You want Argo CD to deploy manifests.
+  id: totrans-362
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您希望 Argo CD 部署清单。
+- en: Solution
+  id: totrans-363
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 解决方案
+- en: Use Argo CD CLI/UI or YAML files to register the repositories’ credential information
+    (username/password/token/key).
+  id: totrans-364
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 Argo CD CLI/UI 或 YAML 文件注册仓库的凭据信息（用户名/密码/令牌/密钥）。
+- en: 'In Argo CD, you have two ways to register a Git repository with its credentials.
+    One way is using the Argo CD CLI/Argo CD UI tooling. To register a private repository
+    in Argo CD, set the username and password by running the following command:'
+  id: totrans-365
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Argo CD 中，您有两种方法可以注册带有其凭据的 Git 仓库。一种方法是使用 Argo CD CLI/Argo CD UI 工具。要在 Argo
+    CD 中注册私有仓库，请通过以下命令设置用户名和密码：
+- en: '[PRE57]'
+  id: totrans-366
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE57]'
+- en: Alternatively, we can use the Argo CD UI to register it too. Open Argo CD UI
+    in a browser, and click the Settings/Repositories button (the one with gears)
+    as shown in [Figure 7-11](#fig-761).
+  id: totrans-367
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 或者，我们也可以使用 Argo CD UI 进行注册。在浏览器中打开 Argo CD UI，点击“设置/仓库”按钮（带有齿轮图标），如图 [7-11](#fig-761)
+    所示。
+- en: '![Selection of Repositories section](assets/gocb_0711.png)'
+  id: totrans-368
+  prefs: []
+  type: TYPE_IMG
+  zh: '![选择仓库部分](assets/gocb_0711.png)'
+- en: Figure 7-11\. Settings menu
+  id: totrans-369
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 7-11\. 设置菜单
+- en: Then click the “Connect Repo using HTTPS” button and fill the form with the
+    required data as shown in [Figure 7-12](#fig-762).
+  id: totrans-370
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后点击“使用 HTTPS 连接 Repo”按钮，并填写所需数据，如图 [7-12](#fig-762) 所示。
+- en: '![Configuration of the repository with HTTPS credentials](assets/gocb_0712.png)'
+  id: totrans-371
+  prefs: []
+  type: TYPE_IMG
+  zh: '![使用 HTTPS 凭据配置仓库](assets/gocb_0712.png)'
+- en: Figure 7-12\. Configuration of repository
+  id: totrans-372
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 7-12\. 仓库的配置
+- en: Finally, click the Connect button to test that it’s possible to establish a
+    connection and add the repository into Argo CD.
+  id: totrans-373
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，单击“连接”按钮以测试是否可以建立连接并将仓库添加到 Argo CD 中。
+- en: 'The other way is to create a Kubernetes Secret manifest file with that repository
+    and credentials information:'
+  id: totrans-374
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一种方法是创建一个带有仓库和凭据信息的 Kubernetes Secret 清单文件：
+- en: '[PRE58]'
+  id: totrans-375
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE58]'
+- en: '[![1](assets/1.png)](#co_argo_cd_CO14-1)'
+  id: totrans-376
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_argo_cd_CO14-1)'
+- en: Create a secret in the Argo CD namespace
+  id: totrans-377
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Argo CD 命名空间中创建一个密钥
+- en: '[![2](assets/2.png)](#co_argo_cd_CO14-2)'
+  id: totrans-378
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_argo_cd_CO14-2)'
+- en: Sets secret type as `repository`
+  id: totrans-379
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将密钥类型设置为 `repository`
+- en: '[![3](assets/3.png)](#co_argo_cd_CO14-3)'
+  id: totrans-380
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_argo_cd_CO14-3)'
+- en: URL of the repository to register
+  id: totrans-381
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要注册的仓库的网址
+- en: '[![4](assets/4.png)](#co_argo_cd_CO14-4)'
+  id: totrans-382
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_argo_cd_CO14-4)'
+- en: Password to access
+  id: totrans-383
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 访问密码
+- en: '[![5](assets/5.png)](#co_argo_cd_CO14-5)'
+  id: totrans-384
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#co_argo_cd_CO14-5)'
+- en: Username to access
+  id: totrans-385
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 访问用户名
+- en: If you apply this file, it will have the same effect as the manual approach.
+  id: totrans-386
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您应用此文件，则效果与手动操作相同。
+- en: At this point, every time we define a `repoURL` value in the `Application` resource
+    with a repository URL registered for authentication, Argo CD will use the registered
+    credentials to log in.
+  id: totrans-387
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这一点上，每当我们在 `Application` 资源中定义一个 `repoURL` 值，并且使用了为身份验证注册的存储库 URL，Argo CD 将使用注册的凭据登录。
+- en: Discussion
+  id: totrans-388
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 讨论
+- en: In addition to setting credentials such as username and password for accessing
+    a private Git repo, Argo CD also supports other methods such as tokens, TLS client
+    certificates, SSH private keys, or GitHub App credentials.
+  id: totrans-389
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了为访问私有 Git 存储库设置用户名和密码之外，Argo CD 还支持其他方法，如令牌、TLS 客户端证书、SSH 私钥或 GitHub App 凭据。
+- en: Let’s see some examples using Argo CD CLI or Kubernetes Secrets.
+  id: totrans-390
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们看一些使用 Argo CD CLI 或 Kubernetes Secrets 的示例。
+- en: 'To configure a TLS client certificate:'
+  id: totrans-391
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要配置 TLS 客户端证书：
+- en: '[PRE59]'
+  id: totrans-392
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE59]'
+- en: 'For SSH, you just need to set the location of the SSH private key:'
+  id: totrans-393
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于 SSH，您只需设置 SSH 私钥的位置：
+- en: '[PRE60]'
+  id: totrans-394
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE60]'
+- en: 'Or using a Kubernetes Secret:'
+  id: totrans-395
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 或者使用 Kubernetes Secret：
+- en: '[PRE61]'
+  id: totrans-396
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE61]'
+- en: '[![1](assets/1.png)](#co_argo_cd_CO15-1)'
+  id: totrans-397
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_argo_cd_CO15-1)'
+- en: Sets the content of the SSH private key
+  id: totrans-398
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 设置 SSH 私钥的内容
+- en: 'If you are using the GitHub App method, you need to set the App ID, the App
+    Installation ID, and the private key:'
+  id: totrans-399
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果使用 GitHub App 方法，您需要设置 App ID、App Installation ID 和私钥：
+- en: '[PRE62]'
+  id: totrans-400
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE62]'
+- en: 'Or using the declarative approach:'
+  id: totrans-401
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 或者使用声明性方法：
+- en: '[PRE63]'
+  id: totrans-402
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE63]'
+- en: '[![1](assets/1.png)](#co_argo_cd_CO16-1)'
+  id: totrans-403
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_argo_cd_CO16-1)'
+- en: Sets GitHub App parameters
+  id: totrans-404
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 设置 GitHub App 参数
+- en: '[![2](assets/2.png)](#co_argo_cd_CO16-2)'
+  id: totrans-405
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_argo_cd_CO16-2)'
+- en: Only valid if GitHub App Enterprise is used
+  id: totrans-406
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 仅当使用 GitHub App Enterprise 时有效
+- en: For the access token, use the account name as the username and the token in
+    the password field.
+  id: totrans-407
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于访问令牌，请使用账户名作为用户名，并在密码字段中使用令牌。
+- en: Choosing which strategy to use will depend on your experience managing Kubernetes
+    Secrets. Remember that a Secret in Kubernetes is not encrypted but encoded in
+    Base64, so it is not secured by default.
+  id: totrans-408
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 选择使用哪种策略将取决于您管理 Kubernetes Secrets 的经验。请记住，Kubernetes 中的 Secret 并不是加密的，而是以 Base64
+    编码，因此默认情况下不安全。
+- en: We recommend using only the declarative approach when you’ve got a good strategy
+    for securing the secrets.
+  id: totrans-409
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们建议只在有了保护机密的良好策略时才使用声明性方法。
+- en: Note
+  id: totrans-410
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: 'We’ve not discussed the Sealed Secrets project yet (we’ll do so in the following
+    chapter), but when using Sealed Secrets, the labels will be removed to avoid the
+    `SealedSecret` object having a `template` section that encodes all the fields
+    you want the controller to put in the unsealed Secret:'
+  id: totrans-411
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们还没有讨论过 Sealed Secrets 项目（我们将在下一章中讨论），但是在使用 Sealed Secrets 时，标签将被移除，以避免 `SealedSecret`
+    对象具有一个 `template` 部分，该部分编码了您希望控制器放入未密封 Secret 中的所有字段：
+- en: '[PRE64]'
+  id: totrans-412
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE64]'
+- en: 7.7 Order Kubernetes Manifests
+  id: totrans-413
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 7.7 订单 Kubernetes 清单
+- en: Problem
+  id: totrans-414
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 问题
+- en: You want to use Argo CD to deploy.
+  id: totrans-415
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您想要使用 Argo CD 进行部署。
+- en: Solution
+  id: totrans-416
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 解决方案
+- en: Use *sync waves* and *resource hooks* to modify the default order of applying
+    manifests.
+  id: totrans-417
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 *同步波* 和 *资源钩子* 修改应用清单的默认顺序。
+- en: 'Argo CD applies the Kubernetes manifests (plain, Helm, Kustomize) in a particular
+    order using the following logic:'
+  id: totrans-418
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Argo CD 使用以下逻辑按特定顺序应用 Kubernetes 清单（普通、Helm、Kustomize）：
+- en: By kind
+  id: totrans-419
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: By kind
+- en: Namespaces
+  id: totrans-420
+  prefs:
+  - PREF_IND
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: Namespaces
+- en: NetworkPolicy
+  id: totrans-421
+  prefs:
+  - PREF_IND
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: NetworkPolicy
+- en: Limit Range
+  id: totrans-422
+  prefs:
+  - PREF_IND
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: Limit Range
+- en: ServiceAccount
+  id: totrans-423
+  prefs:
+  - PREF_IND
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: ServiceAccount
+- en: Secret
+  id: totrans-424
+  prefs:
+  - PREF_IND
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: Secret
+- en: ConfigMap
+  id: totrans-425
+  prefs:
+  - PREF_IND
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: ConfigMap
+- en: StorageClass
+  id: totrans-426
+  prefs:
+  - PREF_IND
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: StorageClass
+- en: PersistentVolumes
+  id: totrans-427
+  prefs:
+  - PREF_IND
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: PersistentVolumes
+- en: ClusterRole
+  id: totrans-428
+  prefs:
+  - PREF_IND
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: ClusterRole
+- en: Role
+  id: totrans-429
+  prefs:
+  - PREF_IND
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: Role
+- en: Service
+  id: totrans-430
+  prefs:
+  - PREF_IND
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: Service
+- en: DaemonSet
+  id: totrans-431
+  prefs:
+  - PREF_IND
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: DaemonSet
+- en: Pod
+  id: totrans-432
+  prefs:
+  - PREF_IND
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: Pod
+- en: ReplicaSet
+  id: totrans-433
+  prefs:
+  - PREF_IND
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: ReplicaSet
+- en: Deployment
+  id: totrans-434
+  prefs:
+  - PREF_IND
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: Deployment
+- en: StatefulSet
+  id: totrans-435
+  prefs:
+  - PREF_IND
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: StatefulSet
+- en: Job
+  id: totrans-436
+  prefs:
+  - PREF_IND
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: Job
+- en: Ingress
+  id: totrans-437
+  prefs:
+  - PREF_IND
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: Ingress
+- en: In the same kind, then by name (alphabetical order)
+  id: totrans-438
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 以相同类型，然后按名称（按字母顺序）
+- en: 'Argo CD has three phases when applying resources: the first phase is executed
+    before applying the manifests (`PreSync`), the second phase is when the manifests
+    are applied (`Sync`), and the third phase is executed after all manifests are
+    applied and synchronized (`PostSync`).'
+  id: totrans-439
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当应用资源时，Argo CD 有三个阶段：第一阶段在应用清单（`PreSync`）之前执行，第二阶段是应用清单（`Sync`），第三阶段在所有清单应用并同步后执行（`PostSync`）。
+- en: '[Figure 7-13](#fig-771) summarizes these phases.'
+  id: totrans-440
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 7-13](#fig-771) 总结了这些阶段。'
+- en: '![Relationship between phases and sync waves](assets/gocb_0713.png)'
+  id: totrans-441
+  prefs: []
+  type: TYPE_IMG
+  zh: '![阶段和同步波之间的关系](assets/gocb_0713.png)'
+- en: Figure 7-13\. Hooks and sync waves
+  id: totrans-442
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 7-13\. 钩子和同步波
+- en: Resource hooks are scripts executed at a given phase, or if the Sync phase failed,
+    you could run some rollback operations.
+  id: totrans-443
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 资源钩子是在给定阶段执行的脚本，或者如果同步阶段失败，则可以运行一些回滚操作。
+- en: '[Table 7-1](#table0701) lists the available resource hooks.'
+  id: totrans-444
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[表 7-1](#table0701) 列出了可用的资源钩子。'
+- en: Table 7-1\. Resource hooks
+  id: totrans-445
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 7-1\. 资源钩子
+- en: '| Hook | Description | Use case |'
+  id: totrans-446
+  prefs: []
+  type: TYPE_TB
+  zh: '| 钩子 | 描述 | 使用案例 |'
+- en: '| --- | --- | --- |'
+  id: totrans-447
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- |'
+- en: '|'
+  id: totrans-448
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '|'
+- en: '`PreSync`'
+  id: totrans-449
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`PreSync`'
+- en: '| Executes prior to the application of the manifests | Database migrations
+    |'
+  id: totrans-450
+  prefs: []
+  type: TYPE_TB
+  zh: '| 在清单应用之前执行 | 数据库迁移 |'
+- en: '|'
+  id: totrans-451
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '|'
+- en: '`Sync`'
+  id: totrans-452
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`Sync`'
+- en: '| Executes at the same time as manifests | Complex rolling update strategies
+    like canary releases or dark launches |'
+  id: totrans-453
+  prefs: []
+  type: TYPE_TB
+  zh: '| 与清单同时执行 | 复杂的滚动更新策略，如金丝雀发布或暗部署 |'
+- en: '|'
+  id: totrans-454
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '|'
+- en: '`PostSync`'
+  id: totrans-455
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`PostSync`'
+- en: '| Executes after all `Sync` hooks have completed and were successful (healthy)
+    | Run tests to validate deployment was correctly done |'
+  id: totrans-456
+  prefs: []
+  type: TYPE_TB
+  zh: '| 在所有 `Sync` 钩子完成并成功（健康）后执行 | 运行测试以验证部署是否正确完成 |'
+- en: '|'
+  id: totrans-457
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '|'
+- en: '`SyncFail`'
+  id: totrans-458
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`SyncFail`'
+- en: '| Executes when the sync operation fails | Rollback operations in case of failure
+    |'
+  id: totrans-459
+  prefs: []
+  type: TYPE_TB
+  zh: '| 在同步操作失败时执行 | 在失败情况下执行回滚操作 |'
+- en: '|'
+  id: totrans-460
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '|'
+- en: '`Skip`'
+  id: totrans-461
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`Skip`'
+- en: '| Skip the application of the manifest | When manual steps are required to
+    deploy the application (i.e., releasing public traffic to new version) |'
+  id: totrans-462
+  prefs: []
+  type: TYPE_TB
+  zh: '| 跳过清单的应用 | 当需要手动步骤来部署应用（例如，释放公共流量到新版本）时 |'
+- en: 'Hooks are defined as an annotation named `argocd.argoproj.io/hook` to a Kubernetes
+    resource. In the following snippet, a `PostSync` manifest is defined:'
+  id: totrans-463
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 钩子被定义为一个名为 `argocd.argoproj.io/hook` 的注释，应用于 Kubernetes 资源。在以下片段中，定义了一个 `PostSync`
+    清单：
+- en: '[PRE65]'
+  id: totrans-464
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE65]'
+- en: '[![1](assets/1.png)](#co_argo_cd_CO17-1)'
+  id: totrans-465
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_argo_cd_CO17-1)'
+- en: Job’s name
+  id: totrans-466
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作业名称
+- en: '[![2](assets/2.png)](#co_argo_cd_CO17-2)'
+  id: totrans-467
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_argo_cd_CO17-2)'
+- en: Sets when the manifest is applied
+  id: totrans-468
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 设置清单应用的时间点
+- en: A *sync wave* is a way to order how Argo CD applies the manifests stored in
+    Git.
+  id: totrans-469
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*同步波*是 Argo CD 应用存储在 Git 中的清单的一种排序方式。'
+- en: All manifests have zero waves by default, and the lower values go first. Use
+    the `argocd.argoproj.io/sync-wave` annotation to set the wave number to a resource.
+  id: totrans-470
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，所有清单的波次都为零，较低的值先执行。使用 `argocd.argoproj.io/sync-wave` 注释将波次号设置为资源。
+- en: 'For example, you might want to deploy a database first and then create the
+    database schema; for this case, you should set a `sync-wave` lower in the database
+    deployment file than in the job for creating the database schema, as shown in
+    the following snippet:'
+  id: totrans-471
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，您可能希望先部署数据库，然后再创建数据库架构；对于这种情况，您应该在数据库部署文件中将 `sync-wave` 设置为比创建数据库架构作业中更低，如下片段所示：
+- en: '[PRE66]'
+  id: totrans-472
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE66]'
+- en: '[![1](assets/1.png)](#co_argo_cd_CO18-1)'
+  id: totrans-473
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_argo_cd_CO18-1)'
+- en: PostgreSQL deployment
+  id: totrans-474
+  prefs: []
+  type: TYPE_NORMAL
+  zh: PostgreSQL 部署
+- en: '[![2](assets/2.png)](#co_argo_cd_CO18-2)'
+  id: totrans-475
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_argo_cd_CO18-2)'
+- en: Sync wave for PostgreSQL deployment is 0
+  id: totrans-476
+  prefs: []
+  type: TYPE_NORMAL
+  zh: PostgreSQL 部署的同步波是 0
+- en: '[![3](assets/3.png)](#co_argo_cd_CO18-3)'
+  id: totrans-477
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_argo_cd_CO18-3)'
+- en: Name of the Job
+  id: totrans-478
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作业名称
+- en: '[![4](assets/4.png)](#co_argo_cd_CO18-4)'
+  id: totrans-479
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_argo_cd_CO18-4)'
+- en: Job executed when PostgreSQL is healthy
+  id: totrans-480
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当 PostgreSQL 健康时执行的作业
+- en: Discussion
+  id: totrans-481
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 讨论
+- en: 'When Argo CD starts applying the manifests, it orders the resources in the
+    following way:'
+  id: totrans-482
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当 Argo CD 开始应用清单时，它按以下方式排序资源：
+- en: Phase
+  id: totrans-483
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 阶段
+- en: Wave (lower precedence first)
+  id: totrans-484
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 波次（优先级低的先）
+- en: Kind
+  id: totrans-485
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 种类
+- en: Name
+  id: totrans-486
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 名称
+- en: Let’s deploy a more significant application with deployment files, sync waves,
+    and hooks.
+  id: totrans-487
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们部署一个更大的应用，其中包括部署文件、同步波和钩子。
+- en: The sample application deployed is a TODO application connected with a database
+    (PostgreSQL) to store TODOs. To deploy the application, some particular order
+    needs to be applied; for example, the database server must be running before creating
+    the database schema. Also, when the whole application is deployed, we insert some
+    default TODOs into the database to run a post-sync manifest.
+  id: totrans-488
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 部署的示例应用是一个 TODO 应用程序，连接到一个数据库（PostgreSQL）来存储 TODO。为了部署该应用程序，需要按特定顺序进行操作；例如，必须先运行数据库服务器，然后再创建数据库架构。此外，当整个应用程序部署完成后，我们会向数据库中插入一些默认的
+    TODO 来运行后同步清单。
+- en: The overall process is shown in [Figure 7-14](#fig-772).
+  id: totrans-489
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 整个过程显示在 [图 7-14](#fig-772) 中。
+- en: '![Todo Application with the order manifests are executed](assets/gocb_0714.png)'
+  id: totrans-490
+  prefs: []
+  type: TYPE_IMG
+  zh: '![带有执行顺序清单的 TODO 应用](assets/gocb_0714.png)'
+- en: Figure 7-14\. Todo app
+  id: totrans-491
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 7-14\. Todo 应用
+- en: 'Create an `Application` resource pointing out to the application:'
+  id: totrans-492
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建一个指向应用程序的 `Application` 资源：
+- en: '[PRE67]'
+  id: totrans-493
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE67]'
+- en: In the terminal, apply the resource, and Argo CD will deploy all applications
+    in the specified order.
+  id: totrans-494
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在终端中应用资源，Argo CD 将按指定顺序部署所有应用程序。
+- en: See Also
+  id: totrans-495
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 参见
+- en: '[*gitops-engine/sync_tasks.go* on GitHub](https://oreil.ly/NDWru)'
+  id: totrans-496
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[*GitHub 上的 gitops-engine/sync_tasks.go*](https://oreil.ly/NDWru)'
+- en: 7.8 Define Synchronization Windows
+  id: totrans-497
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 7.8 定义同步窗口
+- en: Problem
+  id: totrans-498
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 问题
+- en: You want Argo CD to block or allow application synchronization depending on
+    time.
+  id: totrans-499
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您希望 Argo CD 根据时间阻塞或允许应用程序同步。
+- en: Solution
+  id: totrans-500
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 解决方案
+- en: Argo CD has the *sync windows* concept to configure time windows where application
+    synchronizations (applying new resources that have been pushed to the repository)
+    will either be blocked or allowed.
+  id: totrans-501
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Argo CD 提供了 *同步窗口* 的概念，用于配置应用程序同步的时间窗口（将推送到存储库的新资源应用）是否被阻止或允许。
+- en: To define a sync window, create an `AppProject` manifest setting the `kind`
+    (either `allow` or `deny`), a `schedule` in cron format to define the initial
+    time, a `duration` of the window, and which resources the sync window is applied
+    to (`Application`, namespaces, or clusters).
+  id: totrans-502
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要定义同步窗口，创建一个 `AppProject` 清单，设置 `kind`（允许或拒绝），以 cron 格式设置初始时间 `schedule`，窗口的
+    `duration`，以及应用同步窗口的资源（`Application`，命名空间或集群）。
+- en: The `AppProject` resource is responsible for defining these windows where synchronizations
+    are permitted/blocked.
+  id: totrans-503
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`AppProject` 资源负责定义这些窗口，其中允许/阻止同步。'
+- en: 'Create a new file to permit synchronizations only from 22:00 to 23:00 (just
+    one hour) and for Argo CD `Applications` whose names end in `-prod`:'
+  id: totrans-504
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建一个新文件，仅允许在 22:00 到 23:00 进行同步（仅一个小时），并且用于以 `-prod` 结尾的 Argo CD `应用程序`：
+- en: '[PRE68]'
+  id: totrans-505
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE68]'
+- en: '[![1](assets/1.png)](#co_argo_cd_CO19-1)'
+  id: totrans-506
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_argo_cd_CO19-1)'
+- en: List of windows
+  id: totrans-507
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 窗口列表
+- en: '[![2](assets/2.png)](#co_argo_cd_CO19-2)'
+  id: totrans-508
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_argo_cd_CO19-2)'
+- en: Allow syncs
+  id: totrans-509
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 允许同步
+- en: '[![3](assets/3.png)](#co_argo_cd_CO19-3)'
+  id: totrans-510
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_argo_cd_CO19-3)'
+- en: Only at 22:00
+  id: totrans-511
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 仅在 22:00
+- en: '[![4](assets/4.png)](#co_argo_cd_CO19-4)'
+  id: totrans-512
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_argo_cd_CO19-4)'
+- en: For 1 hour (23:00)
+  id: totrans-513
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 1小时（23:00）
+- en: '[![5](assets/5.png)](#co_argo_cd_CO19-5)'
+  id: totrans-514
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#co_argo_cd_CO19-5)'
+- en: Sets the applications that affect this window
+  id: totrans-515
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 设置影响此窗口的应用程序
+- en: '[![6](assets/6.png)](#co_argo_cd_CO19-6)'
+  id: totrans-516
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![6](assets/6.png)](#co_argo_cd_CO19-6)'
+- en: Regular expression matching any application whose name ends with `-prod`
+  id: totrans-517
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正则表达式匹配以 `-prod` 结尾的任何应用程序
+- en: Discussion
+  id: totrans-518
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 讨论
+- en: We cannot perform a sync of the application (neither automatic nor manual) when
+    it’s not the time configured in the time window defined in the `AppProject` manifest.
+    However, we can configure a window to allow manual syncs.
+  id: totrans-519
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当未在 `AppProject` 清单中定义的时间窗口内配置的时间时，我们无法执行应用程序的同步（无论是自动还是手动）。但是，我们可以配置一个窗口来允许手动同步。
+- en: 'Using the CLI tool:'
+  id: totrans-520
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用CLI工具：
+- en: '[PRE69]'
+  id: totrans-521
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE69]'
+- en: 'Also, manual sync can be set in the YAML file. In the following example, we’re
+    setting manual synchronization for the `namespace` default, denying synchronizations
+    at 22:00 for one hour and allowing synchronizations in `prod-cluster` at 23:00
+    for one hour:'
+  id: totrans-522
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 同时，在 YAML 文件中可以设置手动同步。在下面的示例中，我们设置了 `default` 命名空间的手动同步，拒绝在 22:00 进行一个小时的同步，并允许在
+    `prod-cluster` 中在 23:00 进行一个小时的同步：
+- en: '[PRE70]'
+  id: totrans-523
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE70]'
+- en: '[![1](assets/1.png)](#co_argo_cd_CO20-1)'
+  id: totrans-524
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_argo_cd_CO20-1)'
+- en: Block synchronizations
+  id: totrans-525
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 阻止同步
+- en: '[![2](assets/2.png)](#co_argo_cd_CO20-2)'
+  id: totrans-526
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_argo_cd_CO20-2)'
+- en: Enable manual sync to `default` namespace
+  id: totrans-527
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 启用到 `default` 命名空间的手动同步
+- en: '[![3](assets/3.png)](#co_argo_cd_CO20-3)'
+  id: totrans-528
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_argo_cd_CO20-3)'
+- en: Configure namespaces to block
+  id: totrans-529
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 配置要阻止的命名空间
+- en: '[![4](assets/4.png)](#co_argo_cd_CO20-4)'
+  id: totrans-530
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_argo_cd_CO20-4)'
+- en: Configure clusters to allow syncs at 23:00
+  id: totrans-531
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 配置集群，允许在 23:00 进行同步
+- en: 'We can inspect the current windows from the UI by going to the Settings → Projects
+    → default → windows tab or by using the `argocd` CLI tool:'
+  id: totrans-532
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以通过转到 设置 → 项目 → 默认 → 窗口选项卡 或者使用 `argocd` CLI 工具来检查当前窗口的UI：
+- en: '[PRE71]'
+  id: totrans-533
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE71]'

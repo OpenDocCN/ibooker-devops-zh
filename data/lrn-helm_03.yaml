@@ -1,0 +1,1563 @@
+- en: Chapter 3\. Beyond the Basics with Helm
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第三章。使用 Helm 进行基础以外的探索
+- en: In the previous chapter, we looked at the most frequently used Helm commands.
+    In this chapter we will explore other capabilities that the Helm tool provides.
+    We will dive into commands that provide information about releases, that test
+    installations, and that keep track of history. Finally, we will revisit installing
+    and upgrading, this time covering advanced cases.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在上一章中，我们看了 Helm 最常用的命令。在本章中，我们将探索 Helm 工具提供的其他功能。我们将深入研究提供有关发布信息的命令，测试安装的命令，并跟踪历史记录的命令。最后，我们将重新审视安装和升级，这次涵盖高级情况。
+- en: We will get started with some tools helpful for troubleshooting and debugging.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将开始使用一些有助于故障排除和调试的工具。
+- en: Templating and Dry Runs
+  id: totrans-3
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 模板化与干运行
+- en: When Helm installs a release, the program steps through several phases. It loads
+    the chart, parses the values passed to the program, reads the chart metadata,
+    and so on. Near the middle of the process, Helm compiles all of the templates
+    in the chart (all in one pass), and then renders them by passing in the values
+    (like we saw in the previous chapter). During this middle portion, it executes
+    all of the template directives. Once the templates are rendered into YAML, Helm
+    verifies the structure of the YAML by parsing it into Kubernetes objects. Finally,
+    Helm serializes those objects and sends them to the Kubernetes API server.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当 Helm 安装一个发布时，程序将通过几个阶段。它加载图表，解析传递给程序的值，读取图表元数据等。在过程的中间部分，Helm 将编译图表中的所有模板（一次性全部编译），然后通过传递值（就像我们在前一章中看到的）渲染它们。在这个中间部分期间，它执行所有模板指令。一旦模板被渲染成
+    YAML，Helm 通过将其解析为 Kubernetes 对象来验证 YAML 的结构。最后，Helm 序列化这些对象并将它们发送到 Kubernetes
+    API 服务器。
+- en: 'Roughly, then, the process is:'
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大致而言，过程如下：
+- en: Load the entire chart, including its dependencies.
+  id: totrans-6
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 加载整个图表，包括其依赖项。
+- en: Parse the values.
+  id: totrans-7
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 解析值。
+- en: Execute the templates, generating YAML.
+  id: totrans-8
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 执行模板，生成 YAML。
+- en: Parse the YAML into Kubernetes objects to verify the data.
+  id: totrans-9
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 将 YAML 解析为 Kubernetes 对象以验证数据。
+- en: Send it to Kubernetes.
+  id: totrans-10
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 将其发送到 Kubernetes。
+- en: 'For example, let’s look at one of the commands we issued in the previous chapter:'
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 举例来说，让我们来看看我们在前一章中发出的一个命令：
+- en: '[PRE0]'
+  id: totrans-12
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: In the first phase, Helm will locate the chart named `bitnami/drupal` and load
+    that chart. If the chart is local, it will be read off of disk. If a URL is given,
+    it will be fetched from the remote location (possibly using a plugin to assist
+    in fetching the chart).
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在第一阶段，Helm 将定位名为`bitnami/drupal`的图表并加载该图表。如果图表是本地的，则将从磁盘读取。如果给定 URL，则将从远程位置获取（可能使用插件来帮助获取图表）。
+- en: Then it will transform `--set drupalUsername=admin` into a value that can be
+    injected into the templates. This value will be combined with the default values
+    in the chart’s *values.yaml* file. Helm does some basic checks against the data.
+    If it has trouble parsing the user input, or if the default values are corrupt,
+    it will exit with an error. Otherwise, it will build a single big values object
+    that the template engine can use for substitutions.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后它将`--set drupalUsername=admin`转换为可以注入模板的值。此值将与图表的*values.yaml*文件中的默认值组合。Helm
+    对数据进行了一些基本检查。如果有问题解析用户输入，或者默认值损坏，它将以错误退出。否则，它将构建一个单一的大值对象，模板引擎可以用来进行替换。
+- en: The generated values object is created by loading all of the values of the chart
+    file, overlaying any values loaded from files (that is, with the `-f` flag), and
+    then overlaying any values set with the `--set` flag. In other words, `--set`
+    values override settings from passed-in values files, which in turn override anything
+    in the chart’s default *values.yaml* file.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 生成的值对象是通过加载图表文件的所有值，叠加从文件加载的任何值（即使用`-f`标志），然后叠加使用`--set`标志设置的任何值来创建的。换句话说，`--set`值覆盖传递值文件中的设置，这反过来又覆盖图表默认的*values.yaml*文件中的任何设置。
+- en: At this point, Helm will read all of the templates in the Drupal chart, and
+    then execute those templates, passing the merged values into the template engine.
+    Malformed templates will cause errors. But there are a variety of other situations
+    that may cause failure here. For example, if a required value is missing, it is
+    at this phase that an error is returned.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这一点上，Helm 将读取 Drupal 图表中的所有模板，然后执行这些模板，将合并的值传递给模板引擎。格式错误的模板将导致错误。但还有许多其他情况可能导致失败。例如，如果缺少必需的值，则在此阶段将返回错误。
+- en: It is important to note that, when executed, some Helm templates require information
+    about Kubernetes. So during template rendering, Helm *may* contact the Kubernetes
+    API server. This is an important topic that we will discuss in a moment.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 需要注意的是，当执行时，某些Helm模板需要有关Kubernetes的信息。因此，在模板渲染期间，Helm *可能* 会联系Kubernetes API服务器。这是一个我们将在稍后讨论的重要话题。
+- en: The output of the preceding step is then parsed from YAML into Kubernetes objects.
+    Helm will perform some schema-level validation at this point, making sure that
+    the objects are well-formed. Then they will be serialized into the final YAML
+    format for Kubernetes.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后，将前一步的输出从YAML解析为Kubernetes对象。此时，Helm将执行一些模式级验证，确保对象格式良好。然后，它们将被序列化为Kubernetes的最终YAML格式。
+- en: In the last phase, Helm sends the YAML data to the Kubernetes API server. This
+    is the server that `kubectl` and other Kubernetes tools interact with.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在最后阶段，Helm将YAML数据发送到Kubernetes API服务器。这是`kubectl`和其他Kubernetes工具交互的服务器。
+- en: The API server will run a series of checks on the submitted YAML. If Kubernetes
+    accepts the YAML data, Helm will consider the deployment a success. But if Kubernetes
+    rejects the YAML, Helm will exit with an error.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: API服务器将对提交的YAML运行一系列检查。如果Kubernetes接受YAML数据，Helm将认为部署成功。但如果Kubernetes拒绝YAML，则Helm将退出并显示错误。
+- en: 'Later on, we’ll go into detail about what happens once the objects are sent
+    to Kubernetes. In particular, we’ll cover how Helm associates the process described
+    earlier with an installation and revisions. But right now, we have enough information
+    about workflow to understand two related Helm features: the `--dry-run` flag and
+    the `helm template` command.'
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 后面，我们将详细讨论一旦对象发送到Kubernetes后会发生什么。特别是，我们将涵盖Helm如何将前面描述的过程与安装和修订相关联。但现在，我们已经有足够的工作流信息来理解两个相关的Helm特性：`--dry-run`标志和`helm
+    template`命令。
+- en: The --dry-run Flag
+  id: totrans-22
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: '`--dry-run`标志'
+- en: Commands like `helm install` and `helm upgrade` provide a flag named `--dry-run`.
+    When you supply this flag, it will cause Helm to step through the first four phases
+    (load the chart, determine the values, render the templates, format to YAML).
+    But when the fourth phase is finished, Helm will dump a trove of information to
+    standard output, including all of the rendered templates. Then it will exit without
+    sending the objects to Kubernetes and without creating any release records.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 像`helm install`和`helm upgrade`这样的命令提供了一个名为`--dry-run`的标志。当您提供此标志时，它将导致Helm依次执行前四个阶段（加载图表，确定值，渲染模板，格式化为YAML）。但是当第四阶段完成时，Helm将在标准输出中转储大量信息，包括所有渲染的模板。然后它将退出，而不会将对象发送到Kubernetes，也不会创建任何发布记录。
+- en: 'For example, here is a version of our previous Drupal install with the `--dry-run`
+    flag appended:'
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，这是我们之前安装Drupal的版本，附加了`--dry-run`标志：
+- en: '[PRE1]'
+  id: totrans-25
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: 'At the top of the output, it will print some information about the release:'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在输出的顶部，它会打印一些关于发布的信息：
+- en: '[PRE2]'
+  id: totrans-27
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: The preceding tells us what the name of the installation is, when it was last
+    deployed (in this case, the current date and time), which namespace it would have
+    been deployed into, what phase of the release it is in (`pending-install`), and
+    the revision number. Since this is an install, the revision is `1`. On upgrade,
+    it would be `2` or greater.
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 前面告诉我们安装的名称是什么，上次部署时间是什么（在本例中是当前日期和时间），它将被部署到哪个命名空间，发布的阶段是什么（`pending-install`），以及修订号。由于这是一个安装过程，修订号是`1`。在升级时，它将是`2`或更高。
+- en: Finally, if this chart declared any hooks, they would be enumerated here. For
+    more on hooks, see Chapters [6](ch06.xhtml#advanced_charts) and [7](ch07.xhtml#chart_repositories).
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，如果此图表声明了任何挂钩，它们将在此处枚举。有关挂钩的更多信息，请参阅第[6](ch06.xhtml#advanced_charts)章和第[7](ch07.xhtml#chart_repositories)章。
+- en: 'At first glance, it might seem that this metadata entry has a lot of unnecessary
+    data. After all, what good does `LAST DEPLOYED` do if we are not actually installing?
+    In fact, this chunk of information is a standard set used throughout Helm. It
+    is part of the *release record*: a set of information about a release. Commands
+    like `helm get` use these same fields.'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 乍一看，这个元数据条目似乎包含了许多不必要的数据。毕竟，如果我们实际上没有进行安装，`LAST DEPLOYED`有什么作用呢？事实上，这一信息块是Helm中使用的标准设置之一。它是*发布记录*的一部分：关于发布的一组信息。像`helm
+    get`这样的命令使用这些相同的字段。
+- en: 'Next, after the informational block, all of the rendered templates are dumped
+    to standard output:'
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 紧接着信息块之后，所有渲染的模板都会被转储到标准输出：
+- en: '[PRE3]'
+  id: totrans-32
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: The rendered Drupal chart is thousands of lines, so the preceding just shows
+    the first several lines of output.
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 渲染后的Drupal图表有数千行，因此前面只显示了输出的前几行。
+- en: 'Finally, at the bottom of the dry-run output, Helm prints the user-oriented
+    release notes:'
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，在干运行输出的底部，Helm 打印了面向用户的释放说明：
+- en: '[PRE4]'
+  id: totrans-35
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: The example is truncated for brevity.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 示例为了简洁起见被截断。
+- en: This dry-run feature provides Helm users a way to debug the output of a chart
+    before it is sent on to Kubernetes. With all of the templates rendered, you can
+    inspect exactly what would have been submitted to your cluster. And with the release
+    data, you can verify that the release would have been created as you expected.
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个干运行特性为 Helm 用户提供了一种在发送到 Kubernetes 之前调试图表输出的方式。通过渲染所有模板，您可以检查到底会提交到集群的内容。并且通过发布数据，您可以验证释放是否按您期望的方式创建。
+- en: The principal purpose of the `--dry-run` flag is to give people a chance to
+    inspect and debug output before sending it on to Kubernetes. But soon after it
+    was introduced, Helm maintainers noticed a trend among users. People wanted to
+    use `--dry-run` to use Helm as a template engine, and then use other tools (like
+    `kubectl`) to send the rendered output to Kubernetes.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`--dry-run` 标志的主要目的是让人们有机会在发送到 Kubernetes 之前检查和调试输出。但不久之后，Helm 的维护者注意到用户中存在一种趋势。人们想要使用
+    `--dry-run` 将 Helm 作为模板引擎使用，然后使用其他工具（如 `kubectl`）将渲染后的输出发送到 Kubernetes。'
+- en: 'But `--dry-run` wasn’t written with this use case in mind, and that caused
+    a few problems:'
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 但 `--dry-run` 并非为此用例而编写，这导致了一些问题：
+- en: '`--dry-run` mixes non-YAML information with the rendered templates. This means
+    the data has to be cleaned up before being sent to tools like `kubectl`.'
+  id: totrans-40
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: '`--dry-run` 将非 YAML 信息与渲染模板混合在一起。这意味着在发送到 `kubectl` 等工具之前，数据必须被清理。'
+- en: A `--dry-run` on upgrade can produce different YAML output than a `--dry-run`
+    on install, and this can be confusing.
+  id: totrans-41
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 升级时的 `--dry-run` 可能会生成与安装时不同的 YAML 输出，这可能会令人困惑。
+- en: It contacts the Kubernetes API server for validation, which means Helm has to
+    have Kubernetes credentials even if it is just used to `--dry-run` a release.
+  id: totrans-42
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 它联系 Kubernetes API 服务器进行验证，这意味着即使只用于 `--dry-run` 释放，Helm 也必须具有 Kubernetes 凭据。
+- en: It also inserts information into the template engine that is cluster-specific.
+    Because of this, the output of some rendering processes may be cluster-specific.
+  id: totrans-43
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 它还将信息插入到模板引擎中，这些信息是特定于集群的。因此，某些渲染过程的输出可能是集群特定的。
+- en: 'To remedy these problems, the Helm maintainers introduced a completely separate
+    command: `helm template`.'
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了解决这些问题，Helm 的维护者引入了一个完全独立的命令：`helm template`。
+- en: The helm template Command
+  id: totrans-45
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: '`helm template` 命令'
+- en: While `--dry-run` is designed for debugging, `helm template` is designed to
+    isolate the template rendering process of Helm from the installation or upgrade
+    logic.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然 `--dry-run` 设计用于调试，`helm template` 则旨在将 Helm 的模板渲染过程与安装或升级逻辑隔离开来。
+- en: 'Earlier, we looked at the five phases of a Helm install or upgrade. The `template`
+    command performs the first four phases (load the chart, determine the values,
+    render the templates, format to YAML). But it does this with a few additional
+    caveats:'
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 早些时候，我们看过 Helm 安装或升级的五个阶段。`template` 命令执行前四个阶段（加载图表、确定值、渲染模板、格式化为 YAML）。但这需要考虑一些额外的注意事项：
+- en: During `helm template`, Helm *never* contacts a remote Kubernetes server.
+  id: totrans-48
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在 `helm template` 过程中，Helm *从不* 联系远程 Kubernetes 服务器。
+- en: The `template` command always acts like an installation.
+  id: totrans-49
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`template` 命令始终像一个安装操作一样。'
+- en: Template functions and directives that would normally require contacting a Kubernetes
+    server will instead only return default data.
+  id: totrans-50
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 通常需要与 Kubernetes 服务器联系的模板函数和指令现在将仅返回默认数据。
+- en: The chart only has access to default Kubernetes kinds.
+  id: totrans-51
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 图表仅有默认的 Kubernetes 种类访问权限。
+- en: Regarding the last item, `helm template` makes a notable simplifying assumption.
+    Kubernetes servers support built-in kinds (`Pod`, `Service`, `ConfigMap`, and
+    so on) as well as custom kinds generated by custom resource definitions (CRDs).
+    When running an install or upgrade, Helm fetches those kinds from the Kubernetes
+    server before processing the chart.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 关于最后一项，`helm template` 做了一个显著的简化假设。Kubernetes 服务器支持内置种类（`Pod`、`Service`、`ConfigMap`
+    等）以及由自定义资源定义（CRD）生成的自定义种类。在运行安装或升级时，Helm 在处理图表之前从 Kubernetes 服务器获取这些种类。
+- en: However, `helm template` does this step differently. When Helm is compiled,
+    it is compiled against a particular version of Kubernetes. The Kubernetes libraries
+    contain the list of built-in kinds for that release. Helm uses that built-in list
+    instead of a list it fetches from the API server. For this reason, Helm does not
+    have access to any CRDs during a `helm template` run, since CRDs are installed
+    on the cluster and are not included in the Kubernetes libraries.
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，`helm template` 在此步骤上的操作方式有所不同。当 Helm 编译时，它是针对特定版本的 Kubernetes 进行编译的。Kubernetes
+    库包含了该版本发布的内置种类列表。Helm 使用该内置列表，而不是从 API 服务器获取列表。因此，在 `helm template` 运行期间，Helm
+    没有访问任何 CRD，因为 CRD 安装在集群上，而不包括在 Kubernetes 库中。
+- en: Note
+  id: totrans-54
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Running an old version of Helm against a chart that uses new kinds or versions
+    can produce an error during `helm template` because Helm will not have the newest
+    kinds or versions compiled into it.
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在使用旧版本的 Helm 运行针对使用新种类或版本的图表时，可能会在 `helm template` 过程中出现错误，因为 Helm 没有将最新的种类或版本编译进去。
+- en: As a result of these decisions, `helm template` produces consistent output run
+    after run. More importantly, it can be run in an environment that does not have
+    access to a Kubernetes cluster, like a continuous integration (CI) pipeline.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于这些决策，`helm template` 在每次运行后产生一致的输出。更重要的是，它可以在没有访问 Kubernetes 集群的环境中运行，比如持续集成（CI）流水线。
+- en: 'The output is also different from `--dry-run`. Here’s an example command:'
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 输出也不同于 `--dry-run`。以下是一个示例命令：
+- en: '[PRE5]'
+  id: totrans-58
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: The preceding is a greatly abridged version of the output, showing just the
+    command and a sample of the beginning data and the end of the data. The important
+    thing to note, though, is that *only* the YAML-formatted Kubernetes manifest is
+    printed by default.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 上述内容是输出的大大简化版本，仅显示了命令以及数据的开头和结尾的示例。需要注意的是，默认情况下仅打印 YAML 格式的 Kubernetes 清单。
+- en: Because Helm does not contact a Kubernetes cluster during a `helm template`
+    run, it does not do complete validation of the output. It is possible that Helm
+    will not catch some errors in this case. You may choose to use the `--validate`
+    flag if you want that behavior, but in this case Helm will need a valid *kubeconfig*
+    file with credentials for a cluster.
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于 Helm 在 `helm template` 运行期间不联系 Kubernetes 集群，它不会对输出进行完整验证。在这种情况下，如果您希望有这种行为，可以选择使用
+    `--validate` 标志，但在这种情况下，Helm 需要一个带有集群凭据的有效 *kubeconfig* 文件。
+- en: The `helm template` command has a broad number of flags that mirror those in
+    `helm install`. So in many cases, you can execute a `helm template` command just
+    as you would a `helm install`, but then capture the YAML and use it with other
+    tooling.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`helm template` 命令有许多标志，与 `helm install` 中的标志相对应。因此，在许多情况下，您可以像执行 `helm install`
+    命令一样执行 `helm template` 命令，然后捕获 YAML 并将其与其他工具一起使用。'
+- en: Using a Post-Render Instead of Helm Template
+  id: totrans-62
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用后渲染而不是 Helm Template
+- en: Sometimes you want to intercept the YAML, modify it with your own tool, and
+    then load it into Kubernetes. Helm provides a way to execute this external tool
+    without having to resort to using `helm template`. The flag `--post-renderer`
+    on the `install`, `upgrade`, `rollback`, and `template` will cause Helm to send
+    the YAML data to the command, and then read the results back into Helm. This is
+    a great way to work with tools like Kustomize.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有时您希望拦截 YAML，使用自己的工具修改它，然后将其加载到 Kubernetes 中。Helm 提供了一种执行此外部工具的方式，而无需使用 `helm
+    template`。在 `install`、`upgrade`、`rollback` 和 `template` 上使用 `--post-renderer`
+    标志会导致 Helm 将 YAML 数据发送到命令，然后再将结果读回到 Helm。这是与 Kustomize 等工具配合使用的一个很好的方式。
+- en: To summarize, `helm template` is a tool for rendering Helm charts into YAML,
+    and the `--dry-run` flag is a tool for debugging installation and upgrade commands
+    without loading the data into Kubernetes.
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 总结一下，`helm template` 是将 Helm charts 渲染为 YAML 的工具，而 `--dry-run` 标志是在不将数据加载到 Kubernetes
+    的情况下调试安装和升级命令的工具。
+- en: Learning About a Release
+  id: totrans-65
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 了解发布情况
+- en: In the previous chapter, we got a glimpse of the `helm get` command. At this
+    point, we will take a deeper look into that command and others that provide us
+    with information *about* Helm releases.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在前一章中，我们简要介绍了 `helm get` 命令。现在，我们将深入了解该命令以及其他提供有关 Helm 发布信息的命令。
+- en: 'To start, let’s revisit the five phases of a Helm installation from the previous
+    section. They were:'
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，让我们回顾一下前一节中 Helm 安装的五个阶段。它们是：
+- en: Load the chart.
+  id: totrans-68
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 加载图表。
+- en: Parse the values.
+  id: totrans-69
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 解析值。
+- en: Execute the templates.
+  id: totrans-70
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 执行模板。
+- en: Render the YAML.
+  id: totrans-71
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 渲染 YAML。
+- en: Send it to Kubernetes.
+  id: totrans-72
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 发送到 Kubernetes。
+- en: The first four phases are primarily concerned with a local representation of
+    the data. That is, Helm is doing all of the processing on the same computer that
+    the `helm` command is run on.
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 前四个阶段主要涉及数据的本地表示。也就是说，Helm 在运行 `helm` 命令的同一台计算机上执行所有处理。
+- en: During the last phase, though, Helm sends that data to Kubernetes. And then
+    the two communicate back and forth until the release is either accepted or rejected.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，在最后一个阶段，Helm 将该数据发送到 Kubernetes。然后两者之间来回通信，直到发布被接受或拒绝。
+- en: During that fifth phase, Helm must monitor the state of the release. Moreover,
+    since many individuals may be working on the same copy of that particular application
+    installation, Helm needs to monitor the state in such a way that *multiple users*
+    can see that information.
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在第五阶段期间，Helm 必须监控发布的状态。此外，由于许多人可能在同一个应用程序安装的副本上工作，因此 Helm 需要以多用户可以看到信息的方式监控状态。
+- en: Helm provides this feature with *release records*.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Helm 提供了 *发布记录* 功能。
+- en: Release Records
+  id: totrans-77
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 发布记录
+- en: When we install a Helm chart (with `helm install`), the new installation is
+    created in the namespace you specify, or the default namespace. We looked at this
+    in the previous chapter.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当我们安装 Helm 图表（使用 `helm install`）时，新的安装会创建在您指定的命名空间中，或者默认命名空间中。我们在前一章已经看过了这个过程。
+- en: 'At the end of that chapter, we also saw how `helm install` creates a special
+    type of Kubernetes `Secret` that holds release information. We saw how we could
+    inspect these `Secret`s with `kubectl`:'
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在那一章的结尾，我们还看到了 `helm install` 如何创建一种特殊类型的 Kubernetes `Secret` 来保存发布信息。我们还看到了如何使用
+    `kubectl` 检查这些 `Secret`：
+- en: '[PRE6]'
+  id: totrans-80
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: Of particular note is that last `Secret`, `sh.helm.release.v1.mysite.v1`. Notice
+    that it uses a special type (`helm.sh/release.v1`) to indicate that it is a Helm
+    secret. Helm automatically generated this secret to track version 1 of our `mysite`
+    installation (which is a Drupal site).
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 特别要注意的是最后一个 `Secret`，`sh.helm.release.v1.mysite.v1`。请注意，它使用了特殊类型（`helm.sh/release.v1`）来指示这是一个
+    Helm 密钥。Helm 自动生成此密钥来跟踪我们的 `mysite` 安装的版本 1（这是一个 Drupal 站点）。
+- en: 'Each time we upgrade that `mysite` installation, a new `Secret` will be created
+    to track each release. In other words, a release record tracks each *revision*
+    of an *installation*:'
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每次我们升级 `mysite` 安装时，都会创建一个新的 `Secret` 来跟踪每个发布。换句话说，发布记录跟踪每个安装的 *修订版本*：
+- en: '[PRE7]'
+  id: totrans-83
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: In the preceding example, we have upgraded a few times, and now we are at `v3`
+    of `mysite`. By default, Helm tracks up to ten revisions of each installation.
+    Once an installation exceeds ten releases, Helm deletes the oldest release records
+    until no more than the maximum remain.
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在上述例子中，我们已经升级了几次，现在我们在 `mysite` 的 `v3` 版本。默认情况下，Helm 跟踪每个安装的十个修订版本。一旦一个安装超过十个发布，Helm
+    将删除最旧的发布记录，直到最多保留指定数量。
+- en: Each release record contains enough information to re-create the Kubernetes
+    objects for that revision (an important thing for `helm rollback`). It also contains
+    metadata about the release.
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个发布记录包含足够的信息来重新创建该修订版本的 Kubernetes 对象（这对于 `helm rollback` 非常重要）。它还包含关于发布的元数据。
+- en: 'For example, if we looked at the release using `kubectl`, we would see something
+    like this:'
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，如果我们使用 `kubectl` 查看发布，我们会看到类似于这样的内容：
+- en: '[PRE8]'
+  id: totrans-87
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: '[![1](Images/1.png)](#co_beyond_the_basics_with_helm_CO1-1)'
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](Images/1.png)](#co_beyond_the_basics_with_helm_CO1-1)'
+- en: The labels contain Helm metadata
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 标签包含 Helm 元数据。
+- en: In this example, the giant Base64-encoded data has been removed along with a
+    few other inessential fields. That blob contains a gzipped representation of the
+    chart and release. But importantly, the `labels` section of the Kubernetes metadata
+    contains information about this release.
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这个例子中，已经删除了巨大的 Base64 编码数据以及一些其他不必要的字段。该数据块包含了图表和发布的 gzip 压缩表示。但是重要的是，Kubernetes
+    元数据中的 `labels` 部分包含了关于此发布的信息。
+- en: We can see, for instance, that this data describes the release named `mysite`,
+    that its current revision number is `3`, and the release is marked `deployed`.
+    If we were to look at version `2`, we would see the release `status` is `superseded`,
+    which means that it has been replaced by a later version.
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，我们可以看到，这些数据描述了名为 `mysite` 的发布，其当前修订版本号为 `3`，并且发布被标记为 `deployed`。如果我们查看版本
+    `2`，我们会看到发布的 `status` 是 `superseded`，这意味着它已被后续版本替换。
+- en: In short, this secret is stored inside of Kubernetes so that different users
+    of the same cluster have access to the same release information.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 简而言之，这个密钥是存储在 Kubernetes 内部的，以便同一集群的不同用户可以访问相同的发布信息。
+- en: 'During the life cycle of a release, it can pass through several different statuses.
+    Here they are, approximately in the order you would likely see them:'
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在发布的生命周期中，它可以通过几种不同的状态。以下是您可能会看到的顺序大致排列如下：
+- en: '`pending-install`'
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`pending-install`'
+- en: Before sending the manifests to Kubernetes, Helm claims the installation by
+    creating a release (marked version 1) whose status is set to `pending-install`.
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在将清单发送到Kubernetes之前，Helm通过创建一个状态设置为`pending-install`的发布（标记为版本1）来声明安装。
+- en: '`deployed`'
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`deployed`'
+- en: As soon as Kubernetes accepts the manifest from Helm, Helm updates the release
+    record, marking it as deployed.
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦Kubernetes接受来自Helm的清单，Helm会更新发布记录，将其标记为已部署。
+- en: '`pending-upgrade`'
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`pending-upgrade`'
+- en: When a Helm upgrade is begun, a new release is created for an installation (e.g.,
+    `v2`), and its status is set to `pending-upgrade`.
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当开始Helm升级时，将为安装创建一个新的发布（例如，`v2`），并且其状态设置为`pending-upgrade`。
+- en: '`superseded`'
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`superseded`'
+- en: When an upgrade is run, the last deployed release is updated, marked as `superseded`,
+    and the newly upgraded release is changed from `pending-upgrade` to `deployed`.
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当运行升级时，将更新最后部署的发布，标记为`superseded`，并且新升级的发布从`pending-upgrade`更改为`deployed`。
+- en: '`pending-rollback`'
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`pending-rollback`'
+- en: If a rollback is created, a new release (e.g., `v3`) is created, and its status
+    is set to `pending-rollback` until Kubernetes accepts the release manifest. Then
+    it is marked `deployed` and the last release is marked `superseded`.
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果创建了回滚操作，则会创建一个新的发布（例如，`v3`），并且其状态设置为`pending-rollback`，直到Kubernetes接受发布清单。然后它被标记为`deployed`，而上一个发布被标记为`superseded`。
+- en: '`uninstalling`'
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`uninstalling`'
+- en: When a `helm uninstall` is executed, the most recent release is read and then
+    its status is changed to `uninstalling`.
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当执行`helm uninstall`时，会读取最近的发布，然后其状态更改为`uninstalling`。
+- en: '`uninstalled`'
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`uninstalled`'
+- en: If history is preserved during deletion, then when the `helm uninstall` is complete,
+    the last release’s status is changed to `uninstalled`.
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果在删除过程中保留历史记录，则在`helm uninstall`完成后，上一个发布的状态将更改为`uninstalled`。
+- en: '`failed`'
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`failed`'
+- en: Finally, if during *any* operation, Kubernetes rejects a manifest submitted
+    by Helm, Helm will mark that release `failed`.
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，如果在*任何*操作期间，Kubernetes拒绝了Helm提交的清单，Helm将标记该发布为`failed`。
+- en: Listing Releases
+  id: totrans-110
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 列出发布版本
+- en: Status messages show up in a number of Helm commands. We already saw how `pending-install`
+    appears in a `--dry-run`. In this section and the next, we’ll see a few more places
+    where this appears.
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 状态消息出现在多个Helm命令中。我们已经看到`pending-install`如何在`--dry-run`中出现。在本节和下一节中，我们将看到这些消息出现的几个更多地方。
+- en: In the previous chapter, we used `helm list` to see the charts we had installed.
+    Given our coverage of status, it is worth revisiting `helm list`. The `list` command
+    is the best tool for quickly checking on the statuses of your releases.
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在前一章中，我们使用`helm list`查看我们已安装的图表。考虑到我们的状态覆盖，值得重新访问`helm list`。`list`命令是快速检查您发布状态的最佳工具。
+- en: 'For example, say we have a cluster with both the `drupal` and `wordpress` charts
+    installed. Here is the output of `helm list`:'
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，假设我们有一个同时安装`drupal`和`wordpress`图表的集群。这是`helm list`的输出：
+- en: '[PRE9]'
+  id: totrans-114
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: 'To show the result of a failure, though, we can run an upgrade command that
+    we know will break:'
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要显示失败的结果，我们可以运行一个我们知道会失败的升级命令：
+- en: '[PRE10]'
+  id: totrans-116
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: As the error message indicates, a pull policy cannot be set to `NoSuchPolicy`.
+    This error came from the Kubernetes API server, which means Helm submitted the
+    manifest, and Kubernetes rejected it. So our release should be in a failed state.
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如错误消息所示，无法将拉取策略设置为`NoSuchPolicy`。此错误来自Kubernetes API服务器，这意味着Helm提交了清单，而Kubernetes拒绝了它。因此，我们的发布应该处于失败状态。
+- en: 'We can verify this by running `helm ls` again:'
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以通过再次运行`helm ls`来验证这一点：
+- en: '[PRE11]'
+  id: totrans-119
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: It is worth noting again that the `REVISION` field for our newly failed `wordpress`
+    installation has been incremented from `2` to `3`. Even failed releases have revisions
+    attached to them. We’ll see why this is important in [“History and Rollbacks”](#history_and_rollbacks).
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 值得再次注意的是，我们新失败的`wordpress`安装的`REVISION`字段已从`2`增加到`3`。即使失败的发布也附有修订版本。我们将看到为什么这一点在[“历史和回滚”](#history_and_rollbacks)中很重要。
+- en: Find Details of a Release with helm get
+  id: totrans-121
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用`helm get`查找发布的详细信息
+- en: While `helm list` provides a summary view of installations, the `helm get` set
+    of commands provide deeper information about a particular release.
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然`helm list`提供了安装的摘要视图，但`helm get`命令集提供了有关特定发布的更详细信息。
+- en: There are five `helm get` subcommands (`hooks`, `manifests`, `notes`, `values`,
+    and `all`). Each subcommand retrieves some portion of the information Helm tracks
+    for a release.
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有五个`helm get`子命令（`hooks`、`manifests`、`notes`、`values`和`all`）。每个子命令检索Helm为发布跟踪的一部分信息。
+- en: Using helm get notes
+  id: totrans-124
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 使用 helm get notes
+- en: 'The `helm get notes` subcommand prints the release notes:'
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`helm get notes`子命令打印发布说明：'
+- en: '[PRE12]'
+  id: totrans-126
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: This output should look familiar, as `helm install` and `helm upgrade` both
+    print the release notes at the end of a successful operation. But `helm get notes`
+    provides a convenient way to grab these notes on demand. That is useful in cases
+    where you’ve forgotten what the URL is to your Drupal site.
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个输出应该看起来很熟悉，因为`helm install`和`helm upgrade`都会在成功操作结束时打印发布说明。但是`helm get notes`提供了一个方便的方式来随需获取这些说明。在您忘记Drupal站点的URL是什么的情况下，这是很有用的。
+- en: Using helm get values
+  id: totrans-128
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 使用 helm get values
+- en: 'One useful subcommand is `values`. You can use this to see which values were
+    supplied during the last release. In the previous section, we upgraded a WordPress
+    installation and caused it to fail. We can see what values caused it to fail using
+    `helm get values`:'
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个有用的子命令是`values`。您可以使用它来查看上次发布时提供的值。在前一节中，我们升级了一个WordPress安装并导致其失败。我们可以使用`helm
+    get values`查看导致其失败的值：
+- en: '[PRE13]'
+  id: totrans-130
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: 'We know that revision 2 was successful, but revision 3 failed. So we can take
+    a look at the earlier values to see what changed:'
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们知道修订版本2成功了，但修订版本3失败了。因此，我们可以查看早期的值以查看发生了什么变化：
+- en: '[PRE14]'
+  id: totrans-132
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: With this, we can see that one value was removed and one value was added. Features
+    like this are designed to make it easier for Helm users to identify the source
+    of errors.
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过这个，我们可以看到一个值被移除，一个值被添加。这样的功能旨在帮助Helm用户更容易地识别错误的来源。
+- en: 'This command is also useful for learning about the total state of a release’s
+    configuration. We can use `helm get values` to see *all* of the values currently
+    set for that release. To do this, we use the `--all` flag:'
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个命令也对了解发布配置的总体状态很有用。我们可以使用`helm get values`查看该发布当前设置的*所有*值。为此，我们使用`--all`标志：
+- en: '[PRE15]'
+  id: totrans-135
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: When the `--all` flag is specified, Helm will get the complete computed set
+    of values, sorted alphabetically. This is a great tool for seeing the exact state
+    of configuration for the release.
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当指定`--all`标志时，Helm将获取完整的计算值集，按字母顺序排序。这是一个查看发布配置的确切状态的好工具。
+- en: Seeing Default Values
+  id: totrans-137
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 查看默认值
+- en: Although `helm get values` does not have a way of showing you the default values,
+    you can see those with `helm inspect values CHARTNAME`. This inspects the chart
+    itself (not the release) and prints out the documented default *values.yaml* file.
+    Thus, we could use `helm inspect values bitnami/wordpress` to see the default
+    configuration for the WordPress chart.
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管`helm get values`没有显示默认值的方法，但您可以使用`helm inspect values CHARTNAME`查看这些值。这会检查图表本身（而不是发布）并打印出文档化的默认*values.yaml*文件。因此，我们可以使用`helm
+    inspect values bitnami/wordpress`来查看WordPress图表的默认配置。
+- en: Using helm get manifest
+  id: totrans-139
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 使用 helm get manifest
+- en: 'The last `helm get` subcommand that we will cover is `helm get manifest`. This
+    sub-command retrieves the exact YAML manifest that Helm produced using the Chart
+    templates:'
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将要介绍的最后一个`helm get`子命令是`helm get manifest`。这个子命令检索Helm使用图表模板生成的确切YAML清单：
+- en: '[PRE16]'
+  id: totrans-141
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: 'One important detail about this command is that it does not return the *current
+    state* of all of your resources. It returns *the manifest generated from the template*.
+    In the preceding example, we see a `Secret` named `wordpress-mariadb`. If we query
+    that `Secret` using `kubectl`, the `metadata` section looks like this:'
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有关此命令的一个重要细节是，它不会返回所有资源的*当前状态*。它返回*从模板生成的清单*。在前面的示例中，我们看到一个名为`wordpress-mariadb`的`Secret`。如果我们使用`kubectl`查询该`Secret`，`metadata`部分如下所示：
+- en: '[PRE17]'
+  id: totrans-143
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: The output of `kubectl` contains the record as it currently exists in Kubernetes.
+    There are several fields that have been added since the template output. Some
+    (like the annotations) are managed by Helm itself, and others (like `managedFields`
+    and `creationTimestamp`) are managed by Kubernetes.
+  id: totrans-144
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kubectl`的输出包含当前在Kubernetes中存在的记录。自模板输出以来已添加了几个字段。一些字段（如注释）由Helm本身管理，其他字段（如`managedFields`和`creationTimestamp`）由Kubernetes管理。'
+- en: Once again, Helm provides tools designed to ease debugging. Between `helm get
+    manifest` and `kubectl get`, you have tools for comparing what Kubernetes thinks
+    is the current object with what the chart produced. This is particularly helpful
+    when a resource that should be managed by Helm was manually edited outside of
+    Helm (e.g., using `kubectl edit`).
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 再次强调，Helm 提供了设计用于简化调试的工具。在 `helm get manifest` 和 `kubectl get` 之间，您可以使用工具比较
+    Kubernetes 认为是当前对象与图表生成的对象之间的差异。当由 Helm 管理的资源在 Helm 外部手动编辑（例如使用 `kubectl edit`）时，这尤其有帮助。
+- en: With `helm get`, we can closely inspect an individual release. But the next
+    tool we will cover provides us a view of the progression of releases. In the next
+    section, we will look at `helm history` and `helm rollback`.
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 `helm get`，我们可以仔细检查单个发布。但接下来我们将介绍的工具将为我们提供发布版本的进展视图。在接下来的部分中，我们将查看 `helm
+    history` 和 `helm rollback`。
+- en: History and Rollbacks
+  id: totrans-147
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 历史和回滚
+- en: 'Throughout this book, we have distinguished between installations and revisions.
+    In this chapter, we have been working with an installation named `mysite` and
+    another installation named `wordpress`. And when we ran `helm list` earlier, we
+    saw that each installation had three releases. Moreover, we saw that `wordpress`
+    was in a failed state:'
+  id: totrans-148
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本书中，我们区分了安装和修订版本。在本章中，我们使用了一个名为 `mysite` 的安装和另一个名为 `wordpress` 的安装。当我们之前运行
+    `helm list` 时，我们看到每个安装都有三个发布版本。此外，我们看到 `wordpress` 处于失败状态：
+- en: '[PRE18]'
+  id: totrans-149
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: 'We can investigate the release history of WordPress to see what happened. To
+    do this, we will use `helm history`:'
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以调查 WordPress 的发布历史记录以查看发生了什么。为此，我们将使用 `helm history`：
+- en: '[PRE19]'
+  id: totrans-151
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: The output of this command gives us a nice history of the `wordpress` release.
+    First it was installed, and then it was upgraded and marked deployed (which means
+    that it was a successful upgrade). But when it was upgraded again, that upgrade
+    `failed`. The `helm history` command even gives us the error message that Kubernetes
+    returned when marking the release `failed`.
+  id: totrans-152
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此命令的输出为我们提供了 `wordpress` 发布的良好历史记录。首先安装了它，然后升级并标记为已部署（这意味着升级成功）。但当再次升级时，该升级失败了。`helm
+    history` 命令甚至给出了 Kubernetes 在标记发布为“失败”时返回的错误消息。
+- en: From the error, we know that the release failed because we supplied an invalid
+    image pull policy. So of course we could correct this by simply running another
+    `helm upgrade`. But imagine a case where the cause of error was not readily available.
+    Rather than leave the application in a failed state while diagnosing the problem,
+    it would be nice to simply revert back to the release that worked before.
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 根据错误信息，我们知道发布失败是因为我们提供了无效的镜像拉取策略。所以当然，我们可以通过运行另一个 `helm upgrade` 来纠正这个问题。但想象一种情况，即错误的原因不容易获取。在诊断问题时，而不是将应用程序留在失败状态，最好是简单地回退到之前工作正常的发布版本。
+- en: 'This is what `helm rollback` is for:'
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`helm rollback` 的作用是这样的：'
+- en: '[PRE20]'
+  id: totrans-155
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: This command tells Helm to fetch the `wordpress` version `2` release, and resubmit
+    that manifest to Kubernetes. A rollback does *not* restore to a previous snapshot
+    of the cluster. Helm does not track enough information to do that. What it does
+    is resubmit the previous configuration, and Kubernetes attempts to reset the resources
+    to match.
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此命令告诉 Helm 检索 `wordpress` 版本 `2` 的发布，并将该清单重新提交给 Kubernetes。回滚不会恢复到集群的先前快照。Helm
+    并未跟踪足够的信息来执行此操作。它所做的是重新提交先前的配置，然后 Kubernetes 尝试重置资源以匹配该配置。
+- en: 'Now we can once again use `helm history` to see what has happened:'
+  id: totrans-157
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们可以再次使用 `helm history` 来查看发生了什么：
+- en: '[PRE21]'
+  id: totrans-158
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: The rollback operation created a new revision (`4`). Since the rollback was
+    successful (and Kubernetes accepted the alterations), the release is marked `deployed`.
+    Note that revision `2` is now marked `superseded`, while the failed release `3`
+    is still marked `failed`.
+  id: totrans-159
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 回滚操作创建了一个新的修订版本（`4`）。由于回滚成功（并且 Kubernetes 接受了更改），该发布被标记为“已部署”。请注意，修订版本 `2` 现在被标记为“已取代”，而失败的发布
+    `3` 仍被标记为“失败”。
+- en: Because Helm has preserved the history, you can still examine the failed release
+    after rolling back to a known-good configuration.
+  id: totrans-160
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因为 Helm 保留了历史记录，所以即使回滚到已知良好的配置后，您仍然可以检查失败的发布。
+- en: In most cases, `helm rollback` is a great way to recover from a catastrophe.
+    But if you hand-edit resources that are managed by Helm, an interesting problem
+    may arise. Rollbacks can on occasion cause some unexpected behavior, especially
+    if the Kubernetes resources have been hand-edited by users. Helm and Kubernetes
+    will attempt to preserve those hand-edits if they do not conflict with the rollback.
+    Essentially, a rollback will generate a 3-way diff between the current state of
+    the resources, the failed Helm release, and the Helm release that you roll back
+    to. In some cases, the generated diff may result in rolling back handmade edits,
+    while in other cases those discrepancies will be merged. In the worst case, some
+    handmade edits may be overwritten while other related edits are merged, leading
+    to an inconsistency in configuration. This is one of the many reasons Helm core
+    maintainers recommend against hand-editing resources. If all edits are made through
+    Helm, then you can use Helm tools effectively and with no guesswork.
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在大多数情况下，`helm rollback` 是从灾难中恢复的好方法。但是，如果手动编辑了由Helm管理的资源，则可能会出现有趣的问题。回滚有时可能会导致一些意外行为，特别是如果Kubernetes资源已被用户手动编辑。如果手动编辑不与回滚冲突，Helm和Kubernetes将尝试保留这些手动编辑。本质上，回滚将生成当前资源状态、失败的Helm发布和回滚到的Helm发布之间的三向差异。在某些情况下，生成的差异可能会导致回滚手工编辑的内容，而在其他情况下，这些差异将被合并。在最坏的情况下，一些手工编辑可能会被覆盖，而其他相关编辑会被合并，导致配置的不一致。这是Helm核心维护者建议不要手动编辑资源的许多原因之一。如果所有编辑都通过Helm进行，那么您可以有效地使用Helm工具，而无需猜测。
+- en: Keeping History and Rolling Back
+  id: totrans-162
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 保留历史记录和回滚
+- en: 'In the previous chapter, we saw that the `helm uninstall` command has a flag
+    called `--keep-history`. Normally, a deletion event will destroy all release records
+    associated with that installation. But when `--keep-history` is specified, you
+    can see the history of an installation even after it has been deleted:'
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在前一章中，我们看到`helm uninstall`命令有一个名为`--keep-history`的标志。通常，删除事件将销毁与该安装相关联的所有发布记录。但是，如果指定了`--keep-history`，即使已删除，您也可以查看安装的历史记录：
+- en: '[PRE22]'
+  id: totrans-164
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: '[PRE23]'
+  id: totrans-165
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: 'Note that the last release is now marked as `uninstalled`. When history is
+    preserved, you can roll back a deleted installation:'
+  id: totrans-166
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注意，最后一个发布现在标记为`uninstalled`。当保留历史记录时，您可以回滚已删除的安装：
+- en: '[PRE24]'
+  id: totrans-167
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: 'And now we can see a newly deployed release `5`:'
+  id: totrans-168
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们可以看到一个新部署的发布`5`：
+- en: '[PRE25]'
+  id: totrans-169
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE25]'
+- en: 'But without the `--keep-history` flag, this will not work:'
+  id: totrans-170
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 但是如果没有`--keep-history`标志，这将无法工作：
+- en: '[PRE26]'
+  id: totrans-171
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE26]'
+- en: A Deep Dive into Installs and Upgrades
+  id: totrans-172
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 深入探讨安装和升级
+- en: In [Chapter 2](ch02.xhtml#Using_Helm) we took a first look at installing and
+    upgrading Helm packages, and throughout this chapter we have looked at tools that
+    help us work with Helm installations. To close out this chapter, we will circle
+    back to installation and upgrading and look at a few advanced features.
+  id: totrans-173
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[第二章](ch02.xhtml#Using_Helm)中，我们首次介绍了安装和升级Helm包，并在本章中探讨了帮助我们处理Helm安装的工具。为了结束这一章，我们将回到安装和升级，并看看一些高级特性。
+- en: The --generate-name and --name-template Flags
+  id: totrans-174
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: '`--generate-name`和`--name-template`标志'
+- en: One of the subtle dangers of the way Kubernetes works has to do with naming.
+    Kubernetes assumes that names will have certain uniqueness properties. For example,
+    a `Deployment` object must have a name unique within its namespace. That is, in
+    the namespace `mynamespace` I cannot have two `Deployment`s named `myapp`. But
+    I can have a `Deployment` and a `Pod` each named `myapp`.
+  id: totrans-175
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes工作方式的一个微妙危险与命名有关。Kubernetes假设名称具有某些唯一性属性。例如，一个`Deployment`对象必须在其命名空间内具有唯一名称。也就是说，在命名空间`mynamespace`中，我不能有两个名为`myapp`的`Deployment`。但是我可以有一个名为`myapp`的`Deployment`和一个名为`myapp`的`Pod`。
+- en: This has made certain tasks a little more complicated. For example, a CI system
+    that automatically deploys things must be able to ensure that the name it gives
+    these things is unique within the namespace. One approach to dealing with this
+    issue is for Helm to provide a tool for generating a unique name. (Another approach
+    is to always overwrite a name if it already exits. See the next section for that
+    approach.)
+  id: totrans-176
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这使得某些任务变得更加复杂。例如，自动部署事物的CI系统必须能够确保它给这些事物的名称在命名空间内是唯一的。解决此问题的一种方法是让Helm提供一个生成唯一名称的工具。（另一种方法是如果名称已经存在则始终覆盖。请参阅下一节了解该方法。）
+- en: 'Helm provides the `--generate-name` flag for `helm install`:'
+  id: totrans-177
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Helm为`helm install`提供了`--generate-name`标志：
+- en: '[PRE27]'
+  id: totrans-178
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE27]'
+- en: 'With the `--generate-name` flag, we no longer need to provide a name as the
+    first argument to `helm install`. Helm generates a name based on a combination
+    of the chart name and a timestamp. In the preceding output, we can see the name
+    that was generated for us: `wordpress-1597689085`.'
+  id: totrans-179
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 `--generate-name` 标志，我们不再需要在 `helm install` 的第一个参数中提供名称。Helm 根据图表名称和时间戳的组合生成一个名称。在前面的输出中，我们可以看到为我们生成的名称：`wordpress-1597689085`。
+- en: In Helm 2, “friendly names” were generated using adjectives and animal names.
+    That was removed in Helm 3 due to complaints that release names were unprofessional.
+    There is currently no way to re-enable this feature.
+  id: totrans-180
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Helm 2 中，“友好名称”是使用形容词和动物名称生成的。由于有人抱怨发布名称不专业，因此在 Helm 3 中删除了该功能。目前没有重新启用此功能的方法。
+- en: 'However, there is an additional flag that allows you to specify a naming template.
+    The `--name-template` flag allows you do to something like this:'
+  id: totrans-181
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，还有一个额外的标志允许您指定一个命名模板。`--name-template` 标志允许您像这样做：
+- en: '[PRE28]'
+  id: totrans-182
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE28]'
+- en: 'In this example, we used the name template `foo-{{ randAlpha 9 | lower }}`.
+    This uses the Helm template engine to generate a name for you. We’ll cover the
+    Helm template engine in the next few chapters. But here’s what the name template
+    does: The `{{` and `}}` demarcate the beginning and end of a template. Inside
+    of that template, we are calling the `randAlpha` function, asking for a `9`-character
+    random string from the `a-z, A-Z` range of characters. Then we are “piping” the
+    results through a second function (`lower`) that lowercases everything.'
+  id: totrans-183
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本例中，我们使用了名称模板 `foo-{{ randAlpha 9 | lower }}`。这使用 Helm 模板引擎为您生成一个名称。我们将在接下来的几章中介绍
+    Helm 模板引擎。但这里的名称模板的作用是：`{{` 和 `}}` 标志着模板的开始和结束。在模板内部，我们调用 `randAlpha` 函数，请求从 `a-z,
+    A-Z` 字符范围中获取一个 `9` 字符的随机字符串。然后，我们通过第二个函数 (`lower`) 将结果转换为小写。
+- en: Looking at the output of the earlier example, the result of `{{ randAlpha 9
+    | lower }}` was `yejpiyjmp`. So the result of the entire name template was `foo-yejpiyjmp`.
+  id: totrans-184
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 查看前面示例的输出，`{{ randAlpha 9 | lower }}` 的结果是 `yejpiyjmp`。因此整个名称模板的结果是 `foo-yejpiyjmp`。
+- en: The --create-namespace Flag
+  id: totrans-185
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: '`--create-namespace` 标志'
+- en: Another consideration with naming in Kubernetes has to do with namespaces. Earlier,
+    we saw that no two objects of the same kind *within the same namespace* can have
+    the same name. But Kubernetes also has a concept of global names. CRDs and namespaces
+    each have global names.
+  id: totrans-186
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 中关于命名的另一个考虑与命名空间有关。前面，我们看到在*同一命名空间内*，同一种类的两个对象不能具有相同的名称。但 Kubernetes
+    也有全局名称的概念。CRD 和命名空间各自都有全局名称。
+- en: A namespace, therefore, must be unique cluster-wide.
+  id: totrans-187
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，命名空间在整个集群中必须是唯一的。
+- en: Whenever Helm encounters globally unique names, it adopts a defensive posture.
+    In later chapters, we’ll see how charts handle globally unique names. But here,
+    it is worth pointing out that Helm 3 assumes by default that if you attempt to
+    deploy a chart into a namespace, that namespace was already created.
+  id: totrans-188
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每当 Helm 遇到全局唯一名称时，它会采取一种防御性姿态。在后面的章节中，我们将看到图表如何处理全局唯一名称。但在这里，值得指出的是，Helm 3 默认假定如果您尝试将图表部署到一个命名空间中，那么该命名空间应已经存在。
+- en: 'For example, on a fresh cluster this will fail:'
+  id: totrans-189
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，在一个新的集群上，这将失败：
+- en: '[PRE29]'
+  id: totrans-190
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE29]'
+- en: It fails because `mynamespace` has not already been created and *Helm won’t
+    automatically create a namespace*. It won’t create one because namespaces are
+    global, and the safe assumption is that when a namespace is created, it probably
+    needs access controls (like RBACs) and other things assigned to it before it can
+    be safely used in production. In short, it views silently creating a namespace
+    as an opportunity for unintentionally creating a security hole.
+  id: totrans-191
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 它失败的原因是 `mynamespace` 尚未创建，并且*Helm 不会自动创建命名空间*。它不会创建命名空间，因为命名空间是全局的，安全的假设是，在创建命名空间时，可能需要访问控制（如
+    RBAC）和其他分配给它的事物，然后才能安全地在生产中使用。简而言之，它认为静默地创建命名空间是意外创建安全漏洞的机会。
+- en: 'However, Helm does let you override this consideration by explicitly stating
+    that you want to create a namespace:'
+  id: totrans-192
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，Helm 允许您通过明确声明要创建一个命名空间来覆盖此考虑：
+- en: '[PRE30]'
+  id: totrans-193
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE30]'
+- en: By adding `--create-namespace`, we have indicated to Helm that we *acknowledge*
+    that there may not be a namespace with that name already, and we just want one
+    to be created. Be sure, of course, that if you use this flag on a production instance,
+    you have other mechanisms for enforcing security on this new namespace.
+  id: totrans-194
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过添加 `--create-namespace`，我们已告知 Helm 我们*知晓*可能没有具有该名称的命名空间，并且我们只想要创建一个。当然，如果您在生产实例上使用此标志，请确保您有其他机制来确保对该新命名空间的安全性。
+- en: There is not an analogous `--delete-namespace` on `helm uninstall`. And the
+    reason for this falls out of Helm’s defensiveness regarding global objects. Once
+    a namespace is created, any number of objects may be put in the namespace, not
+    all of them managed by Helm. And when a namespace is deleted, all of the objects
+    inside of that namespace are also deleted. So Helm does not automatically delete
+    namespaces that were created with `--create-namespace`. To delete a namespace,
+    use `kubectl delete namespace` (after making sure, of course, that no important
+    objects exist in that namespace).
+  id: totrans-195
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 `helm uninstall` 上并没有类似的 `--delete-namespace`。这背后的原因在于 Helm 对全局对象的保护性措施。一旦创建了命名空间，可以向其中放入任意数量的对象，其中并非全部由
+    Helm 管理。当删除命名空间时，该命名空间中的所有对象也会被删除。因此，Helm 不会自动删除通过 `--create-namespace` 创建的命名空间。要删除命名空间，请使用
+    `kubectl delete namespace`（当然，在确保该命名空间中不存在重要对象之后）。
+- en: Using helm upgrade --install
+  id: totrans-196
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用 `helm upgrade --install`
+- en: Some systems, like CI pipelines, are employed to automatically install or upgrade
+    a chart each time a significant event occurs. For example, many organizations
+    have pipelines that trigger whenever new code is uploaded to a version control
+    system (VCS) like Git. GitHub, a popular Git hosting service, even provides tools
+    to automatically deploy whenever a code change is merged.
+  id: totrans-197
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一些系统，如 CI 流水线，被用来在每次发生重要事件时自动安装或升级图表。例如，许多组织都有流水线，每当新代码上传到版本控制系统（如 Git）时触发。GitHub，一个流行的
+    Git 托管服务，甚至提供了工具，可以在代码更改合并时自动部署。
+- en: Systems like this often run rudimentary scripts on a stateless platform that
+    does not have the means to query Kubernetes. Users of such systems requested a
+    Helm feature that would allow “install or upgrade” support in a single command.
+  id: totrans-198
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此类系统通常在无法查询 Kubernetes 的无状态平台上运行基本脚本。这类系统的用户请求 Helm 功能，允许在单个命令中支持 "安装或升级"。
+- en: To facilitate this behavior, Helm maintainers added the `--install` flag to
+    the `helm upgrade` command. The `helm upgrade --install` command will install
+    a release if it does not exist already, or will upgrade a release if a release
+    by that name is found. Underneath the hood, it works by querying Kubernetes for
+    a release with the given name. If that release does not exist, it switches out
+    of the upgrade logic and into the install logic.
+  id: totrans-199
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了促进这种行为，Helm 的维护者们在 `helm upgrade` 命令中添加了 `--install` 标志。`helm upgrade --install`
+    命令将在不存在该名称的发布时安装一个发布，或者在找到该名称的发布时升级一个发布。在幕后，它通过查询 Kubernetes 是否存在具有给定名称的发布来工作。如果该发布不存在，则切换出升级逻辑并进入安装逻辑。
+- en: 'For example, we can run an install and an upgrade in sequence using exactly
+    the same command:'
+  id: totrans-200
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，我们可以使用完全相同的命令顺序运行安装和升级：
+- en: '[PRE31]'
+  id: totrans-201
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE31]'
+- en: As we can see in the first line of output, the first run of the command caused
+    an install, while the second caused an upgrade.
+  id: totrans-202
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如我们在输出的第一行中所见，第一次运行命令时进行了安装，而第二次运行命令时进行了升级。
+- en: This command does introduce some danger, though. Helm has no way of establishing
+    whether the name of the installation you provide to `helm upgrade --install` belongs
+    to the release you intend to upgrade or just *happens* to be the named the same
+    thing as the thing you want to install. Careless use of this command could result
+    in overwriting one installation with another. This is why it is not the default
+    behavior for Helm.
+  id: totrans-203
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，这个命令确实存在一些危险。Helm 无法确定您在 `helm upgrade --install` 中提供的安装名称是否属于您打算升级的发布版本，或者只是碰巧与您想要安装的内容同名。对这个命令的粗心使用可能导致用一个安装覆盖另一个安装。这就是为什么这不是
+    Helm 的默认行为。
+- en: The --wait and --atomic Flags
+  id: totrans-204
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: '`--wait` 和 `--atomic` 标志'
+- en: Another pair of significant flags for `helm install` and `helm upgrade` modify
+    the success criteria for Helm operations. These are the `--wait` and `--atomic`
+    flags.
+  id: totrans-205
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`helm install` 和 `helm upgrade` 的另一对重要标志修改了 Helm 操作的成功标准。这些是 `--wait` 和 `--atomic`
+    标志。'
+- en: The `--wait` flag modifies the behavior of the Helm client in a couple of ways.
+    First, when Helm runs an installation, it remains active for a set window of time
+    (modifiable with the `--timeout` flag) during which it watches Kubernetes. It
+    polls the Kubernetes API server for information about all pod-running objects
+    that were created by the chart. For example, `DaemonSet`s, `Deployment`s, and
+    `StatefulSet`s all create pods. So Helm with `--wait` will track such objects,
+    waiting until the pods they create are marked as `Running` by Kubernetes.
+  id: totrans-206
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`--wait`标志在几个方面修改了Helm客户端的行为。首先，在Helm运行安装时，它会保持活动状态一段固定的时间窗口（可以使用`--timeout`标志修改），在此期间它会监视Kubernetes。它会轮询Kubernetes
+    API服务器以获取有关由图表创建的所有Pod运行对象的信息。例如，`DaemonSet`、`Deployment`和`StatefulSet`都会创建Pod。因此，使用`--wait`的Helm将跟踪这些对象，直到它们创建的Pod被Kubernetes标记为`Running`。'
+- en: In a normal install or upgrade, Helm marks a release as successful as soon as
+    the Kubernetes API server accepts the manifests. This is similar to package managers
+    that consider a package successfully installed as soon as the package contents
+    are written to the correct storage locations.
+  id: totrans-207
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在正常安装或升级中，Helm会在Kubernetes API服务器接受清单后立即将发布标记为成功。这类似于将包成功安装视为将包内容写入正确存储位置的软件包管理器。
+- en: But with `--wait`, the success criteria for an installation is modified. A chart
+    is not considered successfully installed unless (1) the Kubernetes API server
+    accepts the manifest and (2) all of the pods created by the chart reach the `Running`
+    state before Helm’s timeout expires.
+  id: totrans-208
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 但是使用`--wait`时，安装的成功标准会发生变化。除非（1）Kubernetes API服务器接受清单，并且（2）图表创建的所有Pod在Helm超时到期之前达到`Running`状态，否则不会认为图表安装成功。
+- en: Thus, installs with `--wait` can fail for a wide variety of reasons, including
+    network latency, a slow scheduler, busy nodes, slow image pulls, and outright
+    failure of a container to start.
+  id: totrans-209
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，使用`--wait`进行安装可能会因多种原因而失败，包括网络延迟、慢调度器、繁忙节点、慢镜像拉取以及容器无法启动的明确失败。
+- en: This behavior is seen as a desirable outcome, and operators use `helm install
+    --wait` to ensure that not only did the chart successfully install but that the
+    resulting application correctly started. However, it does introduce some complicating
+    factors when troubleshooting. Transient outages may result in Helm failures that
+    are resolved by Kubernetes later. For example, a delayed image pull might result
+    in a Helm release marked as failed, even though a few minutes later the image
+    pull can complete and the application can be started.
+  id: totrans-210
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种行为被视为一种理想的结果，操作员使用`helm install --wait`确保图表不仅成功安装，而且生成的应用程序正确启动。然而，这在故障排除时引入了一些复杂因素。瞬态故障可能导致Helm失败，但稍后由Kubernetes解决。例如，延迟的镜像拉取可能导致Helm发布被标记为失败，尽管几分钟后镜像拉取完成并且应用程序可以启动。
+- en: With this in mind, though, `helm install --wait` is a good tool for making sure
+    that the release is brought all the way to running. But when used in automated
+    systems (like CI), it may cause spurious failures. One recommendation for using
+    `--wait` in CI is to use a long `--timeout` (five or ten minutes) to ensure that
+    Kubernetes has time to resolve any transient failures.
+  id: totrans-211
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 考虑到这一点，`helm install --wait`是确保发布完全运行的好工具。但在自动化系统（如CI）中使用时，可能会导致偶发失败。建议在CI中使用`--wait`的一个方法是设置较长的`--timeout`（五到十分钟），以确保Kubernetes有足够时间解决任何瞬态故障。
+- en: A second strategy is to use the `--atomic` flag instead of the `--wait` flag.
+    This flag causes the same behavior as `--wait` unless the release fails. Then,
+    instead of marking the release as `failed` and exiting, it performs an automatic
+    rollback to the last successful release. In automated systems, the `--atomic`
+    flag is more resistent to outages, since it is less likely to have a failure as
+    its end result. (Keep in mind, though, that there is no assurance that a rollback
+    will be successful.)
+  id: totrans-212
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 第二种策略是使用`--atomic`标志，而不是`--wait`标志。该标志引起的行为与`--wait`相同，除非发布失败。然后，它不会将发布标记为`failed`并退出，而是自动回滚到上次成功的发布。在自动化系统中，`--atomic`标志对于故障更具抵抗力，因为其最终结果不太可能是失败。（请注意，回滚成功也无法保证。）
+- en: Just as `--wait` can mark a release as a failure for transitive reasons that
+    may be resolved by Kubernetes itself, `--atomic` may trigger an unnecessary rollback
+    for the same reasons. Thus, it is recommended to use longer `--timeout` durations
+    for `--atomic`, especially when used with CI systems.
+  id: totrans-213
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 就像`--wait`可以因 Kubernetes 自身解决的传递原因将发布标记为失败一样，`--atomic`可能因同样的原因触发不必要的回滚。因此，建议在与
+    CI 系统一起使用`--atomic`时使用更长的`--timeout`持续时间。
+- en: Upgrading with --force and --cleanup-on-fail
+  id: totrans-214
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用`--force`和`--cleanup-on-fail`进行升级
+- en: The last two flags we will look at modify the way that Helm handles the nuances
+    of upgrades.
+  id: totrans-215
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将讨论的最后两个标志修改了 Helm 处理升级细节的方式。
+- en: The `--force` flag modifies the behavior of Helm when it upgrades a resource
+    that manages pods (like `Pod`, `Deployment`, and `StatefulSet`). Normally, when
+    Kubernetes receives a request to modify such objects, it determines whether it
+    needs to restart the pods that this resource manages. For example, a `Deployment`
+    may run five replicas of a pod. But if Kubernetes receives an update to the `Deployment`
+    object, it will only restart those pods if certain fields are modified.
+  id: totrans-216
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当 Helm 升级管理 pods 的资源（如`Pod`、`Deployment`和`StatefulSet`）时，`--force`标志会修改 Helm
+    的行为。通常情况下，当 Kubernetes 收到修改此类对象的请求时，它会确定是否需要重新启动此资源管理的 pods。例如，一个`Deployment`可能运行五个
+    pod 的副本。但如果 Kubernetes 收到`Deployment`对象的更新，它只会在修改了特定字段时重新启动那些 pods。
+- en: Sometimes, though, Helm users want to make sure that the pods are restarted.
+    That’s where the `--force` flag comes in. Instead of modifying the `Deployment`
+    (or similar object), it will delete and re-create it. This forces Kubernetes to
+    delete the old pods and create new ones. By design, using `--force` will cause
+    downtime. While it is often only seconds of downtime, it is downtime nonetheless.
+    It is recommended to only use `--force` when the situation clearly calls for it,
+    not as a default option. For example, the core maintainers do not recommend using
+    `--force` in CI pipelines that deploy to production.
+  id: totrans-217
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有时候，Helm 用户想要确保 pod 被重新启动。这时就需要用到`--force`标志。与修改`Deployment`（或类似对象）不同，它会删除并重新创建。这会强制
+    Kubernetes 删除旧的 pods 并创建新的。设计上，使用`--force`会导致停机时间。尽管通常只有几秒钟的停机时间，但仍然会有停机。建议只在情况明确需要时使用`--force`，而不是默认选项。例如，核心维护者不建议在部署到生产环境的
+    CI 流水线中使用`--force`。
+- en: Another way to modify the behavior of an upgrade is to use the `--cleanup-on-fail`
+    flag. Similarly to `--force`, this flag instructs Helm to do additional work.
+  id: totrans-218
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 修改升级行为的另一种方法是使用`--cleanup-on-fail`标志。与`--force`类似，此标志指示 Helm 执行额外的工作。
+- en: Consider the case where you install a chart that creates one Kubernetes `Secret`.
+    A new version of the chart is created, and it creates a second `Secret`. But partway
+    through the installation, Helm encounters an error and marks the release a failure.
+    It is possible for the second `Secret` to be left hanging. This situation is more
+    likely to arise if `--wait` or `--atomic` are used, since those may fail after
+    Kubernetes has accepted the manifests and created the resources.
+  id: totrans-219
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 考虑一种情况，您安装了一个创建一个 Kubernetes `Secret` 的图表。创建了图表的新版本，并创建了第二个`Secret`。但在安装过程中的某个时候，Helm
+    遇到错误并标记了发布为失败。第二个`Secret`有可能被悬而未决。如果使用了`--wait`或`--atomic`，这种情况更有可能发生，因为这些操作可能在
+    Kubernetes 接受清单并创建资源后失败。
+- en: The `--cleanup-on-fail` flag will attempt to fix this situation. On failure,
+    it will request deletion on every object that was *newly created* during the upgrade.
+    Using it may make it a little harder to debug (especially if the failure was a
+    result of the newly created object), but it is useful if you do not want to risk
+    having unused objects hanging around after a failure.
+  id: totrans-220
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在失败时，`--cleanup-on-fail`标志将尝试修复此情况。它会请求删除在升级期间*新创建*的每个对象。使用它可能会稍微增加调试的难度（特别是如果失败是由于新创建的对象导致的），但如果您不想冒在失败后留下未使用的对象的风险，这是非常有用的。
+- en: Conclusion
+  id: totrans-221
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 结论
+- en: The Helm command-line tool provides many useful commands. While the basic commands
+    were introduced in the previous chapter, this chapter has focused on some of the
+    other useful commands in Helm. Near the end, we also revisited the installation
+    and upgrade commands, getting a taste of some of the more sophisticated features
+    for working with those.
+  id: totrans-222
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Helm 命令行工具提供了许多有用的命令。虽然基本命令已在前一章介绍过，本章重点介绍了 Helm 中的其他一些有用命令。最后，我们还重新审视了安装和升级命令，了解了与这些命令一起使用的一些更复杂的特性。
+- en: However, not all of the commands were discussed here. In coming chapters, we’ll
+    take a look at commands for creating and packaging charts, commands for signing
+    and verifying packages, and more commands for working with repositories.
+  id: totrans-223
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，并非所有命令都在这里讨论过。在接下来的章节中，我们将查看用于创建和打包图表的命令，用于签名和验证软件包的命令，以及更多处理仓库的命令。

@@ -1,0 +1,623 @@
+- en: Chapter 13\. Integrating External Services with Kubernetes
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第13章。将外部服务与 Kubernetes 集成
+- en: In many of the chapters in this book, we’ve discussed how to build, deploy,
+    and manage services in Kubernetes. However, the truth is that systems don’t exist
+    in a vacuum, and most of the services that we build will need to interact with
+    systems and services that exist outside of the Kubernetes cluster in which they’re
+    running. This might be necessary because we are building new services being accessed
+    by legacy infrastructure running in virtual or physical machines. Additionally,
+    it might be because the services we are building need to access preexisting databases
+    or other services that are running on physical infrastructure in an on-premises
+    datacenter. Finally, you might have multiple Kubernetes clusters with services
+    you need to interconnect. For all these reasons, the ability to expose, share,
+    and build services that span the boundary of your Kubernetes cluster is an important
+    part of building real-world applications.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本书的许多章节中，我们讨论了如何在 Kubernetes 中构建、部署和管理服务。然而，事实是系统并不孤立存在，我们构建的大多数服务都需要与 Kubernetes
+    集群之外的系统和服务进行交互。这可能是因为我们正在构建新服务，这些服务由运行在虚拟或物理机器上的遗留基础设施访问。此外，这也可能是因为我们构建的服务需要访问运行在本地数据中心物理基础设施上的现有数据库或其他服务。最后，您可能有多个
+    Kubernetes 集群，这些服务需要互联互通。因此，能够公开、共享并构建跨越 Kubernetes 集群边界的服务是构建现实应用程序的重要组成部分。
+- en: Importing Services into Kubernetes
+  id: totrans-2
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 将服务导入 Kubernetes
+- en: The most common pattern for connecting Kubernetes with external services consists
+    of a Kubernetes Service that is consuming a service that exists outside of the
+    Kubernetes cluster. Often, this is because Kubernetes is being used for new application
+    development or is serving as an interface for a legacy resource like an on-premises
+    database. In many existing applications, parts of the application are easier to
+    move than others. For example, a database with mission-critical data may be required
+    to stay on premises for reasons of data governance, compliance, or business continuity.
+    At the same time, there are significant benefits to building new interfaces to
+    these legacy databases in Kubernetes. If every migration to Kubernetes required
+    a lift and shift of the entire application, then many applications would be required
+    to stay with their legacy implementations forever. Instead, this chapter shows
+    how you can integrate cloud native development of new applications with existing
+    services such as databases that may be running on traditional virtual machines,
+    bare metal servers, or even mainframes.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将 Kubernetes 与外部服务连接的最常见模式是通过 Kubernetes 服务来消费存在于 Kubernetes 集群外部的服务。通常情况下，这是因为
+    Kubernetes 被用于新应用开发或作为与传统资源（如本地数据库）接口的服务。在许多现有应用程序中，应用程序的某些部分比其他部分更容易移动。例如，出于数据治理、合规性或业务连续性的原因，具有关键数据的数据库可能需要保留在本地。同时，在
+    Kubernetes 中为这些传统数据库构建新接口也有显著的好处。如果每次迁移到 Kubernetes 都需要整个应用程序的搬迁，那么许多应用程序可能会永远停留在其传统实现上。相反，本章展示了如何将新应用程序的云原生开发与现有服务（如可能运行在传统虚拟机、裸机服务器甚至大型机上的数据库）集成。
+- en: When we consider the task of making an external service accessible from Kubernetes,
+    the first challenge is simply to get the networking to work correctly. The details
+    of making networking operational are specific to both the location of the database
+    and the location of the Kubernetes cluster. As a result, they are beyond the scope
+    of this book, but generally, cloud-based Kubernetes providers enable the deployment
+    of a cluster into a user-provided virtual network (VNET), and those virtual networks
+    can then be peered up with an on-premises network.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当我们考虑将外部服务从 Kubernetes 中访问时，第一个挑战就是确保网络能够正常工作。使网络操作起来的具体细节与数据库的位置以及 Kubernetes
+    集群的位置有关。因此，它们超出了本书的范围，但通常情况下，基于云的 Kubernetes 提供商可以将集群部署到用户提供的虚拟网络（VNET）中，然后这些虚拟网络可以与本地网络进行互联。
+- en: After you’ve established network connectivity between pods in the Kubernetes
+    cluster and the on-premises resource, the next challenge is to make the external
+    service look and feel like a Kubernetes Service. In Kubernetes, service discovery
+    occurs via Domain Name System (DNS) lookups, so, to make our external database
+    feel like it is a native part of Kubernetes, we need to make the database discoverable
+    in the same DNS. We’ll get into the details of how to do this next.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您在 Kubernetes 集群中的 Pod 与本地资源之间建立了网络连接之后，下一个挑战是使外部服务看起来和感觉像是 Kubernetes 服务的一部分。在
+    Kubernetes 中，服务发现通过域名系统（DNS）查找进行，因此，要使我们的外部数据库感觉像是 Kubernetes 的一个本地部分，我们需要在相同的
+    DNS 中使数据库可发现。接下来我们将详细讨论如何做到这一点。
+- en: Selector-Less Services for Stable IP Addresses
+  id: totrans-6
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 用于稳定 IP 地址的无选择器服务
+- en: 'The first way to achieve this is with a *selector-less* Kubernetes Service.
+    When you create a Kubernetes Service without a selector, there are no pods whose
+    labels match the nonexistent service selector; thus, no load balancing is performed.
+    Instead, you can program this selector-less service to have endpoints that are
+    the specific IP address(es) of the external resource you want to add to the Kubernetes
+    cluster. That way, when a Kubernetes pod performs a lookup for `your-database`,
+    the built-in Kubernetes DNS server will translate that to a service IP address
+    of your external service. Here is an example of a selector-less service for an
+    external database:'
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 实现这一点的第一种方法是使用*无选择器*的 Kubernetes 服务。当您创建一个没有选择器的 Kubernetes 服务时，不存在与虚构服务选择器匹配的
+    Pod，因此不会执行负载平衡。相反，您可以将这种无选择器服务编程为具有您想要添加到 Kubernetes 集群的外部资源的特定 IP 地址的端点。这样，当
+    Kubernetes Pod 查找 `your-database` 时，内置的 Kubernetes DNS 服务器将把它翻译为您外部服务的服务 IP 地址。以下是一个用于外部数据库的无选择器服务示例：
+- en: '[PRE0]'
+  id: totrans-8
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'When the service exists, you need to update its endpoints to contain the database
+    IP address serving at `24.1.2.3`:'
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当服务存在时，您需要更新其端点以包含提供 `24.1.2.3` 的数据库 IP 地址。
+- en: '[PRE1]'
+  id: totrans-10
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: '[Figure 13-1](#figure1401) depicts how this integrates a service within Kubernetes.
+    As you can see, the pod looks up the service in the cluster DNS server as it would
+    for any other Kubernetes Service. But instead of being given the IP address of
+    another pod in the Kubernetes cluster, it is instead given an IP address that
+    corresponds to the resource outside of the Kubernetes cluster. In this way, the
+    developer may not even know the service is implemented outside of the cluster.'
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 13-1](#figure1401) 描述了如何在 Kubernetes 中集成服务。正如您所见，Pod 会像对待任何其他 Kubernetes
+    服务一样在集群 DNS 服务器中查找服务。但是，与其给出 Kubernetes 集群中另一个 Pod 的 IP 地址不同，它会给出一个对应于 Kubernetes
+    集群外部资源的 IP 地址。通过这种方式，开发人员甚至可能不知道服务是在集群外部实现的。'
+- en: '![images/figure-14-1.png](assets/kbp2_1301.png)'
+  id: totrans-12
+  prefs: []
+  type: TYPE_IMG
+  zh: '![图像/figure-14-1.png](assets/kbp2_1301.png)'
+- en: Figure 13-1\. Service integration
+  id: totrans-13
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 13-1\. 服务集成
+- en: CNAME-Based Services for Stable DNS Names
+  id: totrans-14
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 用于稳定 DNS 名称的基于 CNAME 的服务
+- en: The previous example assumed that the external resource you were trying to integrate
+    with your Kubernetes cluster had a stable IP address. Although this is often true
+    of physical on-premises resources, depending on the network topology, it might
+    not always be true. It is also significantly less likely to be true in a cloud
+    environment where virtual machine (VM) IP addresses are more dynamic. Alternatively,
+    the service might have multiple replicas sitting behind a single DNS-based load
+    balancer. In these situations, the external service you are trying to bridge into
+    your cluster doesn’t have a stable IP address, but it does have a stable DNS name.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 前面的例子假定您试图将外部资源集成到 Kubernetes 集群中，并具有稳定的 IP 地址。尽管物理本地资源通常如此，这在网络拓扑结构可能不总是正确。在虚拟机（VM）IP
+    地址更动态的云环境中，这通常不是真的。或者，服务可能有多个副本坐落在单一基于 DNS 的负载均衡器后面。在这些情况下，您尝试桥接到集群中的外部服务没有稳定
+    IP 地址，但它确实有一个稳定的 DNS 名称。
+- en: 'For these instances, you can define a CNAME-based Kubernetes Service. If you’re
+    not familiar with DNS records, a CNAME, or *Canonical Name*, record indicates
+    that a particular DNS address should be translated to a different *Canonical*
+    DNS name. For example, a CNAME record for *foo.com* that contains *bar.com* indicates
+    that anyone looking up *foo.com* should perform a recursive lookup for *bar.com*
+    to obtain the correct IP address. You can use Kubernetes Services to define CNAME
+    records in the Kubernetes DNS server. For example, if you have an external database
+    with a DNS name of *database.myco.com*, you might create a CNAME *Service* that
+    is named `myco-database`. Such a Service looks like this:'
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于这些情况，您可以定义基于 CNAME 的 Kubernetes 服务。如果您对 DNS 记录不熟悉，CNAME 或 *规范名称* 记录指示特定的 DNS
+    地址应翻译为不同的 *规范* DNS 名称。例如，对于包含 *bar.com* 的 *foo.com* 的 CNAME 记录表示，任何查询 *foo.com*
+    的人应执行递归查找 *bar.com* 以获取正确的 IP 地址。您可以使用 Kubernetes 服务在 Kubernetes DNS 服务器中定义 CNAME
+    记录。例如，如果您有一个外部数据库，其 DNS 名称为 *database.myco.com*，您可以创建一个名为 `myco-database` 的 CNAME
+    *服务*。这样的服务如下所示：
+- en: '[PRE2]'
+  id: totrans-17
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: With a Service defined in this way, any pod that does a lookup for `myco-database`
+    will be recursively resolved to *database.myco.com*. Of course, to make this work,
+    the DNS name of your external resource *also* needs to be resolvable from the
+    Kubernetes DNS servers. If the DNS name is globally accessible (e.g., from a well-known
+    DNS service provider), this will automatically work. However, if the DNS of the
+    external service is located in a company-local DNS server (e.g., a DNS server
+    that services only internal traffic), the Kubernetes cluster might not know by
+    default how to resolve queries to this corporate DNS server.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用这种方式定义的服务，任何对 `myco-database` 的查询都将递归解析为 *database.myco.com*。当然，为使此功能生效，您的外部资源的
+    DNS 名称 *也* 需要能够从 Kubernetes DNS 服务器解析。如果 DNS 名称是全球可访问的（例如来自知名的 DNS 服务提供商），这将自动生效。然而，如果外部服务的
+    DNS 位于公司内部的 DNS 服务器中（例如仅服务内部流量的 DNS 服务器），Kubernetes 集群可能默认不知道如何解析对此公司 DNS 服务器的查询。
+- en: To set up the cluster’s DNS server to communicate with an alternate DNS resolver,
+    you need to adjust its configuration. You do this by updating a Kubernetes ConfigMap
+    with a configuration file for the DNS server.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要将集群的 DNS 服务器设置为与备用 DNS 解析器通信，您需要调整其配置。这可以通过更新 Kubernetes ConfigMap 中的 DNS 服务器配置文件来完成。
+- en: CNAME records are a useful way to map external services with stable DNS names
+    to names that are discoverable within your cluster. At first it might seem counterintuitive
+    to remap a well-known DNS address to a cluster-local DNS address, but the consistency
+    of having all services look and feel the same is usually worth the small amount
+    of added complexity. Additionally, because the CNAME Service, like all Kubernetes
+    Services, is defined per namespace, you can use namespaces to map the same service
+    name (e.g., `database`) to different external services (e.g., `canary` or `production`),
+    depending on the Kubernetes namespace.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CNAME 记录是一种有用的方式，可将具有稳定 DNS 名称的外部服务映射到在集群内可发现的名称。一开始，将一个众所周知的 DNS 地址重新映射到集群本地
+    DNS 地址似乎有些违反直觉，但是所有服务看起来和感觉相同的一致性通常值得增加的少量复杂性。此外，因为 CNAME 服务与所有 Kubernetes 服务一样，是按命名空间定义的，您可以使用命名空间将相同的服务名称（例如`database`）映射到不同的外部服务（例如`canary`或`production`）。
+- en: Active Controller-Based Approaches
+  id: totrans-21
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 基于活动控制器的方法
+- en: In a limited set of circumstances, neither of the previous methods for exposing
+    external services within Kubernetes is feasible. Generally, this is because there
+    is neither a stable DNS address nor a single stable IP address for the service
+    that you want to expose within the Kubernetes cluster. In such circumstances,
+    exposing the external service within the Kubernetes cluster is significantly more
+    complicated, but it isn’t impossible.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在一组有限的情况下，以上两种在 Kubernetes 内部暴露外部服务的方法都不可行。一般情况下，这是因为要暴露到 Kubernetes 集群内部的服务既没有稳定的
+    DNS 地址，也没有单一的稳定 IP 地址。在这种情况下，将外部服务暴露到 Kubernetes 集群内部变得更加复杂，但并非不可能。
+- en: 'To achieve this, you need some understanding of how Kubernetes Services work
+    under the hood. Kubernetes Services are made up of two different resources: the
+    Service resource, with which you are doubtless familiar, and the Endpoints resource
+    that represents the IP addresses that make up the service. In normal operation,
+    the Kubernetes controller manager populates the endpoints of a service based on
+    the selector in the service. However, if you create a selector-less service, as
+    in the first stable-IP approach, the Endpoints resource for the service will not
+    be populated because no pods are selected. In this situation, you need to supply
+    the control loop to create and populate the correct Endpoints resource. You need
+    to dynamically query your infrastructure to obtain the IP addresses for the service
+    external to Kubernetes that you want to integrate and then populate your service’s
+    endpoints with these IP addresses. After you do this, the mechanisms of Kubernetes
+    take over and program both the DNS server and the `kube-proxy` correctly to load-balance
+    traffic to your external service. [Figure 13-2](#fig-external-service) presents
+    a complete picture of how this works in practice.'
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要实现这一点，您需要对 Kubernetes 服务在底层如何工作有一定的了解。Kubernetes 服务由两种不同的资源组成：您无疑熟悉的 Service
+    资源以及代表组成服务的 IP 地址的 Endpoints 资源。在正常操作中，Kubernetes 控制器管理器根据服务中的选择器填充服务的端点。但是，如果创建一个无选择器的服务，就像第一个稳定
+    IP 方法一样，服务的 Endpoints 资源将不会被填充，因为没有选择 pod。在这种情况下，您需要提供控制循环来创建和填充正确的 Endpoints
+    资源。您需要动态查询基础设施，获取要集成到 Kubernetes 之外的服务的 IP 地址，然后使用这些 IP 地址填充您的服务端点。完成这些步骤后，Kubernetes
+    的机制将接管并正确地配置 DNS 服务器和 `kube-proxy`，以实现对外部服务的负载均衡。[图 13-2](#fig-external-service)
+    展示了这在实践中的完整工作方式。
+- en: '![images/figure-14-2.png](assets/kbp2_1302.png)'
+  id: totrans-24
+  prefs: []
+  type: TYPE_IMG
+  zh: '![images/figure-14-2.png](assets/kbp2_1302.png)'
+- en: Figure 13-2\. An external service
+  id: totrans-25
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 13-2\. 一个外部服务
+- en: Exporting Services from Kubernetes
+  id: totrans-26
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 从 Kubernetes 导出服务
+- en: In the previous section, we explored how to import preexisting services to Kubernetes,
+    but you might also need to export services from Kubernetes to the preexisting
+    environments. This might occur because you have a legacy internal application
+    for customer management that needs access to a new API you are developing in a
+    cloud native infrastructure. Alternatively, you might be building new microservice-based
+    APIs but you need to interface with a preexisting traditional web application
+    firewall (WAF) because of internal policy or regulatory requirements. Regardless
+    of the reason, being able to expose services from a Kubernetes cluster to other
+    internal applications is a critical design requirement for many applications.
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在前一节中，我们探讨了如何将现有服务导入到 Kubernetes 中，但您可能还需要将服务从 Kubernetes 导出到现有环境。这可能是因为您有一个需要访问您正在开发的云原生基础设施中的新
+    API 的传统内部客户管理的遗留应用程序。或者，您可能正在构建基于微服务的新 API，但由于内部政策或监管要求，您需要与现有的传统 Web 应用程序防火墙（WAF）进行接口。无论原因是什么，能够将
+    Kubernetes 集群中的服务暴露给其他内部应用程序是许多应用程序的关键设计要求。
+- en: This can be challenging because in many Kubernetes installations, the pod IP
+    addresses are not routable addresses from outside the cluster. Via tools like
+    flannel, or other networking providers, routing is established within a Kubernetes
+    cluster to facilitate communication between pods and also between nodes and pods,
+    but the same routing is not generally extended to arbitrary machines in the same
+    network. In many cases the IP ranges given to pods are distinct from the IP space
+    of a corporate network and routing is not possible. Furthermore, in the case of
+    cloud to on-premises connectivity, the IP addresses of the pods are not always
+    advertised back across a VPN or network peering relationship into the on-premises
+    network. Consequently, setting up routing between a traditional application and
+    Kubernetes pods is the key task to enable the export of Kubernetes-based services.
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这可能是一个挑战，因为在许多 Kubernetes 安装中，pod 的 IP 地址在集群外部通常不是可路由的地址。通过像 flannel 这样的工具或其他网络提供者，建立了
+    Kubernetes 集群内的路由，以便在 pod 之间以及节点与 pod 之间进行通信，但是通常不会将同样的路由扩展到同一网络中的任意机器。在许多情况下，分配给
+    pod 的 IP 范围与企业网络的 IP 空间不同，并且路由是不可能的。此外，在云对本地连接的情况下，pod 的 IP 地址并不总是通过 VPN 或网络对等关系广告返回到本地网络。因此，设置传统应用程序与
+    Kubernetes pod 之间的路由是实现基于 Kubernetes 的服务导出的关键任务。
+- en: Exporting Services by Using Internal Load Balancers
+  id: totrans-29
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用内部负载均衡器导出服务
+- en: 'The easiest way to export from Kubernetes is by using the built-in `Service`
+    object. If you have any previous experience with Kubernetes, no doubt you have
+    seen how you can connect a cloud-based load balancer to bring external traffic
+    to a collection of pods in the cluster. However, you might not have realized that
+    most clouds also offer an *internal* load balancer. The internal load balancer
+    provides the same capabilities to map a virtual IP address to a collection of
+    pods, but that virtual IP address is drawn from an internal IP address space (e.g.,
+    `10.0.0.0/24`), so it is routable only from within that virtual network. You activate
+    an internal load balancer by adding a cloud-specific annotation to your Service
+    load balancer. For example, in Microsoft Azure, you add the `service.beta.kubernetes.io/azure-load-balancer-internal:
+    "true"` annotation. On Amazon Web Services (AWS), the annotation is `service.beta.kubernetes.io/aws-load-balancer-internal:
+    0.0.0.0/0`. You place annotations in the `metadata` field in the Service resource
+    as follows:'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '从 Kubernetes 导出的最简单方法是使用内置的`Service`对象。如果您之前有 Kubernetes 的使用经验，毫无疑问您已经看到过如何连接云基础负载均衡器以将外部流量引导到集群中的一组
+    pod。但是，您可能没有意识到大多数云服务提供的是 *内部* 负载均衡器。内部负载均衡器提供了相同的功能，将虚拟 IP 地址映射到一组 pod，但该虚拟 IP
+    地址来自内部 IP 地址空间（例如`10.0.0.0/24`），因此仅从虚拟网络内可路由。您可以通过向服务负载均衡器的元数据字段添加特定于云的注释来激活内部负载均衡器。例如，在
+    Microsoft Azure 中，您需要添加`service.beta.kubernetes.io/azure-load-balancer-internal:
+    "true"`注释。在 Amazon Web Services (AWS) 中，注释为`service.beta.kubernetes.io/aws-load-balancer-internal:
+    0.0.0.0/0`。您可以按照以下方式将注释放置在服务资源的`metadata`字段中：'
+- en: '[PRE3]'
+  id: totrans-31
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: When you export a Service via an internal load balancer, you receive a stable,
+    routable IP address that is visible on the virtual network outside of the cluster.
+    Then, you can either use that IP address directly or set up internal DNS resolution
+    to provide discovery for your exported service.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您通过内部负载均衡器导出服务时，您会获得一个稳定的、可路由的 IP 地址，该地址在集群外的虚拟网络上可见。然后，您可以直接使用该 IP 地址或设置内部
+    DNS 解析来为导出的服务提供发现功能。
+- en: Exporting Services on NodePorts
+  id: totrans-33
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 在 NodePorts 上导出服务
+- en: Unfortunately, in on-premises installations, cloud-based internal load balancers
+    are unavailable. In this context using a NodePort-based service is often a good
+    solution. A Service of type NodePort exports a listener on every node in the cluster
+    that forwards traffic from the node’s IP address and selected port into the Service
+    that you defined, as shown in [Figure 13-3](#figure-node-port).
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不幸的是，在本地安装中，无法使用基于云的内部负载均衡器。在这种情况下，使用基于 NodePort 的服务通常是一个不错的解决方案。类型为 NodePort
+    的服务在集群中的每个节点上导出一个监听器，该监听器将流量从节点的 IP 地址和选定的端口转发到您定义的服务中，如[图 13-3](#figure-node-port)所示。
+- en: '![images/figure-14-3.png](assets/kbp2_1303.png)'
+  id: totrans-35
+  prefs: []
+  type: TYPE_IMG
+  zh: '![images/figure-14-3.png](assets/kbp2_1303.png)'
+- en: Figure 13-3\. A NodePort-based service
+  id: totrans-36
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 13-3\. 基于 NodePort 的服务
+- en: 'Here’s an example YAML file for a NodePort service:'
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下面是一个 NodePort 服务的 YAML 文件示例：
+- en: '[PRE4]'
+  id: totrans-38
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: Following the creation of a Service of type NodePort, Kubernetes automatically
+    selects a port for the Service; you can get that port from the Service by looking
+    at the `spec.ports[*].nodePort` field. If you want to choose the port yourself,
+    you can specify it when you create the Service, but the NodePort must be within
+    the configured range for the cluster. The default for this range are ports between
+    `30000` and `30999`.
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在创建了类型为 NodePort 的服务之后，Kubernetes 会自动为该服务选择一个端口；您可以从服务中查看`spec.ports[*].nodePort`字段获取该端口。如果您希望自己选择端口，可以在创建服务时指定，但是
+    NodePort 必须在集群配置的范围内。该范围的默认值为端口在`30000`到`30999`之间。
+- en: Kubernetes’ work is done when the Service is exposed on this port. To export
+    it to an existing application outside of the cluster, you (or your network administrator)
+    will need to make it discoverable. Depending on the way your application is configured,
+    you might be able to give your application a list of `${node}:${port}` pairs,
+    and the application will perform client-side load balancing. Alternatively, you
+    might need to configure a physical or virtual load balancer within your network
+    to direct traffic from a virtual IP address to this list of `${node}:${port}`
+    backends. The specific details for this configuration will differ depending on
+    your environment.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当服务在此端口上暴露时，Kubernetes 的工作就完成了。要将其导出到集群外的现有应用程序中，你（或你的网络管理员）需要使其可发现。根据应用程序的配置方式，你可能能够为应用程序提供
+    `${node}:${port}` 对的列表，并且应用程序将执行客户端负载平衡。或者，你可能需要在网络中配置一个物理或虚拟负载均衡器，以将流量从虚拟 IP
+    地址引导到这些 `${node}:${port}` 后端列表。此配置的具体细节将根据你的环境而有所不同。
+- en: Integrating External Machines and Kubernetes
+  id: totrans-41
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 集成外部机器和 Kubernetes
+- en: If neither of the previous solutions work well for you, perhaps because you
+    want tighter integration for dynamic service discovery, the final choice for exposing
+    Kubernetes Services to outside applications is to directly integrate the machine(s)
+    running the application into the Kubernetes cluster’s service discovery and networking
+    mechanisms. This is significantly more invasive and complicated than either of
+    the previous approaches, and you should use it only when necessary for your application
+    (which should be infrequently). In some managed Kubernetes environments, it might
+    not even be possible.
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果前面的解决方案对你都不合适，可能是因为你希望更紧密地集成动态服务发现，那么将 Kubernetes 服务暴露给外部应用程序的最终选择是直接将运行应用程序的机器集成到
+    Kubernetes 集群的服务发现和网络机制中。这比前面的任何方法都要更具侵入性和复杂性，你应该只在应用程序必要时使用它（这应该是很少的情况）。在某些托管的
+    Kubernetes 环境中，甚至可能不可行。
+- en: When integrating an external machine into the cluster for networking, you need
+    to ensure that the pod network routing and DNS-based service discovery both work
+    correctly. The easiest way to do this is to run the kubelet on the machine that
+    you want to join to the cluster, but disable scheduling in the cluster. Joining
+    a kubelet node to a cluster is beyond the scope of this book, but there are numerous
+    other books or online resources that describe how to achieve this. When the node
+    is joined, you need to immediately mark it as unschedulable using the `kubectl
+    cordon ...` command to prevent any additional work being scheduled on it. This
+    cordoning will not prevent DaemonSets from landing pods onto the node, and thus
+    the pods for both the KubeProxy and network routing will land on the machine and
+    make Kubernetes-based services discoverable from any application running on that
+    machine.
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当将外部机器集成到集群中用于网络时，你需要确保 pod 网络路由和基于 DNS 的服务发现都能正常工作。做到这一点的最简单方法是在要加入集群的机器上运行
+    kubelet，但在集群中禁用调度。将 kubelet 节点加入集群超出了本书的范围，但有许多其他书籍或在线资源描述了如何实现这一点。加入节点后，你需要立即使用
+    `kubectl cordon ...` 命令将其标记为不可调度，以防止在其上调度任何额外的工作。这种遮挡不会阻止 DaemonSet 将 pod 定位到节点上，因此
+    KubeProxy 和网络路由的 pod 将定位在该机器上，并使基于 Kubernetes 的服务可被运行在该机器上的任何应用程序发现。
+- en: The approach we just described is quite invasive to the node because it requires
+    installing Docker or some other container runtime. As a result, it might not be
+    feasible in many environments. A lighter weight but more complex approach is to
+    just run the `kube-proxy` as a process on the machine and adjust the machine’s
+    DNS server. Assuming that you can set up pod routing to work correctly, running
+    the `kube-proxy` will set up machine-level networking so that Kubernetes Service
+    virtual IP addresses will be remapped to the pods that make up that Service. If
+    you also change the machine’s DNS to point to the Kubernetes cluster DNS server,
+    you will have effectively enabled Kubernetes discovery on a machine that is not
+    part of the Kubernetes cluster.
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们刚刚描述的方法对节点的侵入性很大，因为它需要安装 Docker 或其他容器运行时。因此，在许多环境中可能不可行。一个更轻量但更复杂的方法是在机器上仅作为进程运行
+    `kube-proxy`，并调整机器的 DNS 服务器。假设你可以设置 pod 路由以正确工作，运行 `kube-proxy` 将建立机器级网络，使 Kubernetes
+    服务的虚拟 IP 地址重新映射到组成该服务的 pod 上。如果还将机器的 DNS 更改为指向 Kubernetes 集群 DNS 服务器，那么你将有效地在不属于
+    Kubernetes 集群的机器上启用 Kubernetes 发现。
+- en: Both of these approaches are complicated and advanced, and you should not take
+    them lightly. If you find yourself considering this level of service discovery
+    integration, ask yourself whether it may be easier to actually bring the service
+    you are connecting to the cluster into the cluster itself. We cover this in [Chapter 16](ch16.html#managing_state_and_stateful_application).
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这两种方法都很复杂和先进，您不应该轻易采用。如果您发现自己在考虑这种服务发现集成的水平，不妨问问自己是否将要连接到集群的服务实际上可能更容易直接将服务带入集群中。我们在[第
+    16 章](ch16.html#managing_state_and_stateful_application)中有所涉及。
+- en: Sharing Services Between Kubernetes
+  id: totrans-46
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 之间共享服务
+- en: The previous sections have described how to connect Kubernetes applications
+    to outside services and how to connect outside services to Kubernetes applications,
+    but another significant use case is connecting services *between* Kubernetes clusters.
+    This may be to achieve East-West failover between different regional Kubernetes
+    clusters, or it might be to link together services run by different teams. The
+    process of achieving this interaction is actually a combination of the designs
+    described in the previous sections.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 前面的章节已经描述了如何将 Kubernetes 应用连接到外部服务，以及如何连接外部服务到 Kubernetes 应用，但另一个重要的用例是连接 Kubernetes
+    集群**之间的**服务。这可能是为了在不同区域的 Kubernetes 集群之间实现东西向故障转移，或者可能是为了将不同团队运行的服务链接在一起。实现这种交互的过程实际上是前面章节描述的设计的结合体。
+- en: First, you need to expose the Service within the first Kubernetes cluster to
+    enable network traffic to flow. Let’s assume that you’re in a cloud environment
+    that supports internal load balancers, and that you receive a virtual IP address
+    for that internal load balancer of 10.1.10.1\. Next, you need to integrate this
+    virtual IP address into the second Kubernetes cluster to enable service discovery.
+    You achieve this in the same manner as importing an external application into
+    Kubernetes (we covered this in [“Importing Services into Kubernetes”](#importing)).
+    You create a selector-less service and set its IP address to be 10.1.10.1\. With
+    these two steps you have integrated service discovery and connectivity between
+    services within your two Kubernetes clusters.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，您需要暴露第一个 Kubernetes 集群中的服务以启用网络流量。假设您在支持内部负载均衡器的云环境中，并且收到了内部负载均衡器的虚拟 IP 地址为
+    10.1.10.1\. 接下来，您需要将此虚拟 IP 地址集成到第二个 Kubernetes 集群中以启用服务发现。您可以通过与将外部应用程序导入 Kubernetes
+    相同的方式实现此目的（我们在[“将服务导入 Kubernetes”](#importing)中已经讨论过这一点）。您创建一个无选择器服务，并将其 IP 地址设置为
+    10.1.10.1\. 通过这两个步骤，您已经实现了在两个 Kubernetes 集群内的服务发现和连接集成。
+- en: These steps are fairly manual, and although this might be acceptable for a small,
+    static set of services, if you want to enable tighter or automatic service integration
+    between clusters, it makes sense to write a cluster daemon that runs in both clusters
+    to perform the integration. This daemon would watch the first cluster for Services
+    with a particular annotation, say something like `myco.com/exported-service`;
+    all Services with this annotation would then be imported into the second cluster
+    via selector-less services. Likewise, the same daemon would garbage-collect and
+    delete any services that are exported into the second cluster but are no longer
+    present in the first. If you set up such daemons in each of your regional clusters,
+    you can enable dynamic, East-West connectivity between all clusters in your environment.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些步骤相当手动化，虽然对于一小部分静态服务集合来说可能可以接受，但如果你希望在集群之间实现更紧密或自动的服务集成，编写一个在两个集群中都运行的集群守护程序以执行集成操作就是合理的。该守护程序将监视第一个集群中带有特定注解的服务，比如`myco.com/exported-service`；所有带有此注解的服务将通过无选择器服务导入到第二个集群中。同样，该守护程序还会进行垃圾回收并删除已导出到第二个集群但在第一个集群中不再存在的任何服务。如果在您的每个区域集群中设置了这样的守护程序，您就可以在环境中的所有集群之间实现动态的东西向连接。
+- en: There has also been recent work within the Kubernetes project to define a Multi-Cluster
+    Service API. This work is experimental and can be found within the [Multi-Cluster
+    Service](https://oreil.ly/ZXZi4) project on GitHub. At the time of writing, the
+    experimental nature of this project means that it is probably not suitable for
+    production use-cases, but it shows the future direction of multi-cluster service
+    management in the Kubernetes ecosystem. As it moves from alpha to beta and eventually
+    to general availability, this implementation of Service sharing will make it much
+    easier to build cross-cluster microservice applications. Even today, tools such
+    as the Fleet cluster manager in Microsoft Azure are starting to implement these
+    Multi-Cluster Service APIs in response to user needs.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 项目中最近还进行了多集群服务 API 的定义工作。这项工作是实验性的，可以在 GitHub 上的 [Multi-Cluster Service](https://oreil.ly/ZXZi4)
+    项目中找到。在撰写本文时，该项目的实验性质意味着它可能不适合生产用例，但它展示了 Kubernetes 生态系统中多集群服务管理的未来方向。随着它从 alpha
+    版本到 beta 版本再到一般可用版本的推进，这种服务共享的实现将使构建跨集群微服务应用程序变得更加容易。即使在今天，像 Microsoft Azure 中的
+    Fleet 集群管理器等工具也开始根据用户需求实现这些多集群服务 API。
+- en: Third-Party Tools
+  id: totrans-51
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第三方工具
+- en: So far, this chapter has described the various ways to import, export, and connect
+    services that span Kubernetes clusters and some outside resource. If you have
+    previous experience with service mesh technologies, these concepts might seem
+    quite familiar. Indeed, there are a variety of third-party tools and projects
+    that you can use to interconnect services both with Kubernetes and with arbitrary
+    applications and machines. Generally, these tools provide a lot of functionality,
+    but they are also significantly more complex operationally than the approaches
+    described earlier. However, if you find yourself building more and more networking
+    interconnectivity, you should explore the space of service meshes, which is rapidly
+    iterating and evolving. Nearly all these third-party tools have an open source
+    component, but they also offer commercial support that can reduce the operational
+    overhead of running additional infrastructure.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，本章已经描述了各种导入、导出和连接 Kubernetes 集群及某些外部资源的方法。如果您之前有服务网格技术的经验，这些概念可能会非常熟悉。事实上，有许多第三方工具和项目可以用来将服务与
+    Kubernetes 以及任意应用程序和机器进行互联。通常，这些工具提供了很多功能，但在操作上也比之前描述的方法复杂得多。然而，如果您发现自己越来越多地构建网络互联性，应该探索服务网格的领域，这个领域正在快速迭代和发展。几乎所有这些第三方工具都有开源组件，但它们也提供商业支持，可以减少运行额外基础设施的操作开销。
+- en: Connecting Cluster and External Services Best Practices
+  id: totrans-53
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 集群与外部服务连接的最佳实践
+- en: Establish network connectivity between the cluster and on-premises. Networking
+    can be varied between different sites, clouds, and cluster configurations, but
+    first ensure that pods can talk to on-premises machines and vice versa.
+  id: totrans-54
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在集群和本地环境之间建立网络连接。网络配置可能因不同的站点、云和集群配置而有所不同，但首先确保 Pod 能够与本地环境中的机器进行通信，反之亦然。
+- en: To access services outside of the cluster, you can use selector-less services
+    and directly program in the IP address of the machine (e.g., the database) with
+    which you want to communicate. If you don’t have fixed IP addresses, you can instead
+    use CNAME services to redirect to a DNS name. If you have neither a DNS name nor
+    fixed services, you might need to write a dynamic operator that periodically synchronizes
+    the external service IP addresses with the Kubernetes Service endpoints.
+  id: totrans-55
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 要访问集群外的服务，您可以使用无选择器服务，并直接编程输入您想要通信的机器（例如数据库）的 IP 地址。如果您没有固定的 IP 地址，您可以使用 CNAME
+    服务重定向到 DNS 名称。如果既没有 DNS 名称也没有固定服务，您可能需要编写一个动态操作程序，定期将外部服务 IP 地址与 Kubernetes 服务端点同步。
+- en: To export services from Kubernetes, use internal load balancers or NodePort
+    services. Internal load balancers are typically easier to use in public cloud
+    environments where they can be bound to the Kubernetes Service itself. When such
+    load balancers are unavailable, NodePort services can expose the service on all
+    the machines in the cluster.
+  id: totrans-56
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 要从 Kubernetes 导出服务，请使用内部负载均衡器或 NodePort 服务。内部负载均衡器通常更易于在公共云环境中使用，可以绑定到 Kubernetes
+    服务本身。当这些负载均衡器不可用时，NodePort 服务可以在集群中的所有机器上公开服务。
+- en: You can achieve connections between Kubernetes clusters through a combination
+    of these two approaches, exposing a service externally that is then consumed as
+    a selector-less service in the other Kubernetes cluster.
+  id: totrans-57
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 通过这两种方法的组合，您可以在 Kubernetes 集群之间建立连接，将服务暴露给外部，然后在另一个 Kubernetes 集群中作为无选择器服务消费。
+- en: Summary
+  id: totrans-58
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 摘要
+- en: In the real world, not every application is cloud native. Building production-ready
+    applications often involves connecting preexisting systems with newer applications.
+    This chapter described how you can integrate Kubernetes with legacy applications
+    and also how to integrate different services running across multiple distinct
+    Kubernetes clusters. Unless you have the luxury of building something brand new,
+    cloud native development will always require legacy integration. The techniques
+    described in this chapter will help you achieve that.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在现实世界中，并非每个应用都是云原生的。构建生产就绪的应用程序通常涉及将现有系统与新应用程序连接起来。本章描述了如何将 Kubernetes 与传统应用程序集成，以及如何集成跨多个不同
+    Kubernetes 集群运行的不同服务。除非您有幸能够构建全新的东西，云原生开发始终需要遗留集成。本章介绍的技术将帮助您实现这一点。

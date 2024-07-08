@@ -1,0 +1,1562 @@
+- en: Chapter 7\. Monitoring, Logging, and Runtime Security
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第7章。监控、日志和运行时安全
+- en: The last domain of the curriculum primarily deals with detecting suspicious
+    activity on the host and container level in a Kubernetes cluster. We’ll first
+    define the term *behavior analytics* and how it applies to the realm of Kubernetes.
+    With the theory out of the way, we’ll bring in the tool called Falco that can
+    detect intrusion scenarios.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 课程的最后一个领域主要涉及在 Kubernetes 集群中检测主机和容器级别的可疑活动。我们首先定义 *行为分析* 这个术语，并说明它如何应用于 Kubernetes
+    领域。理论澄清后，我们将介绍一个名为 Falco 的工具，它可以检测入侵场景。
+- en: Once a container has been started, its runtime environment can still be modified.
+    For example, as an operator you could decide to shell into the container in order
+    to manually install additional tools or write files to the container’s temporary
+    filesystem. Modifying a container after it has been started can open doors to
+    security risks. You will want to aim for creating *immutable containers*, containers
+    that cannot be modified after they have been started. We’ll learn how to configure
+    a Pod with the right settings to make its containers immutable.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦容器启动，其运行环境仍然可以修改。例如，作为操作员，您可以决定进入容器以手动安装额外工具或向容器的临时文件系统写入文件。在容器启动后修改容器可能会带来安全风险。您应该考虑创建
+    *不可变容器*，即启动后无法修改的容器。我们将学习如何配置 Pod 的正确设置，使其容器变为不可变。
+- en: Last, we’ll talk about capturing logs for events that occur in a Kubernetes
+    cluster. Those logs can be used for troubleshooting purposes on the cluster level,
+    to reconstruct when and how the cluster configuration was changed such that it
+    led to an undesired or broken runtime behavior. Log entries can also be used to
+    trace an attack that may be happening right now as a means to enacting countermeasures.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，我们将讨论捕获在 Kubernetes 集群中发生事件的日志。这些日志可用于集群级别的故障排除，以重建集群配置何时以及如何发生变化，导致不希望或破损的运行时行为。日志条目还可用于跟踪正在发生的攻击，作为实施对策的手段。
+- en: 'At a high level, this chapter covers the following concepts:'
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在高层次上，本章涵盖以下概念：
+- en: Performing behavior analytics to detect malicious activities
+  id: totrans-5
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 进行行为分析以检测恶意活动
+- en: Performing deep analytical investigation and identification
+  id: totrans-6
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 进行深入的分析调查和识别
+- en: Ensuring immutability of containers at runtime
+  id: totrans-7
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在运行时确保容器的不可变性
+- en: Using audit logs to monitor access
+  id: totrans-8
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用审计日志监控访问
+- en: Performing Behavior Analytics
+  id: totrans-9
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 进行行为分析
+- en: Apart from managing and upgrading a Kubernetes cluster, the administrator is
+    in charge of keeping an eye on potentially malicious activity. While you can perform
+    this task manually by logging into cluster nodes and observing host- and container-level
+    processes, it is a horribly inefficient undertaking.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了管理和升级 Kubernetes 集群外，管理员还负责监视潜在的恶意活动。虽然您可以通过登录到集群节点并观察主机和容器级别的进程来手动执行此任务，但这是一项效率极低的工作。
+- en: '*Behavior analytics* is the process of observing the cluster nodes for any
+    activity that seems out of the ordinary. An automated process helps with filtering,
+    recording, and alerting events of specific interest.'
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*行为分析* 是观察集群节点是否存在异常活动的过程。自动化过程有助于过滤、记录和警报特定感兴趣的事件。'
+- en: 'Scenario: A Kubernetes Administrator Can Observe Actions Taken by an Attacker'
+  id: totrans-12
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 情景：Kubernetes 管理员可以观察攻击者采取的行动
+- en: An attacker gained access to a container by opening a shell running on a worker
+    node to launch additional attacks throughout the Kubernetes cluster. An administrator
+    can’t easily detect this event by manually checking each and every container.
+    [Figure 7-1](#behavioral-analytics-attacker) illustrates the scenario.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 攻击者通过在工作节点上运行的 shell 打开容器获得访问权，以在整个 Kubernetes 集群中启动额外的攻击。管理员不能轻易地通过手动检查每个容器来检测此事件。[图
+    7-1](#behavioral-analytics-attacker) 描述了这种情况。
+- en: '![ckss 0701](assets/ckss_0701.png)'
+  id: totrans-14
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckss 0701](assets/ckss_0701.png)'
+- en: Figure 7-1\. Malicious events recorded by behavior analytics tool
+  id: totrans-15
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 7-1。行为分析工具记录的恶意事件
+- en: The administrator decided to take matters in their own hands by installing a
+    behavior analytics tool. The tool will continuously monitor certain events and
+    record them almost instantaneously. The administrator now has an efficient mechanism
+    for detecting intrusions and can act upon them.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 管理员决定自行安装行为分析工具。该工具将持续监视特定事件并几乎即时记录它们。管理员现在拥有有效的机制来检测入侵并采取行动。
+- en: Among the behavior analytics tools relevant to the exam are [Falco](https://falco.org),
+    [Tracee](https://oreil.ly/ibXcO), and [Tetragon](https://oreil.ly/q15oU). In this
+    book, we’ll only focus on Falco, as it is listed among the links of documentation
+    pages available during the exam.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与考试相关的行为分析工具中包括[Falco](https://falco.org)，[Tracee](https://oreil.ly/ibXcO)和[Tetragon](https://oreil.ly/q15oU)。在本书中，我们将只关注Falco，因为它是考试期间可用文档页面链接之一。
+- en: Understanding Falco
+  id: totrans-18
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 理解Falco
+- en: 'Falco helps with detecting threats by observing host- and container-level activity.
+    Here are a few examples of events Falco could watch for:'
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco通过观察主机和容器级活动来帮助检测威胁。以下是Falco可能监控的一些事件示例：
+- en: Reading or writing files at specific locations in the filesystem
+  id: totrans-20
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在文件系统中特定位置读取或写入文件
+- en: Opening a shell binary for a container, such as `/bin/bash` to open a bash shell
+  id: totrans-21
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 打开容器的shell二进制文件，例如`/bin/bash`打开bash shell
+- en: An attempt to make a network call to undesired URLs
+  id: totrans-22
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 尝试向不良URL进行网络调用
+- en: Falco deploys a set of sensors that listen for the configured events and conditions.
+    Each sensor consists of a set of rules that map an event to a data source. An
+    alert is produced when a rule matches a specific event. Alerts will be sent to
+    an output channel to record the event, such as standard output, a file, or an
+    HTTPS endpoint. Falco allows for enabling more than one output channel simultaneously.
+    [Figure 7-2](#falco-high-level-architecture) shows Falco’s high-level architecture.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco部署了一组传感器来监听配置的事件和条件。每个传感器由一组规则组成，将事件映射到数据源。当规则匹配特定事件时会产生警报。警报将发送到输出通道以记录事件，例如标准输出、文件或HTTPS端点。Falco允许同时启用多个输出通道。[图7-2](#falco-high-level-architecture)展示了Falco的高级架构。
+- en: '![ckss 0702](assets/ckss_0702.png)'
+  id: totrans-24
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckss 0702](assets/ckss_0702.png)'
+- en: Figure 7-2\. Falco’s high-level architecture
+  id: totrans-25
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图7-2\. Falco的高级架构
+- en: Falco is a tool with a lot of features and configuration options. We won’t be
+    able to discuss all features in this book, but I would suggest you spend some
+    time on understanding Falco’s high-level concepts.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco是一个功能丰富且有多种配置选项的工具。在本书中我们无法讨论所有功能，但我建议您花些时间了解Falco的高级概念。
+- en: Another great learning resource on Falco can be found on the Sysdig training
+    portal webpage. [“Falco 101”](https://oreil.ly/PwGWx) is a free video course that
+    explains all the bells and whistles of the product. All you need to do to get
+    started is sign up for an account. Moreover, I’d suggest giving the book [*Practical
+    Cloud Native Security with Falco*](https://oreil.ly/0WHIR) by Loris Degioanni
+    and Leonardo Grasso (O’Reilly) a read. The content takes a beginner-friendly approach
+    to learning Falco.
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 关于Falco的另一个很好的学习资源可以在Sysdig培训门户网页上找到。[“Falco 101”](https://oreil.ly/PwGWx)是一个免费的视频课程，详细解释了产品的所有细节。要开始学习，您只需注册一个账户。此外，我建议您阅读[*Practical
+    Cloud Native Security with Falco*](https://oreil.ly/0WHIR)，这本由Loris Degioanni和Leonardo
+    Grasso（O’Reilly出版）合著的书籍采用了面向初学者的友好方法来学习Falco。
+- en: Installing Falco
+  id: totrans-28
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 安装Falco
+- en: Falco can be installed as a binary on the host system or as a DaemonSet object
+    in Kubernetes. You can safely assume that Falco has been preinstalled for you
+    in the exam environment. For more information on the installation process, have
+    a look at the [relevant portion](https://oreil.ly/MB6wU) of the Falco documentation.
+    The following steps briefly explain the installation of the binary on an Ubuntu
+    machine. Falco needs to be installed on all worker nodes of a Kubernetes cluster.
+    Be aware that those instructions may change with a future version of Falco.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco可以作为主机系统上的二进制文件或Kubernetes中的DaemonSet对象安装。您可以放心地假设Falco已经预安装在考试环境中。有关安装过程的更多信息，请查看[Falco文档的相关部分](https://oreil.ly/MB6wU)。以下步骤简要说明了在Ubuntu机器上安装二进制文件的过程。Falco需要安装在Kubernetes集群的所有工作节点上。请注意，这些说明可能会随着Falco的未来版本而更改。
+- en: 'First, you need to trust the Falco GPG key, configure the Falco-specific apt
+    repository, and update the package list:'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，您需要信任Falco的GPG密钥，配置特定于Falco的apt存储库，并更新软件包列表：
+- en: '[PRE0]'
+  id: totrans-31
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'You then install the kernel header with the following command:'
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后，您可以使用以下命令安装内核头文件：
+- en: '[PRE1]'
+  id: totrans-33
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: 'Last, you need to install the Falco apt package with version 0.33.1:'
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，您需要安装版本为0.33.1的Falco apt包：
+- en: '[PRE2]'
+  id: totrans-35
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'Falco has been installed successfully and is running as a systemd service in
+    the background. Run the following command to check on the status of the Falco
+    service:'
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco已成功安装，并作为一个后台的systemd服务运行。运行以下命令检查Falco服务的状态：
+- en: '[PRE3]'
+  id: totrans-37
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: The Falco service should be in the “active” status. It is already monitoring
+    events in your system.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco 服务应该处于“active”状态。它已经在监视系统中的事件。
+- en: Configuring Falco
+  id: totrans-39
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 配置 Falco
+- en: 'The Falco service provides an operational environment for monitoring the system
+    with a set of default rules. Those rules live in YAML files in the `/etc/falco`
+    directory. The list of files and subdirectories in `/etc/falco` is as follows:'
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco 服务提供了一个操作环境，用于监视系统并带有一组默认规则。这些规则存储在 `/etc/falco` 目录中的 YAML 文件中。`/etc/falco`
+    中的文件和子目录列表如下：
+- en: '[PRE4]'
+  id: totrans-41
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: Of those files, I want to describe the high-level purpose of the most important
+    ones.
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我想描述其中最重要文件的高级目的。
+- en: Falco configuration file
+  id: totrans-43
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: Falco 配置文件
+- en: The file named `falco.yaml` is the configuration file for the Falco process.
+    It controls the channel that will be notified in case of an alert. A channel could
+    be standard output or a file. Furthermore, the file defines the minimum log level
+    of alerts to include in logs, and how to configure the embedded web server used
+    to implement a health check for the Falco process. Refer to [“Falco Configuration
+    Options”](https://oreil.ly/sfHW9) for a full reference on all available options.
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 名为 `falco.yaml` 的文件是 Falco 进程的配置文件。它控制在发生警报时将通知的通道。通道可以是标准输出或文件。此外，该文件定义了在日志中包含的警报的最低日志级别，以及如何配置用于实现
+    Falco 进程健康检查的嵌入式 Web 服务器。请参考 [“Falco 配置选项”](https://oreil.ly/sfHW9) 获取所有可用选项的完整参考。
+- en: Default rules
+  id: totrans-45
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 默认规则
+- en: The file named `falco_rules.yaml` defines a set of preinstalled rules. Falco
+    considers those rules to be applied by default. Among them are checks for creating
+    an alert when a shell to a container is opened or when a write operation is performed
+    to a system directory. You can find other examples and their corresponding rule
+    definitions on the [“Rules Examples” page](https://oreil.ly/fxHQm).
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 名为 `falco_rules.yaml` 的文件定义了一组预安装规则。Falco 认为这些规则是默认应用的。其中包括检查当打开容器的 shell 或执行写操作到系统目录时创建警报的规则。您可以在
+    [“规则示例”页面](https://oreil.ly/fxHQm) 上找到其他示例及其相应的规则定义。
+- en: Custom rules
+  id: totrans-47
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 自定义规则
+- en: The file named `falco_rules.local.yaml` lets you define custom rules and override
+    default rules. With a fresh installation of Falco, the file only contains commented-out
+    rules to provide you with a starting point for adding your own rules. You can
+    find [guidance on writing custom rules](https://oreil.ly/mJnPo) in the Falco documentation.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 名为 `falco_rules.local.yaml` 的文件允许您定义自定义规则并覆盖默认规则。在安装 Falco 时，该文件仅包含注释掉的规则，为您提供添加自己规则的起点。您可以在
+    Falco 文档中找到 [编写自定义规则的指导](https://oreil.ly/mJnPo)。
+- en: Kubernetes-specific rules
+  id: totrans-49
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: Kubernetes 特定规则
+- en: The file `k8s_audit_rules.yaml` defines [Kubernetes-specific rules](https://oreil.ly/d5FGD)
+    in addition to logging system call events. Typical examples are “log an event
+    when a namespace is deleted” or “log an event when a Role or ClusterRole object
+    is created.”
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 名为 `k8s_audit_rules.yaml` 的文件定义了 [Kubernetes 特定规则](https://oreil.ly/d5FGD)，除了记录系统调用事件。典型示例是“当命名空间被删除时记录事件”或“当创建
+    Role 或 ClusterRole 对象时记录事件”。
+- en: Applying configuration changes
+  id: totrans-51
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 应用配置更改
+- en: 'Modifying the contents of configuration files will not automatically propagate
+    them to the Falco process. You need to restart the Falco service, as demonstrated
+    by the following command:'
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 修改配置文件的内容不会自动传播到 Falco 进程。您需要重新启动 Falco 服务，如下所示：
+- en: '[PRE5]'
+  id: totrans-53
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: Next up, we’ll trigger some of the events covered by Falco’s default rules.
+    Each of those events will create an alert written to the configured channel. The
+    initial setup of Falco routes messages to standard output.
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，我们将触发 Falco 默认规则涵盖的一些事件。每个事件都会创建一个写入配置通道的警报。Falco 的初始设置将消息路由到标准输出。
+- en: Generating Events and Inspecting Falco Logs
+  id: totrans-55
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 生成事件并检查 Falco 日志
+- en: 'Let’s see Falco alerts in action. One of the default rules added by Falco creates
+    an alert whenever a user tries to open a shell to a container. We’ll need to perform
+    this activity to see a log entry for it. To achieve that, create a new Pod named
+    `nginx`, open a bash shell to the container, and then exit out of the container:'
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们看看 Falco 警报是如何工作的。Falco 默认规则之一会在用户尝试打开容器的 shell 时创建一个警报。我们需要执行这个活动来查看其日志条目。为了实现这一点，创建一个名为
+    `nginx` 的新 Pod，打开容器的 bash shell，然后退出容器：
+- en: '[PRE6]'
+  id: totrans-57
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: 'Identify the cluster node the Pod runs on by inspecting its runtime details:'
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过检查其运行时详细信息来确定 Pod 运行在哪个集群节点上：
+- en: '[PRE7]'
+  id: totrans-59
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: 'This Pod is running on the cluster node named `kube-worker-1`. You will need
+    to inspect the Falco logs on that machine to find the relevant log entry. You
+    can inspect logged events by using the `journalctl` command directly on the `kube-worker-1`
+    cluster node. The following command searches for entries that contain the keyword
+    `falco`:'
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此Pod正在名为`kube-worker-1`的集群节点上运行。您需要检查该机器上的Falco日志以找到相关的日志条目。您可以直接在`kube-worker-1`集群节点上使用`journalctl`命令检查记录的事件。以下命令搜索包含关键字`falco`的条目：
+- en: '[PRE8]'
+  id: totrans-61
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: 'You will find that additional rules will kick in if you try to modify the container
+    state. Say you’d installed the Git package using `apt` in the `nginx` container:'
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您尝试修改容器状态，将会发现会引入额外的规则。比如说，您在`nginx`容器中使用`apt`安装了Git包：
+- en: '[PRE9]'
+  id: totrans-63
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: 'Falco added log entries for those system-level operations. The following output
+    renders the alerts:'
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco为这些系统级操作添加了日志条目。以下输出呈现了警报：
+- en: '[PRE10]'
+  id: totrans-65
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: In the next section, we’ll inspect the Falco rules that trigger the creation
+    of alerts, and their syntax.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在下一节中，我们将检查触发警报创建的Falco规则及其语法。
+- en: Understanding Falco Rule File Basics
+  id: totrans-67
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 理解Falco规则文件基础知识
+- en: 'A Falco rules file usually consists of three elements defined in YAML: rules,
+    macros, and lists. You’ll need to understand those elements on a high level and
+    know how to modify them to achieve a certain goal.'
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco规则文件通常由YAML中定义的三个元素组成：规则、宏和列表。您需要在高层次上理解这些元素，并知道如何修改它们以达到特定的目标。
+- en: Crafting your own Falco rules
+  id: totrans-69
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 编写您自己的Falco规则
+- en: During the exam, you will likely not have to craft your own Falco rules. You’ll
+    be provided with an existing set of rules. If you want to dive deeper into Falco
+    rules, have a look at the relevant [documentation page](https://oreil.ly/PD1ro).
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 考试期间，您可能不需要自己编写Falco规则。您将获得一组现有的规则。如果您想更深入地了解Falco规则，请查看相关的[文档页面](https://oreil.ly/PD1ro)。
+- en: Rule
+  id: totrans-71
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 规则
+- en: A *rule* is the condition under which an alert should be generated. It also
+    defines the output message of the alert. An output message can consist of a hard-coded
+    message and incorporate built-in variables. The alert is recorded on the `WARNING`
+    log level. [Example 7-1](#falco-rule-camera) shows the YAML for a rule listening
+    to events that try to access the machine’s camera from processes other than your
+    traditional video-conferencing software, such as Skype or Webex.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*规则*是生成警报的条件。它还定义了警报的输出消息。输出消息可以包含硬编码的消息并结合内置变量。警报记录在`WARNING`日志级别上。[示例 7-1](#falco-rule-camera)展示了一个规则的YAML，监听试图从除了传统视频会议软件（如Skype或Webex）之外的进程访问机器摄像头的事件。'
+- en: Example 7-1\. A Falco rule that monitors camera access
+  id: totrans-73
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 7-1\. 监控摄像头访问的Falco规则
+- en: '[PRE11]'
+  id: totrans-74
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: Macro
+  id: totrans-75
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 宏
+- en: A *macro* is a reusable rule condition that helps with avoiding copy-pasting
+    similar logic across multiple rules. Macros are useful if the rule file becomes
+    lengthy and you want to improve on maintainability.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*宏*是可重复使用的规则条件，有助于避免在多个规则之间复制粘贴类似的逻辑。如果规则文件变得很长，并且您希望提高可维护性，宏非常有用。'
+- en: Say you are in the process of simplifying a rules file. You notice that multiple
+    rules use the same condition that listens for camera access. [Example 7-2](#falco-macro-camera)
+    shows how to break out the logic into a macro.
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设您正在简化一个规则文件的过程中。您注意到多个规则使用相同的条件监听摄像头访问。[示例 7-2](#falco-macro-camera)展示了如何将逻辑分解为宏。
+- en: Example 7-2\. A Falco macro defining a reusable condition
+  id: totrans-78
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 7-2\. 定义可重复条件的Falco宏
+- en: '[PRE12]'
+  id: totrans-79
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: The macro can now be referenced by name in a rule definition, as shown in [Example 7-3](#falco-rule-with-macro).
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在可以通过名称在规则定义中引用宏，如[示例 7-3](#falco-rule-with-macro)所示。
+- en: Example 7-3\. A Falco rule incorporating a macro
+  id: totrans-81
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 7-3\. 包含宏的Falco规则
+- en: '[PRE13]'
+  id: totrans-82
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: List
+  id: totrans-83
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 列表
+- en: A *list* is a collection of items that you can include in rules, macros, and
+    other lists. Think of lists as an array in traditional programming languages.
+    [Example 7-4](#falco-list-video-software) creates a list of process names associated
+    with video-conferencing software.
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*列表*是可以包含在规则、宏和其他列表中的项目集合。将列表视为传统编程语言中的数组。[示例 7-4](#falco-list-video-software)创建了一个与视频会议软件关联的进程名称列表。'
+- en: Example 7-4\. A Falco list
+  id: totrans-85
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 7-4\. Falco列表
+- en: '[PRE14]'
+  id: totrans-86
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: '[Example 7-5](#falco-macro-with-list) shows the usage of the list by name in
+    a macro.'
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[示例 7-5](#falco-macro-with-list)展示了如何在宏中使用列表。'
+- en: Example 7-5\. A Falco macro that uses a list
+  id: totrans-88
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 7-5\. 使用列表的Falco宏
+- en: '[PRE15]'
+  id: totrans-89
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: Dissecting an existing rule
+  id: totrans-90
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 解析现有规则
+- en: The reason why Falco ships with default rules is to shorten the timespan to
+    hit the ground running for a production cluster. Instead of having to come up
+    with your own rules and the correct syntax, you can simply install Falco and benefit
+    from best practices from the get-go.
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco 预装默认规则的原因是为了缩短生产集群启动时间。与其自己定义规则和正确的语法，您可以简单地安装 Falco，并从一开始就受益于最佳实践。
+- en: Let’s come back to one of the events we triggered in [“Generating Events and
+    Inspecting Falco Logs”](#generating-events-inspect-falco-logs). At the time of
+    writing, I am using the Falco version 0.33.1\. The rules file `/etc/falco/falco_rules.yaml`
+    shipped with it contains a rule named “Terminal shell in container.” It observes
+    the event of opening a shell to a container. You can easily find the rule by searching
+    for a portion of the log message, e.g., “A shell was spawned in a container.”
+    [Example 7-6](#default-open-shell-falco-rule-file) shows the syntax of the rule
+    definition, as well as the annotated portions of the YAML.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们回到我们在 [“生成事件并检查 Falco 日志”](#generating-events-inspect-falco-logs) 中触发的事件之一。撰写时，我正在使用
+    Falco 版本 0.33.1。随附的规则文件 `/etc/falco/falco_rules.yaml` 包含一个名为 “Terminal shell in
+    container” 的规则。它观察打开容器的 shell 事件。您可以通过搜索日志消息的一部分，例如 “在容器中生成了一个 shell” 来轻松找到该规则。[示例 7-6](#default-open-shell-falco-rule-file)
+    展示了规则定义的语法，以及 YAML 注释部分。
+- en: Example 7-6\. A Falco rule that monitors shell activity to a container
+  id: totrans-93
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 7-6。监视 shell 活动到容器的 Falco 规则
+- en: '[PRE16]'
+  id: totrans-94
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: '[![1](assets/1.png)](#co_monitoring__logging__and_runtime_security_CO1-1)'
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_monitoring__logging__and_runtime_security_CO1-1)'
+- en: Defines a macro, a condition reusable across multiple rules referenced by name.
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 定义宏，一种可在多个规则中重复使用的条件，通过名称引用。
+- en: '[![2](assets/2.png)](#co_monitoring__logging__and_runtime_security_CO1-5)'
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_monitoring__logging__and_runtime_security_CO1-5)'
+- en: Specifies the name of the rule.
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 指定规则的名称。
+- en: '[![3](assets/3.png)](#co_monitoring__logging__and_runtime_security_CO1-6)'
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_monitoring__logging__and_runtime_security_CO1-6)'
+- en: The aggregated condition composed of multiple macros.
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由多个宏组成的聚合条件。
+- en: '[![4](assets/4.png)](#co_monitoring__logging__and_runtime_security_CO1-7)'
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_monitoring__logging__and_runtime_security_CO1-7)'
+- en: The alerting message should the event happen. The message may use built-in fields
+    to reference runtime value.
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果发生事件，警报消息应该。消息可能使用内置字段引用运行时值。
+- en: '[![5](assets/5.png)](#co_monitoring__logging__and_runtime_security_CO1-8)'
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#co_monitoring__logging__and_runtime_security_CO1-8)'
+- en: Indicates how serious a violation of the rule it is.
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 指示规则违反的严重程度。
+- en: '[![6](assets/6.png)](#co_monitoring__logging__and_runtime_security_CO1-9)'
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![6](assets/6.png)](#co_monitoring__logging__and_runtime_security_CO1-9)'
+- en: Categorizes the rule set into groups of related rules for ease of management.
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将规则集分为相关规则组，以便管理。
+- en: Sometimes you may want to change an existing rule. The next section will explain
+    how to best approach overriding default rules.
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有时候您可能希望更改现有的规则。下一节将解释如何最好地覆盖默认规则。
+- en: Overriding Existing Rules
+  id: totrans-108
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 覆盖现有规则
+- en: Instead of modifying the rule definition directly in `/etc/falco/falco_rules.yaml`,
+    I’d suggest you redefine the rule in `/etc/falco/falco_rules.local.yaml`. That’ll
+    help with falling back to the original rule definition in case you want to get
+    rid of the modifications or if you make any mistakes in the process. The rule
+    definition needs to be changed on all worker nodes of the cluster.
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不要直接修改 `/etc/falco/falco_rules.yaml` 中的规则定义，我建议您在 `/etc/falco/falco_rules.local.yaml`
+    中重新定义规则。这样做可以帮助您在想要消除修改或在过程中出现任何错误时回退到原始规则定义。规则定义需要在集群的所有工作节点上进行更改。
+- en: The rule definition shown in [Example 7-7](#modified-open-shell-falco-rule-file)
+    overrides the rule named “Terminal shell in container” by changing the priority
+    to `ALERT` and the output to a new format by incorporating [built-in fields](https://oreil.ly/z5oAk).
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 [示例 7-7](#modified-open-shell-falco-rule-file) 中展示的规则定义通过将优先级更改为 `ALERT` 并将输出格式更改为通过
+    [内置字段](https://oreil.ly/z5oAk) 来包含新格式来覆盖名为 “Terminal shell in container” 的规则。
+- en: Example 7-7\. The modified rule that monitors shell activity to a container
+  id: totrans-111
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 7-7。修改后的监视 shell 活动到容器的规则
+- en: '[PRE17]'
+  id: totrans-112
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: '[![1](assets/1.png)](#co_monitoring__logging__and_runtime_security_CO2-1)'
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_monitoring__logging__and_runtime_security_CO2-1)'
+- en: Simplifies the log output rendered for a violation.
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 简化违规时生成的日志输出。
+- en: '[![2](assets/2.png)](#co_monitoring__logging__and_runtime_security_CO2-2)'
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_monitoring__logging__and_runtime_security_CO2-2)'
+- en: Treats a violation of the rule with `ALERT` priority.
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以 `ALERT` 优先级处理违反规则。
+- en: 'After adding the rule to `falco_rules.local.yaml`, we need to let Falco pick
+    up the changes. Restart the Falco service with the following command:'
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在向 `falco_rules.local.yaml` 添加规则后，我们需要让 Falco 获取这些更改。请使用以下命令重启 Falco 服务：
+- en: '[PRE18]'
+  id: totrans-118
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: 'As a result, any attempt that shells into a container will be logged with a
+    different output format and priority, as the following shows:'
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，任何尝试 shell 进入容器的行为都将以不同的输出格式和优先级记录，如下所示：
+- en: '[PRE19]'
+  id: totrans-120
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: In addition to overriding existing Falco rules, you can also define your own
+    custom rules in `/etc/falco/falco_rules.local.yaml`. Writing custom rules is out
+    of scope for this book, but you should find plenty of information on the topic
+    in the Falco documentation.
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了覆盖现有的 Falco 规则，您还可以在 `/etc/falco/falco_rules.local.yaml` 中定义自己的自定义规则。编写自定义规则不在本书的讨论范围内，但您可以在
+    Falco 文档中找到大量相关信息。
+- en: Ensuring Container Immutability
+  id: totrans-122
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 确保容器的不可变性
+- en: Containers are mutable by default. After the container has been started, you
+    can open a shell to it, install a patch for existing software, modify files, or
+    make changes to its configuration. Mutable containers allow attackers to gain
+    access to the container by downloading or installing malicious software.
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器默认是可变的。在容器启动后，您可以打开一个 shell 连接到它，安装现有软件的补丁，修改文件或更改其配置。可变的容器允许攻击者通过下载或安装恶意软件来获取对容器的访问权限。
+- en: To counteract the situation, make sure that the container is operated in an
+    immutable state. That means preventing write operations to the container’s filesystem
+    or even disallowing shell access to the container. If you need to make any substantial
+    changes to the container, such as updating a dependency or incorporating a new
+    application feature, you should release a new tag of the container image instead
+    of manually modifying the container itself. You’d then assign the new tag of the
+    container image to the Pod without having to modify the internals directly.
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要对抗这种情况，请确保容器处于不可变状态。这意味着防止对容器文件系统的写操作，甚至禁止对容器进行 shell 访问。如果需要对容器进行任何重大更改，比如更新依赖项或集成新的应用功能，应该发布容器镜像的新标签，而不是手动修改容器本身。然后，您可以将容器镜像的新标签分配给
+    Pod，而无需直接修改其内部。
+- en: 'Scenario: An Attacker Installs Malicious Software'
+  id: totrans-125
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 情景：攻击者安装恶意软件
+- en: '[Figure 7-3](#installs-malicious-software-attacker) illustrates a scenario
+    where an attacker gains access to a container using stolen credentials. The attacker
+    downloads and installs malicious software given that the container allows write
+    operations to the root filesystem. The malicious software keeps monitoring activities
+    in the container; for example, it could parse the application logs for sensitive
+    information. It may then send the information to a server outside of the Kubernetes
+    cluster. Consequently, the data is used as a means to log into other parts of
+    the system.'
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 7-3](#installs-malicious-software-attacker) 描述了一个情景，攻击者利用窃取的凭据访问容器。攻击者下载并安装了恶意软件，因为容器允许对根文件系统进行写操作。恶意软件继续监视容器中的活动，例如可以解析应用程序日志以获取敏感信息，然后将信息发送到
+    Kubernetes 集群外的服务器。因此，数据被用作登录系统其他部分的手段。'
+- en: '![ckss 0703](assets/ckss_0703.png)'
+  id: totrans-127
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckss 0703](assets/ckss_0703.png)'
+- en: Figure 7-3\. An attacker shells into a container and installs malicious software
+  id: totrans-128
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 7-3\. 攻击者 shell 进入容器并安装恶意软件
+- en: In the next section, you’ll learn how to prevent the situation from happening
+    by using a distroless container image, injecting configuration data with the help
+    of a ConfigMap or Secret, and by configuring a read-only container filesystem.
+    Those settings as a whole will make the container truly immutable.
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在下一节中，您将学习如何通过使用 Distroless 容器镜像、通过 ConfigMap 或 Secret 注入配置数据以及配置只读容器文件系统来防止这种情况的发生。这些设置将使容器真正成为不可变的。
+- en: Using a Distroless Container Image
+  id: totrans-130
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用 Distroless 容器镜像
+- en: Distroless container images have become increasing popular in the world of containers.
+    They only bundle your application and its runtime dependencies, while at the same
+    time removing as much of the operating system as possible, e.g., shells, package
+    managers, and libraries. Distroless container images are not just smaller in size;
+    they are also more secure. An attacker cannot shell into the container, and therefore
+    the filesystem cannot be misused to install malicious software. Using distroless
+    container images is the first line of defense in creating an immutable container.
+    We already covered distroless container images in [“Picking a Base Image Small
+    in Size”](ch06.xhtml#small-sized-base-image). Refer to that section for more information.
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Distroless容器镜像在容器的世界中越来越受欢迎。它们仅捆绑了您的应用程序及其运行时依赖项，同时尽可能地去除操作系统的大部分内容，例如shell、软件包管理器和库。Distroless容器镜像不仅尺寸更小，而且更安全。攻击者无法进入容器，因此文件系统无法被滥用安装恶意软件。使用Distroless容器镜像是创建不可变容器的第一防线。我们已经在[“选择尺寸小的基础镜像”](ch06.xhtml#small-sized-base-image)中介绍了Distroless容器镜像。更多信息请参阅该部分。
+- en: Configuring a Container with a ConfigMap or Secret
+  id: totrans-132
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 配置容器使用ConfigMap或Secret
+- en: It is best practice to use the same container image for different deployment
+    environments, even though their runtime configurations may be different. Any environment-specific
+    configuration, such as credentials, and connection URLs to other parts of the
+    system, should be externalized. In Kubernetes, you can inject configuration data
+    into a container with the help of a ConfigMap or Secret as environment variables
+    or files mounted via Volumes. [Figure 7-4](#configmap-runtime-configuration) shows
+    the reuse of the same container image to configure a Pod in a development and
+    production cluster. Configuration data specific to the environment is provided
+    by a ConfigMap.
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最佳实践是在不同的部署环境中使用相同的容器镜像，即使它们的运行时配置可能不同。任何特定于环境的配置，如凭据和系统其他部分的连接URL，都应该是外部化的。在Kubernetes中，您可以通过ConfigMap或Secret将配置数据作为环境变量或通过Volumes挂载为文件注入到容器中。[图 7-4](#configmap-runtime-configuration)展示了在开发和生产集群中配置Pod时重用相同的容器镜像。环境特定的配置数据由ConfigMap提供。
+- en: '![ckss 0704](assets/ckss_0704.png)'
+  id: totrans-134
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckss 0704](assets/ckss_0704.png)'
+- en: Figure 7-4\. Using the same container image across multiple environments
+  id: totrans-135
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 7-4\. 在多个环境中使用相同的容器镜像
+- en: Avoiding the creation of environment-specific container images simplifies the
+    creation process, reduces the risk of introducing accidental security risks, and
+    makes testing of the functionality easier. Injecting runtime values does not require
+    changing the container after it has been started and therefore is key to making
+    it immutable.
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 避免创建特定于环境的容器镜像简化了创建过程，减少了引入意外安全风险的风险，并使功能测试更加容易。在容器启动后注入运行时值无需更改容器，因此是使其不可变的关键。
+- en: When using Secrets as environment variables in a container, make sure to avoid
+    accidentally logging the values to standard output, e.g., as a plain-text value
+    when writing a log message. Anyone with access to the container logs would be
+    able to parse them for Secrets values. As a spot check, identify the places in
+    your application code where you use a Secret and assess their risk for exposure.
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当在容器中将Secret作为环境变量使用时，请确保避免意外将值记录到标准输出，例如在编写日志消息时作为明文值。任何可以访问容器日志的人都可以解析其中的Secret值。作为抽查，识别应用程序代码中使用Secret的位置，并评估其暴露风险。
+- en: To brush up on creating, configuring, and consuming ConfigMaps and Secrets,
+    revisit the [Kubernetes documentation](https://oreil.ly/RjxjE).
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要了解创建、配置和使用ConfigMaps和Secrets的最新信息，请查阅[Kubernetes文档](https://oreil.ly/RjxjE)。
+- en: Configuring a Read-Only Container Root Filesystem
+  id: totrans-139
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 配置只读容器根文件系统
+- en: Another aspect of container immutability is to prevent write access to the container’s
+    filesystem. You can configure this runtime behavior by assigning the value `true`
+    to the attribute `spec.containers[].securityContext.readOnlyRootFilesystem`.
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器不可变性的另一个方面是防止对容器文件系统的写访问。您可以通过将值`true`分配给属性`spec.containers[].securityContext.readOnlyRootFilesystem`来配置此运行时行为。
+- en: There are some applications that still require write access to fulfill their
+    functional requirements. For example, [nginx](https://www.nginx.com) needs to
+    write to the directories `/var/run`, `/var/cache/nginx`, and `/usr/local/nginx`.
+    In combination with setting `readOnlyRootFilesystem` to `true`, you can declare
+    Volumes that make those directories writable. [Example 7-8](#nginx-immutable-container)
+    shows the YAML manifest of an immutable container running nginx.
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 仍然有一些应用程序需要写入权限以满足其功能需求。例如，[nginx](https://www.nginx.com) 需要写入到 `/var/run`、`/var/cache/nginx`
+    和 `/usr/local/nginx` 目录。与设置 `readOnlyRootFilesystem` 为 `true` 结合使用，您可以声明卷使这些目录可写。[Example 7-8](#nginx-immutable-container)
+    展示了运行 nginx 的不可变容器的 YAML 清单。
+- en: Example 7-8\. A container disallowing write access to the root filesystem
+  id: totrans-142
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: Example 7-8\. 一个禁止对根文件系统进行写入访问的容器
+- en: '[PRE20]'
+  id: totrans-143
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: Identify the filesystem read/write requirements of your application before creating
+    a Pod. Configure write mountpaths with the help of Volumes. Any other filesystem
+    path should become read-only.
+  id: totrans-144
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在创建 Pod 之前，确定应用程序的文件系统读/写需求。使用卷来配置写入挂载路径。任何其他文件系统路径应设为只读。
+- en: Using Audit Logs to Monitor Access
+  id: totrans-145
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用审计日志监控访问
+- en: It’s imperative for a Kubernetes administrator to have a record of events that
+    have occurred in the cluster. Those records can help detect an intrusion in real-time,
+    or they can be used to track down configuration changes for troubleshooting purposes.
+    *Audit logs* provide a chronological view of events received by the API server.
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于 Kubernetes 管理员来说，记录集群中发生的事件是非常重要的。这些记录可以帮助实时检测入侵，或者用于跟踪配置更改以进行故障排除。*审计日志*
+    提供了 API 服务器接收到的事件的时间顺序视图。
+- en: 'Scenario: An Administrator Can Monitor Malicious Events in Real Time'
+  id: totrans-147
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 情景：管理员可以实时监控恶意事件
+- en: '[Figure 7-5](#observing-audit-log-attacker) shows the benefits of monitoring
+    Kubernetes API events. In this scenario, the attacker tries to make calls to the
+    API server. Events of interest have been captured by the audit log mechanism.
+    The administrator can view those events at any time, identify intrusion attempts,
+    and take countermeasure.'
+  id: totrans-148
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Figure 7-5](#observing-audit-log-attacker) 展示了监控 Kubernetes API 事件的好处。在这种情况下，攻击者试图调用
+    API 服务器。审计日志机制已捕获到感兴趣的事件。管理员可以随时查看这些事件，识别入侵尝试，并采取对策。'
+- en: '![ckss 0705](assets/ckss_0705.png)'
+  id: totrans-149
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckss 0705](assets/ckss_0705.png)'
+- en: Figure 7-5\. An attacker monitored by observing audit logs
+  id: totrans-150
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 7-5\. 通过观察审计日志监控的攻击者
+- en: We only reviewed one of the use cases here, the one that applies to security
+    concerns. The ability to trace company-internal API requests should not be underestimated.
+    By reviewing audit logs, the administrator can provide guidance to application
+    developers trying to create Kubernetes objects, or reconstruct configuration changes
+    that may have led to faulty cluster behavior.
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们只在这里回顾了一个用例，即适用于安全问题的用例。不能低估跟踪公司内部 API 请求的能力。通过审查审计日志，管理员可以为试图创建 Kubernetes
+    对象的应用程序开发人员提供指导，或者重建可能导致集群行为故障的配置更改。
+- en: Understanding Audit Logs
+  id: totrans-152
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 理解审计日志
+- en: 'Kubernetes can store records for events triggered by end users for any requests
+    made to the API server or for events emitted by the control plane itself. Entries
+    in the audit log exist in [JSON Lines](https://jsonlines.org) format and can consist
+    of, but aren’t limited to, the following information:'
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 可以存储由最终用户触发的对 API 服务器的任何请求或由控制平面本身发出的事件的记录。审计日志中的条目以 [JSON Lines](https://jsonlines.org)
+    格式存在，可能包括但不限于以下信息：
+- en: What event occurred?
+  id: totrans-154
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 发生了什么事件？
+- en: Who triggered the event?
+  id: totrans-155
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 是谁触发了这个事件？
+- en: When was it triggered?
+  id: totrans-156
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 它是什么时候触发的？
+- en: Which Kubernetes component handled the request?
+  id: totrans-157
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 哪个 Kubernetes 组件处理了该请求？
+- en: The type of event and the corresponding request data to be recorded are defined
+    by an *audit policy*. The audit policy is a YAML manifest specifying those rules
+    and has to be provided to the API server process.
+  id: totrans-158
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 事件类型及其对应的请求数据由 *审计策略* 定义。审计策略是一个指定这些规则的 YAML 清单，并且必须提供给 API 服务器进程。
+- en: 'The *audit backend* is responsible for storing the recorded audit events, as
+    defined by the audit policy. You have two configurable options for a backend:'
+  id: totrans-159
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*审计后端* 负责存储根据审计策略定义的记录的审计事件。对于后端，您有两个可配置的选项：'
+- en: A log backend, which write the events to a file.
+  id: totrans-160
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一个日志后端，将事件写入文件。
+- en: A webhook backend, which sends the events to an external service via HTTP(S)—for
+    example, for the purpose of integrating a centralized logging and monitoring system.
+    Such a backend can help with debugging runtime issues like a crashed application.
+  id: totrans-161
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Webhook 后端通过 HTTP(S) 将事件发送到外部服务，例如集中式日志记录和监控系统集成的目的。 这样的后端可以帮助调试运行时问题，例如应用程序崩溃。
+- en: '[Figure 7-6](#audit-log-architecture) puts together all the pieces necessary
+    to configure audit logging. The following sections will explain the details of
+    configuring them.'
+  id: totrans-162
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 7-6](#audit-log-architecture) 汇总了配置审计日志所需的所有要素。 下面的章节将解释配置它们的详细信息。'
+- en: '![ckss 0706](assets/ckss_0706.png)'
+  id: totrans-163
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckss 0706](assets/ckss_0706.png)'
+- en: Figure 7-6\. The high-level audit log architecture
+  id: totrans-164
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 7-6\. 高级审计日志架构
+- en: Let’s have a deeper look at the audit policy file and its configuration options.
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们深入了解审计策略文件及其配置选项。
+- en: Creating the Audit Policy File
+  id: totrans-166
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 创建审计策略文件
+- en: The audit policy file is effectively a YAML manifest for a `Policy` resource.
+    Any event received by the API server is matched against the rules defined in the
+    policy file in the order of definition. The event is logged with the declared
+    audit level if a matching rule can be found. [Table 7-1](#audit-levels) lists
+    all available audit levels.
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 审计策略文件实际上是用于 `Policy` 资源的 YAML 清单。 API 服务器接收到的任何事件都会按照策略文件中定义的顺序匹配规则。 如果能找到匹配的规则，则记录事件及其声明的审计级别。
+    [表 7-1](#audit-levels) 列出了所有可用的审计级别。
+- en: Table 7-1\. Audit levels
+  id: totrans-168
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 7-1\. 审计级别
+- en: '| Level | Effect |'
+  id: totrans-169
+  prefs: []
+  type: TYPE_TB
+  zh: '| Level | Effect |'
+- en: '| --- | --- |'
+  id: totrans-170
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| `None` | Do not log events matching this rule. |'
+  id: totrans-171
+  prefs: []
+  type: TYPE_TB
+  zh: '| `None` | 不记录与此规则匹配的事件。 |'
+- en: '| `Metadata` | Only log request metadata for the event. |'
+  id: totrans-172
+  prefs: []
+  type: TYPE_TB
+  zh: '| `Metadata` | 仅记录事件的请求元数据。 |'
+- en: '| `Request` | Log metadata and the request body for the event. |'
+  id: totrans-173
+  prefs: []
+  type: TYPE_TB
+  zh: '| `Request` | 记录事件的元数据和请求体。 |'
+- en: '| `RequestResponse` | Log metadata, request, and response body for the event.
+    |'
+  id: totrans-174
+  prefs: []
+  type: TYPE_TB
+  zh: '| `RequestResponse` | 记录事件的元数据、请求和响应体。 |'
+- en: '[Example 7-9](#audit-policy) shows an exemplary audit policy. The rules are
+    specified as an array of items with the attribute named `rules`. Each rule declares
+    a level, the resource type and API group it applies to, and an optional namespace.'
+  id: totrans-175
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[示例 7-9](#audit-policy) 展示了一个示例审计策略。 规则被指定为具有名为 `rules` 的属性的项目数组。 每个规则声明一个级别，适用于的资源类型和
+    API 组，以及一个可选的命名空间。'
+- en: Example 7-9\. Contents of an audit policy file
+  id: totrans-176
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 7-9\. 审计策略文件的内容
+- en: '[PRE21]'
+  id: totrans-177
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: '[![1](assets/1.png)](#co_monitoring__logging__and_runtime_security_CO3-1)'
+  id: totrans-178
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_monitoring__logging__and_runtime_security_CO3-1)'
+- en: Prevents generating logs for all requests in the `RequestReceived` stage
+  id: totrans-179
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 阻止在 `RequestReceived` 阶段为所有请求生成日志
+- en: '[![2](assets/2.png)](#co_monitoring__logging__and_runtime_security_CO3-2)'
+  id: totrans-180
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_monitoring__logging__and_runtime_security_CO3-2)'
+- en: Logs Pod changes at `RequestResponse` level
+  id: totrans-181
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 记录 `RequestResponse` 级别的 Pod 变更
+- en: '[![3](assets/3.png)](#co_monitoring__logging__and_runtime_security_CO3-3)'
+  id: totrans-182
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_monitoring__logging__and_runtime_security_CO3-3)'
+- en: Logs specialized Pod events, e.g., log and status requests, at the `Metadata`
+    level
+  id: totrans-183
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 记录特定的 Pod 事件，例如日志和状态请求，在 `Metadata` 级别
+- en: The previous audit policy isn’t very extensive but should give you an impression
+    of its format. Refer to the [Kubernetes documentation](https://oreil.ly/Zozkf)
+    for additional examples and more details.
+  id: totrans-184
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 先前的审计策略并不是很详细，但应该让您对其格式有所了解。 有关更多示例和详细信息，请参阅 [Kubernetes 文档](https://oreil.ly/Zozkf)。
+- en: Once the audit policy file has been created, it can be consumed by the API server
+    process. Add the flag `--audit-policy-file` to the API server process in the file
+    `/etc/kubernetes/manifests/kube-apiserver.yaml`. The value assigned to the parameter
+    is the fully qualified path to the audit policy file.
+  id: totrans-185
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦创建了审计策略文件，它就可以被 API 服务器进程消费。 在文件 `/etc/kubernetes/manifests/kube-apiserver.yaml`
+    中的 API 服务器进程中添加标志 `--audit-policy-file`。 参数分配的值是审计策略文件的完全限定路径。
+- en: Next up, we’ll walk through the settings needed to configure audit logging for
+    the API server for a file-based log backend and a webhook backend.
+  id: totrans-186
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，我们将详细介绍配置 API 服务器的审计日志记录所需的设置，包括文件日志后端和 Webhook 后端。
+- en: Configuring a Log Backend
+  id: totrans-187
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 配置日志后端
+- en: 'To set up a file-based log backend, you will need to add three pieces of configuration
+    to the file `/etc/kubernetes/manifests/kube-apiserver.yaml`. The following list
+    summarizes the configuration:'
+  id: totrans-188
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要设置基于文件的日志后端，您需要向文件 `/etc/kubernetes/manifests/kube-apiserver.yaml` 添加三个配置项。
+    以下列表总结了配置内容：
+- en: 'Provide two flags to the API server process: the flag `--audit-policy-file`
+    points to the audit policy file; the flag `--audit-log-path` points to the log
+    output file.'
+  id: totrans-189
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 向API服务器进程提供两个标志：标志`--audit-policy-file`指向审计策略文件；标志`--audit-log-path`指向日志输出文件。
+- en: Add a Volume mountpath for the audit log policy file and the log output directory.
+  id: totrans-190
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 为审计日志策略文件和日志输出目录添加卷挂载路径。
+- en: Add a Volume definition to the host path for the audit log policy file and the
+    log output directory.
+  id: totrans-191
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 为审计日志策略文件和日志输出目录在主机路径上添加卷定义。
+- en: '[Example 7-10](#log-backend-api-server) shows the modified content of the API
+    server configuration file.'
+  id: totrans-192
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 示例 7-10显示了API服务器配置文件的修改内容。
+- en: Example 7-10\. Configuring the audit policy file and audit log file
+  id: totrans-193
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 7-10。配置审计策略文件和审计日志文件
+- en: '[PRE22]'
+  id: totrans-194
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: '[![1](assets/1.png)](#co_monitoring__logging__and_runtime_security_CO4-1)'
+  id: totrans-195
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_monitoring__logging__and_runtime_security_CO4-1)'
+- en: Provides the location of the policy file and log file to the API server process.
+  id: totrans-196
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将策略文件和日志文件的位置提供给API服务器进程。
+- en: '[![2](assets/2.png)](#co_monitoring__logging__and_runtime_security_CO4-3)'
+  id: totrans-197
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_monitoring__logging__and_runtime_security_CO4-3)'
+- en: Mounts the policy file and the audit log directory to the given paths.
+  id: totrans-198
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将策略文件和审计日志目录挂载到给定路径。
+- en: '[![3](assets/3.png)](#co_monitoring__logging__and_runtime_security_CO4-5)'
+  id: totrans-199
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_monitoring__logging__and_runtime_security_CO4-5)'
+- en: Defines the Volumes for the policy file and the audit log directory.
+  id: totrans-200
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 定义策略文件和审计日志目录的卷。
+- en: The runtime behavior of the log backend can be further customized by passing
+    additional flags to the API server process. For example, you can specify the maximum
+    number of days to retain old audit log files by providing the flag `--audit-log-maxage`.
+    Refer to the [Kubernetes documentation](https://oreil.ly/L-63d) to have a look
+    at the complete list of flags.
+  id: totrans-201
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过向API服务器进程传递附加标志，可以进一步自定义日志后端的运行时行为。例如，您可以通过提供标志`--audit-log-maxage`指定保留旧审计日志文件的最大天数。请参考[Kubernetes文档](https://oreil.ly/L-63d)查看完整的标志列表。
+- en: 'It’s time to produce some log entries. The following `kubectl` command sends
+    a request to the API server for creating a Pod named `nginx`:'
+  id: totrans-202
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在是产生一些日志条目的时候了。以下`kubectl`命令向API服务器发送一个请求，以创建名为`nginx`的Pod：
+- en: '[PRE23]'
+  id: totrans-203
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: 'In the previous step, we configured the audit log file at `/var/log/kubernetes/audit/audit.log`.
+    Depending on the rules in the audit policy, the number of entries may be overwhelming,
+    which makes finding a specific event hard. A simple way to filter configured events
+    is by searching for the value `audit.k8s.io/v1` assigned to the `apiVersion` attribute.
+    The following command finds relevant log entries, one for the `RequestResponse`
+    level, and another for the `Metadata` level:'
+  id: totrans-204
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在上一步中，我们配置了审计日志文件位于`/var/log/kubernetes/audit/audit.log`。根据审计策略中的规则，条目数量可能会非常庞大，这使得查找特定事件变得困难。过滤已配置事件的简单方法是搜索分配给`apiVersion`属性的值`audit.k8s.io/v1`。以下命令查找相关的日志条目，一个是`RequestResponse`级别的，另一个是`Metadata`级别的：
+- en: '[PRE24]'
+  id: totrans-205
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: Configuring a Webhook Backend
+  id: totrans-206
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 配置Webhook后端
+- en: Configuring a webhook backend looks different from configuring a log backend.
+    We need to tell the API server to send an HTTP(S) request to an external service
+    instead of the file. The configuration to the external service, the webhook, and
+    the credentials needed to authenticate are defined in a [kubeconfig file](https://oreil.ly/bUnmO),
+    similarly to what we’ve done in [“Configuring the ImagePolicyWebhook Admission
+    Controller Plugin”](ch06.xhtml#configuring-imagepolicywebhook-admission-controller-plugin).
+  id: totrans-207
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 配置Webhook后端与配置日志后端有所不同。我们需要告诉API服务器向外部服务发送HTTP(S)请求，而不是文件。与我们在[“配置ImagePolicyWebhook
+    Admission Controller插件”](ch06.xhtml#configuring-imagepolicywebhook-admission-controller-plugin)中所做的类似，将配置到外部服务的配置、Webhook和用于认证的凭据定义在一个[kubeconfig文件](https://oreil.ly/bUnmO)中。
+- en: Add the flag `--audit-webhook-config-file` to the API server process in the
+    file `/etc/kubernetes/manifests/kube-apiserver.yaml`, and point it to the location
+    of the kubeconfig file. The flag `--audit-webhook-initial-backoff` defines the
+    time to wait after the initial request to the external service before retrying.
+    You will still have to assign the flag `--audit-policy-file` to point to the audit
+    policy file.
+  id: totrans-208
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在文件`/etc/kubernetes/manifests/kube-apiserver.yaml`中向API服务器进程添加标志`--audit-webhook-config-file`，并指向kubeconfig文件的位置。标志`--audit-webhook-initial-backoff`定义了在初始请求后等待外部服务重试之前的时间。您仍然需要分配标志`--audit-policy-file`来指向审计策略文件。
+- en: Summary
+  id: totrans-209
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 总结
+- en: Monitoring and logging events in a Kubernetes cluster is an important duty of
+    every administrator. We used Falco to identify and filter security-related events.
+    You learned about the purpose and syntax of the different configuration files
+    and how to find relevant alerts in the logs.
+  id: totrans-210
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在Kubernetes集群中监视和记录事件是每个管理员的重要职责。我们使用Falco来识别和过滤与安全相关的事件。您了解了不同配置文件的目的和语法，以及如何在日志中找到相关警报。
+- en: In addition to employing behavior analytics tools, you will want to set up audit
+    logging for requests reaching the API server. Audit logging records configured
+    events to a backend, either to a file on the control plane node or to an external
+    service via an HTTP(S) call. We worked through the process of enabling audit logging
+    for the API server process.
+  id: totrans-211
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了使用行为分析工具外，您还需要为到达API服务器的请求设置审计日志记录。审计日志记录配置的事件到后端，可以是控制平面节点上的文件，也可以通过HTTP(S)调用发送到外部服务。我们已经完成了为API服务器进程启用审计日志记录的过程。
+- en: A sensible step toward more secure containers is to make them immutable. An
+    immutable container only supports a read-only filesystem, so that a potential
+    attacker cannot install malicious software. Mount a Volume if the application
+    running inside of the container needs to write data. Use a distroless container
+    image to lock out attackers from being able to shell into the container.
+  id: totrans-212
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 朝向更安全容器的明智步骤是使其不可变。不可变容器仅支持只读文件系统，因此潜在攻击者无法安装恶意软件。如果容器内运行的应用程序需要写入数据，则挂载一个卷。使用distroless容器镜像阻止攻击者能够进入容器的shell。
+- en: Exam Essentials
+  id: totrans-213
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 考试要点
+- en: Practice how to configure and operate Falco.
+  id: totrans-214
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 练习如何配置和操作Falco。
+- en: Falco is definitely going to come up as a topic during the exam. You will need
+    to understand how to read and modify a rule in a configuration file. I would suggest
+    you browse through the syntax and options in more detail in case you need to write
+    one yourself. The main entry point for running Falco is the command line tool.
+    It’s fair to assume that it will have been preinstalled in the exam environment.
+  id: totrans-215
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco肯定会成为考试中的一个主题。您需要了解如何读取和修改配置文件中的规则。我建议您详细浏览语法和选项，以防需要自己编写规则。运行Falco的主要入口点是命令行工具。可以合理地假设它已经预装在考试环境中。
+- en: Know how to identify immutable containers.
+  id: totrans-216
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 知道如何识别不可变容器。
+- en: Immutable containers are a central topic to this exam domain. Understand how
+    to set the `spec.containers[].securityContext.readOnlyRootFilesystem` attribute
+    for a Pod and how to mount a Volume to a specific path in case a write operation
+    is required by the container process.
+  id: totrans-217
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不可变容器是本考试领域的核心主题。了解如何为Pod设置`spec.containers[].securityContext.readOnlyRootFilesystem`属性，以及如何挂载卷到特定路径，以防容器进程需要写操作。
+- en: Deeply understand audit log configuration options.
+  id: totrans-218
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 深入了解审计日志配置选项。
+- en: Setting up audit logging consists of two steps. For one, you need to understand
+    the syntax and structure of an audit policy file. The other aspect is how to configure
+    the API server to consume the audit policy file, provide a reference to a backend,
+    and mount the relevant filesystem Volumes. Make sure to practice all of those
+    aspects hands-on.
+  id: totrans-219
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 设置审计日志记录包括两个步骤。首先，您需要了解审计策略文件的语法和结构。另一个方面是如何配置API服务器以消耗审计策略文件，提供到后端的引用，并挂载相关的文件系统卷。确保进行所有这些方面的实际操作练习。
+- en: Sample Exercises
+  id: totrans-220
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 示例练习
+- en: Navigate to the directory *app-a/ch07/falco* of the checked-out GitHub repository
+    [*bmuschko/cks-study-guide*](https://oreil.ly/sImXZ). Start up the VMs running
+    the cluster using the command `vagrant up`. The cluster consists of a single control
+    plane node named `kube-control-plane` and one worker node named `kube-worker-1`.
+    Once done, shut down the cluster using `vagrant destroy -f`. Falco is already
+    running as a systemd service.
+  id: totrans-221
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 导航到已检出的GitHub存储库[*bmuschko/cks-study-guide*](https://oreil.ly/sImXZ)的*app-a/ch07/falco*目录。使用命令`vagrant
+    up`启动运行集群的虚拟机（VMs）。该集群包括一个名为`kube-control-plane`的单个控制平面节点和一个名为`kube-worker-1`的工作节点。完成后，使用`vagrant
+    destroy -f`关闭集群。Falco已作为一个systemd服务正在运行。
+- en: Inspect the process running in the existing Pod named `malicious`. Have a look
+    at the Falco logs and see if a rule created a log for the process.
+  id: totrans-222
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 检查运行在名为`malicious`的现有Pod中的进程。查看Falco日志，看看是否有规则为该进程创建了日志。
+- en: Reconfigure the existing rule that creates a log for the event by changing the
+    output to `<timestamp>,<username>,<container-id>`. Find the changed log entry
+    in the Falco logs.
+  id: totrans-223
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 通过更改输出为`<timestamp>,<username>,<container-id>`来重新配置创建事件日志的现有规则。在Falco日志中找到已更改的日志条目。
+- en: Reconfigure Falco to write logs to the file at `/var/logs/falco.log`. Disable
+    the standard output channel. Ensure that Falco appends new messages to the log
+    file.
+  id: totrans-224
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 重新配置 Falco，使其将日志写入到文件 `/var/logs/falco.log`。禁用标准输出通道。确保 Falco 将新消息追加到日志文件中。
+- en: '*Prerequisite:* This exercise requires the installation of the tools [Vagrant](https://oreil.ly/FiyeH)
+    and [VirtualBox](https://oreil.ly/WW8IK).'
+  id: totrans-225
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: '*先决条件：* 这项练习需要安装工具 [Vagrant](https://oreil.ly/FiyeH) 和 [VirtualBox](https://oreil.ly/WW8IK)。'
+- en: Navigate to the directory *app-a/ch07/immutable-container* of the checked-out
+    GitHub repository [*bmuschko/cks-study-guide*](https://oreil.ly/sImXZ). Execute
+    the command `kubectl apply -f setup.yaml`.
+  id: totrans-226
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 转到已检出的 GitHub 仓库 [*bmuschko/cks-study-guide*](https://oreil.ly/sImXZ) 的目录 *app-a/ch07/immutable-container*。使用命令
+    `kubectl apply -f setup.yaml` 执行操作。
+- en: Inspect the Pod created by the YAML manifest in the `default` namespace. Make
+    relevant changes to the Pod so that its container can be considered immutable.
+  id: totrans-227
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 检查 YAML 清单在 `default` 命名空间中创建的 Pod。对 Pod 进行相关更改，以便其容器被视为不可变。
+- en: Navigate to the directory *app-a/ch07/audit-log* of the checked-out GitHub repository
+    [*bmuschko/cks-study-guide*](https://oreil.ly/sImXZ). Start up the VMs running
+    the cluster using the command `vagrant up`. The cluster consists of a single control
+    plane node named `kube-control-plane` and one worker node named `kube-worker-1`.
+    Once done, shut down the cluster using `vagrant destroy -f`.
+  id: totrans-228
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 转到已检出的 GitHub 仓库 [*bmuschko/cks-study-guide*](https://oreil.ly/sImXZ) 的目录 *app-a/ch07/audit-log*。使用命令
+    `vagrant up` 启动运行集群的虚拟机。该集群包括一个名为 `kube-control-plane` 的单控制平面节点和一个名为 `kube-worker-1`
+    的工作节点。完成后，使用 `vagrant destroy -f` 停止集群。
+- en: Edit the existing audit policy file at `/etc/kubernetes/audit/rules/audit-policy.yaml`.
+    Add a rule that logs events for ConfigMaps and Secrets at the `Metadata` level.
+    Add another rule that logs events for Services at the `Request` level.
+  id: totrans-229
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 编辑位于 `/etc/kubernetes/audit/rules/audit-policy.yaml` 的现有审计策略文件。添加一个规则，以 `Metadata`
+    级别记录 ConfigMaps 和 Secrets 的事件。添加另一个规则，以 `Request` 级别记录 Services 的事件。
+- en: Configure the API server to consume the audit policy file. Logs should be written
+    to the file `/var/log/kubernetes/audit/logs/apiserver.log`. Define a maximum number
+    of five days to retain audit log files.
+  id: totrans-230
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 配置 API 服务器以消耗审计策略文件。日志应写入到文件 `/var/log/kubernetes/audit/logs/apiserver.log`。定义最多保留审计日志文件五天。
+- en: Ensure that the log file has been created and contains at least one entry that
+    matches the events configured.
+  id: totrans-231
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 确保已创建日志文件并包含至少一个与配置的事件匹配的条目。
+- en: '*Prerequisite:* This exercise requires the installation of the tools [Vagrant](https://oreil.ly/FiyeH)
+    and [VirtualBox](https://oreil.ly/WW8IK).'
+  id: totrans-232
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: '*先决条件：* 这项练习需要安装工具 [Vagrant](https://oreil.ly/FiyeH) 和 [VirtualBox](https://oreil.ly/WW8IK)。'

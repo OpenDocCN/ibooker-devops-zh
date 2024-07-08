@@ -1,0 +1,1804 @@
+- en: Chapter 3\. Monitoring and Logging in Kubernetes
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第3章《Kubernetes中的监控和日志记录》
+- en: In this chapter, we discuss best practices for monitoring and logging in Kubernetes.
+    We’ll dive into the details of different monitoring patterns, important metrics
+    to collect, and building dashboards from these raw metrics. We then wrap up with
+    examples of implementing monitoring for your Kubernetes cluster.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们将讨论在 Kubernetes 中监控和日志记录的最佳实践。我们将深入探讨不同监控模式的细节，收集重要的度量指标，并从这些原始度量指标构建仪表板。然后，我们以实现
+    Kubernetes 集群监控的示例结束。
+- en: Metrics Versus Logs
+  id: totrans-2
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 度量与日志
+- en: 'You first need to understand the difference between log collection and metrics
+    collection. They are complementary but serve different purposes:'
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您首先需要理解日志收集和度量收集之间的区别。它们是互补的，但提供不同的用途：
+- en: Metrics
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 度量
+- en: A series of numbers measured over a period of time.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一系列在一段时间内测量的数字。
+- en: Logs
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 日志
+- en: Logs keep track of what happens while a program is running, including any errors,
+    warnings, or notable events that occur.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 日志记录了程序运行时发生的所有事件，包括任何错误、警告或显著事件。
+- en: A example of where you would need to use both metrics and logging is when an
+    application is performing poorly. Our first indication of the issue might be an
+    alert of high latency on the pods hosting the application, but the metrics might
+    not give a good indication of the issue. We then can look into our logs to investigate
+    errors that are being emitted from the application.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在应用性能不佳时，您可能需要同时使用度量和日志记录的示例是，我们第一次发现问题可能是由于托管应用程序的 Pod 上高延迟的警报，但度量可能无法明确问题。然后我们可以查看日志以调查应用程序发出的错误。
+- en: Monitoring Techniques
+  id: totrans-9
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 监控技术
+- en: Closed-box monitoring focuses on monitoring from the outside of an application
+    and is what’s been used traditionally when monitoring systems for components like
+    CPU, memory, storage, and so on. Closed-box monitoring can still be useful for
+    monitoring at the infrastructure level, but it lacks insights and context into
+    how the application is operating. For example, to test whether a cluster is healthy,
+    we might schedule a pod, and if it’s successful, we know that the scheduler and
+    service discovery are healthy within our cluster, so we can assume the cluster
+    components are healthy.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 封闭盒监控侧重于从应用程序外部进行监控，传统上用于监控诸如 CPU、内存、存储等组件的系统。封闭盒监控仍然可以用于基础设施级别的监控，但缺乏对应用程序操作方式的洞察和上下文。例如，为了测试集群是否健康，我们可以调度一个
+    Pod，如果成功，我们知道调度器和服务发现在我们集群内部是健康的，因此可以假设集群组件是健康的。
+- en: Open-box monitoring focuses on the details in the context of the application
+    state, such as total HTTP requests, number of 500 errors, latency of requests,
+    and so on. With open-box monitoring, we can begin to understand the *why* of our
+    system state. It allows us to ask, “Why did the disk fill up?” and not just state,
+    “The disk filled up.”
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 开放盒监控侧重于在应用程序状态上下文中的详细信息，例如总 HTTP 请求、500 错误的数量、请求的延迟等。通过开放盒监控，我们可以开始理解系统状态的原因。它允许我们提出问题：“为什么磁盘填满了？”而不仅仅是陈述：“磁盘填满了。”
+- en: Monitoring Patterns
+  id: totrans-12
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 监控模式
+- en: You might look at monitoring and say, “How difficult can this be? We’ve always
+    monitored our systems.” The concept of monitoring isn’t new, and we have many
+    tools at our disposal to help us understand how our systems are performing. But
+    platforms like Kubernetes are much more dynamic and transient, so you’ll need
+    to change your thinking about how to monitor these environments. For example,
+    when monitoring a virtual machine (VM) you expect that VM to be up 24/7 and all
+    its state preserved. In Kubernetes, pods can be very dynamic and short-lived,
+    so you need to have monitoring in place that can handle this dynamic and transient
+    nature.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可能会审视监控并说：“这有多难？我们一直在监控我们的系统。”监控的概念并不新鲜，我们有许多工具可以帮助我们了解系统的运行情况。但像 Kubernetes
+    这样的平台更具动态性和短暂性，因此您需要改变对如何监控这些环境的思考方式。例如，当监控虚拟机（VM）时，您期望该 VM 在线 24/7，并且其所有状态得到保留。在
+    Kubernetes 中，Pod 可能非常动态和短暂，因此您需要有能够处理这种动态和瞬态性质的监控系统。
+- en: 'There are two monitoring patterns to focus on when monitoring distributed systems.
+    The *USE* method, popularized by Brendan Gregg, focuses on the following:'
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在监控分布式系统时，有两种监控模式值得关注。由 Brendan Gregg 推广的*USE*方法，关注以下内容：
+- en: U—Utilization
+  id: totrans-15
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: U—利用率
+- en: S—Saturation
+  id: totrans-16
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: S—饱和度
+- en: E—Errors
+  id: totrans-17
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: E—错误
+- en: This method is focused on infrastructure monitoring because there are limitations
+    on using it for application-level monitoring. The USE method is described as “For
+    every resource, check utilization, saturation, and error rates.” This method lets
+    you quickly identify resource constraints and error rates of your systems. For
+    example, to check the health of the network for your nodes in the cluster, you
+    will want to monitor the utilization, saturation, and error rate to be able to
+    easily identify any network bottlenecks or errors in the network stack. The USE
+    method is a tool in a larger toolbox and is not the only method you will utilize
+    to monitor your systems.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 该方法侧重于基础设施监控，因为在应用级监控中使用它存在限制。USE 方法被描述为“对于每个资源，检查利用率、饱和度和错误率”。该方法可以帮助您快速识别系统的资源约束和错误率。例如，要检查集群中节点的网络健康状况，您将希望监控利用率、饱和度和错误率，以便轻松识别任何网络瓶颈或网络堆栈中的错误。USE
+    方法是更大工具箱中的一种工具，不是您监控系统时唯一使用的方法。
+- en: 'Another monitoring approach, called the *RED* method, was popularized by Tom
+    Wilkie. The RED method approach is focused on the following:'
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一种监控方法称为*RED*方法，由 Tom Wilkie 推广。RED 方法专注于以下内容：
+- en: R—Rate
+  id: totrans-20
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: R—Rate
+- en: E—Errors
+  id: totrans-21
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: E—错误
+- en: D—Duration
+  id: totrans-22
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: D—持续时间
+- en: 'The philosophy was taken from Google’s *Four Golden Signals*:'
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这一理念源于 Google 的*四个黄金信号*：
+- en: Latency
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 延迟
+- en: How long it takes to serve a request
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 提供请求所需的时间
+- en: Traffic
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 流量
+- en: How much demand is placed on your system
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您的系统承受了多少需求
+- en: Errors
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 错误
+- en: The rate of requests that are failing
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请求失败的速率
+- en: Saturation
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 饱和度
+- en: How utilized your service is
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您的服务被多少程度利用
+- en: 'As an example, you could use this method to monitor a frontend service running
+    in Kubernetes to calculate the following:'
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，您可以使用此方法来监控在 Kubernetes 中运行的前端服务，以计算以下内容：
+- en: How many requests is my frontend service processing?
+  id: totrans-33
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 我的前端服务正在处理多少个请求？
+- en: How many 500 errors are users of the service receiving?
+  id: totrans-34
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 服务用户收到多少个 500 错误？
+- en: Is the service overutilized by requests?
+  id: totrans-35
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 服务是否被请求过度利用？
+- en: As you can see from the previous example, this method is more focused on the
+    users’ experience with the service.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如您从上一个例子中看到的，这种方法更关注用户对服务的体验。
+- en: The USE and RED methods are complementary given that the USE method focuses
+    on the infrastructure components and the RED method focuses on monitoring the
+    end-user experience for the application.
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: USE 和 RED 方法是互补的，因为 USE 方法侧重于基础设施组件，而 RED 方法侧重于监控应用程序的最终用户体验。
+- en: Kubernetes Metrics Overview
+  id: totrans-38
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Kubernetes 指标概述
+- en: Now that we know the different monitoring techniques and patterns, let’s look
+    at what components you should be monitoring in your Kubernetes cluster. A Kubernetes
+    cluster consists of control-plane components and node components. The control-plane
+    components consist of the API server, etcd, scheduler, and controller manager.
+    The nodes consist of the kubelet, container runtime, kube-proxy, kube-dns, and
+    pods. You need to monitor all these components to ensure a healthy cluster and
+    application.
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们知道了不同的监控技术和模式，让我们看看您应该在 Kubernetes 集群中监控哪些组件。Kubernetes 集群包括控制平面组件和节点组件。控制平面组件包括
+    API 服务器、etcd、调度器和控制器管理器。节点包括 kubelet、容器运行时、kube-proxy、kube-dns 和 pods。您需要监控所有这些组件，以确保集群和应用程序的健康。
+- en: Kubernetes exposes these metrics in a variety of ways, so let’s look at different
+    components that you can use to collect metrics within your cluster.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 通过多种方式公开这些指标，因此让我们看看您可以用来收集集群内指标的不同组件。
+- en: cAdvisor
+  id: totrans-41
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: cAdvisor
+- en: Container Advisor, or cAdvisor, is an open source project that collects resources
+    and metrics for containers running on a node. cAdvisor is built into the Kubernetes
+    kubelet, which runs on every node in the cluster. It collects memory and CPU metrics
+    through the Linux control group (cgroup) tree. If you are not familiar with cgroups,
+    it’s a Linux kernel feature that allows isolation of resources for CPU, disk I/O,
+    or network I/O. cAdvisor will also collect disk metrics through statfs, which
+    is built into the Linux kernel. These are implementation details you don’t really
+    need to worry about, but you should understand how these metrics are exposed and
+    the type of information you can collect. You should consider cAdvisor as the source
+    of truth for all container metrics.
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器监视器，或者说 cAdvisor，是一个收集运行在节点上容器资源和指标的开源项目。cAdvisor 内置于运行在集群每个节点上的 Kubernetes
+    kubelet 中。它通过 Linux 控制组（cgroup）树收集内存和 CPU 指标。如果您对 cgroups 不熟悉，它是 Linux 内核的一个功能，允许隔离
+    CPU、磁盘 I/O 或网络 I/O 资源。cAdvisor 还将通过 Linux 内核内置的 statfs 收集磁盘指标。这些是您不必过于担心的实现细节，但您应了解这些指标如何公开以及您可以收集的信息类型。您应将
+    cAdvisor 视为所有容器指标的真实来源。
+- en: Metrics Server
+  id: totrans-43
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Metrics Server
+- en: The Kubernetes metrics server and Metrics Server API replace the deprecated
+    Heapster. Heapster had some architectural disadvantages with how it implemented
+    the data sink, which caused a lot of vendored solutions in the core Heapster code
+    base. This issue was solved by implementing a resource and Custom Metrics API
+    as an aggregated API in Kubernetes. This allows implementations to be switched
+    out without changing the API.
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes metrics server 和 Metrics Server API 取代了已弃用的 Heapster。Heapster 在实现数据汇聚方面存在一些架构上的劣势，导致核心
+    Heapster 代码库中出现了许多供应商解决方案。通过在 Kubernetes 中实现资源和自定义指标 API 作为聚合 API，解决了这个问题，允许在不改变
+    API 的情况下切换实现。
+- en: There are two aspects to understand in the Metrics Server API and metrics server.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Metrics Server API 和 metrics server 中有两个方面需要理解。
+- en: First, the canonical implementation of the Resource Metrics API is the metrics
+    server. The metrics server gathers resource metrics such as CPU and memory. It
+    gathers these metrics from the kubelet’s API and then stores them in memory. Kubernetes
+    uses these resource metrics in the scheduler, Horizontal Pod Autoscaler (HPA),
+    and Vertical Pod Autoscaler (VPA).
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，资源指标 API 的典范实现是 metrics server。metrics server 收集诸如 CPU 和内存之类的资源指标。它从 kubelet
+    的 API 收集这些指标，然后将它们存储在内存中。Kubernetes 在调度器、水平 Pod 自动伸缩器（HPA）和垂直 Pod 自动伸缩器（VPA）中使用这些资源指标。
+- en: Second, the Custom Metrics API allows monitoring systems to collect arbitrary
+    metrics. This allows monitoring solutions to build custom adapters that will allow
+    for extending outside the core resource metrics. For example, Prometheus built
+    one of the first custom metrics adapters, which allows you to use the HPA based
+    on a custom metric. This opens up better scaling based on your use case because
+    now you can bring in metrics like queue size and scale based on a metric that
+    might be external to Kubernetes.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 第二，自定义指标 API 允许监控系统收集任意指标。这使得监控解决方案可以构建自定义适配器，从而允许扩展核心资源指标之外的功能。例如，Prometheus
+    构建了第一个自定义指标适配器，允许您基于自定义指标使用 HPA。这打开了基于您的使用情况进行更好扩展的可能性，因为现在您可以引入队列大小等指标，并根据可能是
+    Kubernetes 外部的指标进行扩展。
+- en: Now that there is a standardized Metrics API, this opens up many possibilities
+    to scale outside the plain old CPU and memory metrics.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在有了标准化的 Metrics API，这开启了许多超越传统 CPU 和内存指标的可能性。
+- en: kube-state-metrics
+  id: totrans-49
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: kube-state-metrics
+- en: kube-state-metrics is a Kubernetes add-on that monitors the object stored in
+    Kubernetes. Where cAdvisor and Metrics Server are used to provide detailed metrics
+    on resource usage, kube-state-metrics is focused on identifying conditions on
+    Kubernetes objects deployed to your cluster.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: kube-state-metrics 是一个 Kubernetes 插件，用于监控存储在 Kubernetes 中的对象。在 cAdvisor 和 Metrics
+    Server 用于提供详细的资源使用情况指标时，kube-state-metrics 专注于识别部署到集群的 Kubernetes 对象的条件。
+- en: 'Following are some questions that kube-state-metrics can answer for you:'
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下面是 kube-state-metrics 可以为您解答的一些问题：
+- en: Pods
+  id: totrans-52
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Pod
+- en: How many pods are deployed to the cluster?
+  id: totrans-53
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 集群部署了多少个 Pod？
+- en: How many pods are in a pending state?
+  id: totrans-54
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 有多少个 Pod 处于挂起状态？
+- en: Are there enough resources to serve a pods request?
+  id: totrans-55
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 是否有足够的资源来处理 Pod 的请求？
+- en: Deployments
+  id: totrans-56
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 部署
+- en: How many pods are in a running state versus a desired state?
+  id: totrans-57
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 有多少个 Pod 处于运行状态与期望状态？
+- en: How many replicas are available?
+  id: totrans-58
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 有多少个副本可用？
+- en: What deployments have been updated?
+  id: totrans-59
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 哪些部署已更新？
+- en: Nodes
+  id: totrans-60
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 节点
+- en: What’s the status of my nodes?
+  id: totrans-61
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 我的节点状态如何？
+- en: What are the allottable CPU cores in my cluster?
+  id: totrans-62
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 我的集群中可分配的 CPU 核心有哪些？
+- en: Are there any nodes that are unschedulable?
+  id: totrans-63
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 是否有任何不可调度的节点？
+- en: Jobs
+  id: totrans-64
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 任务
+- en: When did a job start?
+  id: totrans-65
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一个任务何时开始？
+- en: When did a job complete?
+  id: totrans-66
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一个任务何时完成？
+- en: How many jobs failed?
+  id: totrans-67
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 多少个任务失败了？
+- en: As of this writing, kube-state-metrics tracks many object types. These are always
+    expanding, and you can find the documentation in the [GitHub repository](https://oreil.ly/bdTp2).
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 截至本文撰写时，kube-state-metrics 跟踪许多对象类型。这些类型始终在扩展，您可以在 [GitHub 仓库](https://oreil.ly/bdTp2)
+    中找到文档。
+- en: What Metrics Do I Monitor?
+  id: totrans-69
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 我应该监控哪些指标？
+- en: 'The easy answer is “everything,” but if you try to monitor too much, you can
+    create noise that filters out the real signals into which you need to have insight.
+    When we think about monitoring in Kubernetes, we want a layered approach that
+    takes into account the following:'
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 简单的答案是“一切”，但如果您尝试监视过多，可能会产生噪音，过滤掉您需要洞察的真实信号。当我们考虑 Kubernetes 中的监控时，我们希望采用一种分层方法，考虑以下内容：
+- en: Physical or virtual nodes
+  id: totrans-71
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 物理或虚拟节点
+- en: Cluster components
+  id: totrans-72
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 集群组件
+- en: Cluster add-ons
+  id: totrans-73
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 集群附加组件
+- en: End-user applications
+  id: totrans-74
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 最终用户应用程序
+- en: Using this layered approach to monitoring allows you to more easily identify
+    the correct signals in your monitoring system. It allows you to approach issues
+    in a more targeted way. For example, if you have pods going into a pending state,
+    you can start with resource utilization of the nodes, and if all is OK, you can
+    target cluster-level components.
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用这种分层监控方法可以更轻松地识别监控系统中的正确信号。它使您能够更有针对性地解决问题。例如，如果您的 Pod 进入挂起状态，您可以从节点资源利用开始，如果一切正常，您可以针对集群级组件。
+- en: 'Following are metrics you would want to target in your system:'
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下面是您系统中希望关注的指标：
+- en: Nodes
+  id: totrans-77
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 节点
+- en: CPU utilization
+  id: totrans-78
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: CPU 利用率
+- en: Memory utilization
+  id: totrans-79
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 内存利用率
+- en: Network utilization
+  id: totrans-80
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 网络利用率
+- en: Disk utilization
+  id: totrans-81
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 磁盘利用率
+- en: Cluster components
+  id: totrans-82
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 集群组件
+- en: etcd latency
+  id: totrans-83
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: etcd 延迟
+- en: Cluster add-ons
+  id: totrans-84
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 集群附加组件
+- en: Cluster Autoscaler
+  id: totrans-85
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 集群自动缩放器
+- en: Ingress controller
+  id: totrans-86
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Ingress 控制器
+- en: Application
+  id: totrans-87
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 应用程序
+- en: Container memory utilization and saturation
+  id: totrans-88
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 容器内存利用率和饱和度
+- en: Container CPU utilization
+  id: totrans-89
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 容器 CPU 利用率
+- en: Container network utilization and error rate
+  id: totrans-90
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 容器网络利用率和错误率
+- en: Application framework–specific metrics
+  id: totrans-91
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 特定应用程序框架的指标
+- en: Monitoring Tools
+  id: totrans-92
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 监控工具
+- en: 'Many monitoring tools can integrate with Kubernetes, and more arrive every
+    day, building on their feature set to better integrate with Kubernetes. Following
+    are a few popular tools that integrate with Kubernetes:'
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 许多监控工具可以与 Kubernetes 集成，并且每天都有更多工具加入，扩展其功能集以更好地与 Kubernetes 集成。以下是几个流行的与 Kubernetes
+    集成的工具：
+- en: Prometheus
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Prometheus
+- en: Prometheus is an open source systems monitoring and alerting toolkit originally
+    built at SoundCloud. Since its inception in 2012, many companies and organizations
+    have adopted Prometheus, and the project has a very active developer and user
+    community. It is now a standalone open source project and maintained independent
+    of any company. To emphasize this, and to clarify the project’s governance structure,
+    Prometheus joined the Cloud Native Computing Foundation (CNCF) in 2016 as the
+    second hosted project, after Kubernetes.
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Prometheus 是一个最初在 SoundCloud 构建的开源系统监控和警报工具包。自 2012 年成立以来，许多公司和组织都采用了 Prometheus，并且该项目拥有非常活跃的开发者和用户社区。现在它是一个独立的开源项目，独立于任何公司的维护。为了强调这一点，并澄清项目的治理结构，Prometheus
+    在 2016 年作为第二个托管项目加入了云原生计算基金会（CNCF），紧随 Kubernetes 之后。
+- en: InfluxDB
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: InfluxDB
+- en: InfluxDB is a time-series database designed to handle high write and query loads.
+    It is an integral component of the TICK (Telegraf, InfluxDB, Chronograf, and Kapacitor)
+    stack. InfluxDB is meant to be used as a backing store for any use case involving
+    large amounts of timestamped data, including DevOps monitoring, application metrics,
+    IoT sensor data, and real-time analytics.
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: InfluxDB 是一个设计用于处理高写入和查询负载的时间序列数据库。它是 TICK（Telegraf、InfluxDB、Chronograf 和 Kapacitor）堆栈的重要组成部分。InfluxDB
+    旨在作为任何涉及大量时间戳数据的用例的后端存储使用，包括 DevOps 监控、应用程序指标、IoT 传感器数据和实时分析。
+- en: Datadog
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Datadog
+- en: Datadog provides a monitoring service for cloud-scale applications, providing
+    monitoring of servers, databases, tools, and services through a SaaS-based data
+    analytics platform.
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Datadog 提供云规模应用程序的监控服务，通过基于 SaaS 的数据分析平台监控服务器、数据库、工具和服务。
+- en: Sysdig
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Sysdig
+- en: Sysdig Monitor is a commercial tool that provides Docker monitoring and Kubernetes
+    monitoring for container-native apps. Sysdig also allows you to collect, correlate,
+    and query Prometheus metrics with direct Kubernetes integration.
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Sysdig监控是一个商业工具，为容器本地应用程序提供Docker监控和Kubernetes监控。Sysdig还允许您收集、关联和查询具有直接Kubernetes集成的Prometheus指标。
+- en: Cloud provider tools
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 云提供商工具
+- en: 'All major cloud providers provide monitoring tools for their different solutions.
+    These tools are typically integrated into the cloud provider’s ecosystem and provide
+    a good starting point for monitoring your Kubernetes cluster. Following are some
+    examples of cloud provider tools:'
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有主要的云提供商都为其不同的解决方案提供监控工具。这些工具通常集成到云提供商的生态系统中，并为监控您的Kubernetes集群提供一个良好的起点。以下是一些云提供商工具的例子：
+- en: GCP Stackdriver
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: GCP Stackdriver
+- en: Stackdriver Kubernetes Engine Monitoring is designed to monitor Google Kubernetes
+    Engine (GKE) clusters. It manages monitoring and logging services together and
+    its interface provides a dashboard customized for GKE clusters. Stackdriver Monitoring
+    provides visibility into the performance, uptime, and overall health of cloud-powered
+    applications. It collects metrics, events, and metadata from Google Cloud Platform
+    (GCP), Amazon Web Services (AWS), hosted uptime probes, and application instrumentation.
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Stackdriver Kubernetes引擎监视旨在监视Google Kubernetes引擎（GKE）集群。它管理监视和日志服务，并且其界面提供了专为GKE集群定制的仪表板。Stackdriver监视提供了对云驱动应用程序性能、可用性和总体健康的可见性。它从Google云平台（GCP）、亚马逊网络服务（AWS）、托管的正常运行时间探针和应用程序仪表化中收集指标、事件和元数据。
+- en: Microsoft Azure Monitor for containers
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Microsoft Azure容器监视器
+- en: Azure Monitor for containers is a feature designed to monitor the performance
+    of container workloads deployed to either Azure Container Instances or managed
+    Kubernetes clusters hosted on Azure Kubernetes Service. Monitoring your containers
+    is critical, especially when you’re running a production cluster, at scale, with
+    multiple applications. Azure Monitor for containers gives you performance visibility
+    by collecting memory and processor metrics from controllers, nodes, and containers
+    that are available in Kubernetes through the Metrics API. Container logs are also
+    collected. After you enable monitoring from Kubernetes clusters, metrics and logs
+    are automatically collected for you through a containerized version of the Log
+    Analytics agent for Linux.
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Azure容器监视器是一个旨在监视部署到Azure容器实例或托管在Azure Kubernetes服务上的托管Kubernetes集群的性能的功能。在运行生产集群时，特别是在规模化和多应用程序情况下，监视您的容器至关重要。Azure容器监视器通过从控制器、节点和Kubernetes中通过Metrics
+    API可用的容器收集内存和处理器指标来提供性能可见性。还收集容器日志。在从Kubernetes集群启用监视后，指标和日志将通过Linux版本的Log Analytics代理自动收集。
+- en: AWS Container Insights
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: AWS容器洞察
+- en: If you use Amazon Elastic Container Service (ECS), Amazon Elastic Kubernetes
+    Service, or other Kubernetes platforms on Amazon EC2, you can use CloudWatch Container
+    Insights to collect, aggregate, and summarize metrics and logs from your containerized
+    applications and microservices. The metrics include utilization for resources
+    such as CPU, memory, disk, and network. Container Insights also provides diagnostic
+    information, such as container restart failures, to help you isolate issues and
+    resolve them quickly.
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您使用亚马逊弹性容器服务（ECS）、亚马逊弹性Kubernetes服务或其他基于亚马逊EC2的Kubernetes平台，您可以使用CloudWatch容器洞察收集、聚合和总结容器化应用程序和微服务的指标和日志。这些指标包括CPU、内存、磁盘和网络等资源的利用率。容器洞察还提供诊断信息，例如容器重启失败，帮助您隔离问题并快速解决。
+- en: One important aspect when looking at implementing a tool to monitor metrics
+    is to look at how the metrics are stored. Tools that provide a time-series database
+    with key/value pairs will give you a higher degree of attributes for the metric.
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在考虑实施监控指标工具时，一个重要的方面是查看指标存储方式。提供带有键/值对的时间序列数据库的工具将为您的指标提供更高程度的属性。
+- en: Tip
+  id: totrans-111
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: Always evaluate monitoring tools you already have, because taking on a new monitoring
+    tool has a learning curve and a cost due to the operational implementation of
+    the tool. Many of the monitoring tools now have integration into Kubernetes, so
+    evaluate which ones you have today and whether they will meet your requirements.
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 始终评估您已经拥有的监控工具，因为采用新的监控工具会有学习曲线和操作实施成本。许多监控工具现在已经集成到Kubernetes中，因此评估您今天拥有的工具及其是否能满足您的要求是非常重要的。
+- en: Monitoring Kubernetes Using Prometheus
+  id: totrans-113
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用Prometheus监视Kubernetes
+- en: In this section we focus on monitoring metrics with Prometheus, which provides
+    good integrations with Kubernetes labeling, service discovery, and metadata. The
+    high-level concepts we implement throughout the chapter will also apply to other
+    monitoring systems.
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本节中，我们关注使用Prometheus监控指标，它与Kubernetes标签、服务发现和元数据有很好的集成。本章节实施的高级概念也适用于其他监控系统。
+- en: 'Prometheus is an open source project hosted by the CNCF. It was originally
+    developed at SoundCloud, and a lot of its concepts are based on Google’s internal
+    monitoring system, Borgmon. It implements a multidimensional data model with keypairs
+    that work much like how the Kubernetes labeling system works. Prometheus exposes
+    metrics in a human-readable format, as in the following example:'
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Prometheus是由CNCF托管的开源项目。它最初在SoundCloud开发，其许多概念基于Google的内部监控系统Borgmon。它实现了一个多维数据模型，使用键值对的方式工作，类似于Kubernetes的标签系统。Prometheus以人类可读的格式暴露指标，如下面的例子所示：
+- en: '[PRE0]'
+  id: totrans-116
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: To collect metrics, Prometheus uses a pull model in which it scrapes a metrics
+    endpoint to collect and ingest the metrics into the Prometheus server. Systems
+    like Kubernetes already expose their metrics in a Prometheus format, making it
+    simple to collect metrics. Many other Kubernetes ecosystem projects (NGINX, Traefik,
+    Istio, Linkerd, etc.) also expose their metrics in a Prometheus format. Prometheus
+    also can use exporters, which allow you to take emitted metrics from your service
+    and translate them to Prometheus-formatted metrics.
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Prometheus使用拉模型来收集指标，在这种模型中，它会获取一个指标端点以收集和摄取指标到Prometheus服务器中。像Kubernetes这样的系统已经以Prometheus格式暴露了它们的指标，使得收集指标变得简单。许多其他的Kubernetes生态系统项目（如NGINX、Traefik、Istio、Linkerd等）也以Prometheus格式暴露它们的指标。Prometheus还可以使用导出器，允许您获取服务发出的指标并将其转换为Prometheus格式的指标。
+- en: Prometheus has a very simplified architecture, as depicted in [Figure 3-1](#prometheus_architecture).
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Prometheus具有非常简化的架构，如[图3-1](#prometheus_architecture)所示。
+- en: '![Prometheus architecture](assets/kbp2_0301.png)'
+  id: totrans-119
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Prometheus architecture](assets/kbp2_0301.png)'
+- en: Figure 3-1\. Prometheus architecture
+  id: totrans-120
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图3-1\. Prometheus架构
+- en: Tip
+  id: totrans-121
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: You can install Prometheus within the cluster or outside the cluster. It’s a
+    good practice to monitor your cluster from a “utility cluster” to avoid a production
+    issue also affecting your monitoring system. Tools like [Thanos](https://oreil.ly/7e6Wf)
+    provide high availability for Prometheus and allow you to export metrics into
+    an external storage system.
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在集群内部或集群外部安装Prometheus。从“实用集群”监控您的集群是一个好的实践，以避免生产问题也影响您的监控系统。像[Thanos](https://oreil.ly/7e6Wf)这样的工具为Prometheus提供了高可用性，并允许将指标导出到外部存储系统。
+- en: 'A deep dive into the Prometheus architecture is beyond the scope of this book,
+    and you should refer to one of the dedicated books on this topic. [*Prometheus:
+    Up & Running*](https://oreil.ly/NewNE) (O’Reilly) is a good in-depth book to get
+    you started.'
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '对Prometheus架构的深入讨论超出了本书的范围，您应参考专门的图书。[*Prometheus: Up & Running*](https://oreil.ly/NewNE)（O''Reilly）是一个很好的深入学习的起点。'
+- en: 'So, let’s dive in and get Prometheus set up on our Kubernetes cluster. There
+    are many different ways to deploy Prometheus, and the deployment will depend on
+    your specific implementation. We will install the Prometheus Operator with Helm:'
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，让我们深入了解并在我们的Kubernetes集群上设置Prometheus。有许多不同的部署方式可以部署Prometheus，部署方式将取决于您的具体实现。我们将使用Helm安装Prometheus
+    Operator：
+- en: Prometheus server
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Prometheus服务器
+- en: Pulls and stores metrics being collected from systems.
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 拉取和存储从系统收集的指标。
+- en: Prometheus Operator
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Prometheus Operator
+- en: Makes the Prometheus configuration Kubernetes native, and manages and operates
+    Prometheus and Alertmanager clusters. Allows you to create, destroy, and configure
+    Prometheus resources through native Kubernetes resource definitions.
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使Prometheus配置与Kubernetes原生化，并管理和操作Prometheus和Alertmanager集群。允许您通过本机Kubernetes资源定义创建、销毁和配置Prometheus资源。
+- en: Node Exporter
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Node Exporter
+- en: Exports host metrics from Kubernetes nodes in the cluster.
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从Kubernetes集群中的节点导出主机指标。
+- en: kube-state-metrics
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: kube-state-metrics
+- en: Collects Kubernetes-specific metrics.
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 收集特定于Kubernetes的指标。
+- en: Alertmanager
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Alertmanager
+- en: Allows you to configure and forward alerts to external systems.
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 允许您配置并将警报转发到外部系统。
+- en: Grafana
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Grafana
+- en: Provides visualization on dashboard capabilities for Prometheus.
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为Prometheus提供仪表板能力的可视化。
+- en: First, we’ll start by getting minikube setup to deploy Prometheus to. We are
+    using Macs so we’ll use `brew` to install minikube. You can also install minikube
+    from the [minikube website](https://oreil.ly/BgFFL).
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，我们将开始设置minikube以部署Prometheus。我们使用Mac，所以我们将使用`brew`来安装minikube。你也可以从[minikube网站](https://oreil.ly/BgFFL)安装minikube。
+- en: '[PRE1]'
+  id: totrans-138
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: Now we’ll install kube-prometheus-stack (formerly Prometheus Operator) and prepare
+    our cluster to start monitoring the Kubernetes API server for changes.
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们将安装kube-prometheus-stack（前身为Prometheus Operator），并准备好我们的集群以开始监控Kubernetes
+    API服务器的变化。
+- en: 'Create a namespace for monitoring:'
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建一个用于监控的命名空间：
+- en: '[PRE2]'
+  id: totrans-141
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'Add the prometheus-community Helm chart repository:'
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 添加prometheus-community Helm chart仓库：
+- en: '[PRE3]'
+  id: totrans-143
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'Add the Helm Stable chart repository:'
+  id: totrans-144
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 添加Helm Stable chart仓库：
+- en: '[PRE4]'
+  id: totrans-145
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: 'Update the chart repository:'
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 更新chart仓库：
+- en: '[PRE5]'
+  id: totrans-147
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'Install the kube-prometheus-stack chart:'
+  id: totrans-148
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安装kube-prometheus-stack chart：
+- en: '[PRE6]'
+  id: totrans-149
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: 'Let’s check to ensure that all the pods are running:'
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们检查确保所有的Pod都在运行：
+- en: '[PRE7]'
+  id: totrans-151
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: 'If installed correctly you should see the following pods:'
+  id: totrans-152
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果安装正确，您应该看到以下Pod：
+- en: '[PRE8]'
+  id: totrans-153
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: '[PRE9]'
+  id: totrans-154
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: Now we’ll create a tunnel to the Grafana instance that is included with kube-prometheus-stack.
+    This will allow us to connect to Grafana from our local machine.
+  id: totrans-155
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们将创建一个到包含在kube-prometheus-stack中的Grafana实例的隧道。这将允许我们从本地机器连接到Grafana：
+- en: This creates a tunnel to our localhost on port 3000\. Now we can open a web
+    browser and connect to Grafana on [*http://127.0.0.1:3000*](http://127.0.0.1:3000).
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这将在我们的本地主机上创建到端口3000的隧道。现在我们可以打开Web浏览器，并连接到[*http://127.0.0.1:3000*](http://127.0.0.1:3000)上的Grafana。
+- en: We talked earlier in the chapter about employing the USE method, so let’s gather
+    some node metrics on CPU utilization and saturation. Kube-prometheus-stack provides
+    visualizations for these common USE method metrics we want to track. The great
+    thing about the kube-prometheus-stack you installed is that it comes with prebuilt
+    Grafana dashboards you can use.
+  id: totrans-157
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章前面我们已经讨论了使用USE方法，所以让我们收集一些有关CPU利用率和饱和度的节点指标。Kube-prometheus-stack提供了这些我们想要追踪的常见USE方法指标的可视化。你安装的kube-prometheus-stack的一个很棒的功能是它带有预构建的Grafana仪表板，你可以使用它们。
+- en: 'Now we’ll create a tunnel to the Grafana instance that is included with kube-prometheus-stack.
+    This will allow us to connect to Grafana from our local machine:'
+  id: totrans-158
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们将创建一个到包含在kube-prometheus-stack中的Grafana实例的隧道。这将允许我们从本地机器连接到Grafana：
+- en: '[PRE10]'
+  id: totrans-159
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: 'Point your web browser at [*http://localhost:3000*](http://localhost:3000)
+    and log in using the following credentials:'
+  id: totrans-160
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将您的Web浏览器指向[*http://localhost:3000*](http://localhost:3000)，并使用以下凭据登录：
+- en: 'Username: admin'
+  id: totrans-161
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 用户名：admin
+- en: 'Password: prom-operator'
+  id: totrans-162
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 密码：prom-operator
+- en: Under the Grafana dashboards you’ll find a dashboard called Kubernetes / USE
+    Method / Cluster. This dashboard gives you a good overview of the utilization
+    and saturation of the Kubernetes cluster, which is at the heart of the USE method.
+    [Figure 3-2](#grafana_dashboard) presents an example of the dashboard.
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在Grafana仪表板下，你会找到一个名为Kubernetes / USE Method / Cluster的仪表板。这个仪表板为你提供了对Kubernetes集群利用率和饱和度的良好概述，这是USE方法的核心。[Figure 3-2](#grafana_dashboard)展示了仪表板的一个示例。
+- en: '![A Grafana dashboard](assets/kbp2_0302.png)'
+  id: totrans-164
+  prefs: []
+  type: TYPE_IMG
+  zh: '![一个Grafana仪表板](assets/kbp2_0302.png)'
+- en: Figure 3-2\. A Grafana dashboard
+  id: totrans-165
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图3-2. 一个Grafana仪表板
+- en: Go ahead and take some time to explore the different dashboards and metrics
+    that you can visualize in Grafana.
+  id: totrans-166
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来花点时间探索不同的仪表板和可以在Grafana中可视化的指标。
+- en: Tip
+  id: totrans-167
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: Avoid creating too many dashboards (aka “The Wall of Graphs”) because this can
+    be difficult for engineers to reason with in troubleshooting situations. You might
+    think having more information in a dashboard means better monitoring, but the
+    majority of the time it causes more confusion for a user looking at the dashboard.
+    Focus your dashboard design on outcomes and time to resolution.
+  id: totrans-168
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 避免创建太多的仪表板（即“图形墙”），因为这可能会让工程师在故障排除情况下难以理解。你可能认为在仪表板中有更多信息意味着更好的监控，但大多数情况下，这会让用户在看仪表板时更加困惑。将你的仪表板设计重点放在结果和解决时间上。
+- en: Logging Overview
+  id: totrans-169
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 日志概述
+- en: 'Up to this point, we have discussed a lot about metrics and Kubernetes, but
+    to get the full picture of your environment, you also need to collect and centralize
+    logs from the Kubernetes cluster and the applications deployed to your cluster.
+    With logging, it might be easy to say, “Let’s just log everything,” but this can
+    cause two issues:'
+  id: totrans-170
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，我们已经讨论了很多关于指标和Kubernetes的内容，但为了全面了解您的环境，您还需要从部署到集群的Kubernetes和应用程序中收集和集中日志。在日志记录方面，可能很容易说，“让我们记录所有事情”，但这会导致两个问题：
+- en: There is too much noise to find issues quickly.
+  id: totrans-171
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 噪音太大，无法快速找到问题。
+- en: Logs can consume a lot of resources and come with a high cost.
+  id: totrans-172
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 日志可能消耗大量资源，并且成本高昂。
+- en: There is no clear-cut answer to what exactly you should log because debug logs
+    become a necessary evil. Over time you’ll start to understand your environment
+    better and learn what noise you can tune out from the logging system. Also, to
+    address the ever-increasing number of logs stored, you will need to implement
+    a retention and archival policy. From an end-user experience, having somewhere
+    between 30 and 45 days’ worth of historical logs is a good fit. This allows for
+    investigation of problems that manifest over a longer period of time but also
+    reduces the amount of resources needed to store logs. If you require longer-term
+    storage for compliance reasons, you’ll want to archive the logs to more cost-effective
+    resources.
+  id: totrans-173
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于应该记录的具体内容并没有明确的答案，因为调试日志变成了一种必要的恶。随着时间的推移，您将开始更好地了解您的环境，并学会从日志系统中消除噪音。此外，为了解决不断增加的日志存储量，您需要实施保留和归档策略。从最终用户的体验来看，保留
+    30 到 45 天的历史日志是一个不错的选择。这样可以用于调查长时间内出现的问题，同时减少存储日志所需的资源量。如果出于合规原因需要长期存储，您将需要将日志存档到成本更低的资源上。
+- en: 'In a Kubernetes cluster, there are multiple components to log. Following is
+    a list of components from which you should be collecting metrics:'
+  id: totrans-174
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 集群中，有多个组件需要记录日志。以下是应收集指标的组件列表：
+- en: Node logs
+  id: totrans-175
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 节点日志
+- en: Kubernetes control-plane logs
+  id: totrans-176
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Kubernetes 控制平面日志
+- en: API server
+  id: totrans-177
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: API 服务器
+- en: Controller manager
+  id: totrans-178
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 控制管理器
+- en: Scheduler
+  id: totrans-179
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 调度器
+- en: Kubernetes audit logs
+  id: totrans-180
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Kubernetes 审计日志
+- en: Application container logs
+  id: totrans-181
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 应用程序容器日志
+- en: With node logs, you want to collect events that happen to essential node services.
+    For example, you will want to collect logs from the Docker daemon running on the
+    nodes. A healthy Docker daemon is essential for running containers on the node.
+    Collecting these logs will help you diagnose any issues that you might run into
+    with the Docker daemon, and it will give you information into any underlying issues
+    with the daemon. There are also other essential services that you will want to
+    log from the underlying node.
+  id: totrans-182
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于节点日志，您希望收集发生在关键节点服务上的事件。例如，您将希望收集运行在节点上的 Docker 守护程序的日志。健康的 Docker 守护程序对于在节点上运行容器至关重要。收集这些日志将帮助您诊断可能遇到的任何
+    Docker 守护程序问题，并为您提供有关守护程序底层问题的信息。此外，还有其他关键服务的日志，您也会希望从底层节点记录。
+- en: The Kubernetes control plane consists of several components from which you’ll
+    need to collect logs to give you more insight into underlying issues within it.
+    The Kubernetes control plane is core to a healthy cluster, and you’ll want to
+    aggregate the logs that it stores on the host in */var/log/kube-APIserver.log*,
+    */var/log/kube-scheduler.log*, and */var/log/kube-controller-manager.log*. The
+    controller manager is responsible for creating objects defined by the end user.
+    As an example, as a user you create a Kubernetes service with type LoadBalancer
+    and it just sits in a pending state; the Kubernetes events might not give all
+    the details to diagnose the issue. If you collect the logs in a centralized system,
+    it will give you more detail into the underlying issue and a quicker way to investigate
+    it.
+  id: totrans-183
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 控制平面由多个组件组成，您需要收集这些日志以深入了解其中的潜在问题。Kubernetes 控制平面对于集群的健康至关重要，您将希望聚合它存储在主机上的日志，包括
+    */var/log/kube-APIserver.log*、*/var/log/kube-scheduler.log* 和 */var/log/kube-controller-manager.log*。控制管理器负责创建用户定义的对象。例如，作为用户，您使用类型为
+    LoadBalancer 的 Kubernetes 服务，它仅处于待定状态；Kubernetes 事件可能不会提供足够的细节来诊断问题。如果您将日志收集到集中系统中，将更详细地了解底层问题，并更快地进行调查。
+- en: You can think of Kubernetes audit logs as security monitoring because they give
+    you insight into who did what within the system. These logs can be very noisy,
+    so you’ll want to tune them for your environment. In many instances these logs
+    can cause a huge spike in your logging system when first initialized, so make
+    sure that you follow the Kubernetes documentation guidance on audit log monitoring.
+  id: totrans-184
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以将 Kubernetes 审计日志视为安全监控，因为它们可以帮助您了解系统内谁做了什么。这些日志可能会非常嘈杂，因此您需要为您的环境进行调整。在初始化时，这些日志可能会在日志系统中造成巨大的峰值，因此请确保遵循
+    Kubernetes 文档中关于审计日志监控的指导。
+- en: Application container logs give you insight into the actual logs your application
+    is emitting. You can forward these logs to a central repository in multiple ways.
+    The first and recommended way is to send all application logs to STDOUT because
+    this gives you a uniform way of application logging, and a monitoring daemon set
+    can gather the logs directly from the Docker daemon. The other way is to use a
+    *sidecar* pattern and run a log-forwarding container next to the application container
+    in a Kubernetes pod. You might need to use this pattern if your application logs
+    to the filesystem.
+  id: totrans-185
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用程序容器日志能让你深入了解应用程序实际发出的日志。你可以通过多种方式将这些日志转发到中央存储库。第一种推荐的方式是将所有应用程序日志发送到 STDOUT，因为这样可以统一应用程序日志记录的方式，监控的守护程序集可以直接从
+    Docker 守护程序中获取这些日志。另一种方式是使用 sidecar 模式，在 Kubernetes Pod 中应用程序容器旁边运行一个日志转发容器。如果你的应用程序将日志记录到文件系统，可能需要使用这种模式。
+- en: Note
+  id: totrans-186
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: There are many options and configurations for managing Kubernetes audit logs.
+    These audit logs can be very noisy and it can be expensive to log all actions.
+    You should consider looking at the [audit logging documentation](https://oreil.ly/L84dM)
+    so that you can fine-tune these logs for your environment.
+  id: totrans-187
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于管理 Kubernetes 审计日志，有许多选项和配置。这些审计日志可能非常嘈杂，并且记录所有操作可能很昂贵。你应该考虑查看 [审计日志文档](https://oreil.ly/L84dM)，以便为你的环境调整这些日志。
+- en: Tools for Logging
+  id: totrans-188
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 日志工具
+- en: As with collecting metrics, there are many tools to collect logs from Kubernetes
+    and applications running in the cluster. You might already have tooling for this,
+    but be aware of how the tool implements logging. The tool should have the capability
+    to run as a Kubernetes DaemonSet, and have a solution to run as a sidecar for
+    applications that don’t send logs to STDOUT. An advantage of using an existing
+    tool is that you will already have operational knowledge of the tool.
+  id: totrans-189
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与收集度量指标一样，有许多工具用于从运行在集群中的 Kubernetes 和应用程序中收集日志。你可能已经为此拥有工具，但要注意工具如何实现日志记录。该工具应具有作为
+    Kubernetes DaemonSet 运行的能力，并且对于不将日志发送到 STDOUT 的应用程序，应该有一个作为 sidecar 运行的解决方案。使用现有工具的一个优势是你已经对该工具的操作有了一定的了解。
+- en: 'Some of the more popular tools with Kubernetes integration are:'
+  id: totrans-190
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一些与 Kubernetes 集成比较流行的工具包括：
+- en: Loki
+  id: totrans-191
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Loki
+- en: Elastic Stack
+  id: totrans-192
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Elastic Stack
+- en: Datadog
+  id: totrans-193
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Datadog
+- en: Sumo Logic
+  id: totrans-194
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Sumo Logic
+- en: Sysdig
+  id: totrans-195
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Sysdig
+- en: Cloud provider services (GCP Stackdriver, Azure Monitor for containers, and
+    Amazon CloudWatch)
+  id: totrans-196
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 云服务提供商的服务（如 GCP Stackdriver、Azure Monitor for containers 和 Amazon CloudWatch）
+- en: When looking for a tool to centralize logs, hosted solutions can provide a lot
+    of value because they offload a lot of the operational cost. Hosting your own
+    logging solution seems great on day *N*, but as the environment grows, it can
+    be very time consuming to maintain the solution.
+  id: totrans-197
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在寻找集中日志工具时，托管解决方案可以提供很多价值，因为它们可以减少很多运营成本。在第 *N* 天使用自己托管的日志解决方案看起来很不错，但随着环境的增长，维护这个解决方案可能会非常耗时。
+- en: Logging by Using a Loki-Stack
+  id: totrans-198
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用 Loki-Stack 进行日志记录
+- en: For the purposes of this book, we use a Loki-Stack with prom-tail for logging
+    for our cluster. Implementing a Loki-Stack can be a good way to get started, but
+    at some point you’ll probably ask yourself, “Is it really worth managing my own
+    logging platform?” Typically, it’s not worth the effort because self-hosted logging
+    solutions are great at first, but become overly complex with time. Self-hosted
+    logging solutions become more operationally complex as your environment scales.
+    There is no one correct answer, so evaluate whether your business requirements
+    need you to host your own solution. There is also a hosted Loki solution (provided
+    by Grafana), so you can always move pretty easily if you choose not to host it
+    yourself.
+  id: totrans-199
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了本书的目的，我们在集群中使用 Loki-Stack 和 prom-tail 进行日志记录。实施 Loki-Stack 可以是一个很好的起步方式，但是在某个时候，你可能会问自己，“管理自己的日志平台真的值得吗？”通常情况下，这并不值得，因为自托管的日志解决方案一开始很棒，但随着时间推移变得过于复杂。随着环境的扩展，自托管的日志解决方案变得操作上更加复杂。并没有一个正确答案，所以要评估你的业务需求是否需要你托管自己的解决方案。此外，还有一个由
+    Grafana 提供的托管 Loki 解决方案，所以如果你选择不自己托管，你总是可以轻松地转移。
+- en: 'We will use the following for the logging stack:'
+  id: totrans-200
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将使用以下内容进行日志堆栈：
+- en: Loki
+  id: totrans-201
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Loki
+- en: prom-tail
+  id: totrans-202
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: prom-tail
+- en: Grafana
+  id: totrans-203
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Grafana
+- en: Deploy Loki-Stack with Helm to your Kubernetes cluster with the following steps.
+  id: totrans-204
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用以下步骤将 Loki-Stack 通过 Helm 部署到你的 Kubernetes 集群。
+- en: 'Add Loki-Stack Helm repo:'
+  id: totrans-205
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 添加 Loki-Stack Helm 仓库：
+- en: '[PRE11]'
+  id: totrans-206
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: 'Update Helm repo:'
+  id: totrans-207
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 更新 Helm 仓库：
+- en: '[PRE12]'
+  id: totrans-208
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: '[PRE13]'
+  id: totrans-209
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: This deploys Loki with prom-tail, which will allow us to forward logs to Loki
+    and visualize the logs using Grafana.
+  id: totrans-210
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这将部署 Loki 与 prom-tail，使我们能够将日志转发到 Loki 并使用 Grafana 可视化日志。
+- en: 'You should see the following pods deployed to your cluster:'
+  id: totrans-211
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您应该看到以下 Pod 部署到您的集群中：
+- en: '[PRE14]'
+  id: totrans-212
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: '[PRE15]'
+  id: totrans-213
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: 'After all pods are “Running,” go ahead and connect to Grafana through port
+    forwarding to our localhost:'
+  id: totrans-214
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当所有 Pod 都处于“Running”状态后，请通过端口转发连接到我们的本地 Grafana：
+- en: '[PRE16]'
+  id: totrans-215
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: 'Now, point your web browser at [*http://localhost:3000*](http://localhost:3000)
+    and log in using the following credentials:'
+  id: totrans-216
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，请将您的 Web 浏览器指向 [*http://localhost:3000*](http://localhost:3000)，并使用以下凭据登录：
+- en: 'Username: admin'
+  id: totrans-217
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 用户名：admin
+- en: 'Password: prom-operator'
+  id: totrans-218
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 密码：prom-operator
+- en: Under the Grafana configuration you’ll find data sources, as shown in [Figure 3-3](#grafana_datasource).
+    We’ll then add Loki as a `Data Source`.
+  id: totrans-219
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Grafana 配置下，您会找到数据源，如 [图 3-3](#grafana_datasource) 所示。然后，我们将 Loki 添加为一个 `数据源`。
+- en: '![The Grafana datasource](assets/kbp2_0303.png)'
+  id: totrans-220
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Grafana 数据源](assets/kbp2_0303.png)'
+- en: Figure 3-3\. The Grafana data source
+  id: totrans-221
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-3\. Grafana 数据源
+- en: We will then add a new data source and add Loki as the data source (see [Figure 3-4](#loki_datasource)).
+  id: totrans-222
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后，我们将添加一个新的数据源，并将 Loki 添加为数据源（见[图 3-4](#loki_datasource)）。
+- en: '![Loki datasource](assets/kbp2_0304.png)'
+  id: totrans-223
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Loki 数据源](assets/kbp2_0304.png)'
+- en: Figure 3-4\. Loki datasource
+  id: totrans-224
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-4\. Loki 数据源
+- en: In the Loki settings page ([Figure 3-5](#loki_configuration)), fill in the URL
+    with http://loki:3100, then click the Save & Test button.
+  id: totrans-225
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Loki 设置页面（见[图 3-5](#loki_configuration)），用 http://loki:3100 填写 URL，然后点击保存并测试按钮。
+- en: '![Loki configuration](assets/kbp2_0305.png)'
+  id: totrans-226
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Loki 配置](assets/kbp2_0305.png)'
+- en: Figure 3-5\. Loki configuration
+  id: totrans-227
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-5\. Loki 配置
+- en: In Grafana, you can perform ad hoc queries on the logs, and you can build out
+    dashboards to give you an overview of the environment.
+  id: totrans-228
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Grafana 中，您可以对日志执行即席查询，并可以构建仪表板，以便为您提供环境概述。
+- en: To explore the logs that the Loki-Stack has collected we can use the *Explore*
+    function in Grafana, as shown in [Figure 3-6](#loki_explore). This will allow
+    us to run a query against the logs that have been collected.
+  id: totrans-229
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要探索 Loki-Stack 收集的日志，我们可以在 Grafana 中使用 *Explore* 功能，如 [图 3-6](#loki_explore)
+    所示。这将允许我们对已收集的日志运行查询。
+- en: '![Explore Loki logs](assets/kbp2_0306.png)'
+  id: totrans-230
+  prefs: []
+  type: TYPE_IMG
+  zh: '![探索 Loki 日志](assets/kbp2_0306.png)'
+- en: Figure 3-6\. Explore Loki logs
+  id: totrans-231
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-6\. 探索 Loki 日志
+- en: 'For the label filter you will need the following filter:'
+  id: totrans-232
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于标签过滤器，您将需要以下过滤器：
+- en: '[PRE17]'
+  id: totrans-233
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: Go ahead and take some time to explore the different logs that you can visualize
+    from Loki and Grafana.
+  id: totrans-234
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 前往 Loki 和 Grafana 中可视化的不同日志，花些时间进行探索。
+- en: Alerting
+  id: totrans-235
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 警报
+- en: Alerting is a double-edged sword, and you need to strike a balance between what
+    you alert on versus what should just be monitored. Alerting on too much causes
+    alert fatigue, and important events will be lost in all the noise. An example
+    would be generating an alert any time a pod fails. You might be asking, “Why wouldn’t
+    I want to monitor for a pod failure?” Well, the beauty of Kubernetes is that it
+    provides features to automatically check the health of a container and restart
+    the container automatically. You really want to focus alerting on events that
+    affect your Service-Level Objectives (SLOs). SLOs are specific measurable characteristics
+    such as availability, throughput, frequency, and response time that you agree
+    upon with the end user of your service. Setting SLOs sets expectations with your
+    end users and provides clarity on how the system should behave. Without an SLO,
+    users can form their opinion, which might be an unrealistic expectation of the
+    service. Alerting in a system like Kubernetes needs an entirely new approach from
+    what we are typically accustomed to and needs to focus on how the end user is
+    experiencing the service. For example, if your SLO for a frontend service is a
+    20-ms response time and you are seeing higher latency than average, you want to
+    be alerted on the problem.
+  id: totrans-236
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 警报是一把双刃剑，您需要在应该报警的事件与仅需监控的事件之间保持平衡。过多的报警会导致警报疲劳，重要事件将会在所有噪音中丢失。一个例子是每当 Pod 失败时生成一个警报。您可能会问：“为什么我不想监视
+    Pod 失败？”好吧，Kubernetes 的美妙之处在于它提供了功能来自动检查容器的健康状态并自动重启容器。您真正想要关注的是影响您的服务级别目标（SLO）的事件。SLO
+    是一些具体可测的特性，例如可用性、吞吐量、频率和响应时间，这些特性是您与服务最终用户协商达成的。设定 SLO 可以为最终用户明确系统行为的期望。没有 SLO，用户可能会形成他们对服务的不切实际期望。在像
+    Kubernetes 这样的系统中，警报需要一种全新的方法，需要专注于最终用户如何体验服务。例如，如果您前端服务的 SLO 是 20 毫秒的响应时间，而您看到的延迟高于平均水平，您应该对此问题进行警报。
+- en: You need to decide what alerts are good and require intervention. In typical
+    monitoring, you might be accustomed to alerting on high CPU usage, memory usage,
+    or processes not responding. These might seem like good alerts, but they probably
+    don’t indicate an issue that someone needs to take immediate action on and that
+    requires notifying an on-call engineer. An alert to an on-call engineer should
+    be an issue that needs immediate human attention and is affecting the UX of the
+    application. If you have ever experienced a “that issue resolved itself” scenario,
+    then that is a good indication that the alert did not need to contact an on-call
+    engineer.
+  id: totrans-237
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你需要决定哪些警报是有效的，并需要干预。在典型的监控中，你可能习惯于对高CPU使用率、内存使用率或无响应的进程发出警报。这些看起来可能是好的警报，但它们可能并不表示需要立即采取行动并通知值班工程师的问题。需要通知值班工程师的警报应该是需要立即人工关注，并且影响应用程序用户体验的问题。如果你曾经经历过“问题自行解决”的情况，那么这很可能是警报无需联系值班工程师的一个很好的指示。
+- en: One way to handle alerts that don’t need immediate action is to focus on automating
+    the remediation of the cause. For example, when a disk fills up, you could automate
+    the deletion of logs to free up space on the disk. Also, utilizing Kubernetes
+    *liveness probes* in your app deployment can help auto-remediate issues with a
+    process that is not responding in the application.
+  id: totrans-238
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 处理不需要立即行动的警报的一种方法是专注于自动化处理原因的修复。例如，当磁盘空间不足时，你可以自动删除日志以释放磁盘空间。此外，在应用部署中利用Kubernetes的*liveness
+    probes*可以帮助自动处理应用程序中无响应的进程问题。
+- en: When building alerts, you also need to consider *alert thresholds*; if you set
+    thresholds too short, then you can get a lot of false positives with your alerts.
+    It’s generally recommended to set a threshold of at least five minutes to help
+    eliminate false positives. Coming up with standard thresholds can help define
+    a standard and avoid micromanaging many different thresholds. For example, you
+    might want to follow a specific pattern of 5 minutes, 10 minutes, 30 minutes,
+    1 hour, and so on.
+  id: totrans-239
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在建立警报时，你还需要考虑*警报阈值*；如果设置的阈值太短，那么警报可能会产生很多误报。通常建议至少设置一个五分钟的阈值，以帮助消除误报。制定标准阈值可以帮助定义一个标准，并避免管理许多不同的阈值。例如，你可能想要遵循一个特定的模式，如5分钟、10分钟、30分钟、1小时等。
+- en: When building notifications for alerts, you want to ensure that you provide
+    relevant information in the notification. For example, you might provide a link
+    to a “playbook” that gives troubleshooting or other helpful information on resolving
+    the issue. You should also include information on the datacenter, region, app
+    owner, and affected system in notifications. Providing all this information will
+    allow engineers to quickly formulate a theory around the issue.
+  id: totrans-240
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在建立用于警报的通知时，你需要确保通知中提供相关信息。例如，你可以提供一个指南链接，该指南提供解决问题的故障排除或其他有用信息。你还应该在通知中包含有关数据中心、区域、应用程序所有者和受影响系统的信息。提供所有这些信息将使工程师能够快速形成关于问题的理论。
+- en: You also need to build notification channels to route alerts that are fired.
+    When thinking about “Who do I notify when an alert is triggered?” you should ensure
+    that notifications are not just sent to a distribution list or team emails. What
+    tends to happen if alerts are sent to larger groups is that they end up getting
+    filtered out because users see these as noise. You should route notifications
+    to the user who is going to take responsibility for the issue.
+  id: totrans-241
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你还需要建立通知渠道来路由触发的警报。在思考“触发警报时应该通知谁？”时，你应确保通知不仅仅发送到分发列表或团队邮箱。如果警报发送到较大的群组，通常会因为用户认为这些是噪音而被过滤掉。你应将通知路由到将负责问题的用户。
+- en: With alerting, you’ll never get it perfect on day one, and we could argue it
+    might never be perfect. You just want to make sure that you incrementally improve
+    on alerting to preclude alert fatigue, which can cause many issues with staff
+    burnout and your systems.
+  id: totrans-242
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在警报中，你永远无法在第一天就做到完美，甚至可以说可能永远不会完美。你只需要确保逐步改进警报以预防警报疲劳，这可能会导致员工疲劳和系统问题的多种问题。
+- en: Note
+  id: totrans-243
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: For further insight on how to approach alerting on and managing systems, read
+    [“My Philosophy on Alerting”](https://oreil.ly/YPxju) by Rob Ewaschuk, which is
+    based on Rob’s observations as a site reliability engineer (SRE) at Google.
+  id: totrans-244
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 若要进一步了解如何处理警报和管理系统，请阅读基于Rob Ewaschuk作为Google站点可靠性工程师（SRE）的观察所著的[《关于警报的我的哲学》](https://oreil.ly/YPxju)。
+- en: Best Practices for Monitoring, Logging, and Alerting
+  id: totrans-245
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 监控、日志记录和警报的最佳实践
+- en: Following are the best practices that you should adopt regarding monitoring,
+    logging, and alerting.
+  id: totrans-246
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下是关于监控、日志记录和警报您应该采纳的最佳实践。
+- en: Monitoring
+  id: totrans-247
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 监控
+- en: Monitor nodes and all Kubernetes components for utilization, saturation, and
+    error rates, and monitor applications for rate, errors, and duration.
+  id: totrans-248
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 监控节点和所有Kubernetes组件的利用率、饱和度和错误率，监控应用程序的速率、错误和持续时间。
+- en: Use closed-box monitoring to monitor for symptoms and not predictive health
+    of a system.
+  id: totrans-249
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用封闭箱监控来监控系统的症状，而不是系统的预测健康状态。
+- en: Use open-box monitoring to inspect the system and its internals with instrumentation.
+  id: totrans-250
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用开箱即用的监控工具来检查系统及其内部情况，并进行仪表化。
+- en: Implement time-series-based metrics to gain high-precision metrics that also
+    allow you to have insight into the behavior of your application.
+  id: totrans-251
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 实施基于时间序列的指标以获得高精度的度量，同时还能洞察您应用程序行为。
+- en: Utilize monitoring systems like Prometheus that provide key labeling for high
+    dimensionality; this will give a better signal to symptoms of an impacting issue.
+  id: totrans-252
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 利用像Prometheus这样提供高维度关键标签的监控系统；这将更好地显示受影响问题的信号。
+- en: Use average metrics to visualize subtotals and metrics based on factual data.
+    Utilize sum metrics to visualize the distribution across a specific metric.
+  id: totrans-253
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用平均指标来可视化小计和基于事实数据的指标。利用总计指标来可视化特定指标的分布。
+- en: Logging
+  id: totrans-254
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 日志记录
+- en: You should use logging in combination with metrics monitoring to get the full
+    picture of how your environment is operating.
+  id: totrans-255
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 您应该结合使用日志记录和指标监控来全面了解环境运行情况。
+- en: Be cautious of storing logs for more than 30 to 45 days; if needed, use cheaper
+    resources for long-term archiving.
+  id: totrans-256
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 要谨慎存储超过30至45天的日志；如果需要，使用更便宜的资源进行长期存档。
+- en: Limit usage of log forwarders in a sidecar pattern, as they will utilize a lot
+    more resources. Opt for using a DaemonSet for the log forwarder and sending logs
+    to STDOUT.
+  id: totrans-257
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 限制在Sidecar模式中使用日志转发器的使用，因为它们会消耗更多资源。建议使用DaemonSet来进行日志转发，并将日志发送到STDOUT。
+- en: Alerting
+  id: totrans-258
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 警报
+- en: Be cautious of alert fatigue because it can lead to bad behaviors in people
+    and processes.
+  id: totrans-259
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 要小心警报疲劳，因为它可能导致人员和流程产生不良行为。
+- en: Always look at incrementally improving on alerting and accept that it will not
+    always be perfect.
+  id: totrans-260
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 始终努力改进警报功能，并接受它不会始终完美。
+- en: Alert for symptoms that affect your SLOs and customers and not for transient
+    issues that don’t need immediate human attention.
+  id: totrans-261
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 警报用于影响您的SLO和客户的症状，而不是不需要立即人工干预的短暂问题。
+- en: Summary
+  id: totrans-262
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 总结
+- en: In this chapter we discussed the patterns, techniques, and tools that can be
+    used for monitoring our systems with metrics and log collection. The most important
+    piece to take away from this chapter is that you need to rethink how you perform
+    monitoring and do it from the outset. Too many times we see this implemented after
+    the fact, and it can get you into a very bad place in understanding your system.
+    Monitoring is all about having better insight into a system and being able to
+    provide better resiliency, which in turn provides a better end-user experience
+    for your application. Monitoring distributed applications and distributed systems
+    like Kubernetes requires a lot of work, so you must be ready for it at the beginning
+    of your journey.
+  id: totrans-263
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们讨论了用于通过度量和日志收集监控系统的模式、技术和工具。从本章中最重要的部分可以得出的结论是，您需要重新考虑如何进行监控，并从一开始就这样做。我们经常看到这种实施是事后进行的，这可能会导致对系统理解上的非常不利影响。监控的目的在于更好地了解系统，并能够提供更好的弹性，从而为应用程序提供更好的最终用户体验。监控分布式应用程序和像Kubernetes这样的分布式系统需要大量工作，因此您必须在旅程的开始时做好准备。

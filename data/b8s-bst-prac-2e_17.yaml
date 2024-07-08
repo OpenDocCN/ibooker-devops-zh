@@ -1,0 +1,804 @@
+- en: Chapter 17\. Admission Control and Authorization
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第17章。准入控制和授权
+- en: Controlling access to the Kubernetes API is key to ensuring that your cluster
+    is not only secured but also can be used as a means to impart policy and governance
+    for all users, workloads, and components of your Kubernetes cluster. In this chapter,
+    we share how you can use admission controllers and authorization modules to enable
+    specific features and how you can customize them to suit your specific needs.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 控制访问Kubernetes API对于确保您的集群不仅安全，还可以用作向所有用户、工作负载和集群组件传达策略和治理的手段至关重要。在本章中，我们分享如何使用准入控制器和授权模块来启用特定功能，以及如何定制它们以满足您的特定需求。
+- en: Before we jump into admission control and authorization let’s review the API
+    request flow through the API server. [Figure 17-1](#api_request_flow) provides
+    insight on how and where admission control and authorization take place in that
+    flow. It depicts the end-to-end request flow through the Kubernetes API server
+    until the object, if accepted, is saved to storage. Follow the API request from
+    left to right through the API server, paying specific attention to the ordering
+    of admission control and authorization. We will be covering best practices for
+    those in this chapter.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在我们深入讨论准入控制和授权之前，让我们回顾一下API请求通过API服务器的流程。[图17-1](#api_request_flow) 提供了关于准入控制和授权在该流程中发生位置和方式的见解。它描述了通过Kubernetes
+    API服务器的端到端请求流程，直到接受对象保存到存储为止。按照API请求从左到右通过API服务器，特别注意准入控制和授权的顺序。我们将在本章介绍这些的最佳实践。
+- en: '![Kubernetes API request flow](assets/kbp2_1701.png)'
+  id: totrans-3
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Kubernetes API 请求流程](assets/kbp2_1701.png)'
+- en: Figure 17-1\. Kubernetes API request flow
+  id: totrans-4
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图17-1。Kubernetes API 请求流程
+- en: Admission Control
+  id: totrans-5
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 准入控制
+- en: Have you ever wondered how namespaces are automatically created when you define
+    a resource in a namespace that doesn’t already exist? Maybe you’ve wondered how
+    a default storage class is selected? These changes are powered by a feature called
+    *admission controllers*. In this section, we look at how you can use admission
+    controllers to implement Kubernetes best practices server-side on behalf of the
+    user and how you can utilize admission control to govern how a Kubernetes cluster
+    is used.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您是否曾想过在定义一个不存在的命名空间中的资源时如何自动创建命名空间？也许您想知道如何选择默认的存储类？这些变更由名为*准入控制器*的功能支持。在本节中，我们将探讨如何使用准入控制器代表用户在服务器端实现Kubernetes最佳实践，并如何利用准入控制来管理Kubernetes集群的使用方式。
+- en: What Are They?
+  id: totrans-7
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 它们是什么？
+- en: Admission controllers sit in the path of the Kubernetes API server request flow
+    and receive requests following the authentication and authorization phases. They
+    are used to either validate or mutate (or both) the request object before saving
+    it to storage. The difference between validating and mutating admission controllers
+    is that mutating admission controllers can modify the request object they admit,
+    whereas validating admission controllers cannot.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 准入控制器位于Kubernetes API服务器请求流程的路径中，并在认证和授权阶段后接收请求。它们用于在将请求对象保存到存储之前验证或变更（或两者兼有）请求对象。验证和变更准入控制器的区别在于，变更准入控制器可以修改它们接受的请求对象，而验证准入控制器则不能。
+- en: Why Are They Important?
+  id: totrans-9
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 为什么它们很重要？
+- en: 'Given that admission controllers sit in the path of all API server requests,
+    you can use them in a variety of different ways. Most commonly, admission controller
+    usage can be grouped into the following three categories:'
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 鉴于准入控制器位于所有API服务器请求的路径上，您可以以多种不同的方式使用它们。最常见的是，准入控制器的使用可以分为以下三类：
+- en: Policy and governance
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 策略和治理
+- en: 'Admission controllers allow policy to be enforced to meet business requirements;
+    for example:'
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 准入控制器允许执行策略以满足业务需求；例如：
+- en: Only internal cloud load balancers can be used when in the `dev` namespace.
+  id: totrans-13
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 仅当在`dev`命名空间中时，才能使用内部云负载均衡器。
+- en: All containers in a pod must have resource limits.
+  id: totrans-14
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Pod中的所有容器必须具有资源限制。
+- en: Add predefined standard labels or annotations to all resources to make them
+    discoverable to existing tools.
+  id: totrans-15
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 向所有资源添加预定义的标准标签或注释，使它们可以被现有工具发现。
+- en: All Ingress resources only use HTTPS. For more details on how to use admission
+    webhooks in this context, see [Chapter 11](ch11.html#policy_and_governance_for_your_cluster).
+  id: totrans-16
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 所有Ingress资源只能使用HTTPS。有关如何在此上下文中使用准入Web钩子的详细信息，请参阅[第11章](ch11.html#policy_and_governance_for_your_cluster)。
+- en: Security
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安全性
+- en: You can use admission controllers to enforce a consistent security posture across
+    your cluster. A canonical example is the Pod Security Admission controller, which
+    determines whether a pod should be admitted based on the configuration of security-sensitive
+    fields defined in the pod specification. For instance, it can deny privileged
+    containers or usage of specific paths from the host filesystem. You can enforce
+    more granular or custom security rules using admission webhooks.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用准入控制器强制执行整个集群中的一致安全姿态。一个典型的例子是 Pod 安全准入控制器，它根据 pod 规范中定义的安全敏感字段的配置确定是否应该允许
+    pod。例如，它可以拒绝特权容器或从主机文件系统使用特定路径。您可以使用准入 Webhook 强制执行更精细或自定义的安全规则。
+- en: Resource management
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 资源管理
+- en: 'Admission controllers allow you to validate to provide best practices for your
+    cluster users, for example:'
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 准入控制器允许您为您的集群用户验证并提供最佳实践，例如：
+- en: Ensure all ingress fully qualified domain names (FQDN) fall within a specific
+    suffix.
+  id: totrans-21
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 确保所有入口完全限定域名（FQDN）位于特定后缀内。
+- en: Ensure ingress FQDNs don’t overlap.
+  id: totrans-22
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 确保入口 FQDN 不重叠。
+- en: All containers in a pod must have resource limits.
+  id: totrans-23
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Pod 中的所有容器必须具有资源限制。
+- en: Admission Controller Types
+  id: totrans-24
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 准入控制器类型
+- en: 'There are two classes of admission controllers: *standard* and *dynamic*. Standard
+    admission controllers are compiled into the API server and are shipped as plug-ins
+    with each Kubernetes release; they need to be configured when the API server is
+    started. Dynamic controllers, on the other hand, are configurable at runtime and
+    are developed outside the core Kubernetes codebase. The only type of dynamic admission
+    control is admission webhooks, which receive admission requests via HTTP callbacks.'
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 准入控制器分为两类：*标准* 和 *动态*。标准准入控制器已编译到 API 服务器中，并随每个 Kubernetes 发布作为插件提供；它们在启动 API
+    服务器时需要配置。另一方面，动态控制器可以在运行时配置，并且是在核心 Kubernetes 代码库之外开发的。唯一类型的动态准入控制是准入 Webhook，它通过
+    HTTP 回调接收准入请求。
+- en: 'By default, the recommended admission controllers are enabled. You may enable
+    additional admission controllers using the following flag on the Kubernetes API
+    server:'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，推荐启用准入控制器。您可以使用以下标志在 Kubernetes API 服务器上启用额外的准入控制器：
+- en: '[PRE0]'
+  id: totrans-27
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'In the current version of Kubernetes, the following admission controllers are
+    enabled by default:'
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在当前版本的 Kubernetes 中，默认启用以下准入控制器：
+- en: '[PRE1]'
+  id: totrans-29
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: You can find the list of Kubernetes admission controllers and their functionality
+    in the [Kubernetes documentation](https://oreil.ly/APrUE).
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在 [Kubernetes 文档](https://oreil.ly/APrUE) 中找到 Kubernetes 准入控制器及其功能的列表。
+- en: 'You might have noticed the following from the list of recommended admission
+    controllers to enable: “MutatingAdmissionWebhook,ValidatingAdmissionWebhook.”
+    These standard admission controllers don’t implement any admission logic themselves;
+    rather, they are used to configure a webhook endpoint running in-cluster to forward
+    the admission request object.'
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可能已经注意到建议启用的准入控制器列表中包含以下内容：“MutatingAdmissionWebhook, ValidatingAdmissionWebhook”。这些标准准入控制器本身不实施任何准入逻辑；而是用于配置在集群中运行的
+    Webhook 端点以转发准入请求对象。
+- en: Configuring Admission Webhooks
+  id: totrans-32
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 配置准入 Webhook
+- en: As previously mentioned, one of the main advantages of admission webhooks is
+    that they are dynamically configurable. It is important that you understand how
+    to effectively configure admission webhooks because there are implications and
+    trade-offs when it comes to consistency and failure modes.
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如前所述，准入 Webhook 的主要优势之一是它们是动态可配置的。重要的是，您理解如何有效地配置准入 Webhook，因为在一致性和失败模式方面存在重要的影响和权衡。
+- en: 'The snippet that follows is a ValidatingWebhookConfiguration resource manifest.
+    This manifest is used to define a validating admission webhook. The snippet provides
+    detailed descriptions of the function of each field:'
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来的代码片段是一个 ValidatingWebhookConfiguration 资源清单。此清单用于定义一个验证准入 Webhook。代码片段提供了每个字段功能的详细描述：
+- en: '[PRE2]'
+  id: totrans-35
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'For completeness, let’s look at a MutatingWebhookConfiguration resource manifest.
+    This manifest defines a mutating admission webhook. The snippet provides detailed
+    descriptions on the function of each field:'
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了完整起见，让我们看一下一个 MutatingWebhookConfiguration 资源清单。此清单定义了一个变更准入 Webhook。代码片段提供了每个字段功能的详细描述：
+- en: '[PRE3]'
+  id: totrans-37
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'You might have noticed that both resources are identical, with the exception
+    of the `kind` and the `reinvocationPolicy` fields. There is one difference on
+    the backend, however: MutatingWebhookConfiguration allows the admission webhook
+    to return a modified request object, whereas ValidatingWebhookConfiguration does
+    not. Still, it is acceptable to define a MutatingWebhookConfiguration and simply
+    validate; there are security considerations that come into play, and you should
+    consider following the *least-privilege rule*.'
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可能已经注意到这两个资源是相同的，除了`kind`和`reinvocationPolicy`字段之外。然而，在后端有一个区别：MutatingWebhookConfiguration
+    允许准入 Webhook 返回修改后的请求对象，而 ValidatingWebhookConfiguration 不允许。不过，定义一个 MutatingWebhookConfiguration
+    并简单验证是可以接受的；这里涉及到安全考虑，你应该考虑遵循*最小权限原则*。
+- en: Note
+  id: totrans-39
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: 'You have likely wondered, “What happens if I define a ValidatingWebhookConfiguration
+    or MutatingWebhookConfiguration with the resource field under the rule object
+    to be either ValidatingWebhookConfiguration or MutatingWebhookConfiguration?”
+    The good news is that neither ValidatingAdmissionWebhooks or MutatingAdmissionWebhooks
+    are ever called on admission requests for ValidatingWebhookConfiguration and MutatingWebhookConfiguration
+    objects. This is for good reason: you don’t want to accidentally put the cluster
+    in an unrecoverable state.'
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可能会想：“如果我定义一个 ValidatingWebhookConfiguration 或 MutatingWebhookConfiguration，并且在规则对象下的资源字段为
+    ValidatingWebhookConfiguration 或 MutatingWebhookConfiguration，会发生什么？” 好消息是，对于
+    ValidatingWebhookConfiguration 和 MutatingWebhookConfiguration 对象的准入请求，永远不会调用 ValidatingAdmissionWebhooks
+    或 MutatingAdmissionWebhooks。这有其充分的理由：你不希望意外地使集群处于不可恢复的状态。
+- en: Admission Control Best Practices
+  id: totrans-41
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 准入控制最佳实践
+- en: Now that we’ve covered the power of admission controllers, here are our best
+    practices to help you make the most of using them.
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经介绍了准入控制器的强大功能，以下是我们的最佳实践，帮助你充分利用它们。
+- en: Admission plug-in ordering doesn’t matter
+  id: totrans-43
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 准入插件的顺序无关紧要
+- en: 'In earlier versions of Kubernetes, the ordering of the admission plug-ins was
+    specific to the processing order; hence it mattered. In current supported Kubernetes
+    versions, the ordering of the admission plug-ins as specified as API server flags
+    via `--enable-admission-plugins` no longer matters. Ordering does, however, play
+    a small role when it comes to admission webhooks, so it’s important to understand
+    the request flow in this case. Request admittance or rejection operates as a logical
+    AND, meaning if any of the admission webhooks rejects a request, the entire request
+    is rejected and an error is sent back to the user. It’s also important to note
+    that mutating admission controllers are always run prior to running validating
+    admission controllers. If you think about it, this makes good sense: you probably
+    don’t want to validate objects that you are going to subsequently modify. [Figure 17-2](#api_request_flow_via_admission_webhooks)
+    illustrates a request flow via admission webhooks; you will see that the mutating
+    admission controller is run before the validating admission controller.'
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 的早期版本中，准入插件的顺序对处理顺序具有特定的影响，因此很重要。在当前支持的 Kubernetes 版本中，通过 `--enable-admission-plugins`
+    作为 API 服务器标志指定的准入插件顺序不再重要。然而，在准入 Webhook 的情况下，顺序确实发挥了一定作用，因此了解请求流程非常重要。请求的准入或拒绝操作采用逻辑与运算，这意味着如果任何一个准入
+    Webhook 拒绝请求，整个请求将被拒绝，并向用户返回错误。还需注意的是，变更准入控制器始终在验证准入控制器之前运行。如果仔细思考一下，这是合理的：你可能不希望验证随后将要修改的对象。[图
+    17-2](#api_request_flow_via_admission_webhooks) 展示了通过准入 Webhook 的请求流程；你将看到变更准入控制器在验证准入控制器之前运行的情况。
+- en: '![An API request flow via admission webhooks](assets/kbp2_1702.png)'
+  id: totrans-45
+  prefs: []
+  type: TYPE_IMG
+  zh: '![通过准入 Webhook 的 API 请求流程](assets/kbp2_1702.png)'
+- en: Figure 17-2\. An API request flow via admission webhooks
+  id: totrans-46
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 17-2\. 通过准入 Webhook 的 API 请求流程
+- en: Don’t mutate the same fields
+  id: totrans-47
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 不要修改相同的字段
+- en: Configuring multiple mutating admission webhooks also presents challenges. There
+    is no way to order the request flow through multiple mutating admission webhooks,
+    so it’s important to not have mutating admission controllers modify the same fields,
+    because this can result in inconsistent behavior. In the case where you have multiple
+    mutating admission webhooks, we generally recommend configuring validating admission
+    webhooks to confirm that the final resource manifest is what you expect post-mutation
+    because it’s guaranteed to be run following mutating webhooks.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 配置多个变异入场网钩也带来了挑战。没有办法通过多个变异入场网钩来排序请求流程，因此重要的是不要让变异入场控制器修改相同的字段，因为这可能导致行为不一致。在您拥有多个变异入场网钩的情况下，我们通常建议配置验证入场网钩来确认最终的资源清单在变异后是否符合您的预期，因为它确保在变异网钩之后运行。
+- en: Mutating admission webhooks must be idempotent
+  id: totrans-49
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 变异入场网钩必须是幂等的
+- en: This means that they must be able to process and admit an object that has already
+    been processed and may have already been modified.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这意味着它们必须能够处理和接纳已经被处理过并且可能已经被修改过的对象。
+- en: Fail open/fail closed
+  id: totrans-51
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 失败开/失败关闭
+- en: You might recall seeing the `failurePolicy` field as part of both the mutating
+    and validating webhook configuration resources. This field defines how the API
+    server should proceed in the case where the admission webhooks have access issues
+    or encounter unrecognized errors. You can set this field to either `Ignore` or
+    `Fail`. `Ignore` essentially fails to open, meaning that processing of the request
+    will continue, whereas `Fail` denies the entire request. This might seem obvious,
+    but the implications in both cases require consideration. Ignoring a critical
+    admission webhook could result in policy that the business relies on not being
+    applied to a resource without the user knowing.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可能会记得在变异和验证网钩配置资源中看到`failurePolicy`字段。该字段定义了在入场网钩遇到访问问题或遇到未识别错误时，API服务器应该如何处理。您可以将此字段设置为`Ignore`或`Fail`。`Ignore`本质上是失败打开，意味着请求的处理将继续，而`Fail`则拒绝整个请求。这看起来可能很明显，但两种情况的影响都需要考虑。忽略关键的入场网钩可能导致业务依赖的策略未应用到用户不知情的资源上。
+- en: One potential solution to protect against this would be to raise an alert when
+    the API server logs that it cannot reach a given admission webhook. `Fail` can
+    be even more devastating by denying all requests if the admission webhook is experiencing
+    issues. To protect against this you can scope the rules to ensure that only specific
+    resource requests are set to the admission webhook. As a tenet, you should never
+    have any rules that apply to all resources in the cluster.
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 保护措施之一是在API服务器记录无法访问特定入场网钩时发出警报。如果入场网钩遇到问题，`Fail`可能会更加破坏性，因为它将拒绝所有请求。为了防止这种情况发生，您可以限定规则以确保只有特定的资源请求设置为入场网钩。作为一个原则，您不应该有适用于集群中所有资源的任何规则。
+- en: Admission webhooks must respond quickly
+  id: totrans-54
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 入场网钩必须快速响应
+- en: If you have written your own admission webhook, it’s important to remember that
+    user/system requests can be directly affected by the time it takes for your admission
+    webhook to make a decision and respond. All admission webhook calls are configured
+    with a 30-second timeout, after which time the `failurePolicy` takes effect. Even
+    if it takes several seconds for your admission webhook to make an admit/deny decision,
+    it can severely affect user experience when working with the cluster. Avoid having
+    complex logic or relying on external systems such as databases to process the
+    admit/deny logic.
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您编写了自己的入场网钩，重要的是要记住用户/系统请求可能直接受到您的入场网钩做出决策并响应的时间影响。所有入场网钩调用都配置有30秒的超时时间，超时后将采取`failurePolicy`。即使您的入场网钩需要几秒钟来做出批准/拒绝的决定，也可能严重影响与集群的用户体验。避免使用复杂的逻辑或依赖外部系统（如数据库）来处理批准/拒绝逻辑。
+- en: Scoping admission webhooks
+  id: totrans-56
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 验证入场网钩
+- en: An optional field allows you to scope the namespaces in which the admission
+    webhooks operate on via the `NamespaceSelector` field. This field defaults to
+    empty, which matches everything, but it can be used to match namespace labels
+    via the use of the `matchLabels` field. We recommend that you always use this
+    field because it allows for an explicit opt-in per namespace.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个可选字段允许您通过`NamespaceSelector`字段来限定入场网钩操作的命名空间。此字段默认为空，匹配所有内容，但可以通过`matchLabels`字段匹配命名空间标签。我们建议您始终使用此字段，因为它允许对每个命名空间进行显式选择。
+- en: Always deploy in a separate namespace using NamespaceSelector
+  id: totrans-58
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 始终使用 NamespaceSelector 在单独的命名空间部署
+- en: When self-hosting a webhook admission controller, deploy the webhook admission
+    controller to a separate namespace and use the `NamespaceSelector` field to exclude
+    resources deployed to that namespace from being processed.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当自托管 Webhook 入场控制器时，部署 Webhook 入场控制器到单独的命名空间，并使用 `NamespaceSelector` 字段排除部署到该命名空间的资源的处理。
+- en: Don’t touch the kube-system namespace
+  id: totrans-60
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 不要触碰 kube-system 命名空间
+- en: The `kube-system` namespace is a reserved namespace that’s common across all
+    Kubernetes clusters. It’s where all system-level services operate. We recommend
+    never running admission webhooks against the resources in this namespace specifically,
+    and you can achieve this by using the `NamespaceSelector` field and simply not
+    matching the `kube-system` namespace. You should also consider doing this for
+    any system-level namespaces that are required for cluster operation.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kube-system` 命名空间是所有 Kubernetes 集群中共有的保留命名空间。所有系统级服务都在这里运行。我们建议绝对不要针对此命名空间中的资源运行入场
+    Webhook，并且可以通过使用 `NamespaceSelector` 字段并简单地不匹配 `kube-system` 命名空间来实现此目的。您还应考虑对于任何对集群操作必需的系统级命名空间执行此操作。'
+- en: Lock down admission webhook configurations with RBAC
+  id: totrans-62
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 使用 RBAC 严格限制入场 Webhook 配置
+- en: Now that you know about all the fields in the admission webhook configuration,
+    you have probably thought of a really simple way to break access to a cluster.
+    It goes without saying that the creation of both a MutatingWebhookConfiguration
+    and ValidatingWebhookConfiguration is a root-level operation on the cluster and
+    must be locked down appropriately using RBAC. Failure to do so can result in a
+    broken cluster or, even worse, an injection attack on your application workloads.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在您已经了解了入场 Webhook 配置中的所有字段，您可能已经想到了一种非常简单的方式来破坏对集群的访问。毫无疑问，创建 MutatingWebhookConfiguration
+    和 ValidatingWebhookConfiguration 都是集群的根级操作，并且必须适当地使用 RBAC 进行锁定。如果未这样做，可能会导致集群故障，甚至更糟糕的是，对您的应用工作负载进行注入攻击。
+- en: Don’t send sensitive data
+  id: totrans-64
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 不要发送敏感数据
+- en: Admission webhooks are essentially opaque boxes that accept AdmissionRequests
+    and output AdmissionResponses. How they store and manipulate the request is opaque
+    to the user. It’s important to think about what request payloads you are sending
+    to the admission webhook. In the case of Kubernetes secrets or ConfigMaps, they
+    might contain sensitive information and require strong guarantees about how that
+    information is stored and shared. Sharing these resources with an admission webhook
+    can leak sensitive information, which is why you should scope your resource rules
+    to the minimum resource needed to validate and/or mutate.
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 入场 Webhook 本质上是接受 AdmissionRequests 并输出 AdmissionResponses 的不透明盒子。它们如何存储和操作请求对用户来说是不透明的。重要的是要考虑发送到入场
+    Webhook 的请求有效负载。在 Kubernetes Secrets 或 ConfigMaps 的情况下，它们可能包含敏感信息，并且需要对存储和共享这些信息的方式提供强有力的保证。与入场
+    Webhook 共享这些资源可能会泄露敏感信息，因此应将资源规则限定于验证和/或变异所需的最小资源。
+- en: Authorization
+  id: totrans-66
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 授权
+- en: 'We often think about authorization in the context of answering the following
+    question: “Is this user able to perform these actions on these resources?” In
+    Kubernetes, the authorization of each request is performed after authentication
+    but before admission. In this section, we explore how you can configure different
+    authorization modules and better understand how you can create the appropriate
+    policy to serve the needs of your cluster. [Figure 17-3](#api_request_flow_via_authorization_modules)
+    illustrates where authorization sits in the request flow.'
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们经常在以下问题的背景下考虑授权：“此用户是否能够对这些资源执行这些操作？”在 Kubernetes 中，每个请求的授权在认证之后但入场之前执行。在本节中，我们探讨了如何配置不同的授权模块，并更好地了解如何创建适当的策略以满足集群的需求。[图
+    17-3](#api_request_flow_via_authorization_modules) 展示了授权在请求流程中的位置。
+- en: '![API request flow via authorization modules](assets/kbp2_1703.png)'
+  id: totrans-68
+  prefs: []
+  type: TYPE_IMG
+  zh: '![API 请求流经授权模块](assets/kbp2_1703.png)'
+- en: Figure 17-3\. API request flow via authorization modules
+  id: totrans-69
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 17-3\. API 请求流经授权模块
+- en: Authorization Modules
+  id: totrans-70
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 授权模块
+- en: Authorization modules are responsible for either granting or denying permission
+    to access. They determine whether to grant access based on policy that must be
+    explicitly defined; otherwise all requests will be implicitly denied.
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 授权模块负责授予或拒绝访问权限。它们根据必须明确定义的策略决定是否授予访问权限；否则，所有请求将被隐式拒绝。
+- en: 'Kubernetes ships with the following authorization modules out of the box:'
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 默认提供以下授权模块：
+- en: Attribute-Based Access Control (ABAC)
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 基于属性的访问控制（ABAC）
+- en: Allows authorization policy to be configured via local files
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 允许通过本地文件配置授权策略
+- en: RBAC
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: RBAC
+- en: Allows authorization policy to be configured via the Kubernetes API (refer to
+    [Chapter 4](ch04.html#configuration_secrets_and_rbac) for more detail)
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 允许通过Kubernetes API配置授权策略（更多细节请参阅[第四章](ch04.html#configuration_secrets_and_rbac)）
+- en: Webhook
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Webhook
+- en: Allows the authorization of a request to be handled via a remote REST endpoint
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 允许通过远程REST端点处理请求的授权
+- en: Node
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Node
+- en: Specialized authorization module that authorizes requests from kubelets
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 专门的授权模块，用于授权来自kubelet的请求
+- en: 'The modules are configured by the cluster administrator via the following flag
+    on the API server: `--authorization-mode`. Multiple modules can be configured
+    and are checked in order. Unlike admission controllers, if a single authorization
+    module admits the request, the request can proceed. Only for the case in which
+    all modules deny the request will an error be returned to the user.'
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些模块由集群管理员通过API服务器上的`--authorization-mode`标志进行配置。可以配置多个模块，并按顺序检查。与准入控制器不同，如果单个授权模块允许请求，则请求可以继续进行。只有在所有模块拒绝请求的情况下，才会向用户返回错误。
+- en: ABAC
+  id: totrans-82
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: ABAC
+- en: 'Let’s look at a policy definition in the context of using the ABAC authorization
+    module. The following grants user Mary read-only access to a pod in the `kube-system`
+    namespace:'
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们在使用ABAC授权模块的情况下看一个策略定义的例子。以下内容授予用户Mary对`kube-system`命名空间中一个Pod的只读访问权限：
+- en: '[PRE4]'
+  id: totrans-84
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: 'If Mary were to make the following request, it would be denied because Mary
+    doesn’t have access to get pods in the `demo-app` namespace:'
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果Mary尝试发起以下请求，则会被拒绝，因为Mary没有权限获取`demo-app`命名空间中的Pod：
+- en: '[PRE5]'
+  id: totrans-86
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'This example introduced a new API group, `authorization.k8s.io`. This set of
+    APIs exposes API server authorization to external services and has the following
+    APIs, which are great for debugging:'
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此示例引入了一个新的API组`authorization.k8s.io`。这一系列API公开了API服务器的授权给外部服务，并包括以下用于调试的API：
+- en: SelfSubjectAccessReview
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: SelfSubjectAccessReview
+- en: Access review for the current user
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当前用户的访问审查
+- en: SubjectAccessReview
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: SubjectAccessReview
+- en: Like SelfSubjectAccessReview but for any user
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Like SelfSubjectAccessReview but for any user
+- en: LocalSubjectAccessReview
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: LocalSubjectAccessReview
+- en: Like SubjectAccessReview but namespace specific
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 类似于SubjectAccessReview，但特定于命名空间
+- en: SelfSubjectRulesReview
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: SelfSubjectRulesReview
+- en: Returns a list of actions a user can perform in a given namespace
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 返回用户在给定命名空间中可以执行的操作列表
+- en: 'The cool part is that you can query these APIs by creating resources as you
+    typically would. Let’s take the previous example and test this using the SelfSubjectAccessReview.
+    The status field in the output indicates that this request is allowed:'
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这一点很酷，您可以按照通常的方式创建资源来查询这些API。让我们以前面的例子为例，并使用SelfSubjectAccessReview来测试这一点。输出中的状态字段指示此请求被允许：
+- en: '[PRE6]'
+  id: totrans-97
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: 'In fact, Kubernetes ships with tooling built into `kubectl` to make this even
+    easier. The `kubectl auth can-i` command operates by querying the same API as
+    the previous example:'
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 实际上，Kubernetes提供了内置于`kubectl`中的工具，使这一过程更加简单。`kubectl auth can-i`命令通过查询与前述示例相同的API来运行：
+- en: '[PRE7]'
+  id: totrans-99
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: 'With administrator credentials, you can also run the same command to check
+    actions as another user:'
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用管理员凭据，您也可以以其他用户身份运行相同的命令来检查操作：
+- en: '[PRE8]'
+  id: totrans-101
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: RBAC
+  id: totrans-102
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: RBAC
+- en: Kubernetes role-based access control is covered in depth in [Chapter 4](ch04.html#configuration_secrets_and_rbac).
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes基于角色的访问控制在[第四章](ch04.html#configuration_secrets_and_rbac)中有详细介绍。
+- en: Webhook
+  id: totrans-104
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: Webhook
+- en: Using the webhook authorization module allows a cluster administrator to configure
+    an external REST endpoint to delegate the authorization process to. This would
+    run off-cluster and be reachable via URL. The configuration of the REST endpoint
+    is found in a file on the control plane host filesystem and configured on the
+    API server via `--authorization-webhook-config-file=SOME_FILENAME`. After you’ve
+    configured it, the API server will send SubjectAccessReview objects as part of
+    the request body to the authorization webhook application, which processes and
+    returns the object with the status field complete.
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用Webhook授权模块允许集群管理员配置外部REST端点以委托授权流程。这将在集群外运行，并通过URL访问。REST端点的配置信息存储在控制平面主机文件系统中的文件中，并通过`--authorization-webhook-config-file=SOME_FILENAME`选项配置到API服务器上。配置完成后，API服务器将SubjectAccessReview对象作为请求体的一部分发送到授权Webhook应用程序，后者会处理并返回带有完成状态字段的对象。
+- en: Authorization Best Practices
+  id: totrans-106
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 授权最佳实践
+- en: 'Consider the following best practices before making changes to the authorization
+    modules configured on your cluster:'
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在更改配置在集群上配置的授权模块之前，请考虑以下最佳实践：
+- en: Don’t use ABAC on multiple control plane clusters
+  id: totrans-108
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 不要在多个控制平面集群上使用 ABAC
+- en: Given that the ABAC policies need to be placed on the filesystem of each control
+    plane host and kept synchronized, we generally recommend *against* using ABAC
+    in multiple control plane clusters. The same can be said for the webhook module
+    because the configuration is based on a file and a corresponding flag being present.
+    Furthermore, changes to these policies in the files require a restart of the API
+    server to take effect, which is effectively a control plane outage in a single
+    control plane cluster or inconsistent configuration in a multiple control plane
+    cluster. Given these details, we recommend using the RBAC module only for user
+    authorization because the rules are configured and stored in Kubernetes itself.
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 考虑到 ABAC 策略需要放置在每个控制平面主机的文件系统上，并保持同步，我们通常建议*不要*在多个控制平面集群中使用 ABAC。同样的情况也适用于 webhook
+    模块，因为配置是基于文件和相应的标志的存在。此外，对这些文件中的策略进行更改需要重启 API 服务器才能生效，这实际上是单个控制平面集群中的控制平面故障，或多个控制平面集群中不一致的配置。鉴于这些细节，我们建议仅针对用户授权使用
+    RBAC 模块，因为规则是在 Kubernetes 自身中配置和存储的。
+- en: Don’t use webhook modules
+  id: totrans-110
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 不要使用 webhook 模块
+- en: Webhook modules, although powerful, are potentially very dangerous. Given that
+    every request is subject to the authorization process, a failure of a webhook
+    service would be devastating for a cluster. Therefore, we generally recommend
+    not using external authorization modules unless you completely vet and are comfortable
+    with your cluster failure modes if the webhook service becomes unreachable or
+    unavailable.
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Webhook 模块虽然功能强大，但潜在风险很高。考虑到每个请求都要经过授权过程，如果 webhook 服务出现故障，对集群将是灾难性的。因此，我们通常建议不使用外部授权模块，除非您完全审核并对集群在
+    webhook 服务不可达或不可用时的故障模式感到满意和放心。
+- en: Summary
+  id: totrans-112
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 总结
+- en: In this chapter, we covered the foundational topics of admission and authorization
+    and covered best practices. Put these skills to use by determining the best admission
+    and authorization configuration that allows you to customize the controls and
+    policies needed for the life of your cluster.
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们涵盖了准入和授权的基础主题，并介绍了最佳实践。通过确定最佳准入和授权配置，您可以自定义所需的控制和策略，以维护您集群的生命周期。

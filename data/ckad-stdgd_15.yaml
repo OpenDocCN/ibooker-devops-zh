@@ -1,0 +1,697 @@
+- en: Chapter 15\. Troubleshooting Pods and Containers
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第15章。故障排除Pod和容器
+- en: When operating an application in a production Kubernetes cluster, failures are
+    almost inevitable. You can’t completely leave this job up to the Kubernetes administrator—it’s
+    your responsibility as an application developer to be able to troubleshoot issues
+    for the Kubernetes objects you designed and deployed.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在生产Kubernetes集群中操作应用程序时，故障几乎是不可避免的。您不能完全将此工作交给Kubernetes管理员——作为应用程序开发者，您有责任为您设计和部署的Kubernetes对象解决问题。
+- en: In this chapter, we’ll look at troubleshooting strategies that can help with
+    identifying the root cause of an issue so that you can take action and correct
+    the failure appropriately. The strategies discussed here start with the high-level
+    perspective of a Kubernetes object and then drill into more detail as needed.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们将探讨一些故障排除策略，这些策略有助于识别问题的根本原因，以便您可以采取措施并适当地纠正故障。
+- en: Troubleshooting Pods
+  id: totrans-3
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 故障排除Pods
+- en: In most cases, creating a Pod is no issue. You simply emit the `run`, `create`,
+    or `apply` commands to instantiate the Pod. If the YAML manifest is formed properly,
+    Kubernetes accepts your request, so the assumption is that everything works as
+    expected. To verify the correct behavior, the first thing you’ll want to do is
+    to check the Pod’s high-level runtime information. The operation could involve
+    other Kubernetes objects like a Deployment responsible for rolling out multiple
+    replicas of a Pod.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在大多数情况下，创建Pod没有问题。您只需发出`run`，`create`或`apply`命令以实例化Pod。如果YAML清单形式正确，Kubernetes将接受您的请求，因此可以假定一切正常工作。为了验证正确的行为，您首先需要做的是检查Pod的高级运行时信息。该操作可能涉及其他Kubernetes对象，如负责部署多个Pod副本的部署。
+- en: Retrieving High-Level Information
+  id: totrans-5
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 检索高级信息
+- en: To retrieve the information, run either the `kubectl get pods` command for just
+    the Pods running in the namespace or the `kubectl get all` command to retrieve
+    the most prominent object types in the namespace (which includes Deployments).
+    You will want to look at the columns `READY`, `STATUS`, and `RESTARTS`. In the
+    optimal case, the number of ready containers matches the number of containers
+    you defined in the `spec`. For a single-container Pod, the `READY` column would
+    say 1/1.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了检索信息，运行`kubectl get pods`命令以仅获取在命名空间中运行的Pod，或者运行`kubectl get all`命令以检索命名空间中最突出的对象类型（包括部署）。您需要查看`READY`，`STATUS`和`RESTARTS`列。在最佳情况下，准备就绪的容器数量与您在`spec`中定义的容器数量相匹配。对于单容器Pod，`READY`列将显示1/1。
+- en: The status should say `Running` to indicate that the Pod entered the proper
+    life cycle state. Be aware that it’s totally possible that a Pod renders a `Running`
+    state, but the application isn’t actually working properly. If the number of restarts
+    is greater than 0, then you might want to check the logic of the liveness probe
+    (if defined) and identify the reason a restart was necessary.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 状态应显示为`Running`，以指示Pod已进入正确的生命周期状态。请注意，可能会发生Pod呈现`Running`状态，但实际上应用程序并未正常工作。如果重新启动次数大于0，则可能需要检查活跃探测器（如果已定义）的逻辑，并确定重新启动所需的原因。
+- en: 'The following Pod observes the status `ErrImagePull` and makes 0/1 containers
+    available to incoming traffic. In short, this Pod has a problem:'
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下Pod观察到状态为`ErrImagePull`，并且使得0/1个容器对传入流量可用。简言之，此Pod存在问题：
+- en: '[PRE0]'
+  id: totrans-9
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: After working with Kubernetes for a while, you’ll automatically recognize common
+    error conditions. [Table 15-1](#common_pod_error_statuses) lists some of those
+    error statuses and explains how to fix them.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在使用Kubernetes一段时间后，您将自动识别常见的错误条件。[表15-1](#common_pod_error_statuses)列出了其中一些错误状态，并说明如何修复它们。
+- en: Table 15-1\. Common Pod error statuses
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表15-1。常见的Pod错误状态
+- en: '| Status | Root cause | Potential fix |'
+  id: totrans-12
+  prefs: []
+  type: TYPE_TB
+  zh: '| 状态 | 根本原因 | 潜在修复方案 |'
+- en: '| --- | --- | --- |'
+  id: totrans-13
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- |'
+- en: '| `ImagePullBackOff` or `ErrImagePull` | Image could not be pulled from registry.
+    | Check correct image name, check that image name exists in registry, verify network
+    access from node to registry, ensure proper authentication. |'
+  id: totrans-14
+  prefs: []
+  type: TYPE_TB
+  zh: '| `ImagePullBackOff`或`ErrImagePull` | 无法从注册表中拉取镜像。 | 检查正确的镜像名称，检查该镜像名称是否存在于注册表中，验证节点到注册表的网络访问，确保正确的身份验证。
+    |'
+- en: '| `CrashLoopBackOff` | Application or command run in container crashes. | Check
+    command executed in container, ensure that image can properly execute (e.g., by
+    creating a container with Docker). |'
+  id: totrans-15
+  prefs: []
+  type: TYPE_TB
+  zh: '| `CrashLoopBackOff` | 容器中运行的应用程序或命令崩溃。 | 检查在容器中执行的命令，确保镜像可以正确执行（例如通过使用Docker创建容器）。
+    |'
+- en: '| `CreateContainerConfigError` | ConfigMap or Secret referenced by container
+    cannot be found. | Check correct name of the configuration object, verify the
+    existence of the configuration object in the namespace. |'
+  id: totrans-16
+  prefs: []
+  type: TYPE_TB
+  zh: '| `CreateContainerConfigError` | 容器引用的 ConfigMap 或 Secret 未找到。 | 检查配置对象的正确名称，验证命名空间中配置对象的存在性。
+    |'
+- en: Inspecting Events
+  id: totrans-17
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 检查事件
+- en: You might not encounter any of those error statuses. But there’s still a chance
+    of the Pod having a configuration issue. You can retrieve detailed information
+    about the Pod using the `kubectl describe pod` command to inspect its events.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可能不会遇到这些错误状态中的任何一个。但 Pod 可能存在配置问题的可能性。您可以使用`kubectl describe pod`命令检查其事件，以获取有关
+    Pod 的详细信息。
+- en: 'The following output belongs to a Pod that tries to mount a Secret that doesn’t
+    exist. Instead of rendering a specific error message, the Pod gets stuck with
+    the status `ContainerCreating`:'
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下输出属于尝试挂载不存在的 Secret 的 Pod。该 Pod 并未呈现特定的错误消息，而是以`ContainerCreating`状态挂起：
+- en: '[PRE1]'
+  id: totrans-20
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: 'Another helpful command is `kubectl get events`. The output of the command
+    lists the events across all Pods for a given namespace. You can use additional
+    command-line options to further filter and sort events:'
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个有用的命令是`kubectl get events`。该命令的输出列出了给定命名空间内所有 Pod 的事件。您可以使用额外的命令行选项进一步过滤和排序事件：
+- en: '[PRE2]'
+  id: totrans-22
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: Sometimes troubleshooting won’t be enough. You may have to dig into the application
+    runtime behavior and configuration in the container.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有时仅仅进行故障排除是不够的。您可能需要深入了解容器中的应用程序运行时行为和配置。
+- en: Using Port Forwarding
+  id: totrans-24
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用端口转发
+- en: In production environments, you’ll operate an application in multiple Pods controlled
+    by a ReplicaSet. It’s not unusual that one of those replicas experiences a runtime
+    issue. Instead of troubleshooting the problematic Pod from a temporary Pod from
+    within the cluster, you can also forward the traffic to a Pod through a tunneled
+    HTTP connection. This is where the [`port-forward` command](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_port-forward/)
+    comes into play.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在生产环境中，您将操作由 ReplicaSet 控制的多个 Pod 上的应用程序。其中一个副本遇到运行时问题并不罕见。您可以通过隧道化的 HTTP 连接将流量转发到
+    Pod，而不是从集群内的临时 Pod 中排查问题的 Pod。这就是[`port-forward`命令](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_port-forward/)的作用所在。
+- en: 'Let’s demonstrate the behavior. The following command creates a new Deployment
+    running nginx in three replicas:'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们演示这种行为。以下命令将创建一个新的 Deployment，在三个副本中运行 nginx：
+- en: '[PRE3]'
+  id: totrans-27
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'The resulting Pod will have unique names derived from the name of the Deployment.
+    Say the Pod `nginx-595dff4799-ph4js` has an issue you want to troubleshoot:'
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 结果的 Pod 将具有根据 Deployment 名称衍生的唯一名称。假设 Pod `nginx-595dff4799-ph4js`存在您想要排查的问题：
+- en: '[PRE4]'
+  id: totrans-29
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: 'The `port-forward` command forwards HTTP connections from a local port to a
+    port exposed by a Pod. This exemplary command forwards port 2500 on your local
+    machine to the container port 80 running in the Pod `nginx-595dff4799-ph4js`:'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`port-forward`命令将 HTTP 连接从本地端口转发到 Pod 中公开的端口。此示例命令将本地机器上的端口 2500 转发到运行在 Pod
+    `nginx-595dff4799-ph4js`中的容器端口 80：'
+- en: '[PRE5]'
+  id: totrans-31
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'The `port-forward` command does not return. You have to open another terminal
+    to perform calls to the Pod via port forwarding. The following command simply
+    checks if the Pod is accessible from your local machine using `curl`:'
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`port-forward`命令不会返回。您需要打开另一个终端，通过端口转发调用 Pod。以下命令仅仅检查 Pod 是否可从您的本地机器访问，使用`curl`：'
+- en: '[PRE6]'
+  id: totrans-33
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: The HTTP response code 200 clearly shows that we can access the Pod from outside
+    of the cluster. The `port-forward` command is not meant to run for a long time.
+    Its primary purpose is for testing or troubleshooting a Pod without having to
+    expose it with the help of a Service.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: HTTP 响应码 200 明确显示我们可以从集群外访问 Pod。`port-forward`命令并非长时间运行的命令。它的主要目的是用于测试或排查 Pod，而无需通过
+    Service 公开它。
+- en: Troubleshooting Containers
+  id: totrans-35
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 容器故障排除
+- en: You can interact with the container for a deep-dive into the application’s runtime
+    environment. The next sections will discuss how to inspect logs, open an interactive
+    shell to a container, and debug containers that do not provide a shell.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以与容器交互，深入了解应用程序的运行时环境。接下来的章节将讨论如何检查日志，打开与容器的交互式 shell，并调试不提供 shell 的容器。
+- en: Note
+  id: totrans-37
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The commands described in the following sections apply to init and sidecar containers
+    as well. Use the `-c` or `--container` command line flag to target a specific
+    container if you are running more than a single one. See [Chapter 8](ch08.xhtml#multi_container_pods)
+    for more information on multi-container Pods.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下面描述的命令也适用于 init 和 sidecar 容器。如果运行的容器多于一个，可以使用 `-c` 或 `--container` 命令行标志来指定目标容器。有关多容器
+    Pod 的更多信息，请参见[第 8 章](ch08.xhtml#multi_container_pods)。
+- en: Inspecting Logs
+  id: totrans-39
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 检查日志
+- en: When troubleshooting a Pod, you can retrieve the next level of details by downloading
+    and inspecting its logs. You may or may not find additional information that points
+    to the root cause of a misbehaving Pod, but it’s definitely worth a look. The
+    YAML manifest shown in [Example 15-1](#pod_failing_shell) defines a Pod running
+    a shell command.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在故障排除 Pod 时，可以通过下载并检查其日志获取下一级别的详细信息。您可能会找到指向行为不端的 Pod 根本原因的额外信息，也可能不会，但肯定值得一试。示例
+    15-1 中显示的 YAML 清单定义了一个运行 Shell 命令的 Pod。
+- en: Example 15-1\. A Pod running a failing shell command
+  id: totrans-41
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 15-1\. 运行失败 Shell 命令的 Pod
+- en: '[PRE7]'
+  id: totrans-42
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: 'After creating the object, the Pod fails with the status `CrashLoopBackOff`.
+    Running the `logs` command reveals that the command run in the container has an
+    issue:'
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建对象后，Pod 失败，状态显示为 `CrashLoopBackOff`。运行 `logs` 命令显示容器中运行的命令存在问题：
+- en: '[PRE8]'
+  id: totrans-44
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: The `logs` command provides two helpful options. The option `-f` streams the
+    logs, meaning you’ll see new log entries as they’re being produced in real time.
+    The option `--previous` gets the logs from the previous instantiation of a container,
+    which is helpful if the container has been restarted.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`logs` 命令提供了两个有用的选项。选项 `-f` 可以实时流式传输日志，意味着您将看到新的日志条目随着其实时生成。选项 `--previous`
+    获取容器先前实例的日志，如果容器已重新启动，则非常有帮助。'
+- en: Opening an Interactive Shell
+  id: totrans-46
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 打开交互式 Shell
+- en: If any of the previous commands don’t point you to the root cause of the failing
+    Pod, it’s time to open an interactive shell to a container. As an application
+    developer, you’ll know best what behavior to expect from the application at runtime.
+    Inspect the running processes by using the Unix or Windows utility tools, depending
+    on the image run in the container.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果之前的任何命令都没有指向导致 Pod 失败的根本原因，那么现在是时候向容器打开交互式 Shell 了。作为应用程序开发者，您最了解在运行时从应用程序中期望什么行为。使用
+    Unix 或 Windows 实用工具来检查运行中的进程，具体取决于容器中运行的镜像。
+- en: Say you encounter a situation where a Pod seems to work properly on the surface,
+    as shown in [Example 15-2](#pod_current_date).
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设您遇到一个情况，其中 Pod 表面上似乎正常工作，如[示例 15-2](#pod_current_date)所示。
+- en: Example 15-2\. A Pod periodically writing the current date to a file
+  id: totrans-49
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 15-2\. 定期向文件写入当前日期的 Pod
+- en: '[PRE9]'
+  id: totrans-50
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: 'After creating the Pod, you check the status. It says `Running`; however, when
+    making a request to the application, the endpoint reports an error. Next, you
+    check the logs. The log output renders an error message that points to a nonexistent
+    directory. Apparently, the directory that the application needs hasn’t been set
+    up correctly:'
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建 Pod 后，检查其状态。状态显示为 `Running`；然而，当请求应用程序时，端点报告错误。接下来，检查日志。日志输出显示一个指向不存在目录的错误消息。显然，应用程序所需的目录尚未正确设置：
+- en: '[PRE10]'
+  id: totrans-52
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: 'The `exec` command opens an interactive shell to further investigate the issue.
+    In the following code, we’re using the Unix tools `mkdir`, `cd`, and `ls` inside
+    of the running container to fix the problem. Obviously, the better mitigation
+    strategy is to create the directory from the application or provide an instruction
+    in the Dockerfile:'
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`exec` 命令打开一个交互式 Shell 以进一步调查问题。在下面的代码中，我们在运行的容器内使用 Unix 工具 `mkdir`、`cd` 和
+    `ls` 来解决问题。显然，更好的缓解策略是在应用程序中创建目录或在 Dockerfile 中提供指令：'
+- en: '[PRE11]'
+  id: totrans-54
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: Interacting with a Distroless Container
+  id: totrans-55
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 与 Distroless 容器交互
+- en: Some images run in containers are designed to be very minimal for security reasons.
+    For example, the [Google distroless](https://github.com/GoogleContainerTools/distroless)
+    images don’t have any Unix utility tools preinstalled. You can’t even open a shell
+    to a container, as it doesn’t come with a shell.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一些运行在容器中的镜像出于安全原因设计得非常精简。例如，[Google distroless](https://github.com/GoogleContainerTools/distroless)
+    镜像没有预安装任何 Unix 实用工具。甚至无法打开容器的 Shell，因为它不带 Shell。
+- en: Incorporating security best practices for container images
+  id: totrans-57
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 为容器镜像集成安全最佳实践
+- en: Shipping container images with accessible shells and running with the `root`
+    user is commonly discouraged as these aspects can be used as potential attack
+    vectors. Check out the [CKS certification](https://training.linuxfoundation.org/certification/certified-kubernetes-security-specialist/)
+    to learn more about security concerns in Kubernetes.
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以可访问的shell和使用 `root` 用户运行的方式来运输容器显然是不鼓励的，因为这些方面可能被用作潜在的攻击向量。查看 [CKS 认证](https://training.linuxfoundation.org/certification/certified-kubernetes-security-specialist/)
+    以了解更多有关Kubernetes安全问题的信息。
+- en: One of Google’s distroless images is `k8s.gcr.io/pause:3.1`, shown in [Example 15-3](#pod_ephemeral_container).
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Google的一个Distroless镜像是 `k8s.gcr.io/pause:3.1`，如 [示例 15-3](#pod_ephemeral_container)
+    所示。
+- en: Example 15-3\. Running a distroless image
+  id: totrans-60
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 15-3\. 运行一个Distroless镜像
+- en: '[PRE12]'
+  id: totrans-61
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: 'As you can see in the following `exec` command, the image doesn’t provide a
+    shell:'
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如您在以下 `exec` 命令中所见，该镜像不提供shell：
+- en: '[PRE13]'
+  id: totrans-63
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: Kubernetes offers the concept of [ephemeral containers](https://kubernetes.io/docs/concepts/workloads/pods/ephemeral-containers/).
+    Those containers are meant to be disposable and have no resilience features like
+    probes. You can deploy an ephemeral container for troubleshooting minimal containers
+    that would usually not allow the use of the `exec` command.
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes提供了 [短暂容器](https://kubernetes.io/docs/concepts/workloads/pods/ephemeral-containers/)
+    的概念。这些容器是可丢弃的，没有像探针这样的弹性功能。您可以为通常不允许使用 `exec` 命令的最小容器部署一个临时容器进行故障排除。
+- en: 'Kubernetes 1.18 introduced a new `debug` command that can inject an ephemeral
+    container to a running Pod for debugging purposes. The following command adds
+    the ephemeral container running the image `busybox` to the Pod named `minimal-pod`
+    and opens an interactive shell for it:'
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 1.18引入了一个新的 `debug` 命令，可以为调试目的向运行中的Pod注入临时容器。以下命令将运行镜像 `busybox`
+    的临时容器添加到名为 `minimal-pod` 的Pod，并为其打开交互式shell：
+- en: '[PRE14]'
+  id: totrans-66
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: Inspecting Resource Metrics
+  id: totrans-67
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 检查资源指标
+- en: Deploying software to a Kubernetes cluster is only the start of operating an
+    application long term. Developers need to understand their applications’ resource
+    consumption patterns and behaviors, with the goal of providing a scalable and
+    reliable service.
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将软件部署到Kubernetes集群只是长期运行应用程序的开始。开发人员需要了解其应用程序的资源消耗模式和行为，目标是提供可扩展和可靠的服务。
+- en: 'In the Kubernetes world, monitoring tools like [Prometheus](https://prometheus.io/)
+    and [Datadog](https://www.datadoghq.com/) help with collecting, processing, and
+    visualizing information over time. The exam does not expect you to be familiar
+    with third-party monitoring, logging, tracing, and aggregation tools; however,
+    it is helpful to have a basic understanding of the underlying Kubernetes infrastructure
+    responsible for collecting usage metrics. The following are examples of typical
+    metrics:'
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在Kubernetes世界中，像 [Prometheus](https://prometheus.io/) 和 [Datadog](https://www.datadoghq.com/)
+    这样的监控工具帮助收集、处理和可视化信息随着时间的推移。考试不要求您熟悉第三方监控、日志记录、跟踪和聚合工具；但了解负责收集使用度量的底层Kubernetes基础设施的基本原理是有帮助的。以下是典型指标的示例：
+- en: Number of nodes in the cluster
+  id: totrans-70
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 集群中的节点数量
+- en: Health status of nodes
+  id: totrans-71
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 节点的健康状态
+- en: Node performance metrics such as CPU, memory, disk space, network
+  id: totrans-72
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如CPU、内存、磁盘空间、网络等节点性能指标
+- en: Pod-level performance metrics such as CPU and memory consumption
+  id: totrans-73
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如CPU和内存消耗等Pod级性能指标
+- en: This responsibility falls to the [metrics server](https://github.com/kubernetes-sigs/metrics-server),
+    a cluster-wide aggregator of resource usage data. As shown in [Figure 15-1](#metrics-server),
+    kubelets running on nodes collect metrics and send them to the metrics server.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这项责任落到 [指标服务器](https://github.com/kubernetes-sigs/metrics-server)，这是一个集群范围内的资源使用数据聚合器。如
+    [图 15-1](#metrics-server) 所示，运行在节点上的kubelet收集指标并将其发送到指标服务器。
+- en: '![ckd2 1501](Images/ckd2_1501.png)'
+  id: totrans-75
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckd2 1501](Images/ckd2_1501.png)'
+- en: Figure 15-1\. Data collection for the metrics server
+  id: totrans-76
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 15-1\. 指标服务器的数据收集
+- en: The metrics server stores data in memory and does not persist data over time.
+    If you are looking for a solution that keeps historical data, then you need to
+    look into commercial options. Refer to the documentation for more information
+    on its [installation process](https://github.com/kubernetes-sigs/metrics-server?tab=readme-ov-file#installation).
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 指标服务器将数据存储在内存中，并且不会随时间持久化数据。如果您正在寻找保留历史数据的解决方案，那么您需要查看商业选项。有关其[安装过程](https://github.com/kubernetes-sigs/metrics-server?tab=readme-ov-file#installation)的更多信息，请参阅文档。
+- en: 'If you’re using Minikube as your practice environment, [enabling the metrics-server
+    add-on](https://kubernetes.io/docs/tutorials/hello-minikube/#enable-addons) is
+    straightforward using the following command:'
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您的练习环境是Minikube，使用以下命令简单地启用metrics-server插件是直接的：[enabling the metrics-server
+    add-on](https://kubernetes.io/docs/tutorials/hello-minikube/#enable-addons)。
+- en: '[PRE15]'
+  id: totrans-79
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: 'You can now query for metrics of cluster nodes and Pods with the `top` command:'
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在您可以使用`top`命令查询集群节点和Pod的指标：
+- en: '[PRE16]'
+  id: totrans-81
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: It takes a couple of minutes after the installation of the metrics server before
+    it has gathered information about resource consumption. Rerun the `kubectl top`
+    command if you receive an error message.
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安装指标服务器后，需要几分钟时间收集资源消耗信息。如果收到错误消息，请重新运行`kubectl top`命令。
+- en: Summary
+  id: totrans-83
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 摘要
+- en: We discussed strategies for approaching failed or misbehaving Pods. The main
+    goal is to diagnose the root cause of a failure and then fix it by taking the
+    right action. Troubleshooting Pods doesn’t have to be hard. With the right `kubectl`
+    commands in your tool belt, you can rule out root causes one by one to get a clearer
+    picture.
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们讨论了解决失败或行为异常Pod的策略。主要目标是诊断失败的根本原因，然后采取正确的措施进行修复。故障排除Pod并不一定困难。通过正确的`kubectl`命令，您可以逐个排除根本原因，从而更清晰地了解情况。
+- en: The Kubernetes ecosystem provides a lot of options for collecting and processing
+    metrics of your cluster over time. Among those options are commercial monitoring
+    tools like Prometheus and Datadog. Many of those tools use the metrics server
+    as the source of truth for those metrics. We also briefly touched on the installation
+    process and the `kubectl top` command for retrieving metrics from the command
+    line.
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes生态系统提供了许多选项来收集和处理集群的指标。其中包括像Prometheus和Datadog这样的商业监控工具。许多工具使用指标服务器作为这些指标的真实来源。我们还简要介绍了安装过程和从命令行检索指标的`kubectl
+    top`命令。
+- en: Exam Essentials
+  id: totrans-86
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 考试要点
+- en: Know how to debug Pod objects
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 了解如何调试Pod对象
+- en: In this chapter, we mainly focused on troubleshooting problematic Pods and containers.
+    Practice all relevant `kubectl` commands that can help with diagnosing issues.
+    Refer to the [Kubernetes documentation](https://kubernetes.io/docs/tasks/debug/debug-application/)
+    to learn more about debugging other Kubernetes resource types.
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们主要专注于故障排除问题Pod和容器。练习所有相关的`kubectl`命令，这些命令可以帮助诊断问题。请参阅[Kubernetes文档](https://kubernetes.io/docs/tasks/debug/debug-application/)以了解更多关于调试其他Kubernetes资源类型的信息。
+- en: Learn how to retrieve and interpret resource metrics
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 学习如何检索和解释资源指标
+- en: Monitoring a Kubernetes cluster is an important aspect of successfully operating
+    in a real-world environment. You should read up on commercial monitoring products
+    and which data the metrics server can collect. You can assume that the exam environment
+    provides you with an installation of the metrics server. Learn how to use the
+    `kubectl top` command to render Pod and node resource metrics and how to interpret
+    them.
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 监控Kubernetes集群是成功运行在真实环境中的重要方面。您应该阅读关于商业监控产品的信息，以及指标服务器可以收集哪些数据。您可以假设考试环境已安装指标服务器。学习如何使用`kubectl
+    top`命令查看Pod和节点的资源指标并进行解释。
+- en: Sample Exercises
+  id: totrans-91
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 样例练习
+- en: Solutions to these exercises are available in [Appendix A](app01_split_011.xhtml#appendix_a_troubleshooting_pods_containers).
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些练习的解决方案在[附录A](app01_split_011.xhtml#appendix_a_troubleshooting_pods_containers)中可用。
+- en: In this exercise, you will practice your troubleshooting skills by inspecting
+    a misconfigured Pod. Navigate to the directory *app-a/ch15/troubleshooting* of
+    the checked-out GitHub repository [*bmuschko/ckad-study-guide*](https://github.com/bmuschko/ckad-study-guide).
+  id: totrans-93
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 在这个练习中，您将通过检查配置错误的Pod来练习故障排除技能。导航到检出的GitHub存储库[*bmuschko/ckad-study-guide*](https://github.com/bmuschko/ckad-study-guide)的目录*app-a/ch15/troubleshooting*。
+- en: Create a new Pod from the YAML manifest in the file *pod.yaml*. Check the Pod’s
+    status. Do you see any issue?
+  id: totrans-94
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 根据文件*pod.yaml*中的YAML清单创建一个新的Pod。检查Pod的状态。是否有任何问题？
+- en: Render the logs of the running container and identify an issue. Shell into the
+    container. Can you verify the issue based on the rendered log message?
+  id: totrans-95
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 渲染正在运行的容器的日志并识别问题。进入容器的Shell。您能根据渲染的日志消息验证问题吗？
+- en: Suggest solutions that can fix the root cause of the issue.
+  id: totrans-96
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 建议解决方案，可以修复问题的根本原因。
+- en: You will inspect the metrics collected by the metrics server. Navigate to the
+    directory *app-a/ch15/stress-test* of the checked-out GitHub repository [*bmuschko/ckad-study-guide*](https://github.com/bmuschko/ckad-study-guide).
+    The current directory contains the YAML manifests for three Pods, *stress-1-pod.yaml*,
+    *stress-2-pod.yaml*, and *stress-3-pod.yaml*. Inspect those manifest files.
+  id: totrans-97
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 要检查度量服务器收集的度量指标。导航到已检出的 GitHub 仓库 [*bmuschko/ckad-study-guide*](https://github.com/bmuschko/ckad-study-guide)
+    的目录 *app-a/ch15/stress-test*。当前目录包含三个 Pod 的 YAML 清单，*stress-1-pod.yaml*、*stress-2-pod.yaml*
+    和 *stress-3-pod.yaml*。检查这些清单文件。
+- en: Create the namespace `stress-test` and the Pods inside of the namespace.
+  id: totrans-98
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 创建命名空间 `stress-test` 和该命名空间内的 Pods。
+- en: Use the data available through the metrics server to identify which of the Pods
+    consumes the most memory.
+  id: totrans-99
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 利用度量服务器提供的数据，确定哪个 Pod 消耗的内存最多。
+- en: '*Prerequisite:* You will need to install the metrics server if you want to
+    be able to inspect actual resource metrics. You can find [installation instructions](https://github.com/kubernetes-sigs/metrics-server#installation)
+    on the project’s GitHub page.'
+  id: totrans-100
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: '*先决条件：* 如果要能够检查实际资源指标，您需要安装度量服务器。您可以在该项目的 GitHub 页面上找到[安装说明](https://github.com/kubernetes-sigs/metrics-server#installation)。'

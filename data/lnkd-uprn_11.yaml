@@ -1,0 +1,1244 @@
+- en: Chapter 11\. Ensuring Reliability with Linkerd
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第11章。通过Linkerd确保可靠性
+- en: As discussed from the very beginning, back in [Chapter 1](ch01.html#LUAR_service_mesh_101),
+    microservices applications are utterly reliant on the network for all of their
+    communications. Networks are slower and less reliable than in-process communication,
+    which introduces new failure modes and presents new challenges to our applications.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如从一开始讨论的那样，在[第1章](ch01.html#LUAR_service_mesh_101)中，微服务应用程序对于其所有通信完全依赖于网络。网络比进程内通信更慢且不太可靠，这引入了新的故障模式，并向我们的应用程序提出了新的挑战。
+- en: For service mesh users, where the mesh mediates all your application traffic,
+    the reliability benefit is that the mesh can make intelligent choices about what
+    to do when things go wrong. In this chapter, we’ll talk about the mechanisms that
+    Linkerd provides to mitigate the problems of unreliability in the network, helping
+    to address the inherent instability of microservices applications.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于服务网格用户，其中网格中介所有应用程序流量，可靠性的好处在于网格可以在发生故障时做出智能选择。在本章中，我们将讨论Linkerd提供的机制，以减轻网络不可靠性问题，帮助解决微服务应用程序固有的不稳定性。
+- en: Load Balancing
+  id: totrans-3
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 负载均衡
+- en: Load balancing might seem like an odd reliability feature to lead with, since
+    many people think that Kubernetes already handles it. As we first discussed in
+    [Chapter 5](ch05.html#LUAR_ingress_and_linkerd), Kubernetes Services make a distinction
+    between the IP address of the Service and the IP addresses of the Pods associated
+    with the Service. When traffic is sent to the ClusterIP, it ends up being redirected
+    to one of the endpoint IPs.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 负载均衡可能看起来像一个奇怪的可靠性特性，因为许多人认为Kubernetes已经处理了它。正如我们在[第5章](ch05.html#LUAR_ingress_and_linkerd)中首次讨论的那样，Kubernetes服务在服务的IP地址和与服务关联的Pod的IP地址之间进行区分。当流量发送到ClusterIP时，它最终会被重定向到其中一个端点IP。
+- en: However, in Kubernetes, the built-in load balancing is limited to entire connections.
+    Linkerd improves on this by using the proxy, which understands more about the
+    protocol involved in the connection, to choose an endpoint for each request, as
+    shown in [Figure 11-1](#service-discovery-in-linkerd).
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，在Kubernetes中，内置的负载均衡仅限于整个连接。Linkerd通过使用理解连接所涉及协议的代理来改进这一点，为每个请求选择端点，如[图 11-1](#service-discovery-in-linkerd)所示。
+- en: '![luar 1101](assets/luar_1101.png)'
+  id: totrans-6
+  prefs: []
+  type: TYPE_IMG
+  zh: '![luar 1101](assets/luar_1101.png)'
+- en: Figure 11-1\. Service discovery in Linkerd
+  id: totrans-7
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 11-1。Linkerd中的服务发现
+- en: As you can see from [Figure 11-1](#service-discovery-in-linkerd), Linkerd will
+    use the destination address from a given request and, depending on the object
+    type it refers to, will adjust its endpoint selection algorithm to select a target.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如您可以从[图 11-1](#service-discovery-in-linkerd)看到的那样，Linkerd将使用给定请求的目标地址，并根据它所引用的对象类型调整其端点选择算法以选择目标。
+- en: Request-Level Load Balancing
+  id: totrans-9
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 请求级负载均衡
+- en: This distinction between connection-level load balancing and request-level load
+    balancing is more important than it might appear at first glance. Under the hood,
+    Linkerd actually maintains a pool of connections between your workloads, letting
+    it rapidly dispatch requests to whichever workload it thinks appropriate without
+    connection overhead, load balancing the individual requests so that the load is
+    evenly and efficiently distributed.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种连接级负载均衡与请求级负载均衡之间的区别比起初看起来更为重要。在底层，Linkerd实际上维护了您的工作负载之间的连接池，让它能够快速分派请求到它认为合适的工作负载，而无需连接开销，从而负载均衡各个请求，使负载均匀高效地分布。
+- en: You can learn more about connection-level load balancing in Kubernetes on the
+    [Kubernetes blog](https://oreil.ly/FMALe).
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在[Kubernetes博客](https://oreil.ly/FMALe)了解有关Kubernetes连接级负载均衡的更多信息。
+- en: The aptly named destination controller in the Linkerd control plane makes this
+    all possible. For each service in the mesh, it maintains a list of the service’s
+    current endpoints as well as their health and relative performance. The Linkerd
+    proxy uses that information to make intelligent decisions about where and how
+    to send a given request.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linkerd控制平面中恰如其名的目标控制器使所有这些成为可能。对于网格中的每个服务，它维护服务当前端点列表以及它们的健康和相对性能。Linkerd代理使用这些信息来智能决策何时以及如何发送给定的请求。
+- en: Retries
+  id: totrans-13
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 重试
+- en: Sometimes, due to network issues or intermittent application failures, a request
+    might fail. In this situation, the Linkerd proxy can *retry* the request for you,
+    automatically repeating it to give the workload another chance to handle it successfully.
+    Of course, it’s not always safe to retry every request, so the Linkerd proxy will
+    only do automatic retries if you’ve explicitly configured retries for a given
+    route, and you should only configure retries when you know they’re safe.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有时，由于网络问题或间歇性应用程序故障，请求可能会失败。在这种情况下，Linkerd代理可以为您*重试*请求，自动重复以给工作负载另一次处理成功的机会。当然，并非每个请求都可以安全地重试，因此只有在为特定路由显式配置了重试时，Linkerd代理才会执行自动重试，并且只有在确定安全时才应配置重试。
+- en: Don’t Blindly Retry!
+  id: totrans-15
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 不要盲目重试！
+- en: Think before you enable retries for a particular request! Not all requests can
+    be safely retried—consider a request that withdraws money from an account, and
+    imagine retrying it in a scenario where the request succeeds but somehow the response
+    gets lost, or the withdrawal service crashes before it can send a reply but after
+    the money is moved. This is not a request that should be retried.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在为特定请求启用重试之前，请三思！并非所有请求都可以安全地重试 —— 比如一个从账户中取款的请求，在请求成功但响应丢失或提款服务在转移资金后崩溃之前无法发送响应的场景中，是不应该重试的。
+- en: Retry Budgets
+  id: totrans-17
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 重试预算
+- en: Many service meshes and API gateways use *counted retries*, where you define
+    a maximum number of times a request can be retried before a failure is returned
+    to the caller. Linkerd, by contrast, uses *budgeted retries*, where retrying continues
+    as long as the ratio of retries to original requests doesn’t exceed the budget.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 许多服务网格和API网关使用*计数重试*，您在此定义请求在返回给调用者之前可以重试的最大次数。相比之下，Linkerd使用*预算重试*，重试持续进行直到重试与原始请求的比率超出预算为止。
+- en: By default, the budget is 20%, plus 10 more “free” retries per second, averaged
+    over 10 seconds. For example, if your workload is taking 100 requests per second
+    (RPS), then Linkerd would allow adding 30 more retries per second (20% of 100
+    is 20, plus an additional 10).
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，预算为20%，每秒额外增加10次“免费”重试，平均分布在10秒内。例如，如果您的工作负载每秒处理100个请求（RPS），那么Linkerd将允许每秒添加30次额外重试（100的20%为20，再加上额外的10次）。
+- en: Budgeted Retries Versus Counted Retries
+  id: totrans-20
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 预算重试与计数重试
+- en: 'Linkerd uses budgeted retries because they tend to let you more directly control
+    the thing you really care about: how much extra load will retries add to the system?
+    Usually, choosing a specific number of retries doesn’t really help control load:
+    if you’re taking 10 RPS and allow 3 retries, you’re up to 40 RPS, but if you’re
+    at 100 RPS and allow 3 retries, you might be up to *400* RPS. Budgeted retries
+    control the added load much more directly, while also tending to avoid the retry
+    storms that can happen under high load (where large amounts of retries can themselves
+    crash a Pod, thus causing more retries…).'
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linkerd使用预算重试，因为它们通常能让您更直接地控制真正关心的事情：重试将为系统增加多少额外负载？通常情况下，选择特定数量的重试并不能真正帮助控制负载：如果每秒处理10个请求并允许3次重试，则负载达到40
+    RPS；但如果每秒处理100个请求并允许3次重试，则可能达到*400* RPS。预算重试可以更直接地控制额外负载，同时倾向于避免在高负载下可能发生的重试风暴（其中大量重试本身可能会导致Pod崩溃，进而引发更多的重试……）。
+- en: Configuring Retries
+  id: totrans-22
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 配置重试
+- en: 'Take a minute to examine the traffic from `books` to `authors` using `linkerd
+    viz`:'
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用`linkerd viz`分析从`books`到`authors`的流量需要花一分钟：
+- en: '[PRE0]'
+  id: totrans-24
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'You’ll see that the `books` workload is only sending requests to a single route
+    over on the `authors` service: `HEAD /authors/{id}.json`. Those requests are failing
+    half the time, making them a great candidate for retries—`HEAD` requests are always
+    idempotent (that is, they can always be repeated without the result changing),
+    so we can always safely enable retries on that route.'
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你会发现`books`工作负载仅向`authors`服务的一个单一路由发送请求：`HEAD /authors/{id}.json`。这些请求失败率达到一半，非常适合重试
+    — `HEAD`请求始终是幂等的（即可以重复执行而不会改变结果），因此我们可以安全地在该路由上启用重试。
+- en: In Linkerd, we control retry behavior with ServiceProfile resources. In this
+    case, we’ll be using the ServiceProfile for the `authors` service, since we’re
+    going to enable retries when talking *to* the `authors` workload.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在Linkerd中，我们通过ServiceProfile资源来控制重试行为。在本例中，我们将使用`authors`服务的ServiceProfile，因为我们将在与`authors`工作负载交流时启用重试。
+- en: Retries, ServiceProfiles, HTTPRoutes, and Linkerd
+  id: totrans-27
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 重试、ServiceProfiles、HTTPRoutes和Linkerd
+- en: As mentioned earlier, the Linkerd project is in the midst of a transition to
+    fully adopting [Gateway API](https://oreil.ly/a-Xug), which means you’ll soon
+    see a few Linkerd custom resources, including ServiceProfile, begin to be deprecated.
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如前面提到的，Linkerd 项目正在全面采用[Gateway API](https://oreil.ly/a-Xug)，这意味着很快你将看到一些 Linkerd
+    自定义资源，包括 ServiceProfile，开始被弃用。
+- en: In Linkerd 2.13 and 2.14, ServiceProfile and HTTPRoute often have mutually exclusive
+    functionality, which makes it particularly important to review the [retry and
+    timeout documentation](https://oreil.ly/1EPEX) to verify the current state of
+    ServiceProfile as you begin building retries into your applications.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Linkerd 2.13 和 2.14 中，ServiceProfile 和 HTTPRoute 经常具有互斥功能，因此在开始为您的应用程序构建重试时，审查
+    [重试和超时文档](https://oreil.ly/1EPEX) 尤为重要。
+- en: 'Start by looking at the existing ServiceProfile using `kubectl get`:'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从使用 `kubectl get` 查看现有的 ServiceProfile 开始：
+- en: '[PRE1]'
+  id: totrans-31
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: This ServiceProfile should look a lot like the one in [Example 11-1](#EX-rel-authors-sp).
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此 ServiceProfile 应该与 [Example 11-1](#EX-rel-authors-sp) 中的一个非常相似。
+- en: Example 11-1\. The `authors` ServiceProfile
+  id: totrans-33
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 11-1\. `authors` ServiceProfile
+- en: '[PRE2]'
+  id: totrans-34
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: You can see five routes listed in the ServiceProfile. We’re going to focus on
+    the last route, `HEAD /authors/{id}.json`.
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以看到 ServiceProfile 中列出了五条路由。我们将重点放在最后一条路由上，即 `HEAD /authors/{id}.json`。
+- en: 'We can configure retries independently for each route by adding the `isRetryable:
+    true` property to the ServiceProfile entry for the route. In addition to that,
+    each ServiceProfile object can define the retry budget for the all the routes
+    in the ServiceProfile.'
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '我们可以通过在 ServiceProfile 条目中添加 `isRetryable: true` 属性，为每个路由单独配置重试。除此之外，每个 ServiceProfile
+    对象还可以为 ServiceProfile 中所有路由定义重试预算。'
+- en: 'The easiest way to add this property is to interactively edit the ServiceProfile:'
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 添加此属性的最简单方法是交互式地编辑 ServiceProfile：
+- en: '[PRE3]'
+  id: totrans-38
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: Use your editor to change the ServiceProfile so that the `HEAD /authors/{id}.json`
+    route has the `isRetryable` property set to `true`, as shown in [Example 11-2](#EX-rel-edited-authors).
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用编辑器修改 ServiceProfile，使 `HEAD /authors/{id}.json` 路由的 `isRetryable` 属性设置为 `true`，如
+    [Example 11-2](#EX-rel-edited-authors) 所示。
+- en: Example 11-2\. The `authors` ServiceProfile with retries
+  id: totrans-40
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 11-2\. 带有重试的 `authors` ServiceProfile
+- en: '[PRE4]'
+  id: totrans-41
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: 'Save your changes to the `authors` ServiceProfile and examine the routes using
+    `linkerd viz routes` once again, as shown here:'
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 保存您对 `authors` ServiceProfile 的更改，并再次使用 `linkerd viz routes` 检查路由，如下所示：
+- en: '[PRE5]'
+  id: totrans-43
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'Switching the output format using `-o wide` tells the `linkerd viz routes`
+    command to show the effective success rate (after retries) as well as the actual
+    success rate (before retries are taken into consideration). If you run this command
+    repeatedly after enabling retries, you’ll see that the effective success rate
+    will climb as the overall latency goes up. Over time, the effective success rate
+    should climb to 100%, even though the actual success rate stays consistent at
+    about 50%: the `authors` workload is still failing about half the time, even though
+    retries are able to mask that from the caller.'
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 `-o wide` 切换输出格式告诉 `linkerd viz routes` 命令显示有效成功率（重试后）以及实际成功率（不考虑重试之前）。如果在启用重试后重复运行此命令，您将看到有效成功率将随着总体延迟的增加而上升。随着时间的推移，有效成功率应该会达到
+    100%，尽管实际成功率保持约 50%：`authors` 工作负载仍然在大约一半的时间内失败，尽管重试可以掩盖来自调用者的失败。
+- en: The watch Command
+  id: totrans-45
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: watch 命令
+- en: 'If you have the `watch` command, this is a great time to use it. It will rerun
+    the command every two seconds until interrupted, giving you an easy way to see
+    things changing:'
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您拥有 `watch` 命令，那么现在正是使用它的好时机。它会每两秒重新运行该命令，直到被中断，为您提供一个轻松的方式来查看变化情况。
+- en: '[PRE6]'
+  id: totrans-47
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: You can also see the difference in the effective and actual RPS. The effective
+    RPS is about 2.2, but the actual RPS will hover near double that—that’s because
+    *retries add load to the failing service* by making additional requests to mask
+    the failures.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您还可以看到有效和实际 RPS 之间的差异。有效 RPS 约为 2.2，但实际 RPS 将接近其两倍——这是因为*重试增加了对故障服务的负载*，通过额外的请求来掩盖失败。
+- en: Why Are We Seeing a Factor of Two?
+  id: totrans-49
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 为什么我们看到两倍的因素？
+- en: We often quote the default retry budget as 20%—so how is it possible that we’re
+    seeing twice the traffic in this situation? For that matter, how is it possible
+    that we’re seeing Linkerd mask all the failures when *50%* of requests are failing?
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们经常引用默认的重试预算为 20%——那么在这种情况下，我们怎么可能看到两倍的流量呢？事实上，我们如何看到 Linkerd 在 *50%* 请求失败时掩盖所有故障？
+- en: The answer to both questions lies with the “free” 10 requests per second included
+    in the default budget. Since the actual load is significantly less than 10 RPS,
+    the extra 10 “free” requests per second are plenty to effectively allow retrying
+    100% of the actual traffic, permitting Linkerd to mask all the failures…at the
+    cost of doubling the traffic.
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这两个问题的答案在于默认预算中包含的每秒“免费”10次请求。由于实际负载远低于10次每秒，“免费”的额外10次请求足以有效允许重试实际流量的100%，使得Linkerd能够掩盖所有故障……代价是流量翻倍。
+- en: Those “free” 10 RPS also mean that you don’t have to worry about Linkerd’s budget
+    letting failures leak through on a lightly used service, even while the budget
+    protects you from retry storms on a heavily used service.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些“免费”的10次每秒也意味着，即使在轻度使用的服务中，您也不必担心Linkerd的预算会让故障泄漏出来，即使在重度使用的服务上，预算也可以保护您免受重试风暴的影响。
+- en: Configuring the Budget
+  id: totrans-53
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 配置预算
+- en: Linkerd’s default budget actually works out well for many applications, but
+    if you need to change it, you’ll need to edit the `retryBudget` stanza in your
+    ServiceProfile, as shown in [Example 11-3](#EX-rel-retry-budget).
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对许多应用程序来说，Linkerd的默认预算实际上运作良好，但如果您需要更改它，则需要在您的ServiceProfile中编辑`retryBudget`部分，如示例[11-3](#EX-rel-retry-budget)所示。
+- en: Example 11-3\. An example retry budget
+  id: totrans-55
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 11-3\. 一个重试预算的示例
+- en: '[PRE7]'
+  id: totrans-56
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: The `retryBudget` stanza shown in [Example 11-3](#EX-rel-retry-budget) would
+    allow retrying 30% of original requests, plus *50* “free” requests per second,
+    averaged over a full minute.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在示例[11-3](#EX-rel-retry-budget)中显示的`retryBudget`部分将允许在整个一分钟内对原始请求的30%进行重试，再加上每秒*50*次的“免费”请求，平均计算。
+- en: Don’t Blindly Use This Budget!
+  id: totrans-58
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 不要盲目使用这个预算！
+- en: The budget shown in [Example 11-3](#EX-rel-retry-budget) is *just an example*.
+    Please do not assume that it will be helpful for any actual application!
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在示例[11-3](#EX-rel-retry-budget)中显示的预算*只是一个例子*。请不要假设它对任何实际应用程序有帮助！
+- en: Timeouts
+  id: totrans-60
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 超时
+- en: Timeouts are a tool that allows us to force a failure in the event a given request
+    is taking too long. They’re particularly effective when used hand-in-hand with
+    retries, so that a request that takes too long will be retried—but you don’t have
+    to use them together! There are a lot of situations where a judiciously placed
+    timeout can help return agency to an application, opening the door to providing
+    a better user experience by making intelligent decisions about what to do if things
+    are slow.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 超时是一种工具，允许我们在给定请求花费过长时间时强制失败。当与重试一起使用时效果尤为显著，因此，如果请求时间过长，它将被重试——但您不必将它们一起使用！有很多情况下，明智地设置超时可以帮助应用程序做出智能决策，提供更好的用户体验。
+- en: When timeouts are configured and a request takes too long, the Linkerd proxy
+    will return an HTTP 504 for the request. The timeout will look like any other
+    request failure as far as Linkerd’s observability functionality is concerned (including
+    triggering a retry, if retries are enabled), and it will be counted toward the
+    effective failure rate on a given route.
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当配置了超时并且请求时间过长时，Linkerd代理将返回HTTP 504状态码。对于Linkerd的可观察性功能来说，超时会被视为任何其他请求失败（包括触发重试，如果启用了重试），并计入给定路由的有效失败率。
+- en: Configuring Timeouts
+  id: totrans-63
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 配置超时
+- en: 'Let’s start things off by taking a look at requests from `webapp` to `books`,
+    to see what the average latency for user requests looks like:'
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们从查看从`webapp`到`books`的请求开始，看看用户请求的平均延迟如何：
+- en: '[PRE8]'
+  id: totrans-65
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: Let’s focus on the `PUT /books/{id}.json` route. Latency varies from environment
+    to environment, but we’ll start with a latency of 25 ms for our example; this
+    will probably result in some timeouts being triggered in most environments. You
+    can use the resulting success rates to tune the timeouts in your cluster.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们关注`PUT /books/{id}.json`路由。延迟因环境而异，但我们将从示例的延迟25毫秒开始；这可能导致大多数环境中触发一些超时。您可以使用结果的成功率来调整集群中的超时时间。
+- en: 'Just like retries, timeouts are configured via ServiceProfiles in Linkerd.
+    As we did with retries, we’ll start by looking at the existing profile. We can
+    get the `books` ServiceProfile with this command:'
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 就像重试一样，超时是通过Linkerd中的ServiceProfiles进行配置的。与重试一样，我们将首先查看现有的配置文件。我们可以使用以下命令获取`books`的ServiceProfile：
+- en: '[PRE9]'
+  id: totrans-68
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: This ServiceProfile should look very similar to the one in [Example 11-4](#EX-rel-books-sp).
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个ServiceProfile应该与示例[11-4](#EX-rel-books-sp)中的那个非常相似。
+- en: Example 11-4\. The `books` ServiceProfile
+  id: totrans-70
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 11-4\. `books`的ServiceProfile
+- en: '[PRE10]'
+  id: totrans-71
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: We configure timeouts by adding the `timeout` property to a route entry, setting
+    its value to a time specification that can be parsed by Go’s `time.ParseDuration`.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们通过将`timeout`属性添加到路由条目来配置超时，将其值设置为可以被Go的`time.ParseDuration`解析的时间规范。
+- en: Timeouts, ServiceProfiles, HTTPRoutes, and Linkerd
+  id: totrans-73
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 超时，ServiceProfiles，HTTPRoutes和Linkerd
+- en: As mentioned earlier, the Linkerd project is in the midst of a transition to
+    fully adopting [Gateway API](https://oreil.ly/6XTtV), so a few Linkerd custom
+    resources, including ServiceProfile, will soon begin to be deprecated.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如前所述，Linkerd项目正在全面采用[Gateway API](https://oreil.ly/6XTtV)，因此一些Linkerd自定义资源，包括ServiceProfile，很快将开始被弃用。
+- en: ServiceProfile and HTTPRoute have overlapping functionality for timeouts starting
+    with Gateway API 1.0.0, which at the time of writing is not yet supported by a
+    stable Linkerd version. It’s particularly important to review the [retry and timeout
+    documentation](https://oreil.ly/41V-2) to verify the current state of ServiceProfile
+    as you begin building retries into your applications.
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ServiceProfile和HTTPRoute从Gateway API 1.0.0开始具有重叠的超时功能，但在撰写本文时尚未得到稳定的Linkerd版本的支持。在开始向应用程序添加重试时，重要的是特别审查[重试和超时文档](https://oreil.ly/41V-2)以验证ServiceProfile的当前状态。
+- en: One particular note is that the syntax for HTTPRoute timeouts, specified by
+    [GEP-2257](https://oreil.ly/lxLGa), is rather more restrictive than Go’s `time.ParseDu⁠ration`,
+    which is used for ServiceProfile timeouts. For maximum compatibility in the future,
+    you may want to consider updating your ServiceProfile timeouts to conform to GEP-2257.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 特别注意的是，HTTPRoute超时的语法，由[GEP-2257](https://oreil.ly/lxLGa)指定，比Go的`time.ParseDu⁠ration`更为严格，后者用于ServiceProfile超时。为了将来最大的兼容性，您可能需要考虑更新您的ServiceProfile超时以符合GEP-2257。
+- en: 'The simplest way to add a timeout to the `PUT /books/{id}.json` route is to
+    edit the ServiceProfile interactively, which you can do using the following command:'
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 向`PUT /books/{id}.json`路由添加超时的最简单方法是通过交互式编辑ServiceProfile完成，您可以使用以下命令完成：
+- en: '[PRE11]'
+  id: totrans-78
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: You will need to add the `timeout` element to the `PUT /books/{id}.json` route,
+    with a value of `25ms`. This is shown in [Example 11-5](#EX-rel-edited-books-sp).
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您需要将`timeout`元素添加到`PUT /books/{id}.json`路由中，并设置值为`25ms`。示例在[Example 11-5](#EX-rel-edited-books-sp)中展示。
+- en: Example 11-5\. The `books` ServiceProfile with a timeout
+  id: totrans-80
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 11-5\. 带有超时的`books` ServiceProfile
+- en: '[PRE12]'
+  id: totrans-81
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: 'With the timeout set, you’ll want to observe the traffic going from the `webapp`
+    to the `books` service to see how the timeout is impacting the overall availability
+    of your service. Once again, `linkerd viz routes` is one of the simplest ways
+    to do this:'
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 设置了超时后，您将希望观察从`webapp`到`books`服务的流量，以查看超时对服务整体可用性的影响。再次强调，`linkerd viz routes`是最简单的方法之一：
+- en: '[PRE13]'
+  id: totrans-83
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: (You can use `-o wide` if you want—it won’t directly help you when observing
+    latency, but it’s certainly not harmful.)
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: （如果您愿意，可以使用`-o wide`—这不会直接帮助您观察延迟，但肯定也不会有害。）
+- en: Timeouts provide a valuable tool to ensure the overall availability of your
+    applications. They allow you to control latency and ensure applications don’t
+    hang while waiting for responses from downstream services.
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 超时为确保应用程序整体可用性提供了宝贵的工具。它们允许您控制延迟，并确保应用程序在等待下游服务响应时不会挂起。
+- en: Traffic Shifting
+  id: totrans-86
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 流量转移
+- en: '*Traffic shifting* refers to changing the destination of a request based on
+    outside criteria. Typically this is a weighted split between two or more destinations
+    (a *canary*), or a split based on a header match, username, etc. (an *A/B split*),
+    although many other types are possible. Traffic shifting is a major part of progressive
+    delivery, where you roll out new application versions by carefully shifting traffic
+    to the new version and verifying functionality as you go. However, you needn’t
+    do progressive delivery to benefit from traffic shifting.'
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*流量转移* 指的是根据外部条件更改请求的目标。通常这是两个或多个目的地的加权分割（*金丝雀*），或者基于头部匹配、用户名等的分割（*A/B分割*），尽管还有许多其他类型的分割是可能的。流量转移是渐进式交付的重要组成部分，通过仔细地将流量转移到新版本并验证功能，您可以滚动部署新的应用程序版本。但是，即使不进行渐进式交付，也可以从流量转移中受益。'
+- en: Traffic Shifting, Gateway API, and the Linkerd SMI Extension
+  id: totrans-88
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 流量转移，Gateway API和Linkerd SMI扩展
+- en: As of Linkerd 2.13, Linkerd natively supports traffic shifting using the Gateway
+    API HTTPRoute resource, so traffic shifting is the first area where we’ll use
+    Gateway API resources to configure Linkerd.
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从Linkerd 2.13开始，Linkerd原生支持使用Gateway API HTTPRoute资源进行流量转移，因此流量转移是我们将使用Gateway
+    API资源配置Linkerd的第一个领域。
+- en: HTTPRoutes Versus Linkerd SMI
+  id: totrans-90
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: HTTPRoutes与Linkerd SMI
+- en: In Linkerd versions prior to 2.13, you can still do traffic shifting, but you
+    need to use the Linkerd SMI extension (which we mentioned in [Chapter 2](ch02.html#LUAR_intro_to_linkerd)).
+    For information about the SMI extension and its legacy TrafficSplit resources,
+    check out the [official Linkerd docs on SMI](https://oreil.ly/56HlN). We recommend
+    using Gateway API in 2.13 and later, though.
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Linkerd 2.13 之前的版本中，您仍然可以进行流量转移，但需要使用 Linkerd SMI 扩展（我们在[第二章](ch02.html#LUAR_intro_to_linkerd)中提到过）。有关
+    SMI 扩展及其传统的 TrafficSplit 资源的信息，请查阅[Linkerd 官方关于 SMI 的文档](https://oreil.ly/56HlN)。我们建议使用
+    2.13 及更高版本中的 Gateway API。
+- en: 'As we explore traffic shifting in Linkerd, we’ll look at the two basic ways
+    of doing it: weight-based and header-based.'
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当我们探索 Linkerd 中的流量转移时，我们将看到两种基本的方法：基于权重和基于标头。
+- en: Setting Up Your Environment
+  id: totrans-93
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 配置您的环境
+- en: In this section we’ll be demonstrating traffic shifting using an entirely different
+    application called [podinfo](https://oreil.ly/1IL4K). To follow along with the
+    traffic shifting demos, we recommend you start a new cluster; please refer to
+    the material in [Chapter 3](ch03.html#LUAR_deploying_linkerd) if you need any
+    help with that.
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这一节中，我们将演示使用一个完全不同的应用程序[Podinfo](https://oreil.ly/1IL4K)来进行流量转移。为了跟随流量转移演示，请您开始一个新的集群；如果您需要任何帮助，请参考[第三章](ch03.html#LUAR_deploying_linkerd)中的材料。
+- en: Once you have your new cluster, you can follow along with [Example 11-6](#EX-rel-setup-podinfo)
+    to get started shifting traffic with podinfo.
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦您有了新的集群，您可以跟着[示例 11-6](#EX-rel-setup-podinfo)开始使用 Podinfo 进行流量转移。
+- en: Example 11-6\. Launching podinfo
+  id: totrans-96
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 11-6\. 启动 Podinfo
+- en: '[PRE14]'
+  id: totrans-97
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: '[PRE15]'
+  id: totrans-98
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: With that, we have our base demo application ready for traffic splitting. The
+    basic layout of our application is shown in [Figure 11-2](#podinfo).
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有了这个，我们的基础演示应用程序已经准备好进行流量分流了。我们应用程序的基本布局如[图 11-2](#podinfo)所示。
+- en: '![luar 1102](assets/luar_1102.png)'
+  id: totrans-100
+  prefs: []
+  type: TYPE_IMG
+  zh: '![luar 1102](assets/luar_1102.png)'
+- en: Figure 11-2\. podinfo application architecture
+  id: totrans-101
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 11-2\. Podinfo 应用程序架构
+- en: Next, you’ll want to watch how traffic is moving through your cluster. It’s
+    best to start this running in a separate window, as shown in [Example 11-7](#EX-rel-watch-podinfo),
+    so you can see what changes as you manipulate resources.
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，您可以观察流量如何在您的集群中移动。建议您在一个单独的窗口中运行，就像[示例 11-7](#EX-rel-watch-podinfo)中展示的那样，这样您就可以看到随着资源操作的变化。
+- en: Example 11-7\. Watching podinfo traffic
+  id: totrans-103
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 11-7\. 观察 Podinfo 的流量
+- en: '[PRE16]'
+  id: totrans-104
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: This will show you how traffic is being routed in your cluster. You should see
+    two podinfo deployments, `podinfo` and `podinfo-v2`. `podinfo-v2` should be receiving
+    very little traffic at the moment since we haven’t yet shifted any traffic to
+    it.
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这将展示您的集群中的流量路由情况。您应该看到两个 Podinfo 部署，`podinfo` 和 `podinfo-v2`。此刻 `podinfo-v2`
+    应该接收到的流量非常少，因为我们还没有将任何流量转移到它。
+- en: Weight-Based Routing (Canary)
+  id: totrans-106
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 基于权重的路由（金丝雀发布）
+- en: '*Weight-based routing* is a method of shifting traffic that selects where a
+    given request will go based on simple percentages: a certain percentage of available
+    traffic goes to one destination, and the rest goes to another. Weight-based routing
+    allows us to shift a small percentage of traffic to the new version of a service
+    to see how it behaves.'
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*基于权重的路由* 是一种根据简单的百分比选择请求目标位置的流量转移方法：一定百分比的可用流量发送到一个目标，剩余的流量发送到另一个目标。基于权重的路由允许我们将一小部分流量转移到服务的新版本，以查看其行为。'
+- en: In progressive delivery this is called *canary routing*, named after the proverbial
+    “canary in a coal mine” that would warn miners when the air was going bad by dying.
+    Here, the idea is that you can shift a small amount of traffic to test if the
+    new version of your workload will die, or work, before you shift more traffic.
+    A successful canary ends when all the traffic has been shifted and the old version
+    can be retired.
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在渐进式交付中，这被称为 *金丝雀路由*，得名于煤矿中的“金丝雀”，当空气变坏时会死去，从而提醒矿工。这里的想法是，您可以将一小部分流量转移以测试新版本的工作负载是否会失败或成功，然后再转移更多流量。成功的金丝雀发布会在所有流量都转移完成后结束，并且旧版本可以被废弃。
+- en: To start the canary running, we’ll need to create an HTTPRoute, as shown in
+    [Example 11-8](#EX-rel-canary-route).
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要启动金丝雀发布，我们需要创建一个 HTTP 路由，如[示例 11-8](#EX-rel-canary-route)所示。
+- en: Which HTTPRoute?
+  id: totrans-110
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 哪个 HTTP 路由？
+- en: We’re going to use `policy.linkerd.io` HTTPRoutes to accommodate readers with
+    older versions of Linkerd. It’s important to be aware, though, that tools like
+    Flagger and Argo Rollouts *do not* support `policy.linkerd.io`! If you’re using
+    one of these tools, you’ll need to use the `gateway.networking.k8s.io` HTTPRoutes,
+    which requires Linkerd 2.14 or higher.
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将使用`policy.linkerd.io` HTTPRoutes来适应使用旧版Linkerd的读者。然而，重要的是要注意，像Flagger和Argo
+    Rollouts *不*支持`policy.linkerd.io`！如果您使用这些工具之一，您需要使用要求Linkerd 2.14或更高版本的`gateway.networking.k8s.io`
+    HTTPRoutes。
+- en: Example 11-8\. The canary HTTPRoute
+  id: totrans-112
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: Example 11-8\. [canary HTTPRoute](https://wiki.example.org/canary_http_route)
+- en: '[PRE17]'
+  id: totrans-113
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: This HTTPRoute will split traffic between the `podinfo` and `podinfo-v2` services.
+    We set the weight to 5 for both services, which will cause 50% of the traffic
+    to shift over to `podinfo-v2`, while leaving 50% with our original `podinfo`.
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个HTTPRoute将把流量分配到`podinfo`和`podinfo-v2`服务之间。我们为两个服务设置权重为5，这将导致50%的流量转移到`podinfo-v2`，而将另外50%保留在我们原来的`podinfo`。
+- en: The Ratio Is What Matters
+  id: totrans-115
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 比例才是重要的
+- en: The absolute values of the weights don’t usually matter—they don’t need to add
+    up to any particular number. What does matter is the *ratio* of weights, so using
+    weights of 5 and 5, or 100 and 100, or 1 and 1 would all give 50/50 splits.
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 权重的绝对值通常不重要 —— 它们不需要加起来等于任何特定的数字。重要的是权重的*比例*，因此使用权重为5和5、100和100或1和1都会得到50/50的分流。
+- en: On the other hand, a weight of 0 explicitly means *not* to direct any traffic
+    to that backend—so don’t try to use 0/0 for a 50/50 split.
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一方面，权重为0明确表示*不*向该后端发送任何流量，所以不要试图使用0/0来进行50/50的分流。
+- en: 'Service versus Service: ClusterIPs, endpoints, and HTTPRoutes'
+  id: totrans-118
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 服务对服务：ClusterIPs、端点和HTTPRoutes
+- en: 'The astute reader will notice that we’re using `podinfo` twice: once in `parentRefs`
+    and once in `backendRefs`. Won’t this cause a routing loop? Aren’t we arranging
+    for traffic to come to `podinfo`, then get directed to `podinfo` again, and do
+    this forever until eventually it finally gets shuffled to `podinfo-v2`?'
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 机智的读者会注意到我们在`parentRefs`和`backendRefs`中都使用了`podinfo`两次。这不会导致路由循环吗？我们难道安排流量来到`podinfo`，然后再次定向到`podinfo`，并且永远这样重复，直到最终它最终被转移到`podinfo-v2`吗？
+- en: 'Rest assured that that won’t happen. If we go back to the Kubernetes Service
+    architecture shown in [Figure 11-3](#k8s-service-architecture-3), the critical
+    bits are that:'
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 放心，那是不会发生的。如果我们回到图11-3（#k8s-service-architecture-3）展示的Kubernetes服务架构，关键点在于：
+- en: When a Service is used in `parentRefs`, it means that the HTTPRoute will control
+    traffic directed to the Service.
+  id: totrans-121
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 当一个服务在`parentRefs`中使用时，这意味着HTTPRoute将控制定向到该服务的流量。
+- en: When a Service is used in `backendRefs`, it allows the HTTPRoute to direct traffic
+    to the Pods attached to the Service.
+  id: totrans-122
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 当一个服务在`backendRefs`中使用时，它允许HTTPRoute将流量定向到与该服务连接的Pod。
+- en: '![luar 1103](assets/luar_1103.png)'
+  id: totrans-123
+  prefs: []
+  type: TYPE_IMG
+  zh: '![luar 1103](assets/luar_1103.png)'
+- en: Figure 11-3\. The three distinct parts of a Kubernetes Service
+  id: totrans-124
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图11-3\. Kubernetes服务的三个独立部分
+- en: So what we’re really saying with `podinfo-route` is that 95% of the traffic
+    to the `podinfo` Service IP will be directed to the `podinfo` *endpoints*, and
+    the other 5% will be directed to the `podinfo-v2` *endpoints*, so there are no
+    loops. This behavior is defined in [GEP-1426](https://oreil.ly/uYWpL) from the
+    GAMMA initiative.
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所以，我们用`podinfo-route`实际上表明95%的流量将被定向到`podinfo`服务IP的`podinfo`*端点*，另外5%将被定向到`podinfo-v2`*端点*，因此没有环路。这种行为在GAMMA倡议的[GEP-1426](https://oreil.ly/uYWpL)中定义。
+- en: You Can’t Route to a Route
+  id: totrans-126
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 你不能将路由发送到另一个路由
+- en: 'GEP-1426 also prevents HTTPRoutes from “stacking.” Suppose that we apply `podinfo-route`
+    as shown in [Example 11-8](#EX-rel-canary-route), then also apply another HTTPRoute
+    (`podinfo-v2-canary`) that tries to split traffic to `podinfo-v2`. In that case:'
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: GEP-1426也阻止HTTPRoutes的“堆叠”。假设我们应用了像[Example 11-8](#EX-rel-canary-route)中展示的`podinfo-route`，然后再应用另一个HTTPRoute（`podinfo-v2-canary`）来尝试将流量分流到`podinfo-v2`。在这种情况下：
+- en: Traffic sent directly to `podinfo-v2` *will* be split by `podinfo-v2-canary`.
+  id: totrans-128
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 直接发送到`podinfo-v2`的流量将由`podinfo-v2-canary`进行分流。
+- en: Traffic sent to `podinfo` that `podinfo-route` then directs to `podinfo-v2`
+    will *not* be split.
+  id: totrans-129
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 发送到`podinfo`的流量，然后由`podinfo-route`重定向到`podinfo-v2`的将*不*会分流。
+- en: This is because `podinfo-route` will send its traffic directly to the `podinfo-v2`
+    *endpoints*. Since that traffic bypasses the `podinfo-v2` Service IP, `podinfo-v2-canary`
+    never gets a chance to work with it.
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是因为`podinfo-route`将其流量直接发送到`podinfo-v2`的*端点*。由于该流量绕过了`podinfo-v2`服务IP，`podinfo-v2-canary`永远没有机会处理它。
+- en: Apply `podinfo-route` to your cluster and take a look at how the traffic shifts
+    in your terminal window that’s watching traffic. You’ll see around 25 requests
+    per second going to the v2 deployment (remember that it will take a little time
+    for the metrics that `linkerd viz` is watching to catch up).
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将 `podinfo-route` 应用于您的集群，并查看在观察流量的终端窗口中流量如何转移。您将看到每秒约 25 个请求转移到 v2 部署（请记住，`linkerd
+    viz` 观察到的指标需要一些时间才能跟上）。
+- en: 'You can modify the weights and see how traffic shifts around in real time:
+    just use `kubectl edit` as shown here:'
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以修改权重并实时查看流量如何变动：只需像这样使用 `kubectl edit`：
+- en: '[PRE18]'
+  id: totrans-133
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: As soon as you save an edited version, the new weights should instantly take
+    effect, changing what you see in your window that’s watching traffic.
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦保存了编辑版本，新的权重应立即生效，更改您在观察流量的窗口中看到的内容。
+- en: 'Once you’re finished, go ahead and delete the `podinfo-route` route, using
+    the following command:'
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 完成后，请继续使用以下命令删除 `podinfo-route` 路由：
+- en: '[PRE19]'
+  id: totrans-136
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: You should see all the traffic shifting back to `podinfo`, setting the stage
+    for our header-based routing experiment.
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您应该看到所有流量都转移到 `podinfo`，为我们的基于标头的路由实验做准备。
+- en: Header-Based Routing (A/B Testing)
+  id: totrans-138
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 基于标头的路由（A/B 测试）
+- en: '*Header-based routing* allows you to make routing decisions based on the headers
+    included in a request. This is commonly used for A/B testing. For example, if
+    you have two versions of a user interface, you typically don’t want to randomly
+    choose between them every time your user loads a page. Instead, you might use
+    some header that identifies the user to pick a version of the UI in a deterministic
+    way, so that a given user will always see a consistent UI, but different users
+    might get different UIs.'
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*基于标头的路由* 允许您根据请求中包含的标头做出路由决策。这通常用于 A/B 测试。例如，如果您有两个版本的用户界面，您通常不希望每次用户加载页面时随机选择它们之一。相反，您可以使用某个标头来标识用户，以确定性方式选择
+    UI 的版本，这样给定用户将始终看到一致的 UI，但不同用户可能会看到不同的 UI。'
+- en: We’ll use header-based routing to allow selecting a version of `podinfo` using
+    a header. Start by applying a new `podinfo-route` HTTPRoute, as shown in [Example 11-9](#EX-rel-ab-route).
+    (Once again, we’re going to use `policy.linkerd.io` HTTPRoutes; see [“Which HTTPRoute?”](#which_httproute_ch11_LUAR_reliability_1710429511809)
+    for a caveat on this choice.)
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将使用基于标头的路由来允许使用标头选择 `podinfo` 的版本。首先应用一个新的 `podinfo-route` HTTPRoute，如示例 [11-9](#EX-rel-ab-route)
+    所示。（再次使用 `policy.linkerd.io` HTTPRoutes；有关此选择的警告，请参阅 [“哪个 HTTPRoute？”](#which_httproute_ch11_LUAR_reliability_1710429511809)。）
+- en: Example 11-9\. Header-based routing
+  id: totrans-141
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 11-9\. 基于标头的路由
+- en: '[PRE20]'
+  id: totrans-142
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: (If you were just following the instructions for weight-based routing, that’s
+    fine; this `podinfo-route` will overwrite the one from that section if you didn’t
+    already delete it.)
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: （如果您刚刚按照权重路由的说明操作，那很好；如果您还没有删除，此 `podinfo-route` 将覆盖该部分的内容。）
+- en: This version has a new `matches` section for header matches. We also move the
+    reference to `podinfo-v2` from the main `backendRefs` section to a new `backendRefs`
+    under `matches`. The effect is that traffic will be shifted to `podinfo-v2` only
+    if it has the header `x-request-id` with a value of `alternative`.
+  id: totrans-144
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此版本具有新的 `matches` 部分，用于标头匹配。我们还将 `podinfo-v2` 的引用从主 `backendRefs` 部分移动到 `matches`
+    下的新 `backendRefs`。效果是，只有当具有值为 `alternative` 的 `x-request-id` 标头时，流量才会转移到 `podinfo-v2`。
+- en: Since the traffic generator we installed doesn’t send any requests with the
+    correct header, when you apply this HTTPRoute, you should immediately see all
+    the traffic fall away from `podinfo-v2`. We can use `curl` to send traffic with
+    the correct header to be routed to `podinfo-v2`, as shown in [Example 11-10](#EX-rel-curl-header).
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于我们安装的流量生成器不发送任何带有正确标头的请求，因此当您应用此 HTTPRoute 时，您应立即看到所有流量从 `podinfo-v2` 中消失。我们可以使用
+    `curl` 发送带有正确标头的流量以路由到 `podinfo-v2`，如 [示例 11-10](#EX-rel-curl-header) 所示。
+- en: Example 11-10\. Testing header-based routing with `curl`
+  id: totrans-146
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 11-10\. 使用 `curl` 测试基于标头的路由
+- en: '[PRE21]'
+  id: totrans-147
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: Traffic Shifting Summary
+  id: totrans-148
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 流量转移总结
+- en: You now have a sense of how to use HTTPRoute objects to manipulate traffic in
+    your cluster. While it’s still possible, for the moment, to use the Linkerd SMI
+    extension, we strongly recommend using Gateway API instead—and if you’re using
+    Linkerd with a progressive delivery tool like Flagger or Argo Rollouts, using
+    Gateway API can dramatically simplify the interface with that tool (although,
+    as noted earlier, you’ll likely need to use Linkerd 2.14 for its support for the
+    official Gateway API types).
+  id: totrans-149
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在你对如何使用 HTTPRoute 对象在集群中操作流量有了了解。虽然暂时还可以使用 Linkerd SMI 扩展，但我们强烈建议改用 Gateway
+    API —— 如果你正在使用像 Flagger 或 Argo Rollouts 这样的渐进交付工具与 Linkerd 一起使用，使用 Gateway API
+    可以显著简化与该工具的接口（尽管如前所述，你可能需要使用支持官方 Gateway API 类型的 Linkerd 2.14）。
+- en: Circuit Breaking
+  id: totrans-150
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 熔断
+- en: When you run applications at scale, it can be helpful to automatically isolate
+    and direct traffic away from any Pod that is experiencing issues. Linkerd tends
+    to route away from underperforming Pods automatically, by virtue of using an exponentially
+    weighted moving average of latency to select the Pod to receive a given request.
+    With circuit breaking, you can make Linkerd explicitly avoid routing to any Pods
+    that are experiencing issues.
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当你在规模上运行应用程序时，自动隔离和将流量从任何遇到问题的 Pod 中转移可能是有帮助的。Linkerd 倾向于自动路由到表现不佳的 Pod，通过使用指数加权移动平均的延迟来选择接收给定请求的
+    Pod。通过熔断，你可以明确地让 Linkerd 避免路由到任何遇到问题的 Pod。
+- en: Enabling Circuit Breaking
+  id: totrans-152
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 启用熔断
+- en: When you enable circuit breaking on a Service, Linkerd will selectively quarantine
+    endpoints that experience multiple consecutive failures. As always with advanced
+    features, make sure you read the [latest Linkerd circuit breaking documentation](https://oreil.ly/33gHv)
+    before implementing this in your environment.
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当你在一个服务上启用熔断时，Linkerd 将有选择地隔离那些经历了多次连续失败的终端点。像所有高级特性一样，请确保在将其应用于你的环境之前阅读[最新的
+    Linkerd 熔断文档](https://oreil.ly/33gHv)。
+- en: 'We’ll demonstrate using Linkerd circuit breaking by installing a deliberately
+    bad Pod:'
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将演示如何使用 Linkerd 的熔断通过安装一个故意不良的 Pod：
+- en: '[PRE22]'
+  id: totrans-155
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: In your terminal that’s watching traffic, you should now see three `podinfo`
+    deployments running. Traffic should be roughly evenly split between `podinfo`
+    and `podinfo-v3`, because `podinfo-v3` is carefully set up to be part of the same
+    Service as `podinfo`.
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在你监控流量的终端中，现在应该看到三个 `podinfo` 部署正在运行。流量应该大致均匀地分配在 `podinfo` 和 `podinfo-v3` 之间，因为
+    `podinfo-v3` 被精心设置为与 `podinfo` 同一服务的一部分。
+- en: Seeing podinfo-v2?
+  id: totrans-157
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 看到 podinfo-v2 吗？
+- en: If you’re seeing any traffic to `podinfo-v2`, check to make sure you don’t have
+    any HTTPRoutes still splitting traffic by running `kubectl get httproute -n podinfo`.
+  id: totrans-158
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你看到任何流量进入 `podinfo-v2`，请确保没有任何 HTTPRoutes 仍在通过运行 `kubectl get httproute -n
+    podinfo` 来分流流量。
+- en: 'You should also note that `podinfo-v3` has a less than 100% success rate. Adding
+    a circuit breaker to the `podinfo` Service, as shown here, should improve things:'
+  id: totrans-159
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你还应该注意 `podinfo-v3` 的成功率不到 100%。按照这里展示的方法为 `podinfo` 服务添加一个熔断器应该会改善情况：
+- en: '[PRE23]'
+  id: totrans-160
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: This tells Linkerd to apply the circuit breaking policy to the `podinfo` Service.
+    It will look for consecutive failures and stop routing to any Pods that are having
+    issues. If you look back at your window that’s watching traffic, you’ll soon see
+    that `podinfo-v3` is no longer receiving much traffic.
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这告诉 Linkerd 在 `podinfo` 服务上应用熔断策略。它会寻找连续的失败并停止路由到任何有问题的 Pod。如果你回看你监控流量的窗口，很快你就会发现
+    `podinfo-v3` 不再接收太多的流量。
+- en: Why Annotations?
+  id: totrans-162
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 为什么使用注释？
+- en: Circuit breakers are still rather new in Linkerd, so they’re currently configurable
+    only using annotations. Keep an eye on the [latest Linkerd circuit breaking documentation](https://oreil.ly/bdiFR)
+    to stay up-to-date as development proceeds!
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linkerd 的熔断器仍然相对较新，因此目前只能使用注释进行配置。随着开发的进行，请密切关注[最新的 Linkerd 熔断文档](https://oreil.ly/bdiFR)以保持最新！
+- en: Tuning Circuit Breaking
+  id: totrans-164
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 调整熔断
+- en: 'We can further tune circuit breaking with additional annotations on the Service:'
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以通过服务上的附加注释进一步调整熔断器：
+- en: '`balancer.linkerd.io/failure-accrual-consecutive-max-failures`'
+  id: totrans-166
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`balancer.linkerd.io/failure-accrual-consecutive-max-failures`'
+- en: Sets the number of failures that you’ll need to see before an endpoint is quarantined.
+    Defaults to `7`.
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 设置需要在终端点被隔离之前看到的失败次数。默认为`7`。
+- en: '`balancer.linkerd.io/failure-accrual-consecutive-min-penalty`'
+  id: totrans-168
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`balancer.linkerd.io/failure-accrual-consecutive-min-penalty`'
+- en: Sets the minimum time an endpoint should be put in quarantine. GEP-2257 Duration,
+    defaults to one second (`1s`).
+  id: totrans-169
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 设置端点应该被隔离的最短时间。GEP-2257持续时间，默认为一秒 (`1s`)。
+- en: '`balancer.linkerd.io/failure-accrual-consecutive-max-penalty`'
+  id: totrans-170
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`balancer.linkerd.io/failure-accrual-consecutive-max-penalty`'
+- en: Sets the upper bound for the quarantine period (the maximum time that an endpoint
+    will be quarantined before the mesh tests it again). GEP-2257 Duration, defaults
+    to one minute (`1m`).
+  id: totrans-171
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 设置隔离期的上限（端点在网格再次测试之前被隔离的最长时间）。GEP-2257持续时间，默认为一分钟 (`1m`)。
+- en: '`balancer.linkerd.io/failure-accrual-consecutive-jitter-ratio`'
+  id: totrans-172
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`balancer.linkerd.io/failure-accrual-consecutive-jitter-ratio`'
+- en: Adds some randomness to the quarantine and test timeframes. Defaults to `0.5`;
+    tuning is only rarely appropriate.
+  id: totrans-173
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 添加一些随机性到隔离和测试时间框架中。默认为 `0.5`；很少需要调整。
+- en: Looking at the traffic, you’ll probably still see `podinfo-v3` showing too many
+    failures. Making it a bit more sensitive to failure, as shown in [Example 11-11](#EX-rel-tune-breaker),
+    will allow the circuit breaker to more aggressively take `podinfo-v3` out of circulation,
+    which should help the situation.
+  id: totrans-174
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 查看流量时，您可能仍然会看到 `podinfo-v3` 显示过多的失败。通过像[示例 11-11](#EX-rel-tune-breaker)所示，使断路器对失败更加敏感，将允许断路器更积极地将
+    `podinfo-v3` 从使用中移出，这应该有助于改善情况。
+- en: Example 11-11\. Tuning circuit breaking
+  id: totrans-175
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 11-11\. 调整断路器
+- en: '[PRE24]'
+  id: totrans-176
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: With that, we should see far fewer errors making it through to `podinfo-v3`.
+  id: totrans-177
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有了这个设置，我们应该看到通过到 `podinfo-v3` 的错误大大减少。
+- en: Circuit Breaking Won’t Hide All Failures
+  id: totrans-178
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 断路器不会隐藏所有故障
+- en: When Linkerd checks to see if a given endpoint has recovered, it does so by
+    allowing an actual user request through. If this request fails, the failure will
+    get all the way back to the caller (unless retries are also enabled).
+  id: totrans-179
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当Linkerd检查一个给定的端点是否已恢复时，它通过允许一个实际用户请求通过来进行。如果此请求失败，该故障将一直传递回调用者（除非还启用了重试）。
+- en: In our example, this would mean that a potentially failing request will make
+    it to `podinfo-v3` every 30 seconds, in order for Linkerd to check to see if the
+    circuit breaker can be reset.
+  id: totrans-180
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在我们的示例中，这意味着一个潜在的失败请求每30秒就会到达 `podinfo-v3`，以便Linkerd检查断路器是否可以被重置。
+- en: Summary
+  id: totrans-181
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 摘要
+- en: With that, we’ve covered how Linkerd can help reliability in your applications.
+    You can retry in the event of transient failures in the network and in your APIs,
+    add timeouts to requests to preserve overall availability, split traffic between
+    versions of a service to perform safer rollouts, and set up circuit breakers to
+    protect services from failing Pods. With all this, you’re well on your way to
+    being able to run a reliable and resilient platform with Linkerd.
+  id: totrans-182
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有了这个设置，我们已经介绍了Linkerd如何帮助提升应用程序的可靠性。您可以在网络和API的瞬时故障发生时重试，添加请求超时以保持总体可用性，将流量分割到服务的不同版本中以执行更安全的发布，设置断路器来保护服务免受失败Pod的影响。有了这些，您就可以很好地运行一个可靠和弹性的平台。

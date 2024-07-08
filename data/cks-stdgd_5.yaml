@@ -1,0 +1,1837 @@
+- en: Chapter 5\. Minimizing Microservice Vulnerabilities
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第 5 章\. 最小化微服务漏洞
+- en: Application stacks operated in a Kubernetes cluster often follow a microservices
+    architecture. The domain “minimize microservice vulnerabilities” covers governance
+    and enforcement of security settings on the Pod level. We’ll touch on Kubernetes
+    core features, as well as external tooling, that help with minimizing security
+    vulnerabilities. Additionally, we’ll also talk about encrypted network communication
+    between Pods running microservices.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 集群中操作的应用程序堆栈通常遵循微服务架构。“最小化微服务漏洞”领域涵盖了在 Pod 级别上实施安全设置的治理和强制执行。我们将介绍
+    Kubernetes 核心功能以及外部工具，帮助减少安全漏洞。此外，我们还将讨论运行微服务的 Pod 之间的加密网络通信。
+- en: 'At a high level, this chapter covers the following concepts:'
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在高层次上，本章涵盖以下概念：
+- en: Setting up appropriate OS-level security domains with security contexts, Pod
+    Security Admission (PSA), and Open Policy Agent Gatekeeper
+  id: totrans-3
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 设置适当的操作系统级安全域与安全上下文，Pod 安全审计（PSA）和 Open Policy Agent Gatekeeper
+- en: Managing Secrets
+  id: totrans-4
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 管理秘密
+- en: Using container runtime sandboxes, such as gVisor and Kata Containers
+  id: totrans-5
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用容器运行时沙盒，如 gVisor 和 Kata 容器
+- en: Implementing Pod-to-Pod communication encryption via mutual Transport Layer
+    Security (TLS)
+  id: totrans-6
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 通过双向传输层安全协议（TLS）实现 Pod 之间的通信加密
+- en: Setting Appropriate OS-Level Security Domains
+  id: totrans-7
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 设置适当的操作系统级安全域
+- en: Both core Kubernetes and the Kubernetes ecosystem offer solutions for defining,
+    enforcing, and governing security settings on the Pod and container level. This
+    section will discuss security contexts, Pod Security Admission, and Open Policy
+    Agent Gatekeeper. You will learn how to apply each of the features and tools using
+    examples that demonstrate their importance to security. Let’s begin by setting
+    up a scenario.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 核心和 Kubernetes 生态系统均提供了定义、实施和管理 Pod 和容器级别安全设置的解决方案。本节将讨论安全上下文、Pod
+    安全审计和 Open Policy Agent Gatekeeper。您将学习如何通过示例应用每个功能和工具，展示它们在安全性方面的重要性。让我们从设置一个场景开始。
+- en: 'Scenario: An Attacker Misuses root User Container Access'
+  id: totrans-9
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 情景：攻击者滥用 root 用户容器访问权限
+- en: By default, containers run with root privileges. A vulnerability in the application
+    could grant an attacker `root` access to the container. The container’s root user
+    is the same as the root user on the host machine. Not only can the attacker then
+    inspect or modify the application, but they can also potentially install additional
+    tooling that allows the attacker to break out of the container and step into host
+    namespace with `root` permissions. The attacker could also copy sensitive data
+    from the host’s filesystem to the container. [Figure 5-1](#root-user-attacker)
+    illustrates the scenario.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，容器以 root 权限运行。应用程序中的漏洞可能会授予攻击者`root`访问容器的权限。容器的 root 用户与主机上的 root 用户相同。攻击者不仅可以检查或修改应用程序，还可能安装额外的工具，使攻击者能够打破容器并以`root`权限进入主机命名空间。攻击者还可以将主机文件系统的敏感数据复制到容器中。[图 5-1](#root-user-attacker)说明了该场景。
+- en: '![ckss 0501](assets/ckss_0501.png)'
+  id: totrans-11
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckss 0501](assets/ckss_0501.png)'
+- en: Figure 5-1\. An attacker misuses root user container access
+  id: totrans-12
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-1\. 攻击者滥用 root 用户容器访问权限
+- en: For that reason, running a container with the default root user is a bad idea.
+    The next sections will explain how to declare a security context for the container
+    that enforces the use of a non-root user or a specific user and/or group identifier.
+    We’ll also discuss other security context settings relevant to shielding host
+    access from the container.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，默认情况下以 root 用户运行容器是一个不好的选择。接下来的章节将解释如何为容器声明一个安全上下文，强制使用非 root 用户或特定用户和/或组标识符。我们还将讨论其他与从容器到主机的访问隔离相关的安全上下文设置。
+- en: Understanding Security Contexts
+  id: totrans-14
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 理解安全上下文
+- en: 'Kubernetes, as the container orchestration engine, can apply additional configuration
+    to increase container security. You do so by defining a security context. A security
+    context defines privilege and access control settings for a Pod or a container.
+    The following list provides some examples:'
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为容器编排引擎的 Kubernetes 可以应用额外的配置来增强容器安全性。通过定义安全上下文来实现。安全上下文定义了 Pod 或容器的特权和访问控制设置。以下列表提供了一些示例：
+- en: The user ID that should be used to run the Pod and/or container
+  id: totrans-16
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 应用程序应使用的用户 ID 来运行 Pod 和/或容器
+- en: The group ID that should be used for filesystem access
+  id: totrans-17
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 文件系统访问应使用的组 ID
+- en: Granting a running process inside the container some privileges of the root
+    user but not all of them
+  id: totrans-18
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 授予容器内运行的进程部分 root 用户权限但不是全部权限
+- en: The security context is not a Kubernetes primitive. It is modeled as a set of
+    attributes under the directive `securityContext` within the Pod specification.
+    Security settings defined on the Pod level apply to all containers running in
+    the Pod; however, container-level settings take precedence. For more information
+    on Pod-level security attributes, see the [PodSecurityContext API](https://oreil.ly/cJWXA).
+    Container-level security attributes can be found in the [SecurityContext API](https://oreil.ly/XOy2a).
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安全上下文不是 Kubernetes 的原语。它被建模为 Pod 规范内的一组属性，在指令 `securityContext` 下。在 Pod 级别定义的安全设置适用于在
+    Pod 中运行的所有容器；但容器级别的设置优先。有关 Pod 级别安全属性的更多信息，请参阅 [PodSecurityContext API](https://oreil.ly/cJWXA)。容器级别的安全属性可以在
+    [SecurityContext API](https://oreil.ly/XOy2a) 中找到。
+- en: Enforcing the Usage of a Non-Root User
+  id: totrans-20
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 强制使用非 root 用户
+- en: We’ll have a look at a use case to make the functionality more transparent.
+    Some images, like the one for the open source reverse-proxy server nginx, must
+    be run with the `root` user. Say you wanted to enforce that containers cannot
+    be run as the `root` user as a means to support a more sensible security strategy.
+    The YAML manifest file `container-non-root-user-error.yaml` shown in [Example 5-1](#non-root-security-context-error)
+    defines the security configuration specifically for a container. This security
+    context only applies to this very container, but not others if you were to define
+    more.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将看一个使用案例，使功能更透明。某些镜像，如用于开源反向代理服务器 nginx 的镜像，必须以 `root` 用户运行。假设你想强制容器不能作为 `root`
+    用户运行，以支持更合理的安全策略。文件 `container-non-root-user-error.yaml` 中的 YAML 清单文件（示例 5-1）定义了特定容器的安全配置。此安全上下文仅适用于此容器，而不适用于其他容器（如果你要定义更多的话）。
+- en: Example 5-1\. Enforcing a non-root user on an image that needs to run with the
+    root user
+  id: totrans-22
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 5-1\. 强制在需要以 root 用户运行的镜像上使用非 root 用户
+- en: '[PRE0]'
+  id: totrans-23
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'The container fails during the startup process with the status `CreateContainer​Confi⁠gError`.
+    A look at the Pod’s event log reveals that the image tries to run with the `root`
+    user. The configured security context does not allow it:'
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器在启动过程中失败，状态为 `CreateContainer​Confi⁠gError`。查看 Pod 的事件日志显示，镜像尝试以 `root` 用户运行。配置的安全上下文不允许这样做：
+- en: '[PRE1]'
+  id: totrans-25
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: There are alternative nginx container images available that are not required
+    to run with the `root` user. An example is [bitnami/nginx](https://oreil.ly/EnvzT).
+    [Example 5-2](#non-root-security-context-success) shows the contents of the file
+    `container-non-root-user-success.yaml`. The major change in this file is the value
+    assigned to the `spec.containers[].image` attribute.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有可用的替代 nginx 容器镜像，不需要以 `root` 用户运行。例如 [bitnami/nginx](https://oreil.ly/EnvzT)。示例 5-2
+    展示了文件 `container-non-root-user-success.yaml` 的内容。此文件的主要变更是为 `spec.containers[].image`
+    属性分配的值。
+- en: Example 5-2\. Enforcing a non-root user on an image that supports running with
+    a user ID
+  id: totrans-27
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 5-2\. 强制在支持使用用户 ID 运行的镜像上使用非 root 用户
+- en: '[PRE2]'
+  id: totrans-28
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'Starting the container with the `runAsNonRoot` directive will work just fine.
+    The container transitions into the “Running” status:'
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 `runAsNonRoot` 指令启动容器将正常工作。容器转换为“运行”状态：
+- en: '[PRE3]'
+  id: totrans-30
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'Let’s quickly check which user ID the container runs with. Shell into the container
+    and run the `id` command. The output renders the user ID, the group ID, and the
+    IDs of supplemental groups. The image `bitnami/nginx` sets the user ID to 1001
+    with the help of an instruction when the container image is built:'
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们快速检查容器使用哪个用户 ID。进入容器并运行 `id` 命令。输出显示用户 ID、组 ID 和附加组的 ID。镜像 `bitnami/nginx`
+    在构建容器镜像时通过指令将用户 ID 设置为 1001：
+- en: '[PRE4]'
+  id: totrans-32
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: Setting a Specific User and Group ID
+  id: totrans-33
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 设置特定的用户和组 ID
+- en: Many container images do not set an explicit user ID or group ID. Instead of
+    running with the `root` default user, you can set the desired user ID and group
+    ID to minimize potential security risks. The YAML manifest stored in the file
+    `container-user-id.yaml` shown in [Example 5-3](#user-group-id-security-context-success)
+    sets the user ID to 1000 and the group ID to 3000.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 许多容器镜像未设置显式的用户 ID 或组 ID。不使用 `root` 默认用户运行，可以设置所需的用户 ID 和组 ID，以最小化潜在的安全风险。文件
+    `container-user-id.yaml` 中存储的 YAML 清单文件（示例 5-3）将用户 ID 设置为 1000，组 ID 设置为 3000。
+- en: Example 5-3\. Running the container with a specific user and group ID
+  id: totrans-35
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 5-3\. 使用特定用户和组 ID 运行容器
+- en: '[PRE5]'
+  id: totrans-36
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'Creating the Pod will work without issues. The container transitions into the
+    “Running” status:'
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建 Pod 将无问题。容器转换为“运行”状态：
+- en: '[PRE6]'
+  id: totrans-38
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: 'You can inspect the user ID and group ID after shelling into the container.
+    The current user is not allowed to create files in the `/` directory. Creating
+    a file in the `/tmp` directory will work, as most users have the permissions to
+    write to it:'
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 进入容器后，您可以检查用户ID和组ID。当前用户无权在`/`目录中创建文件。在`/tmp`目录中创建文件将起作用，因为大多数用户都有写入权限：
+- en: '[PRE7]'
+  id: totrans-40
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: Avoiding Privileged Containers
+  id: totrans-41
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 避免使用特权容器
+- en: 'Kubernetes establishes a clear separation between the container namespace and
+    the host namespace for processes, network, mounts, user ID, and more. You can
+    configure the container’s security context to gain privileges to certain aspects
+    of the host namespace. Assume the following implications when using a privileged
+    container:'
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes在进程、网络、挂载、用户ID等方面在容器命名空间和主机命名空间之间建立了明确的分离。您可以配置容器的安全上下文以获取对主机命名空间某些方面的权限。使用特权容器时，请考虑以下影响：
+- en: Processes within a container almost have the same privileges as processes on
+    the host.
+  id: totrans-43
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 容器内的进程几乎具有与主机上进程相同的权限。
+- en: The container has access to all devices on the host.
+  id: totrans-44
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 容器具有访问主机上所有设备的权限。
+- en: The root user in the container has similar privileges to the `root` user on
+    the host.
+  id: totrans-45
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 容器中的`root`用户具有与主机上的`root`用户类似的权限。
+- en: All directories on the host’s filesystem can be mounted in the container.
+  id: totrans-46
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 可以在容器中挂载主机文件系统上的所有目录。
+- en: Kernel settings can be changed, e.g., by using the [`sysctl` command](https://oreil.ly/YEcOs).
+  id: totrans-47
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 可以通过使用[`sysctl`命令](https://oreil.ly/YEcOs)更改内核设置。
+- en: Using containers in privileged mode
+  id: totrans-48
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用特权模式的容器
+- en: Configuring a container to use privileged mode should be a rare occasion. Most
+    applications and processes running in a container do not need elevated privileges
+    beyond the container namespace. Should you encounter a Pod that has been configured
+    to use privileged mode, contact the team or developer in charge to clarify, as
+    it will open a loophole for attackers to gain access to the host system.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 配置容器以使用特权模式应该是一个罕见的情况。大多数运行在容器中的应用程序和进程不需要超出容器命名空间之外的提升权限。如果遇到配置为使用特权模式的Pod，请联系负责的团队或开发者进行澄清，因为这将为攻击者打开入侵主机系统的漏洞。
+- en: Let’s compare the behavior of a non-privileged container with one configured
+    to run in privileged mode. First, we are going to set up a regular Pod, as shown
+    in [Example 5-4](#non-privileged-container). No security context has been set
+    on the Pod or container level.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们比较配置为非特权容器和配置为特权模式运行的容器的行为。首先，我们将设置一个常规的Pod，如[示例 5-4](#non-privileged-container)所示。在Pod或容器级别未设置安全上下文。
+- en: Example 5-4\. A Pod with a container in non-privileged mode
+  id: totrans-51
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 5-4\. 使用非特权模式的容器中的Pod
+- en: '[PRE8]'
+  id: totrans-52
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: 'Create the Pod and ensure that it comes up properly:'
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建Pod并确保其正确启动：
+- en: '[PRE9]'
+  id: totrans-54
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: 'To demonstrate the isolation between the container namespace and host’s namespace,
+    we’ll try to use the `sysctl` to change the hostname. As you can see in the output
+    of the command, the container will clearly enforce the restricted privileges:'
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了演示容器命名空间与主机命名空间之间的隔离，我们将尝试使用`sysctl`来更改主机名。正如您在命令输出中所看到的那样，容器明确执行受限权限：
+- en: '[PRE10]'
+  id: totrans-56
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: To make a container privileged, simply assign the value `true` to the security
+    context attribute `privileged`. The YAML manifest in [Example 5-5](#privileged-security-context)
+    shows an example.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要使容器具有特权，请简单地将值`true`分配给安全上下文属性`privileged`。在[示例 5-5](#privileged-security-context)中的YAML清单中显示了一个示例。
+- en: Example 5-5\. A Pod with a container configured to run in privileged mode
+  id: totrans-58
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 5-5\. 配置为运行在特权模式中的容器的Pod
+- en: '[PRE11]'
+  id: totrans-59
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: 'Create the Pod as usual. The Pod should transition into the “Running” status:'
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如常创建Pod。Pod应该转换为“Running”状态：
+- en: '[PRE12]'
+  id: totrans-61
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: 'You can now see that the same `sysctl` will allow you to change the hostname:'
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在您可以看到，相同的`sysctl`将允许您更改主机名：
+- en: '[PRE13]'
+  id: totrans-63
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: A container security context configuration related to privileged mode is the
+    attribute `allowPrivilegeEscalation`. This attribute will allow a process running
+    the container to gain more privileges than the parent process. The default value
+    for the attribute is `false`, but if you see the attribute set to `true`, critically
+    question its use. In most cases, you do not need the functionality.
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与特权模式相关的容器安全上下文配置是属性`allowPrivilegeEscalation`。此属性将允许运行容器的进程获得比父进程更多的权限。该属性的默认值为`false`，但如果看到将属性设置为`true`，请对其使用进行严格审查。在大多数情况下，您不需要此功能。
+- en: 'Scenario: A Developer Doesn’t Follow Pod Security Best Practices'
+  id: totrans-65
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 情景：开发者不遵循Pod安全最佳实践
+- en: It is unfair to assume that developers of all trades and levels of seniority
+    have extensive knowledge of Kubernetes features, especially the ones that apply
+    to security best practices. In the previous section, we learned about the security
+    context and which settings to avoid. Developers are probably unaware of those
+    best practices without continued education and therefore may create Pods that
+    use problematic security settings or none at all. [Figure 5-2](#privileged-mode-attacker)
+    shows a developer creating a Pod in privileged mode enabled by a copied manifest
+    found on the internet. An attacker will gladly use this setup to their advantage.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设开发人员在 Kubernetes 功能方面，特别是适用于安全最佳实践的方面，没有广泛的知识是不公平的。在前一节中，我们了解了安全上下文以及要避免使用的设置。开发人员可能不知道这些最佳实践，没有持续的教育，因此可能会创建使用问题安全设置或根本不使用安全设置的
+    Pod。[Figure 5-2](#privileged-mode-attacker) 显示了一名开发人员使用从互联网上找到的复制清单在启用特权模式下创建
+    Pod。攻击者将乐意利用这种设置获取优势。
+- en: '![ckss 0502](assets/ckss_0502.png)'
+  id: totrans-67
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckss 0502](assets/ckss_0502.png)'
+- en: Figure 5-2\. A developer creates a Pod with enabled privileged mode
+  id: totrans-68
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-2\. 开发人员创建启用特权模式的 Pod
+- en: This is where you, as the Kubernetes security specialist, come in. The Kubernetes
+    ecosystem provides core features and external tooling for enforcing security standards
+    for Pods so that objects without the right configuration will be rejected, or
+    at least audited. The next section explores the Kubernetes core feature named
+    Pod Security Admission.
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为 Kubernetes 安全专家，您就是这里的关键人物。Kubernetes 生态系统提供了核心功能和外部工具，用于强制执行 Pod 的安全标准，以便没有正确配置的对象将被拒绝或至少会进行审计。下一节将探讨名为
+    Pod 安全入场的 Kubernetes 核心功能。
+- en: Understanding Pod Security Admission (PSA)
+  id: totrans-70
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 理解 Pod 安全入场（PSA）
+- en: Older versions of Kubernetes shipped with a feature called Pod Security Policies
+    (PSP). Pod Security Policies are a concept that help with enforcing security standards
+    for Pod objects. Kubernetes 1.21 deprecated Pod Security Policies and introduced
+    the replacement functionality Pod Security Admission. PSA determines which Pod
+    Security Standard (PSS) to follow. A PSS defines a range of security policies
+    from highly restrictive to highly permissive.
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 的旧版本附带了名为 Pod 安全策略（PSP）的功能。Pod 安全策略是一个概念，帮助强制执行 Pod 对象的安全标准。Kubernetes
+    1.21 弃用了 Pod 安全策略，并引入了其替代功能 Pod 安全入场。PSA 决定要遵循哪个 Pod 安全标准（PSS）。PSS 定义了从高度限制到高度宽松的安全策略范围。
+- en: However, the Kubernetes release 1.25 completely removed Pod Security Policies.
+    You may still see the feature listed in older versions of the CKS curriculum.
+    We will only focus on Pod Security Admission in this book. PSA is enabled by default
+    with Kubernetes 1.23; however, you will need to declare which Pods should adhere
+    to the security standards. All you need to do to opt into the PSA feature is to
+    add a label with a specific format to a namespace. All Pods in that namespace
+    will have to follow the standards declared.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，Kubernetes 1.25 完全删除了 Pod 安全策略。您可能仍然会在旧版本的 CKS 课程中看到此功能。我们在本书中将仅关注 Pod 安全入场。PSA
+    在 Kubernetes 1.23 中默认启用；但是，您需要声明哪些 Pod 应遵循安全标准。要选择 PSA 功能，您只需在命名空间中添加特定格式的标签。该命名空间中的所有
+    Pod 将必须遵循声明的标准。
+- en: 'The label consists of three parts: a prefix, a mode, and a level. The *prefix*
+    always uses the hard-coded value `pod-security.kubernetes.io` followed by a slash.
+    The *mode* determines the handling of a violation. Finally, the *level* dictates
+    the degree of security standards to adhere to. An example of such a label could
+    look as follows:'
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 标签包含三个部分：前缀、模式和级别。*前缀* 总是使用硬编码值 `pod-security.kubernetes.io`，后面跟着一个斜线。*模式* 决定了违规处理方式。最后，*级别*
+    规定了遵循的安全标准的程度。这样的标签示例可能如下所示：
+- en: '[PRE14]'
+  id: totrans-74
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: The mode allows for setting three different options, shown in [Table 5-1](#psa-modes).
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 模式允许设置三种不同的选项，如 [Table 5-1](#psa-modes) 所示。
+- en: Table 5-1\. Pod Security Admission modes
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Table 5-1\. Pod 安全入场模式
+- en: '| Mode | Behavior |'
+  id: totrans-77
+  prefs: []
+  type: TYPE_TB
+  zh: '| 模式 | 行为 |'
+- en: '| --- | --- |'
+  id: totrans-78
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| `enforce` | Violations will cause the Pod to be rejected. |'
+  id: totrans-79
+  prefs: []
+  type: TYPE_TB
+  zh: '| `enforce` | 违规将导致 Pod 被拒绝。 |'
+- en: '| `audit` | Pod creation will be allowed. Violations will be appended to the
+    audit log. |'
+  id: totrans-80
+  prefs: []
+  type: TYPE_TB
+  zh: '| `audit` | 允许创建 Pod。违规将被记录到审计日志中。 |'
+- en: '| `warn` | Pod creation will be allowed. Violations will be rendered on the
+    console. |'
+  id: totrans-81
+  prefs: []
+  type: TYPE_TB
+  zh: '| `warn` | 允许创建 Pod。违规将在控制台上显示。 |'
+- en: '[Table 5-2](#psa-levels) illustrates the security policies determined by the
+    level set for the PSA.'
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Table 5-2](#psa-levels) 说明了由 PSA 设置的级别确定的安全策略。'
+- en: Table 5-2\. Pod Security Admission levels
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Table 5-2\. Pod 安全入场级别
+- en: '| Level | Behavior |'
+  id: totrans-84
+  prefs: []
+  type: TYPE_TB
+  zh: '| 级别 | 行为 |'
+- en: '| --- | --- |'
+  id: totrans-85
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| `privileged` | Fully unrestricted policy. |'
+  id: totrans-86
+  prefs: []
+  type: TYPE_TB
+  zh: '| `privileged` | 完全无限制的策略。 |'
+- en: '| `baseline` | Minimally restrictive policy that covers crucial standards.
+    |'
+  id: totrans-87
+  prefs: []
+  type: TYPE_TB
+  zh: '| `baseline` | 最低限度的限制性策略，覆盖了关键标准。 |'
+- en: '| `restricted` | Heavily restricted policy following best practices for hardening
+    Pods from a security perspective. |'
+  id: totrans-88
+  prefs: []
+  type: TYPE_TB
+  zh: '| `restricted` | 遵循从安全角度加固 Pod 的最佳实践的严格限制性策略。 |'
+- en: See the [Kubernetes documentation](https://oreil.ly/DYziy) for details on the
+    PSA, including usage examples.
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 详细了解 PSA 的内容，请参阅 [Kubernetes 文档](https://oreil.ly/DYziy)。
+- en: Enforcing Pod Security Standards for a Namespace
+  id: totrans-90
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 为命名空间执行 Pod 安全标准
+- en: Let’s apply a PSA to a Pod in the namespace `psa`. [Example 5-6](#psa-namespace-label)
+    shows the definition of the namespace and the declaration of the relevant label.
+    The label will enforce a PSS on the highest level of security standards.
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 `psa` 命名空间中将 PSA 应用于一个 Pod。[示例 5-6](#psa-namespace-label) 展示了命名空间的定义及相关标签的声明。该标签将强制执行最高级别的安全标准。
+- en: Example 5-6\. A namespace enforcing the highest level of security standards
+  id: totrans-92
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: Example 5-6\. 强制执行最高级别安全标准的命名空间
+- en: '[PRE15]'
+  id: totrans-93
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: Make sure that the Pod is created in the namespace `psa`. [Example 5-7](#psa-violating-pod)
+    shows the YAML manifest for a simple Pod running the `busybox` image.
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 确保 Pod 在 `psa` 命名空间中创建。[示例 5-7](#psa-violating-pod) 展示了运行 `busybox` 镜像的简单 Pod
+    的 YAML 清单。
+- en: Example 5-7\. A Pod violating the PSA restrictions
+  id: totrans-95
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: Example 5-7\. 违反 PSA 限制的 Pod
+- en: '[PRE16]'
+  id: totrans-96
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: 'Violations will be rendered in the console upon running a command to create
+    a Pod in the namespace. As you can see in the following, the Pod wasn’t allowed
+    to be created:'
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在运行创建 Pod 的命令时，违规将在控制台中呈现。如下所示，该 Pod 无法被创建：
+- en: '[PRE17]'
+  id: totrans-98
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: You need to configure the Pod’s security context settings to follow the very
+    restrictive standards. [Example 5-8](#psa-non-violating-pod) shows an exemplary
+    Pod definition that does not violate the Pod Security Standard.
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您需要配置 Pod 的安全上下文设置，以遵循非常严格的标准。[示例 5-8](#psa-non-violating-pod) 展示了一个示范 Pod 定义，它不违反
+    Pod 安全标准。
+- en: Example 5-8\. A Pod following the PSS
+  id: totrans-100
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: Example 5-8\. 跟随 PSS 的 Pod
+- en: '[PRE18]'
+  id: totrans-101
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: 'Creating the Pod object now works as expected:'
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在创建 Pod 对象按预期运行：
+- en: '[PRE19]'
+  id: totrans-103
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: PSA is a built-in, enabled-by-default feature in Kubernetes version 1.23 or
+    higher. It’s easy to adopt, allows for picking and choosing a suitable policy
+    standard, and can be configured to enforce or just log violations.
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: PSA 是 Kubernetes 1.23 版本或更高版本中默认启用的内置功能。它易于采用，允许选择合适的策略标准，并可配置为强制执行或仅记录违规行为。
+- en: Unfortunately, PSA only applies to Pods with a predescribed set of policies.
+    You cannot write your own custom rules, change the messaging, or mutate the Pod
+    object should it not adhere to a PSS. In the next section, we are going to have
+    a look at tooling that goes beyond the functionality of PSA.
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不幸的是，PSA 仅适用于具有预定义策略集的 Pod。您无法编写自定义规则、更改消息传递或变异 Pod 对象，如果不符合 PSS 的话。在下一节中，我们将研究超越
+    PSA 功能的工具。
+- en: Understanding Open Policy Agent (OPA) and Gatekeeper
+  id: totrans-106
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 了解开放策略代理（OPA）和 Gatekeeper
+- en: '[Open Policy Agent (OPA)](https://oreil.ly/oK9pI) is an open source, general-purpose
+    policy engine for enforcing rules. OPA is not specific to Kubernetes and can be
+    used across other technology stacks. One of its benefits is the ability to define
+    a policy in a very flexible fashion. You can write your own rules with the help
+    of the query language named [Rego](https://oreil.ly/0_mA8). The validation logic
+    written in Rego determines if the object is accepted or denied.'
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Open Policy Agent (OPA)](https://oreil.ly/oK9pI) 是一款开源的通用策略引擎，用于强制执行规则。OPA
+    不特定于 Kubernetes，可以在其他技术堆栈中使用。其好处之一是能够以非常灵活的方式定义策略。您可以使用名为 [Rego](https://oreil.ly/0_mA8)
+    的查询语言编写自己的规则。在 Rego 中编写的验证逻辑确定是否接受或拒绝对象。'
+- en: '[Gatekeeper](https://oreil.ly/AyVjP) is an extension to Kubernetes that uses
+    OPA. Gatekeeper allows for defining and enforcing custom policies for any kind
+    of Kubernetes API primitive. Therefore, it is far more versatile than PSA but
+    requires more intricate knowledge on how to craft those rules. Gatekeeper gets
+    involved in the *admission control* stage discussed in [“Processing a Request”](ch03.xhtml#processing-api-request).
+    The following list of policies tries to give you an impression on what’s possible
+    with Gatekeeper:'
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Gatekeeper](https://oreil.ly/AyVjP) 是 Kubernetes 的一个扩展，使用 OPA。Gatekeeper 允许为任何类型的
+    Kubernetes API 原语定义和强制执行自定义策略。因此，它比 PSA 更加灵活，但需要更复杂的知识来制定这些规则。Gatekeeper 参与了讨论的
+    *准入控制* 阶段，详见 [“处理请求”](ch03.xhtml#processing-api-request)。以下策略列表试图给您展示 Gatekeeper
+    的可能性：'
+- en: Ensuring that all Service objects need to define a label with the key `team`
+  id: totrans-109
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 确保所有 Service 对象都需要定义一个带有键 `team` 的标签。
+- en: Ensuring that all container images defined by Pods need to be pulled from a
+    company-internal registry
+  id: totrans-110
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 确保 Pods 定义的所有容器镜像都从公司内部注册表中拉取。
+- en: Ensuring that Deployments need to control at least three replicas
+  id: totrans-111
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 确保 Deployments 需要至少控制三个副本。
+- en: At the time of writing, Gatekeeper allows for enforcing policies by rejecting
+    object creation if requirements haven’t been met. Future versions of Gatekeeper
+    might also provide a mechanism for mutating an object upon creation. For example,
+    you may want to add specific label key-value pairs for any object created. The
+    mutation would take care of adding those labels automatically.
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在撰写本文时，Gatekeeper 允许通过拒绝对象创建来强制执行策略，如果未满足要求。Gatekeeper 的未来版本还可能提供一种在创建时改变对象的机制。例如，您可能希望为创建的任何对象添加特定的标签键值对。该变动将自动处理添加这些标签。
+- en: Installing Gatekeeper
+  id: totrans-113
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 安装 Gatekeeper
+- en: 'Installing Gatekeeper is relatively easy. All you need to do is to create a
+    bunch of Kubernetes objects from a YAML manifest provided by the Gatekeeper project.
+    You need to have cluster admin permissions to properly install Gatekeeper. The
+    following command shows the `kubectl` command used to apply the latest release.
+    For more information, see the [installation manual](https://oreil.ly/CyZ1c):'
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安装 Gatekeeper 相对简单。您只需从 Gatekeeper 项目提供的 YAML 清单创建一堆 Kubernetes 对象即可。您需要有集群管理员权限来正确安装
+    Gatekeeper。以下命令展示了应用最新发布版的 `kubectl` 命令。更多信息，请参阅 [安装手册](https://oreil.ly/CyZ1c)。
+- en: '[PRE20]'
+  id: totrans-115
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: 'Gatekeeper objects have been installed in the namespace `gatekeeper-system`.
+    Make sure that all Pods in the namespace transition into the “Running” status
+    before trying to use Gatekeeper:'
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Gatekeeper 对象已安装在命名空间 `gatekeeper-system` 中。确保在尝试使用 Gatekeeper 之前，命名空间中的所有 Pods
+    都转入“运行”状态：
+- en: '[PRE21]'
+  id: totrans-117
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: Implementing an OPA Policy
+  id: totrans-118
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 实施 OPA 策略。
+- en: We’ll use a specific use case as an example to demonstrate the moving parts
+    required to define a custom OPA policy. [“Using Network Policies to Restrict Pod-to-Pod
+    Communication”](ch02.xhtml#network-policies) explained how to assign a label to
+    a namespace so that it can be selected from a network policy. At its core, our
+    custom OPA policy will determine that namespaces need to define at least one label
+    with the key `app` to signify the application hosted by the namespace.
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将使用一个具体的用例作为示例，演示定义自定义 OPA 策略所需的各部分。“使用网络策略限制 Pod 间通信” 解释了如何为命名空间分配标签，以便从网络策略中选择。在其核心，我们的自定义
+    OPA 策略将确定命名空间需要定义至少一个带有键 `app` 的标签，以表示命名空间托管的应用程序。
+- en: Gatekeeper requires us to implement two components for custom policy, the *constraint
+    template* and the *constraint*. In a nutshell, the constraint template defines
+    the rules with Rego and describes the schema for the constraint. [Example 5-9](#opa-constraint-template)
+    shows a constraint template definition for enforcing a label assignment.
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Gatekeeper 要求我们为自定义策略实现两个组件，*约束模板* 和 *约束*。简言之，约束模板使用 Rego 定义规则，并描述约束的模式。[示例 5-9](#opa-constraint-template)
+    展示了用于强制执行标签分配的约束模板定义。
+- en: Example 5-9\. An OPA constraint template requiring the definition of at least
+    a single label
+  id: totrans-121
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 5-9\. 使用 OPA 约束模板要求至少定义一个单一标签
+- en: '[PRE22]'
+  id: totrans-122
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: '[![1](assets/1.png)](#co_minimizing_microservice_vulnerabilities_CO1-1)'
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_minimizing_microservice_vulnerabilities_CO1-1)'
+- en: Declares the kind to be used by the constraint.
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 声明用于约束的类型。
+- en: '[![2](assets/2.png)](#co_minimizing_microservice_vulnerabilities_CO1-2)'
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_minimizing_microservice_vulnerabilities_CO1-2)'
+- en: Specifies the validation schema of the constraint. In this case, we allow to
+    pass in a property named `labels` that captures the required label keys.
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 指定约束的验证模式。在这种情况下，我们允许传递名为 `labels` 的属性，其中捕获所需的标签键。
+- en: '[![3](assets/3.png)](#co_minimizing_microservice_vulnerabilities_CO1-3)'
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_minimizing_microservice_vulnerabilities_CO1-3)'
+- en: Uses Rego to check for the existence of labels and compares them to the list
+    of required keys.
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 Rego 检查标签的存在并将其与所需键的列表进行比较。
+- en: The constraint is essentially an implementation of the constraint template.
+    It uses the kind defined by the constraint template and populates the data provided
+    by the end user. In [Example 5-10](#opa-constraint), the kind is `K8sRequiredLabels`,
+    which we defined in the constraint template. We are matching on namespaces and
+    expect them to define the label with the key `app`.
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 约束本质上是约束模板的实现。它使用约束模板定义的种类，并填充终端用户提供的数据。在 [示例 5-10](#opa-constraint) 中，种类是 `K8sRequiredLabels`，我们在约束模板中定义了它。我们正在匹配命名空间，并期望它们定义具有键
+    `app` 的标签。
+- en: Example 5-10\. An OPA constraint that defines the “data” for the policy
+  id: totrans-130
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 5-10\. 定义策略“数据”的 OPA 约束
+- en: '[PRE23]'
+  id: totrans-131
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: '[![1](assets/1.png)](#co_minimizing_microservice_vulnerabilities_CO2-1)'
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_minimizing_microservice_vulnerabilities_CO2-1)'
+- en: Uses the kind defined by the constraint template.
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用约束模板定义的种类。
+- en: '[![2](assets/2.png)](#co_minimizing_microservice_vulnerabilities_CO2-2)'
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_minimizing_microservice_vulnerabilities_CO2-2)'
+- en: Defines the API resources the constraint template should apply to.
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 定义约束模板应用的 API 资源。
+- en: '[![3](assets/3.png)](#co_minimizing_microservice_vulnerabilities_CO2-3)'
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_minimizing_microservice_vulnerabilities_CO2-3)'
+- en: Declares that the `labels` property expects the key `app` to exist.
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 声明 `labels` 属性期望存在键 `app`。
+- en: 'With the relevant YAML manifests in place, let’s create the objects for the
+    constraint template and the constraint. Assume that the constraint template was
+    written to the file `constraint-template-labels.yaml` and the constraint to the
+    file `constraint-ns-labels.yaml`:'
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有了相关的 YAML 清单，让我们为约束模板和约束创建对象。假设约束模板写入文件 `constraint-template-labels.yaml`，约束写入文件
+    `constraint-ns-labels.yaml`：
+- en: '[PRE24]'
+  id: totrans-139
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: 'You can verify the validation behavior with a quick-to-run imperative command.
+    The following command tries to create a new namespace without a label assignment.
+    Gatekeeper will render an error message and prevent the creation of the object:'
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以通过快速运行的命令验证验证行为。以下命令尝试创建一个没有标签分配的新命名空间。 Gatekeeper 将呈现错误消息并阻止对象的创建：
+- en: '[PRE25]'
+  id: totrans-141
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE25]'
+- en: Let’s make sure that we can actually create a namespace with the expected label
+    assignment. [Example 5-11](#namespace-app-label) shows the YAML manifest of such
+    a namespace.
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们确保我们实际上可以创建具有预期标签分配的命名空间。[示例 5-11](#namespace-app-label) 展示了这样一个命名空间的 YAML
+    清单。
+- en: Example 5-11\. YAML manifest for namespace with a label assignment
+  id: totrans-143
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 5-11\. 具有标签分配的命名空间的 YAML 清单
+- en: '[PRE26]'
+  id: totrans-144
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE26]'
+- en: 'The following command creates the object from the YAML manifest file named
+    `namespace-app-label.yaml`:'
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下命令从名为 `namespace-app-label.yaml` 的 YAML 清单文件创建对象：
+- en: '[PRE27]'
+  id: totrans-146
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE27]'
+- en: This simple example demonstrated the usage of OPA Gatekeeper. You can find a
+    lot of other examples in the [OPA Gatekeeper Library](https://oreil.ly/1VV5e).
+    Despite it not being spelled out explicitly in the CKS curriculum, you may also
+    want to check out the project [Kyverno](https://kyverno.io), which recently gained
+    a lot of traction with the Kubernetes community.
+  id: totrans-147
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个简单的例子演示了 OPA Gatekeeper 的使用。您可以在 [OPA Gatekeeper Library](https://oreil.ly/1VV5e)
+    中找到许多其他示例。尽管 CKS 课程没有明确说明，您可能还想查看最近在 Kubernetes 社区中获得了很多关注的项目 [Kyverno](https://kyverno.io)。
+- en: Managing Secrets
+  id: totrans-148
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 管理秘密
+- en: No discussion on security features in Kubernetes would be complete without bringing
+    up the topic of Secrets. I would assume that you are already well familiar with
+    the API primitive Secret to define sensitive data and the different options for
+    consuming it in a Pod. Given that this topic is already part of the CKA exam,
+    I will not reiterate it here. For more information, see the relevant section in
+    the [*Certified Kubernetes Administrator (CKA) Study Guide*](https://oreil.ly/cka-study-guide)
+    or the [Kubernetes documentation](https://oreil.ly/1afoc). I talk about security
+    aspects when consuming ConfigMaps and Secrets in a container in [“Configuring
+    a Container with a ConfigMap or Secret”](ch07.xhtml#configuring-container-configmap-secret).
+  id: totrans-149
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 安全功能讨论不完整，没有提到 Secrets。我假设你已经非常熟悉 API 原语 Secret 用于定义敏感数据以及在 Pod 中消费的不同选项。考虑到这个主题已经是
+    CKA 考试的一部分，我在这里不再赘述。更多信息，请参阅《[*Certified Kubernetes Administrator (CKA) Study
+    Guide*](https://oreil.ly/cka-study-guide)》中的相关章节或者[Kubernetes 文档](https://oreil.ly/1afoc)。我在[“Configuring
+    a Container with a ConfigMap or Secret”](ch07.xhtml#configuring-container-configmap-secret)章节中讨论在容器中消费
+    ConfigMaps 和 Secrets 时的安全方面。
+- en: The CKS exam puts a stronger emphasis on more specialized aspects of Secret
+    management. One of those scenarios, which we already touched on, was the handling
+    of a Secret you can assign to a service account. Revisit [“Creating a Secret for
+    a service account”](ch03.xhtml#creating-secret-serviceaccount) to refresh your
+    memory on the topic. As we are not going to discuss all built-in Secret types
+    here, you may want to read up on their purpose and creation in the relevant section
+    of the [Kubernetes documentation](https://oreil.ly/YU7Yy).
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CKS 考试更加强调 Secret 管理的更专业方面。其中一个场景是处理可以分配给服务账户的 Secret，我们已经提到过。回顾[“Creating a
+    Secret for a service account”](ch03.xhtml#creating-secret-serviceaccount)以刷新你对该主题的记忆。由于我们不会在这里讨论所有内置的
+    Secret 类型，请阅读相关章节了解它们的用途和创建方式在[Kubernetes 文档](https://oreil.ly/YU7Yy)中。
+- en: The central location for storing Secrets key-value pairs is etcd. Let’s have
+    a look at potential issues that may arise if an attacker gains access to Kubernetes
+    backing store for cluster data.
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 存储 Secrets 键值对的中心位置是 etcd。让我们来看看，如果攻击者能够访问 Kubernetes 后端存储集群数据，可能会出现的潜在问题。
+- en: 'Scenario: An Attacker Gains Access to the Node Running etcd'
+  id: totrans-152
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 场景：攻击者获得访问运行 etcd 的节点
+- en: Where etcd runs is dependent on the [topology of your Kubernetes cluster](https://oreil.ly/bf5Gt).
+    For the purpose of this scenario, we’ll assume that etcd runs on the control plane
+    node. Any data stored in etcd exists in unencrypted form, so access to the control
+    plane node allows for reading Secrets in plain text. [Figure 5-3](#etcd-attacker)
+    shows an attacker gaining access to the control plane node and therefore the unencrypted
+    Secrets in etcd.
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: etcd 运行的位置取决于你的 Kubernetes 集群的[拓扑结构](https://oreil.ly/bf5Gt)。为了这个场景，我们假设 etcd
+    运行在控制平面节点上。存储在 etcd 中的任何数据都以未加密形式存在，因此访问控制平面节点允许以明文形式读取 Secrets。[图 5-3](#etcd-attacker)展示了攻击者访问控制平面节点和因此在
+    etcd 中的未加密 Secrets。
+- en: '![ckss 0503](assets/ckss_0503.png)'
+  id: totrans-154
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckss 0503](assets/ckss_0503.png)'
+- en: Figure 5-3\. An attacker gains access to etcd to read Secrets
+  id: totrans-155
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-3\. 攻击者获得访问 etcd 并读取 Secrets
+- en: One way to mitigate the situation is by encrypting the data stored in etcd.
+    Access to etcd, either using `etcdctl` or by reading the etcd data from the filesystem,
+    would not expose human-readable, sensitive information anymore.
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 缓解这种情况的一种方法是加密存储在 etcd 中的数据。无论是使用 `etcdctl` 访问 etcd 还是从文件系统读取 etcd 数据，都不会再暴露出人类可读的敏感信息。
+- en: Accessing etcd Data
+  id: totrans-157
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 访问 etcd 数据
+- en: 'We’ll start by showing how an attacker could read etcd data after being able
+    to log into the control plane node. First, we need to create a Secret object to
+    store in etcd. Use the following imperative command to create an entry:'
+  id: totrans-158
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将首先展示，攻击者在能够登录控制平面节点后如何读取 etcd 数据。首先，我们需要创建一个 Secret 对象以存储在 etcd 中。使用以下命令来创建一个条目：
+- en: '[PRE28]'
+  id: totrans-159
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE28]'
+- en: We created a Secret with the key-value pair `password=passwd123`. Shell into
+    the control plane node using SSH. You can easily use the etcd client tool `etcdctl`
+    to read an entry from etcd.
+  id: totrans-160
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们创建了一个带有键值对 `password=passwd123` 的 Secret。使用 SSH 登录控制平面节点。你可以轻松使用 etcd 客户端工具
+    `etcdctl` 从 etcd 中读取一个条目。
+- en: Using the etcd client tool etcdctl
+  id: totrans-161
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用 etcd 客户端工具 etcdctl
+- en: It’s very likely that you do not have `etcdctl` installed on the control plane
+    node yet. Follow the [installation manual](https://oreil.ly/wpCkO) to make the
+    tool available. On Debian Linux, it can be installed with `sudo apt install etcd-client`.
+    To authenticate against etcd, you will need to provide the mandatory command line
+    options `--cacert`, `--cert`, and `--key`. You can find the corresponding values
+    in the configuration file for the API server usually available at `/etc/kubernetes/manifests/kube-apiserver.yaml`.
+    The parameters need to start with the prefix `--etcd`.
+  id: totrans-162
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 很可能您尚未在控制平面节点上安装`etcdctl`。请按照[安装手册](https://oreil.ly/wpCkO)安装工具。在Debian Linux上，可以使用`sudo
+    apt install etcd-client`进行安装。要对etcd进行身份验证，您需要提供必需的命令行选项`--cacert`、`--cert`和`--key`。您可以在通常位于`/etc/kubernetes/manifests/kube-apiserver.yaml`的API服务器配置文件中找到相应的值。参数需要以`--etcd`前缀开头。
+- en: 'The following command uses the mandatory CLI options to read the contents from
+    the Secret object named `app-config`. The following output displays the file contents
+    in hexadecimal format. While not 100% obvious, you can still identify the key-value
+    pair in plain text from the output:'
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下命令使用必需的CLI选项从名为`app-config`的秘密对象中读取内容。以下输出以十六进制格式显示文件内容。虽然不是100%明显，但您仍然可以从输出中识别出明文的键值对：
+- en: '[PRE29]'
+  id: totrans-164
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE29]'
+- en: In the next step, we’ll encrypt the Secret stored in etcd and then verify the
+    existing entries with the same command.
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，我们将加密存储在etcd中的秘密，然后使用相同的命令验证现有条目。
+- en: Encrypting etcd Data
+  id: totrans-166
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 加密etcd数据
+- en: You can control how API data is encrypted in etcd with the help of the command
+    line option `--encryption-provider-config` provided to the API server process.
+    The value assigned to the parameter needs to point to a configuration file that
+    defines an `EncryptionConfiguration` object. We’ll first create the configuration
+    file and then configure the API server process to consume it.
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用命令行选项`--encryption-provider-config`控制API数据在etcd中如何加密，该选项提供给API服务器进程。分配给参数的值需要指向一个定义了`EncryptionConfiguration`对象的配置文件。我们将首先创建配置文件，然后配置API服务器进程来消耗它。
+- en: 'Generate a 32-byte random key and base64-encode it. The value is needed to
+    configure a so-called provider in the encryption configuration:'
+  id: totrans-168
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 生成一个32字节的随机密钥并对其进行base64编码。该值用于配置所谓的加密配置中的提供程序：
+- en: '[PRE30]'
+  id: totrans-169
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE30]'
+- en: Next up, we’ll use the base64-encoded key and assign it to a provider in the
+    encryption configuration, as shown in [Example 5-12](#encryption-configuration).
+    Save the contents in the file `/etc/kubernetes/enc/enc.yaml`.
+  id: totrans-170
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，我们将使用base64编码的密钥并将其分配给加密配置中的提供程序，如[示例 5-12](#encryption-configuration)所示。将内容保存在文件`/etc/kubernetes/enc/enc.yaml`中。
+- en: Example 5-12\. YAML manifest for encryption configuration
+  id: totrans-171
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例5-12\. 用于加密配置的YAML清单
+- en: '[PRE31]'
+  id: totrans-172
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE31]'
+- en: '[![1](assets/1.png)](#co_minimizing_microservice_vulnerabilities_CO3-1)'
+  id: totrans-173
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_minimizing_microservice_vulnerabilities_CO3-1)'
+- en: Defines the API resource to be encrypted in etcd. We are only encrypting Secrets
+    data here.
+  id: totrans-174
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 定义要在etcd中加密的API资源。我们这里只加密秘密数据。
+- en: '[![2](assets/2.png)](#co_minimizing_microservice_vulnerabilities_CO3-2)'
+  id: totrans-175
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_minimizing_microservice_vulnerabilities_CO3-2)'
+- en: The base64-encoded key assigned to an AES-CBC encryption provider.
+  id: totrans-176
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 分配给AES-CBC加密提供程序的base64编码密钥。
+- en: 'Edit the manifest at `/etc/kubernetes/manifests/kube-apiserver.yaml`, the YAML
+    manifest that defines how to run an API server in a Pod. Add the parameter `--encryption-provider-config`,
+    and define the Volume and its mountpath for the configuration file as the following
+    shows:'
+  id: totrans-177
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 编辑位于`/etc/kubernetes/manifests/kube-apiserver.yaml`的清单，这是定义如何在Pod中运行API服务器的YAML清单。添加参数`--encryption-provider-config`，并定义配置文件的Volume及其挂载路径，如下所示：
+- en: '[PRE32]'
+  id: totrans-178
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE32]'
+- en: 'The Pod running the API server should automatically restart. This process may
+    take a couple of minutes. Once fully restarted, you should be able to query for
+    it:'
+  id: totrans-179
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运行API服务器的Pod应该会自动重新启动。这个过程可能需要几分钟时间。一旦完全重启，您应该能够查询它：
+- en: '[PRE33]'
+  id: totrans-180
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE33]'
+- en: 'New Secrets will be encrypted automatically. Existing Secrets need to be updated.
+    You can run the following command to perform an update on Secrets across all namespaces.
+    This includes the Secret named `app-config` in the `default` namespace:'
+  id: totrans-181
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 新的秘密将自动加密。现有的秘密需要更新。您可以运行以下命令来跨所有命名空间执行秘密的更新。这包括`default`命名空间中名为`app-config`的秘密：
+- en: '[PRE34]'
+  id: totrans-182
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE34]'
+- en: 'Running the `etcdctl` command we used before will reveal that the `aescbc`
+    provider has been used to encrypt the data. The password value cannot be read
+    in plain text anymore:'
+  id: totrans-183
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运行我们之前使用的`etcdctl`命令将显示`aescbc`提供程序已用于加密数据。密码值不再能以明文读取：
+- en: '[PRE35]'
+  id: totrans-184
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE35]'
+- en: For more details on encrypting etcd data, refer to the [Kubernetes documentation](https://oreil.ly/uIylK).
+    There, you will find additional information on other encryption providers, how
+    to rotate the decryption key, and the process to consider for a high-availability
+    (HA) cluster setup.
+  id: totrans-185
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要了解有关加密 etcd 数据的更多详细信息，请参阅[Kubernetes 文档](https://oreil.ly/uIylK)。在那里，您将找到关于其他加密提供者的额外信息，如何轮换解密密钥以及考虑用于高可用
+    (HA) 集群设置的过程。
+- en: Understanding Container Runtime Sandboxes
+  id: totrans-186
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 理解容器运行时沙盒
+- en: Containers run in a container runtime isolated from the host environment. The
+    process or application running in the container can interact with the kernel by
+    making syscalls. Now, we can have multiple containers (as controlled by Pods)
+    running on a single Kubernetes cluster node and therefore the same kernel. Under
+    certain conditions, vulnerabilities can lead to a situation where a process running
+    a container can “break out” of its isolated environment and access another container
+    running on the same host machine. A *container runtime sandbox* runs side-by-side
+    with the regular container runtime but adds an additional layer of security by
+    tightening process isolation.
+  id: totrans-187
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器在与主机环境隔离的容器运行时中运行。运行在容器中的进程或应用程序可以通过 syscalls 与内核交互。现在，我们可以在单个 Kubernetes
+    集群节点上运行多个容器（由 Pod 控制），因此使用相同的内核。在某些条件下，漏洞可能导致在容器运行的进程“突破”其隔离环境，并访问在同一主机上运行的另一个容器。*容器运行时沙盒*与常规容器运行时并行运行，但通过加强进程隔离添加了额外的安全层。
+- en: There are a couple of use cases where using a container runtime sandbox may
+    make sense. For example, your Kubernetes cluster handles the workload of different
+    customers with the same infrastructure, a so-called multi-tenant environment.
+    Another reason for wanting to rely on stronger container isolation is that you
+    may not trust the process or application running in a container image, as should
+    be the case if you pulled the container image from a public registry and you can’t
+    verify the creator or its runtime behavior.
+  id: totrans-188
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有几种情况下使用容器运行时沙盒可能是有意义的。例如，您的 Kubernetes 集群使用相同的基础设施处理不同客户的工作负载，这种称为多租户环境。另一个希望依赖更强容器隔离性的原因是，您可能不信任从公共注册表拉取的容器镜像中运行的进程或应用程序，特别是当您无法验证创建者或其运行时行为时。
+- en: 'Scenario: An Attacker Gains Access to Another Container'
+  id: totrans-189
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 情景：攻击者获取对另一个容器的访问权限
+- en: In this scenario, we are confronted with a developer that pulls a container
+    image from a public registry, as referenced by a Pod. The container has not been
+    scanned for security vulnerabilities. An attacker can push a new tag of the container
+    image executing malicious code. After instantiating a container from the image,
+    the malicious code running in the kernel group of container 1 can access the process
+    running in container 2\. As you can see in [Figure 5-4](#container-runtime-attacker),
+    both containers use the same kernel of the host system.
+  id: totrans-190
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这种情况下，我们面对的是开发者从公共注册表拉取容器镜像，如 Pod 所引用。该容器未经安全漏洞扫描。攻击者可以推送容器镜像的新标签来执行恶意代码。在实例化从该镜像运行的容器之后，运行在容器
+    1 的内核组中的恶意代码可以访问运行在容器 2 中的进程。正如您在[图 5-4](#container-runtime-attacker)中所看到的，两个容器使用同一主机系统的内核。
+- en: '![ckss 0504](assets/ckss_0504.png)'
+  id: totrans-191
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckss 0504](assets/ckss_0504.png)'
+- en: Figure 5-4\. An attacker gains access to another container
+  id: totrans-192
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-4\. 攻击者获取对另一个容器的访问权限
+- en: Generally speaking, it’s not a good idea to blindly trust public container images.
+    One way to ensure that such a container image runs with more isolation is the
+    container runtime sandbox. The next section will introduce you to two implementations,
+    both of which are explicitly mentioned by the curriculum.
+  id: totrans-193
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一般来说，盲目信任公共容器镜像并不是一个好主意。确保这样的容器镜像以更高的隔离运行的一种方法是容器运行时沙盒。下一节将向您介绍两种实现方式，这两种方式在课程中都有明确提到。
+- en: Available Container Runtime Sandbox Implementations
+  id: totrans-194
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 可用的容器运行时沙盒实现
+- en: In this book, we’ll only want to talk about two container runtime sandbox implementations,
+    [Kata Containers](https://katacontainers.io) and [gVisor](https://gvisor.dev).
+    Kata containers achieves container isolation by running them in a lightweight
+    virtual machine. gVisor takes a different approach. It effectively implements
+    a Linux kernel that runs on the host system. Therefore, syscalls are not shared
+    anymore across all containers on the host system.
+  id: totrans-195
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本书中，我们只讨论两种容器运行时沙箱实现，[Kata Containers](https://katacontainers.io)和[gVisor](https://gvisor.dev)。
+- en: 'A deeper discussion on the feature sets or specific use cases for those container
+    runtime sandbox implementations goes beyond the scope of this book. We’ll simply
+    learn how to use one solution as an example, gVisor, and how to tie it into Kubernetes.
+    Have a look at the talk [“Kata Containers and gVisor: a Quantitative Comparison”](https://oreil.ly/PBfEn)
+    for an in-depth comparison.'
+  id: totrans-196
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安装和配置gVisor
+- en: Installing and Configuring gVisor
+  id: totrans-197
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 示例 5-14\. 使用运行时类的Pod的YAML清单
+- en: The following [instructions](https://oreil.ly/MlSET) describe the steps required
+    to install gVisor on Linux using the `apt` package manager. You will want to repeat
+    those steps on all host machines declared as worker nodes. For the exam, you will
+    not be expected to install gVisor or Kata Containers. You can assume that the
+    container runtime sandbox has already been installed and configured.
+  id: totrans-198
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建和使用运行时类
+- en: 'Start by installing the dependencies for gVisor with the following command:'
+  id: totrans-199
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，配置用于签署归档和存储库的密钥。正如您在以下命令中所见，gVisor托管在Google存储中：
+- en: '[PRE36]'
+  id: totrans-200
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE36]'
+- en: 'Next, configure the key used to sign archives and the repository. As you can
+    see in the following commands, gVisor is hosted on Google storage:'
+  id: totrans-201
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kata containers通过在轻量级虚拟机中运行来实现容器隔离。gVisor采取了不同的方法。它有效地实现了在主机系统上运行的Linux内核。因此，主机系统上的所有容器不再共享系统调用。
+- en: '[PRE37]'
+  id: totrans-202
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE37]'
+- en: 'gVisor includes an Open Container Initiative (OCI) runtime called runsc. The
+    runsc runtime integrates with tools like Docker and Kubernetes to run container
+    runtime sandboxes. The following command installs the executable from the repository:'
+  id: totrans-203
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，重新启动containerd以使更改生效：
+- en: '[PRE38]'
+  id: totrans-204
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE38]'
+- en: 'Let’s assume we are using containerd as the container runtime. You need to
+    add some configuration to containerd to make it aware of runsc. You can find similar
+    instructions for other container runtimes in the gVisor documentation:'
+  id: totrans-205
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们可以在Pod的配置中引用运行时类名`gvisor`。[Example 5-14](#nginx-pod-gvisor)展示了一个分配了`spec.runtimeClassName`属性的Pod定义，指定了运行时类。
+- en: '[PRE39]'
+  id: totrans-206
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE39]'
+- en: 'Finally, restart containerd to let the changes take effect:'
+  id: totrans-207
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用`apply`命令创建运行时类和Pod对象：
+- en: '[PRE40]'
+  id: totrans-208
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE40]'
+- en: We successfully installed gVisor and can now configure Pods to use it.
+  id: totrans-209
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 示例 5-13\. 使用runsc处理程序定义运行时类的YAML清单
+- en: Creating and Using a Runtime Class
+  id: totrans-210
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: gVisor包含一个名为runsc的Open Container Initiative (OCI)运行时。runsc运行时与Docker和Kubernetes等工具集成，用于运行容器运行时沙箱。以下命令从存储库安装可执行文件：
+- en: It’s a two-step approach to use a container runtime sandbox in a Pod. First,
+    you need to create a runtime class. A RuntimeClass is a Kubernetes API resource
+    that defines the configuration of the container runtime. [Example 5-13](#gvisor-runtimeclass)
+    shows a YAML manifest of a container runtime that points to runsc as the handler
+    we set in the containerd configuration file earlier.
+  id: totrans-211
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设我们正在使用containerd作为容器运行时。您需要向containerd添加一些配置以使其意识到runsc。您可以在gVisor文档中找到其他容器运行时的类似说明：
+- en: Example 5-13\. YAML manifest for defining a runtime class using runsc handler
+  id: totrans-212
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 使用容器运行时沙箱在Pod中是一个两步骤的过程。首先，您需要创建一个运行时类。RuntimeClass是一个Kubernetes API资源，用于定义容器运行时的配置。[Example 5-13](#gvisor-runtimeclass)展示了一个使用runsc处理程序的容器运行时的YAML清单。
+- en: '[PRE41]'
+  id: totrans-213
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE41]'
+- en: We can now reference the runtime class name, `gvisor`, in the configuration
+    of a Pod. [Example 5-14](#nginx-pod-gvisor) shows a Pod definition that assigns
+    the runtime class using the attribute `spec.runtimeClassName`.
+  id: totrans-214
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下[instructions](https://oreil.ly/MlSET)描述了使用`apt`软件包管理器在Linux上安装gVisor所需的步骤。您需要在所有被声明为工作节点的主机机器上重复这些步骤。在考试中，您不需要安装gVisor或Kata
+    Containers。您可以假设容器运行时沙箱已经安装并配置好了。
+- en: Example 5-14\. YAML manifest for a Pod using a runtime class
+  id: totrans-215
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 从以下命令开始安装gVisor的依赖项：
+- en: '[PRE42]'
+  id: totrans-216
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE42]'
+- en: 'Create the runtime class and Pod object using the `apply` command:'
+  id: totrans-217
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于这些容器运行时沙箱实现的特性集或特定用例的深入讨论超出了本书的范围。我们将简单地学习如何使用一个解决方案作为示例，即gVisor，并如何将其与Kubernetes集成。详细比较，请查看讲座[“Kata
+    Containers和gVisor：定量比较”](https://oreil.ly/PBfEn)。
+- en: '[PRE43]'
+  id: totrans-218
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE43]'
+- en: 'You can verify that the container is running with the container runtime sandbox.
+    Simply execute the `dmesg` command to examine the kernel ring buffer. The output
+    from the command should mention gVisor, as shown in the following:'
+  id: totrans-219
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以通过设置容器运行时沙箱来验证容器是否正在运行。只需执行 `dmesg` 命令来检查内核环形缓冲区。命令的输出应该提到 gVisor，如下所示：
+- en: '[PRE44]'
+  id: totrans-220
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE44]'
+- en: Understanding Pod-to-Pod Encryption with mTLS
+  id: totrans-221
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 理解 Pod 与 Pod 之间的 mTLS 加密
+- en: In [“Using Network Policies to Restrict Pod-to-Pod Communication”](ch02.xhtml#network-policies),
+    we talked about Pod-to-Pod communication. One of the big takeaways was that every
+    Pod can talk to any other Pod by targeting its virtual IP address unless you put
+    a more restrictive network policy in place. The communication between two Pods
+    is unencrypted by default.
+  id: totrans-222
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 [“使用网络策略限制 Pod 与 Pod 通信”](ch02.xhtml#network-policies) 中，我们谈论了 Pod 与 Pod 之间的通信。一个重要的要点是，除非你制定更严格的网络策略，否则每个
+    Pod 都可以通过定位其虚拟 IP 地址与任何其他 Pod 通信。默认情况下，两个 Pod 之间的通信是未加密的。
+- en: TLS provides encryption for network communication, often in conjunction with
+    the HTTP protocol. That’s when we talk about using the HTTPS protocol for calls
+    to web pages from the browser. As part of the authentication process, the client
+    offers its client certificate to the server for proving its identity. The server
+    does not authenticate the client, though.
+  id: totrans-223
+  prefs: []
+  type: TYPE_NORMAL
+  zh: TLS 提供网络通信的加密，通常与 HTTP 协议一起使用。当我们谈论从浏览器对 Web 页面的调用时，就会涉及使用 HTTPS 协议。作为认证过程的一部分，客户端向服务器提供其客户端证书以证明其身份。但服务器不对客户端进行认证。
+- en: When loading a web page, the identity of the client, in this case the browser,
+    usually doesn’t matter. The important part is that the web page proves its identity.
+    Mutual TLS (mTLS) is like TLS, but both sides have to authenticate. This approach
+    has the following benefits. First, you achieve secure communication through encryption.
+    Second, you can verify the client identity. An attacker cannot easily impersonate
+    another Pod.
+  id: totrans-224
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在加载 Web 页面时，客户端（即浏览器）的身份通常并不重要。重要的是 Web 页面证明其身份。双向 TLS（mTLS）类似于 TLS，但双方都必须进行身份验证。这种方法有以下几个好处。首先，通过加密实现安全通信。其次，可以验证客户端身份。攻击者不能轻易冒充另一个
+    Pod。
+- en: 'Scenario: An Attacker Listens to the Communication Between Two Pods'
+  id: totrans-225
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 情景：攻击者监听两个 Pod 之间的通信
+- en: An attacker can use the default, unencrypted Pod-to-Pod network communication
+    behavior to their advantage. As you can see in [Figure 5-5](#pod-communication-attacker),
+    an attacker doesn’t even need to break into a Pod. They can simply listen to the
+    Pod-to-Pod communication by impersonating the sending or the receiving side, extract
+    sensitive information, and then use it for more advanced attack vectors.
+  id: totrans-226
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 攻击者可以利用默认的未加密 Pod 与 Pod 之间的网络通信行为来加以利用。如你在 [图 5-5](#pod-communication-attacker)
+    中所见，攻击者甚至不需要侵入 Pod。他们可以简单地通过冒充发送端或接收端来监听 Pod 与 Pod 的通信，提取敏感信息，然后用于更高级的攻击向量。
+- en: '![ckss 0505](assets/ckss_0505.png)'
+  id: totrans-227
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckss 0505](assets/ckss_0505.png)'
+- en: Figure 5-5\. An attacker listens to Pod-to-Pod communication
+  id: totrans-228
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-5\. 攻击者监听 Pod 与 Pod 之间的通信
+- en: You can mitigate the situation by setting up mTLS. The next section will briefly
+    touch on the options for making that happen.
+  id: totrans-229
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过设置 mTLS，你可以缓解这种情况。下一节将简要介绍实现这一目标的选项。
+- en: Adopting mTLS in Kubernetes
+  id: totrans-230
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 中采用 mTLS
+- en: The tricky part about implementing mTLS in a Kubernetes cluster is the management
+    of certificates. As you can imagine, we’ll have to deal with a lot of certificates
+    when implementing a microservices architecture. Those certificates are usually
+    generated by an official certificate authority (CA) to ensure that they can be
+    trusted. Requesting a certificate involves sending a certificate signing request
+    (CSR) to the CA. If the CA approves the request, it creates the certificate, then
+    signs and returns it. It’s recommended to assign short lifespans to a certificate
+    before it needs to be re-issued again. That process is called certificate rotation.
+  id: totrans-231
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 集群中实现 mTLS 的棘手部分是证书的管理。正如你可以想象的，当实施微服务架构时，我们将不得不处理大量的证书。这些证书通常由官方证书颁发机构（CA）生成，以确保它们可以信任。请求证书涉及向
+    CA 发送证书签名请求（CSR）。如果 CA 批准请求，它将创建证书，然后签名并返回。建议在证书到期之前分配较短的生命周期，然后重新发行。这个过程称为证书轮换。
+- en: It’s somewhat unclear to what degree of detail the CKS exam requires you to
+    understand mTLS. The general process of requesting and approving a certificate
+    is described in the [Kubernetes documentation](https://oreil.ly/QvtEQ).
+  id: totrans-232
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CKS考试需要您了解mTLS的详细程度尚不太清楚。请求和批准证书的一般过程在[Kubernetes文档](https://oreil.ly/QvtEQ)中有描述。
+- en: In most cases, Kubernetes administrators rely on a Kubernetes service mesh to
+    implement mTLS instead of implementing it manually. A Kubernetes service mesh,
+    such as Linkerd or Istio, is a tool for adding cross-cutting functionality to
+    your cluster, like observability and security.
+  id: totrans-233
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在大多数情况下，Kubernetes管理员依赖于Kubernetes服务网格来实现mTLS，而不是手动实现。Kubernetes服务网格（如Linkerd或Istio）是一种工具，用于为集群添加横切功能，如可观察性和安全性。
+- en: Another option is to use transparent encryption to ensure that traffic doesn’t
+    go on the wire unencrypted. Some of the popular CNI plugins, such as [Calico](https://oreil.ly/XZSpx)
+    and [Cilium](https://oreil.ly/Qsqq_), have added support for [WireGuard](https://www.wireguard.com).
+    WireGuard is an open source, lightweight, and secure Virtual Private Network (VPN)
+    solution that doesn’t require the configuration or management of encryption keys
+    or certificates. Many teams prefer WireGuard over a service mesh as it is easier
+    to manage.
+  id: totrans-234
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个选项是使用透明加密来确保流量不会在传输中未加密。一些流行的CNI插件，如[Calico](https://oreil.ly/XZSpx)和[Cilium](https://oreil.ly/Qsqq_)，已经增加了对[WireGuard](https://www.wireguard.com)的支持。WireGuard是一种开源、轻量级和安全的虚拟专用网络（VPN）解决方案，无需配置或管理加密密钥或证书。许多团队更喜欢WireGuard而不是服务网格，因为它更易于管理。
+- en: Services meshes and WireGuard are out of scope for the exam.
+  id: totrans-235
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 考试不涵盖服务网格和WireGuard。
+- en: Summary
+  id: totrans-236
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 总结
+- en: It’s important to enforce security best practices for Pods. In this chapter,
+    we reviewed different options. We looked at security contexts and how they can
+    be defined on the Pod and container level. For example, we can configure a security
+    context for a container to run with a non-root user and prevent the use of privileged
+    mode. It’s usually the responsibility of a developer to define those settings.
+    The Pod Security Admission is a Kubernetes feature that takes Pod security settings
+    one step further. You can centrally configure a Pod such that it needs to adhere
+    to certain security standards. The configured security standard can either be
+    enforced, audited, or just logged to standard output. Gatekeeper is an open source
+    project that implements the functionality of the Open Policy Agent for Kubernetes.
+    Not only can you govern the configuration for Pod objects, you can also apply
+    policies to other kinds of objects during creation time.
+  id: totrans-237
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于Pod来说，执行安全最佳实践非常重要。在本章中，我们审查了不同的选项。我们关注安全上下文以及如何在Pod和容器级别定义它们。例如，我们可以为容器配置一个安全上下文，使其以非root用户运行并防止使用特权模式。通常由开发人员负责定义这些设置。Pod安全入场是Kubernetes的一个功能，可以进一步配置Pod安全设置。配置的安全标准可以强制执行、审计或仅记录到标准输出。Gatekeeper是一个开源项目，实现了用于Kubernetes的Open
+    Policy Agent的功能。不仅可以管理Pod对象的配置，还可以在创建时对其他类型的对象应用策略。
+- en: Key-value pairs defined by Secrets are stored in etcd in plain text. You should
+    configure encryption for etcd to ensure that attackers cannot read sensitive data
+    from it. To enable encryption, create a YAML manifest for an EncryptionConfiguration,
+    which you would then pass to the API server process with the command line option
+    `--encryption-provider-config`.
+  id: totrans-238
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由Secrets定义的键值对以明文存储在etcd中。您应该配置etcd的加密，以确保攻击者无法从中读取敏感数据。要启用加密，创建一个EncryptionConfiguration的YAML清单，然后使用命令行选项`--encryption-provider-config`将其传递给API服务器进程。
+- en: Container runtime sandboxes help with isolating processes and applications to
+    a stronger degree than the regular container runtime. The projects Kata Containers
+    and gVisor are implementations of such a container runtime sandbox and can be
+    installed and configured to work with Kubernetes. We tried gVisor. After installing
+    and configuring gVisor, you will need to create a RuntimeClass object that points
+    to runsc. In the Pod configuration, point to the RuntimeClass object by name.
+  id: totrans-239
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器运行时沙盒比常规容器运行时更有效地隔离进程和应用程序。项目Kata Containers和gVisor是此类容器运行时沙盒的实现，可以安装并配置以与Kubernetes一起工作。我们尝试了gVisor。安装和配置gVisor后，您需要创建一个指向runsc的RuntimeClass对象。在Pod配置中，通过名称指向RuntimeClass对象。
+- en: Pod-to-Pod communication is unencrypted and unauthenticated by default. Mutual
+    TLS makes the process more secure. Pods communicating with one another need to
+    provide certificates to prove their identity. Implementing mTLS for a cluster
+    with hundreds of microservices is a tedious task. Each Pod running a microservice
+    needs to employ an approved certificate from a Client Authority. Services meshes
+    help with adding mTLS as a feature to a Kubernetes cluster.
+  id: totrans-240
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，Pod 到 Pod 的通信是未加密且未认证的。双向 TLS 可以使这个过程更安全。互相通信的 Pods 需要提供证书来证明它们的身份。为具有数百个微服务的集群实现
+    mTLS 是一个繁琐的任务。每个运行微服务的 Pod 需要使用来自客户机机构的批准证书。服务网格可以作为 Kubernetes 集群中添加 mTLS 功能的一种方式。
+- en: Exam Essentials
+  id: totrans-241
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 考试要点
+- en: Practice the use of core Kubernetes features and external tools to govern security
+    settings.
+  id: totrans-242
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 练习使用核心 Kubernetes 功能和外部工具来管理安全设置。
+- en: In the course of this chapter, we looked at OS-level security settings and how
+    to govern them with different core features and external tooling. You need to
+    understand the different options, their benefits and limitations, and be able
+    to apply them to implement contextual requirements. Practice the use of security
+    contexts, Pod Security Admission, and Open Policy Agent Gatekeeper. The Kubernetes
+    ecosystem offers more tooling in this space. Feel free to explore those on your
+    own to expand your horizon.
+  id: totrans-243
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章的过程中，我们探讨了操作系统级别的安全设置及如何通过不同的核心功能和外部工具进行管理。您需要了解不同选项、它们的优势和局限性，并能够根据情境要求应用它们。练习使用安全上下文、Pod
+    安全审核和 Open Policy Agent Gatekeeper。Kubernetes 生态系统在这方面提供了更多的工具。可以自行探索以扩展视野。
+- en: Understand how etcd manages Secrets data.
+  id: totrans-244
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 了解 etcd 如何管理 Secrets 数据。
+- en: The CKA exam already covers the workflow of creating and using Secrets to inject
+    sensitive configuration data into Pods. I am assuming that you already know how
+    to do this. Every Secret key-value pair is stored in etcd. Expand your knowledge
+    of Secret management by learning how to encrypt etcd so that an attacker with
+    access to a host running etcd isn’t able to read information in plain text.
+  id: totrans-245
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CKA 考试已经涵盖了使用 Secrets 将敏感配置数据注入到 Pods 的工作流程。我假设您已经知道如何操作。每个 Secret 的键值对都存储在
+    etcd 中。通过学习如何加密 etcd 来扩展您对 Secret 管理的知识，这样即使攻击者能访问运行 etcd 的主机，也无法以明文读取信息。
+- en: Know how to configure the use of a container runtime sandbox.
+  id: totrans-246
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 知道如何配置容器运行时沙盒的使用。
+- en: Container runtime sandboxes help with adding stricter isolation to containers.
+    You will not be expected to install a container runtime sandbox, such as Kata
+    Containers or gVisor. You do need to understand the process for configuring a
+    container runtime sandbox with the help of a RuntimeClass object and how to assign
+    the RuntimeClass to a Pod by name.
+  id: totrans-247
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器运行时沙盒有助于为容器增加更严格的隔离。您不需要安装容器运行时沙盒，如 Kata Containers 或 gVisor。但您需要了解如何通过 RuntimeClass
+    对象配置容器运行时沙盒的过程，并将 RuntimeClass 分配给 Pod 名称。
+- en: Gain awareness of mTLS.
+  id: totrans-248
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 了解 mTLS 的重要性。
+- en: Setting up mTLS for all microservices running in a Pod can be extremely tedious
+    due to certificate management. For the exam, understand the general use case for
+    wanting to set up mTLS for Pod-to-Pod communication. You are likely not expected
+    to actually implement it manually, though. Production Kubernetes clusters use
+    services meshes to provide mTLS as a feature.
+  id: totrans-249
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为所有在 Pod 中运行的微服务设置 mTLS 可能因证书管理而非常繁琐。在考试中，了解希望为 Pod 到 Pod 通信设置 mTLS 的一般用例。尽管您可能不需要手动实现它，但生产
+    Kubernetes 集群使用服务网格提供 mTLS 作为一种功能。
+- en: Sample Exercises
+  id: totrans-250
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 样例练习
+- en: Solutions to these exercises are available in the [Appendix](app01.xhtml#appendix-a).
+  id: totrans-251
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些练习的解决方案可以在 [附录](app01.xhtml#appendix-a) 中找到。
+- en: 'Create a Pod named `busybox-security-context` with the container image `busybox:1.28`
+    that runs the command `sh -c sleep 1h`. Add a Volume of type `emptydir` and mount
+    it to the path `/data/test`. Configure a security context with the following attributes:
+    `runAsUser: 1000`, `runAsGroup: 3000`, and `fsGroup: 2000`. Furthermore, set the
+    attribute `allowPrivilegeEscalation` to `false`.'
+  id: totrans-252
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: '创建一个名为 `busybox-security-context` 的 Pod，使用容器镜像 `busybox:1.28`，运行命令 `sh -c sleep
+    1h`。添加一个类型为 `emptydir` 的 Volume，并将其挂载到路径 `/data/test`。配置安全上下文，包括以下属性：`runAsUser:
+    1000`，`runAsGroup: 3000`，`fsGroup: 2000`。此外，将属性 `allowPrivilegeEscalation` 设置为
+    `false`。'
+- en: Shell into the container, navigate to the directory `/data/test`, and create
+    the file named `hello.txt`. Check the group assigned to the file. What’s the value?
+    Exit out of the container.
+  id: totrans-253
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 登入容器，导航到目录 `/data/test`，并创建名为 `hello.txt` 的文件。检查文件分配的群组。数值是多少？退出容器。
+- en: Create a Pod Security Admission (PSA) rule. In the namespace called `audited`,
+    create a Pod Security Standard (PSS) with the level `baseline` that should be
+    rendered to the console.
+  id: totrans-254
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 创建一个 Pod 安全性审核（PSA）规则。在名为 `audited` 的命名空间中，创建一个 Pod 安全性标准（PSS），其级别为 `baseline`，该信息应该渲染到控制台。
+- en: Try to create a Pod in the namespace that violates the PSS and produces a message
+    on the console log. You can provide any name, container image, and security configuration
+    you like. Will the Pod be created? What PSA level needs to be configured to prevent
+    the creation of the Pod?
+  id: totrans-255
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 尝试在违反 PSS 的命名空间中创建一个 Pod，并在控制台日志中输出消息。您可以提供任何名称、容器映像和安全配置。Pod 是否被创建？需要配置哪些 PSA
+    级别来防止创建该 Pod？
+- en: Install Gatekeeper on your cluster. Create a Gatekeeper ConstraintTemplate object
+    that defines the minimum and maximum number of replicas controlled by a ReplicaSet.
+    Instantiate a Constraint object that uses the ConstraintTemplate. Set the minimum
+    number of replicas to 3 and the maximum number to 10.
+  id: totrans-256
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 在集群上安装 Gatekeeper。创建一个 Gatekeeper ConstraintTemplate 对象，定义一个副本集所控制的副本数的最小和最大值。实例化一个使用该
+    ConstraintTemplate 的约束对象。设置最小副本数为 3，最大副本数为 10。
+- en: Create a Deployment object that sets the number of replicas to 15\. Gatekeeper
+    should not allow the Deployment, ReplicaSet, and Pods to be created. An error
+    message should be rendered. Try again to create the Deployment object but with
+    a replica number of 7\. Verify that all objects have been created successfully.
+  id: totrans-257
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 创建   创建一个部署对象，将副本数设置为15。门禁不允许创建该部署、副本集和 Pod，应该渲染一个错误消息。尝试再次创建副本数为7的部署对象，验证是否成功创建了所有对象。
+- en: Configure encryption for etcd using the `aescbc` provider. Create a new Secret
+    object of type `Opaque`. Provide the key-value pair `api-key=YZvkiWUkycvspyGHk3fQRAkt`.
+    Query for the value of the Secret using etcdctl. What’s the encrypted value?
+  id: totrans-258
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 使用 `aescbc` 提供者为 etcd 配置加密。创建一个类型为 `Opaque` 的密钥对象。提供键值对 `api-key=YZvkiWUkycvspyGHk3fQRAkt`。使用
+    etcdctl 查询该 Secret 的值，查看加密值是什么。
+- en: Navigate to the directory *app-a/ch05/gvisor* of the checked-out GitHub repository
+    [*bmuschko/cks-study-guide*](https://oreil.ly/sImXZ). Start up the VMs running
+    the cluster using the command `vagrant up`. The cluster consists of a single control
+    plane node named `kube-control-plane` and one worker node named `kube-worker-1`.
+    Once done, shut down the cluster using `vagrant destroy -f`.
+  id: totrans-259
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 导航到从 GitHub 仓库[*bmuschko/cks-study-guide*](https://oreil.ly/sImXZ)checkout 的目录
+    *app-a/ch05/gvisor*，启动运行集群的虚拟机使用命令 `vagrant up`。该集群包括一个名为 `kube-control-plane`
+    的单个控制平面节点和一个名为 `kube-worker-1` 的工作节点。完成后，使用 `vagrant destroy -f` 关闭集群。
+- en: gVisor has been installed in the VM `kube-worker-1`. Shell into the VM and create
+    a RuntimeClass object named `container-runtime-sandbox` with runsc as the handler.
+    Then create a Pod with the name `nginx` and the container image `nginx:1.23.2`
+    and assign the RuntimeClass to it.
+  id: totrans-260
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: gVisor 已经安装在虚拟机 `kube-worker-1` 上。进入该虚拟机并创建一个名为 `container-runtime-sandbox`
+    的 RuntimeClass 对象，使用 runsc 作为处理程序。然后创建一个名为 `nginx` 的 Pod，并使用容器映像 `nginx:1.23.2`
+    分配该 RuntimeClass。
+- en: '*Prerequisite:* This exercise requires the installation of the tools [Vagrant](https://oreil.ly/FiyeH)
+    and [VirtualBox](https://oreil.ly/WW8IK).'
+  id: totrans-261
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: '*先决条件*：此练习需要安装工具 [Vagrant](https://oreil.ly/FiyeH) 和 [VirtualBox](https://oreil.ly/WW8IK)。'

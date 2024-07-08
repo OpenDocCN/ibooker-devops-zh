@@ -1,0 +1,935 @@
+- en: Chapter 12\. Multicluster Communication with Linkerd
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第 12 章\. 使用 Linkerd 进行多集群通信
+- en: Every Kubernetes cluster represents a single security and operational failure
+    domain. As you look at scaling out your platform to accommodate more teams, more
+    customers, and more use cases, you will inevitably run into the question of how
+    you want to distribute your apps. Do you want to use large regional clusters with
+    all your production apps in one place? Do you want to use purpose-built clusters
+    for each app or each team? Most teams end up somewhere in the middle, with some
+    shared clusters and some purpose-built for certain apps or categories of apps.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个 Kubernetes 集群都代表着一个单一的安全和操作故障域。当你考虑扩展你的平台以适应更多团队、更多客户和更多用例时，你将不可避免地遇到一个问题：你希望如何分布你的应用程序？你想要使用大型区域性集群将所有生产应用程序放在一个地方吗？还是想要为每个应用程序或每个团队使用专门构建的集群？大多数团队最终会在中间某个地方，一些集群是共享的，而另一些是为某些应用程序或应用程序类别专门构建的。
+- en: Linkerd aims to make the technical implementation problems around running multiple
+    clusters easier to solve.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linkerd 的目标是简化运行多个集群时围绕技术实施问题的解决方案。
+- en: Types of Multicluster Setups
+  id: totrans-3
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 多集群配置类型
+- en: 'Linkerd supports two styles of multicluster configurations: *gateway-based
+    multicluster* and *Pod-to-Pod multicluster*. Gateway-based multicluster setups
+    are easier to deploy; Pod-to-Pod setups offer more advanced functionality. You
+    can choose which is best for a given situation, and you can even use both in the
+    same cluster at the same time, if desired.'
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linkerd 支持两种多集群配置风格：*基于网关的多集群* 和 *Pod-to-Pod 多集群*。基于网关的多集群设置更容易部署；Pod-to-Pod
+    设置提供更高级的功能。你可以根据具体情况选择最合适的方式，并且如果需要的话，甚至可以在同一集群中同时使用两种方式。
+- en: Gateway-Based Multicluster
+  id: totrans-5
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 基于网关的多集群
+- en: 'Linkerd’s gateway-based multicluster setup routes communications between clusters
+    through a special workload that Linkerd calls a gateway, which is reachable via
+    a LoadBalancer Service. This means that gateway-based multicluster connections
+    don’t require any particularly demanding network configuration: all that’s required
+    for gateway-based multicluster communications is that Pods in a given cluster
+    can connect to the LoadBalancer of the other cluster’s gateway, no matter how
+    that happens. The network also doesn’t need to be secure: Linkerd will take care
+    of that with its usual mTLS.'
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linkerd 的基于网关的多集群设置通过 Linkerd 称为网关的特殊工作负载路由集群之间的通信，这些网关可通过 LoadBalancer 服务访问。这意味着基于网关的多集群连接不需要特别复杂的网络配置：基于网关的多集群通信所需的只是集群中的
+    Pod 能够连接到另一个集群网关的 LoadBalancer，不管连接方式如何。网络也不需要安全：Linkerd 将通过其通常的 mTLS 处理此问题。
+- en: The gateway-based multicluster architecture is shown in [Figure 12-1](#gateway-based-multicluster).
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 图表 12-1 显示了基于网关的多集群架构。
+- en: '![luar 1201](assets/luar_1201.png)'
+  id: totrans-8
+  prefs: []
+  type: TYPE_IMG
+  zh: '![luar 1201](assets/luar_1201.png)'
+- en: Figure 12-1\. Gateway multicluster architecture
+  id: totrans-9
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图表 12-1\. 网关多集群架构
+- en: The numbers in the diagram show the number of network hops made when the `vote-bot`
+    in cluster 1 talks to `web` in cluster 2, which then talks to `vote` back in cluster
+    1\. (This actually happens in emojivoto.) Following the path, you’ll see a total
+    of six hops. This can complicate things sometimes, which led to the development
+    of Pod-to-Pod multicluster.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 图表中的数字显示了当 cluster 1 中的 `vote-bot` 与 cluster 2 中的 `web` 交流时所需的网络跳数，然后再回到 cluster
+    1 中的 `vote`。 （实际上在 emojivoto 中发生了这种情况。）沿着这条路径，你会看到总共六个跳跃。这有时可能会复杂化事物，因此产生了 Pod-to-Pod
+    多集群的发展。
+- en: Pod-to-Pod Multicluster
+  id: totrans-11
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Pod-to-Pod 多集群
+- en: A Pod-to-Pod multicluster configuration, by contrast, relies on your Pods being
+    able to talk *directly* to each other, even across cluster boundaries. This can
+    be quite a bit more challenging to set up, because your cluster provider needs
+    to be able to support it. If you’re creating your own bare-metal clusters, this
+    is probably quite possible. If you’re using a cloud provider, it will depend on
+    the provider.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 相比之下，Pod-to-Pod 多集群配置要求你的 Pod 能够**直接**互相通信，甚至跨集群边界。这可能更具挑战性，因为你的集群供应商需要支持此功能。如果你正在创建自己的裸金属集群，这可能是完全可行的。如果你使用的是云提供商，则取决于提供商。
+- en: The Pod-to-Pod multicluster architecture is shown in [Figure 12-2](#gatewayless-multicluster).
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 图表 12-2 显示了 Pod-to-Pod 多集群架构。
+- en: '![luar 1202](assets/luar_1202.png)'
+  id: totrans-14
+  prefs: []
+  type: TYPE_IMG
+  zh: '![luar 1202](assets/luar_1202.png)'
+- en: Figure 12-2\. Pod-to-Pod multicluster architecture
+  id: totrans-15
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图表 12-2\. Pod-to-Pod 多集群架构
+- en: Following the path from `vote-bot` to `web` and back to `vote` here, we see
+    only two hops, the same as we would see in a single cluster.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 沿着从`vote-bot`到`web`再到`vote`的路径，我们只看到两次跳转，与单个集群中看到的相同。
+- en: Gateways Versus Pod-to-Pod
+  id: totrans-17
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 网关与Pod到Pod
+- en: 'As with many things in computing, the mode to choose depends on your situation:'
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 像计算中的许多事物一样，选择的模式取决于您的情况：
+- en: The gateway-based multicluster mode is unquestionably simpler to set up; Pod-to-Pod
+    requires more advanced networking support.
+  id: totrans-19
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 基于网关的多集群模式无疑比Pod到Pod模式更容易设置；Pod到Pod需要更高级的网络支持。
+- en: Pod-to-Pod is marginally faster than gateway-based, since there’s no hop through
+    a gateway. With Linkerd this tends to be negligible, though.
+  id: totrans-20
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Pod到Pod比基于网关的方式稍快，因为没有经过网关的跳转。不过，使用Linkerd时这种差异往往可以忽略不计。
+- en: A potentially more important concern is that in a gateway-based multicluster
+    setup, any call from another cluster will appear as having the identity *of the
+    gateway*, not the actual originating workload.
+  id: totrans-21
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 可能更重要的一个问题是，在基于网关的多集群设置中，来自另一个集群的任何调用都将显示为具有网关的身份，而不是实际的原始工作负载。
+- en: Another important concern is that in Pod-to-Pod mode, the Linkerd `destination`
+    service also needs to be able to connect to the remote Kubernetes API server.
+  id: totrans-22
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 另一个重要的问题是，在Pod到Pod模式下，Linkerd的`destination`服务也需要能够连接到远程Kubernetes API服务器。
+- en: Remember that the two modes can coexist in the same cluster as long as you have
+    the correct IP connectivity. You have an enormous amount of flexibility in how
+    you work with multicluster communications.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 记住，只要有正确的IP连接性，两种模式可以在同一个集群中共存。在处理多集群通信时，您有极大的灵活性。
+- en: Multicluster Certificates
+  id: totrans-24
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 多集群证书
+- en: Whichever kind of multicluster setup you decide to use, your clusters’ trust
+    hierarchies need a common root for Linkerd to establish a multicluster connection
+    between clusters. By far the easiest way to do this is to have them share a common
+    trust anchor, as shown in [Figure 12-3](#multicluster-trust-hierarchy-2). This
+    also implies that if you want clusters to be isolated from each other, they *must
+    not* share the same trust anchor!
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 无论您决定使用哪种多集群设置，您的集群信任层级都需要Linkerd之间建立多集群连接的共同根。迄今为止，最简单的方法是让它们共享一个共同的信任锚点，如[图12-3](#multicluster-trust-hierarchy-2)所示。这也意味着，如果您希望集群彼此隔离，它们*绝对不能*共享相同的信任锚点！
+- en: '![luar 1203](assets/luar_1203.png)'
+  id: totrans-26
+  prefs: []
+  type: TYPE_IMG
+  zh: '![luar 1203](assets/luar_1203.png)'
+- en: Figure 12-3\. A multicluster trust hierarchy
+  id: totrans-27
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图12-3\. 多集群信任层级
+- en: The simplest way to manage this is usually to have a single trust anchor for
+    each environment level (Dev, UAT, Production, Test, etc.), so that, for example,
+    development clusters can peer with each other but not with production clusters.
+    Likewise, it’s often simplest to set up a CA for each of these levels, too, so
+    that each CA needs to worry about only one kind of certificate.
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常，管理这个最简单的方法是每个环境级别（开发、UAT、生产、测试等）拥有一个单一的信任锚点，因此，例如，开发集群可以互相对等，但不能与生产集群对等。同样，每个级别设置CA通常也是最简单的方式之一，这样每个CA只需关注一种证书类型。
+- en: Don’t Share Identity Issuers
+  id: totrans-29
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 不共享身份发行者
+- en: Even in multicluster setups, your clusters should not share identity issuer
+    certificates. Keeping the identity issuers separate is important both for being
+    certain of where a given workload identity originated and for simplifying the
+    operational aspects of rotating the identity issuers.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 即使在多集群设置中，您的集群也不应共享身份发行者证书。保持身份发行者分离对于确保工作负载身份的来源以及简化身份发行者轮换的操作方面都至关重要。
+- en: Ultimately, the needs of your environment will dictate how you set up certificates
+    and CAs.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最终，您的环境需求将决定您如何设置证书和CA。
+- en: Cross-Cluster Service Discovery
+  id: totrans-32
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 跨集群服务发现
+- en: 'The last piece of the multicluster puzzle is service discovery: how do workloads
+    in one cluster know where to find workloads in other clusters? Linkerd tackles
+    this problem with the *service mirror*, which is a part of the control plane supplied
+    by the Multicluster extension.'
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 多集群难题的最后一部分是服务发现：一个集群中的工作负载如何知道如何找到其他集群中的工作负载？Linkerd通过*服务镜像*解决了这个问题，它是Multicluster扩展提供的控制平面的一部分。
+- en: 'As its name implies, the service mirror arranges for Services in one cluster
+    to appear in other clusters. Exactly how it sets up the mirrored Services depends
+    on the type of multicluster configuration you’re using:'
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如其名称所示，服务镜像安排一个集群中的服务在其他集群中出现。它如何设置镜像服务取决于您使用的多集群配置类型：
+- en: Gateway-based multicluster
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 基于网关的多集群
+- en: Connections to a mirrored Service will be redirected to the gateway in front
+    of the original Service. The gateway then knows how to carry the requests on to
+    a real Pod, including endpoint selection, policy enforcement, etc.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 连接到镜像服务将被重定向到原始服务前面的网关。然后，网关知道如何将请求传递给真实的 Pod，包括端点选择、策略执行等。
+- en: Pod-to-Pod multicluster
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod 到 Pod 多集群
+- en: Connections to a mirrored Service will simply transit the network directly to
+    the other Pod. The Linkerd proxy next to the workload making the connection knows
+    which endpoints are available directly, so it handles load balancing, policy enforcement,
+    etc.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 连接到镜像服务将直接通过网络转发到另一个 Pod。在与进行连接的工作负载旁边的 Linkerd 代理知道直接可用的端点，因此它处理负载均衡、策略执行等。
+- en: 'The service mirror doesn’t blindly mirror every Service; it only mirrors those
+    with a `mirror.linkerd.io/exported` label. The value of the label, again, depends
+    on the multicluster mode:'
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 服务镜像不会盲目地镜像每个服务；它只会镜像那些带有 `mirror.linkerd.io/exported` 标签的服务。标签的值，再次强调，取决于多集群模式：
+- en: '`mirror.linkerd.io/exported: true`'
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`mirror.linkerd.io/exported: true`'
+- en: For gateway-based multicluster configurations. The service mirror will expect
+    there to be a gateway for the remote cluster, and it will set up the mirrored
+    Service to use it.
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 适用于基于网关的多集群配置。服务镜像将期望远程集群有一个网关，并将设置镜像服务来使用它。
+- en: '`mirror.linkerd.io/exported: remote-discovery`'
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`mirror.linkerd.io/exported: remote-discovery`'
+- en: For Pod-to-Pod multicluster configurations. The service mirror will set up the
+    mirrored Service to go directly to the original Pods.
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 适用于 Pod 到 Pod 多集群配置。服务镜像将设置镜像服务直接转发到原始 Pod。
+- en: It’s also worth noting that the service mirror needs permission to talk to the
+    remote cluster’s Kubernetes API server. Credentials for this are handled by the
+    Linkerd Link resource, created with the `linkerd multicluster link` CLI command.
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 还值得注意的是，服务镜像需要权限与远程集群的 Kubernetes API 服务器通信。此权限由 Linkerd Link 资源处理，通过 `linkerd
+    multicluster link` CLI 命令创建。
+- en: Links and GitOps
+  id: totrans-45
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 链接和 GitOps
+- en: 'Link resources are actually a little bit more imperative than they should be:
+    running the `linkerd multicluster link` command creates a credentials Secret,
+    a Link resource, and the service mirror controller. Unfortunately, it’s extremely
+    hard to replicate everything without actually running the command right now.'
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 链接资源实际上比它们应该的要更加紧急：运行 `linkerd multicluster link` 命令会创建一个凭据密钥、一个链接资源和服务镜像控制器。不幸的是，目前在没有实际运行该命令的情况下复制所有内容非常困难。
+- en: With all of that background, we can start setting up an example multicluster
+    architecture.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有了这些背景知识，我们可以开始设置一个示例多集群架构。
+- en: Setting Up for Multicluster
+  id: totrans-48
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 设置多集群环境
+- en: Multicluster Linkerd *always* requires that you be able to route IP traffic
+    between your clusters. In some cases, it also requires that all clusters have
+    distinct, nonoverlapping cluster and service CIDR ranges.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 多集群 Linkerd *始终* 要求您能够在集群之间路由 IP 流量。在某些情况下，它还要求所有集群具有不同且不重叠的集群和服务 CIDR 范围。
+- en: Obviously, ensuring that these requirements are met is a bit outside the scope
+    of the service mesh! However, to demonstrate a multicluster setup in this chapter,
+    we’ll be creating two k3d clusters, and we’ll need to make sure the requirements
+    are met when we do so. We’ll call out where we’re doing k3d-specific infrastructure
+    things as we go.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 显然，确保满足这些要求有点超出了服务网格的范围！但是，在本章中演示多集群设置时，我们将创建两个 k3d 集群，并在执行时确保满足这些要求。我们将在进行
+    k3d 特定基础设施操作时进行说明。
+- en: First, as shown in [Example 12-1](#EX-mc-creating-clusters), we’ll create two
+    k3d clusters attached to the same Docker network, and we’ll give them independent
+    cluster and service CIDRs so that we can use this setup either for gateway-based
+    multicluster or for Pod-to-Pod multicluster mode.
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，如 [示例 12-1](#EX-mc-creating-clusters) 所示，我们将创建两个连接到同一 Docker 网络的 k3d 集群，并给它们分配独立的集群和服务
+    CIDR，以便我们可以在基于网关的多集群或 Pod 到 Pod 多集群模式中使用此设置。
+- en: This entire block is k3d-specific, unsurprisingly!
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这整个区块显然是 k3d 特定的！
+- en: Example 12-1\. Creating clusters
+  id: totrans-53
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 12-1\. 创建集群
+- en: '[PRE0]'
+  id: totrans-54
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: Note that both clusters are told to use the same Docker network (`--network=mc-network`),
+    but they have independent, nonoverlapping CIDR ranges.
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注意，两个集群都被告知使用相同的 Docker 网络 (`--network=mc-network`)，但它们具有独立且不重叠的 CIDR 范围。
+- en: We’ll continue by setting up IP routing between clusters, as shown in [Example 12-2](#EX-mc-ip-routing).
+    The `docker exec` commands here are k3d-specific, but the idea of running the
+    `ip route add` command on the Nodes themselves is actually not k3d-specific.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将继续通过设置集群之间的 IP 路由来进行，如 [示例 12-2](#EX-mc-ip-routing) 所示。这里的 `docker exec`
+    命令是特定于 k3d 的，但在节点上运行 `ip route add` 命令的思路实际上并非特定于 k3d。
+- en: Example 12-2\. Setting up IP routing
+  id: totrans-57
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 12-2\. 设置 IP 路由
+- en: '[PRE1]'
+  id: totrans-58
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: Once we have routing set up, it’s time to create new certificates using `step`,
+    as shown in [Example 12-3](#EX-mc-create-certs). As noted previously, you’ll need
+    to use the same trust anchor for every cluster, no matter what kind of cluster
+    you’re using.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦我们设置好路由，就可以使用 `step` 创建新的证书，如 [示例 12-3](#EX-mc-create-certs) 所示。如前所述，无论您使用什么类型的集群，您都需要使用相同的信任锚。
+- en: Example 12-3\. Creating certificates for multicluster
+  id: totrans-60
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 12-3\. 为多集群创建证书
+- en: '[PRE2]'
+  id: totrans-61
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: Finally, given our certificates, we can install Linkerd and the Viz extension!
+    This is shown in [Example 12-4](#EX-mc-install-linkerd).
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，考虑到我们的证书，我们可以安装 Linkerd 和 Viz 扩展！这在 [示例 12-4](#EX-mc-install-linkerd) 中显示。
+- en: Be Careful of Contexts!
+  id: totrans-63
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 要注意上下文！
+- en: We have personally made far more mistakes than we’d care to admit to when working
+    with multicluster setups. A truly embarrassing amount of the time, the problem
+    was because we ran a `kubectl` command against the wrong cluster—so pay attention
+    to those `--context` arguments!
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在处理多集群设置时，我们个人犯了比愿意承认的更多错误。尴尬的是，大部分问题是因为我们对错误的集群运行了 `kubectl` 命令，所以请注意那些 `--context`
+    参数！
+- en: Alternatively, just set up a window for each cluster and work that way. This
+    works well if you have separate Kubernetes configuration files and can set the
+    `KUBECONFIG` variable differently depending on which cluster you want.
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 或者，为每个集群设置一个窗口并进行工作。如果您有单独的 Kubernetes 配置文件，并且可以根据需要设置 `KUBECONFIG` 变量，那么这种方法效果很好。
+- en: Example 12-4\. Installing Linkerd
+  id: totrans-66
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 12-4\. 安装 Linkerd
+- en: '[PRE3]'
+  id: totrans-67
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: At this point, we have to decide whether we’re using a gateway-based or Pod-to-Pod
+    multicluster architecture, because what we do from this point forward changes.
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此时，我们必须决定是否使用基于网关或 Pod 到 Pod 的多集群架构，因为从这一点开始我们的做法会发生变化。
+- en: Continuing with a Gateway-Based Setup
+  id: totrans-69
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 继续使用基于网关的设置
+- en: If you want a Pod-to-Pod setup, skip ahead to [“Continuing with a Pod-to-Pod
+    Setup”](#continuing_with_a_pod-to-pod_setup_ch12_LUAR_multicluster_1708965399165).
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您想要一个 Pod 到 Pod 的设置，请跳到 [“继续使用 Pod 到 Pod 的设置”](#continuing_with_a_pod-to-pod_setup_ch12_LUAR_multicluster_1708965399165)。
+- en: To continue with gateway-based multicluster mode, we install the Linkerd Multicluster
+    extension as shown in [Example 12-5](#EX-mc-install-with-gateways). This extension
+    also ships with the core Linkerd CLI, so you needn’t install an extra command
+    to use it. This is the default way to install Linkerd Multicluster, since gateway-based
+    multicluster mode predates Pod-to-Pod.
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要继续使用基于网关的多集群模式，请按照 [示例 12-5](#EX-mc-install-with-gateways) 中所示安装 Linkerd Multicluster
+    扩展。此扩展还随着核心 Linkerd CLI 一起提供，因此您无需安装额外的命令来使用它。这是安装 Linkerd Multicluster 的默认方式，因为基于网关的多集群模式早于
+    Pod 到 Pod。
+- en: Example 12-5\. Installing Linkerd Multicluster with gateways
+  id: totrans-72
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 12-5\. 使用网关安装 Linkerd Multicluster
+- en: '[PRE4]'
+  id: totrans-73
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: After that, we’ll need to link our clusters together using the gateways, as
+    shown in [Example 12-6](#EX-mc-link-with-gateways).
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，我们需要使用网关将我们的集群连接在一起，如 [示例 12-6](#EX-mc-link-with-gateways) 所示。
+- en: k3d and --api-server-address
+  id: totrans-75
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: k3d 和 --api-server-address
+- en: 'k3d clusters are weird: they always create Kubernetes contexts that say that
+    the Kubernetes API server is on localhost. With our multicluster setup on the
+    same Docker network, our `cluster1` cannot use localhost to talk to `cluster2`,
+    or vice versa.'
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: k3d 集群很奇怪：它们总是创建 Kubernetes 上下文，说 Kubernetes API 服务器在 localhost 上。在同一个 Docker
+    网络上进行我们的多集群设置时，我们的 `cluster1` 不能使用 localhost 与 `cluster2` 或反之间进行通信。
+- en: Therefore, for k3d, we have to use `--api-server-address` to override the address
+    with a routable IP address for the other cluster. This is specific to k3d.
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，对于 k3d，我们必须使用 `--api-server-address` 来覆盖地址，使用可路由的 IP 地址用于其他集群。这是特定于 k3d 的。
+- en: Example 12-6\. Linking the clusters with gateways
+  id: totrans-78
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 12-6\. 使用网关连接集群
+- en: '[PRE5]'
+  id: totrans-79
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: '[PRE6]'
+  id: totrans-80
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: At this point, skip ahead to [“Multicluster Gotchas”](#directions_and_contexts_ch12).
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此时，请跳到 [“多集群注意事项”](#directions_and_contexts_ch12)。
+- en: Continuing with a Pod-to-Pod Setup
+  id: totrans-82
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 继续使用 Pod 到 Pod 的设置
+- en: If you want a gateway-based setup, go back to [“Continuing with a Gateway-Based
+    Setup”](#continuing_with_a_gateway-based_setup_ch12_LUAR_multicluster_1708965417142).
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你想要一个基于网关的设置，请回到 [“继续使用基于网关的设置”](#continuing_with_a_gateway-based_setup_ch12_LUAR_multicluster_1708965417142)。
+- en: To continue with Pod-to-Pod multicluster mode, we install the Linkerd Multicluster
+    extension as shown in [Example 12-7](#EX-mc-install-pod-to-pod), using the `--gateway
+    false` flag.
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要继续使用Pod对Pod多集群模式，我们按照[示例 12-7](#EX-mc-install-pod-to-pod)中显示的方法安装Linkerd多集群扩展，使用`--gateway
+    false`标志。
+- en: Example 12-7\. Installing Linkerd Multicluster Pod-to-Pod
+  id: totrans-85
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 12-7\. 安装Linkerd多集群Pod对Pod
+- en: '[PRE7]'
+  id: totrans-86
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: Now we need to link our clusters, as shown in [Example 12-8](#EX-mc-link-pod-to-pod).
+    Again, we need the `--gateway false` flag (and we only need `--api-server-address`
+    for k3d).
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，我们需要链接我们的集群，如[示例 12-8](#EX-mc-link-pod-to-pod)所示。再次需要`--gateway false`标志（并且我们只需要`--api-server-address`用于k3d）。
+- en: Example 12-8\. Linking the clusters Pod-to-Pod
+  id: totrans-88
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 12-8\. Pod对Pod链接集群
+- en: '[PRE8]'
+  id: totrans-89
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: '[PRE9]'
+  id: totrans-90
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: Multicluster Gotchas
+  id: totrans-91
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 多集群问题
+- en: 'Irrespective of whether you’re setting up for gateway-based multicluster or
+    Pod-to-Pod multicluster, there are two things that are always very important to
+    bear in mind:'
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 无论您是为基于网关的多集群还是Pod对Pod多集群设置，有两件事情始终非常重要需要记住：
+- en: Directions, contexts, and links
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 方向、上下文和链接
+- en: Every `linkerd multicluster link` command creates a unidirectional link. Running
+    a `link` command in the `cluster1` context and applying it to the `cluster2` context
+    is giving `cluster2` the permissions and DNS information needed to communicate
+    with `cluster1`. Basically, running the `link` command in the `cluster1` context
+    gathers information and credentials *about* `cluster1`; applying it in the `cluster2`
+    context gives everything *to* `cluster2`.
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个`linkerd multicluster link`命令都创建一个单向链接。在`cluster1`上下文中运行`link`命令，并将其应用于`cluster2`上下文，是将权限和DNS信息提供给`cluster2`，以便与`cluster1`通信。基本上，在`cluster1`上下文中运行`link`命令收集关于`cluster1`的信息和凭据；在`cluster2`上下文中应用它则将所有内容提供给`cluster2`。
+- en: In our example setup (whether gateway or Pod-to-Pod), we run two links, one
+    in each direction. In most two-cluster setups, this makes sense, but it’s definitely
+    not required.
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在我们的示例设置中（无论是基于网关还是Pod对Pod），我们分别运行两个链接。在大多数双集群设置中，这是有道理的，但绝对不是必需的。
+- en: Checking Your connections
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 检查您的连接
+- en: We’ve helped a lot of folks troubleshoot their multicluster setups, and the
+    most common problem we’ve seen is a lack of connectivity between the clusters.
+    When you’re debugging multicluster setups, the first thing to check is *always*
+    to make sure that you have the appropriate connectivity between your clusters.
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们帮助过很多人解决他们的多集群设置问题，最常见的问题是集群之间的连接问题。在调试多集群设置时，首先要检查的*总是*确保您的集群之间有适当的连接。
+- en: You can usually do this very effectively simply by running a Pod in one cluster
+    with tools like `curl`, `dig`, etc., and then trying to make simple HTTP calls
+    to the other cluster.
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常，您可以通过在一个集群中运行一个带有`curl`、`dig`等工具的Pod，然后尝试向另一个集群发出简单的HTTP调用来非常有效地进行此操作。
+- en: Deploying and Connecting an Application
+  id: totrans-99
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 部署和连接应用
+- en: At this point, we have our clusters connected, and we need to begin taking advantage
+    of our links. In [Example 12-9](#EX-mc-install-emojivoto) we will deploy the [emojivoto
+    sample application](https://oreil.ly/qfGlx) across two clusters.
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此时，我们的集群已经连接，我们需要开始利用我们的链接。在[示例 12-9](#EX-mc-install-emojivoto)中，我们将在两个集群中部署[emojivoto示例应用程序](https://oreil.ly/qfGlx)。
+- en: Example 12-9\. Deploying a multicluster application
+  id: totrans-101
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 12-9\. 部署多集群应用程序
+- en: '[PRE10]'
+  id: totrans-102
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: At this point, the Pods will be running in each cluster, but they have no information
+    about how to talk to each other. You can verify this simply by looking at the
+    Services in each cluster, as shown in [Example 12-10](#EX-mc-check-services).
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此时，Pod将在每个集群中运行，但它们没有关于如何相互通信的信息。您可以简单地查看每个集群中的服务来验证这一点，如[示例 12-10](#EX-mc-check-services)所示。
+- en: Example 12-10\. Checking the Services in each cluster
+  id: totrans-104
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 12-10\. 检查每个集群中的服务
+- en: '[PRE11]'
+  id: totrans-105
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: 'To make emojivoto work in our scenario, we’ll need to mirror services across
+    the clusters. For each Service we want exported, we’ll add the `mirror.link⁠erd.io/exported`
+    label to it:'
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要使emojivoto在我们的场景中工作，我们需要在集群之间镜像服务。对于每个要导出的服务，我们将为其添加`mirror.link⁠erd.io/exported`标签：
+- en: 'If you’re using gateway-based multicluster mode, use `mirror.link⁠erd.io/exported:
+    true`, as shown in [Example 12-11](#EX-mc-export-with-gateways).'
+  id: totrans-107
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '如果您正在使用基于网关的多集群模式，请使用`mirror.link⁠erd.io/exported: true`，如[示例 12-11](#EX-mc-export-with-gateways)所示。'
+- en: 'If you’re using Pod-to-Pod multicluster mode, use `mirror.link⁠erd.io/exported:
+    remote-discovery`, as shown in [Example 12-12](#EX-mc-export-pod-to-pod).'
+  id: totrans-108
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '如果您正在使用Pod对Pod多集群模式，请使用`mirror.link⁠erd.io/exported: remote-discovery`，如[示例 12-12](#EX-mc-export-pod-to-pod)所示。'
+- en: Example 12-11\. Exporting Services with gateways
+  id: totrans-109
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 12-11\. 使用网关导出服务
+- en: '[PRE12]'
+  id: totrans-110
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: Example 12-12\. Exporting Services Pod-to-Pod
+  id: totrans-111
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 12-12\. 导出 Pod-to-Pod 服务
+- en: '[PRE13]'
+  id: totrans-112
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: In either case, if you check the Services in the `emojivoto` namespace, as shown
+    in [Example 12-13](#EX-mc-check-mirrored-services), you’ll see the mirrored Services.
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 无论哪种情况，如果您检查 `emojivoto` 命名空间中的服务，如 [示例 12-13](#EX-mc-check-mirrored-services)
+    所示，您将看到镜像服务。
+- en: Example 12-13\. Checking on mirrored Services
+  id: totrans-114
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 12-13\. 检查镜像服务
+- en: '[PRE14]'
+  id: totrans-115
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: If using Pod-to-Pod multicluster mode, you can also use `linkerd diagnostics
+    endpoints` to check that everything is working correctly, as shown in [Example 12-14](#EX-mc-diag-endpoints).
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果使用 Pod-to-Pod 多集群模式，您还可以使用 `linkerd diagnostics endpoints` 来检查一切是否正常工作，如 [示例 12-14](#EX-mc-diag-endpoints)
+    所示。
+- en: Example 12-14\. Checking on Service endpoints
+  id: totrans-117
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 12-14\. 检查服务端点
+- en: '[PRE15]'
+  id: totrans-118
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: As implied by [Example 12-14](#EX-mc-diag-endpoints), mirrored Services appear
+    as `*serviceName-clusterName*`; for example, the `emoji-svc` mirrored from `cluster2`
+    into `cluster1` will appear as `emoji-svc-cluster2`.
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如 [示例 12-14](#EX-mc-diag-endpoints) 所示，镜像服务显示为 `*serviceName-clusterName*`；例如，从
+    `cluster2` 镜像到 `cluster1` 的 `emoji-svc` 将显示为 `emoji-svc-cluster2`。
+- en: This is a rare case where, by default, the application may have to change to
+    work with Linkerd. The manifests that we applied in [Example 12-9](#EX-mc-install-emojivoto)
+    have already been tweaked so that the emojivoto app uses the mirrored Service
+    names, but you can also use an HTTPRoute and a placeholder Service to redirect
+    traffic.
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是一个罕见的情况，默认情况下，应用可能必须更改以与 Linkerd 协同工作。我们在 [示例 12-9](#EX-mc-install-emojivoto)
+    中应用的清单已经过调整，以便 emojivoto 应用程序使用镜像服务名称，但您也可以使用 HTTPRoute 和占位符服务来重定向流量。
+- en: For example, suppose we want all traffic for `emoji-svc` to be redirected to
+    `emoji-svc-cluster2`. We could start by creating a Service named `emoji-svc` with
+    no `selector`, so that it’s simply not possible for that Service to match any
+    Pods. This is shown in [Example 12-15](#EX-mc-placeholder-service).
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，假设我们希望将所有 `emoji-svc` 的流量重定向到 `emoji-svc-cluster2`。我们可以首先创建一个名为 `emoji-svc`
+    的服务，没有 `selector`，这样该服务就无法匹配任何 Pod。这在 [示例 12-15](#EX-mc-placeholder-service) 中展示。
+- en: Example 12-15\. A placeholder `emoji-svc` Service
+  id: totrans-122
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 12-15\. 占位符 `emoji-svc` 服务
+- en: '[PRE16]'
+  id: totrans-123
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: We can then associate an HTTPRoute with the placeholder Service to redirect
+    all the traffic, as shown in [Example 12-16](#EX-mc-redirect-placeholder).
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后，我们可以将一个 HTTPRoute 与占位符服务关联起来，以重定向所有流量，如 [示例 12-16](#EX-mc-redirect-placeholder)
+    所示。
+- en: Example 12-16\. Redirecting all traffic to the placeholder `emoji-svc` Service
+  id: totrans-125
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 12-16\. 将所有流量重定向到占位符 `emoji-svc` 服务
+- en: '[PRE17]'
+  id: totrans-126
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: Checking Traffic
+  id: totrans-127
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 检查流量
+- en: At this point, traffic should be flowing across clusters and the emojivoto application
+    should be working, as you should be able to see by pointing a web browser to the
+    `web-svc` service in `cluster1`, as shown in [Example 12-17](#EX-mc-browser-time).
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此时，流量应该在集群之间流动，并且 emojivoto 应用程序应该工作正常，您可以通过将 Web 浏览器指向 `cluster1` 中的 `web-svc`
+    服务来查看，如 [示例 12-17](#EX-mc-browser-time) 所示。
+- en: Example 12-17\. Checking out emojivoto with a browser
+  id: totrans-129
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 12-17\. 使用浏览器查看 emojivoto
+- en: '[PRE18]'
+  id: totrans-130
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: You can also watch traffic flowing in the Linkerd Viz dashboard, accessible
+    by running either command shown in [Example 12-18](#EX-mc-viz), or by using the
+    CLI commands in [Example 12-19](#EX-mc-viz-cli).
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您还可以观察 Linkerd Viz 仪表板中的流量流动，通过运行 [示例 12-18](#EX-mc-viz) 中显示的任一命令，或者使用 [示例 12-19](#EX-mc-viz-cli)
+    中的 CLI 命令。
+- en: Example 12-18\. Multicluster Linkerd Viz dashboard
+  id: totrans-132
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 12-18\. 多集群 Linkerd Viz 仪表板
+- en: '[PRE19]'
+  id: totrans-133
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: Example 12-19\. Multicluster Linkerd Viz CLI
+  id: totrans-134
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 12-19\. 多集群 Linkerd Viz CLI
+- en: '[PRE20]'
+  id: totrans-135
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: However you look at it, you should be able to see traffic flowing across clusters.
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 无论如何查看，您都应该能够看到跨集群的流量流动。
+- en: Policy in Multicluster Environments
+  id: totrans-137
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 多集群环境中的策略
+- en: There’s one more thing to cover before we close out the chapter. Linkerd policy
+    is applicable not just within but also between clusters. However, as you saw in
+    Figures [12-1](#gateway-based-multicluster) and [12-2](#gatewayless-multicluster),
+    the two modes work differently. When using gateway-based multicluster mode, the
+    gateway itself is where you need to apply any cross-cluster policy. It will accept
+    policy configurations like any other workload in the mesh.
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在结束本章之前，还有一件事要讨论。Linkerd 策略不仅适用于集群内部，还适用于集群之间。然而，正如您在图 [12-1](#gateway-based-multicluster)
+    和 [12-2](#gatewayless-multicluster) 中看到的那样，这两种模式的工作方式是不同的。在使用基于网关的多集群模式时，您需要在网关本身应用任何跨集群策略。它将接受类似于网格中的任何其他工作负载的策略配置。
+- en: Pod-to-Pod multicluster mode has the advantage of preserving the identity of
+    the originating workload when you make multicluster requests. That means you can
+    set a policy directly on your target workload to only accept requests from the
+    services that need to access it.
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod-to-Pod 多集群模式的优势在于在进行多集群请求时保留了原始工作负载的身份。这意味着您可以直接在目标工作负载上设置策略，仅允许来自需要访问它的服务的请求。
+- en: Summary
+  id: totrans-140
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 摘要
+- en: This chapter covered how multicluster architecture works in Linkerd and showed
+    you how to set it up in a local environment. Linkerd’s multicluster features are
+    robust, powerful, and used at scale by some of the largest organizations in the
+    world. Consider how a multicluster setup could impact your environment and if
+    it’s a good addition to your platform.
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本章介绍了 Linkerd 中多集群架构的工作原理，并展示了如何在本地环境中进行设置。Linkerd 的多集群功能稳健、强大，并且被全球一些最大的组织广泛使用。请考虑多集群设置如何影响您的环境，以及它是否对您的平台是一个良好的补充。

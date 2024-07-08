@@ -1,0 +1,1503 @@
+- en: Chapter 4\. System Hardening
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第 4 章\. 系统加固
+- en: The domain “system hardening” deals with security aspects relevant to the underlying
+    host system running the Kubernetes cluster nodes. Topics discussed here touch
+    on techniques and configuration options that are fundamentally Linux core functionality.
+    This includes disabling services and removing packages, managing users and groups,
+    disabling ports, and setting up firewall rules. Finally, this chapter discusses
+    Linux kernel hardening tools that can restrict what operations a process running
+    in a container can perform on a host level.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: “系统加固”领域涉及到运行 Kubernetes 集群节点的底层主机系统的安全相关方面。本章讨论的主题涉及基本的 Linux 核心功能，包括禁用服务和删除软件包、管理用户和组、禁用端口以及设置防火墙规则。最后，本章讨论了可以限制容器中运行的进程在主机级别上执行操作的
+    Linux 内核加固工具。
+- en: 'At a high level, this chapter covers the following concepts:'
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从高层次上看，本章涵盖以下概念：
+- en: Minimizing the host OS footprint
+  id: totrans-3
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 减少主机操作系统的占用
+- en: Minimizing IAM roles
+  id: totrans-4
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 减少 IAM 角色
+- en: Minimizing external access to the network
+  id: totrans-5
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 减少对网络的外部访问
+- en: Using kernel hardening tools like AppArmor and seccomp
+  id: totrans-6
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用像 AppArmor 和 seccomp 这样的内核加固工具
+- en: Minimizing the Host OS Footprint
+  id: totrans-7
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 减少主机操作系统的占用
+- en: Cluster nodes run on physical or virtual machines. In most cases, the operating
+    system on those machines is a Linux distribution. Evidently, the operating system
+    can expose security vulnerabilities.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 集群节点运行在物理机或虚拟机上。在大多数情况下，这些机器上的操作系统是 Linux 发行版。显然，操作系统可能会暴露安全漏洞。
+- en: Over time, you need to keep the version of the operating system up to date with
+    the latest security fixes. This process could entail upgrading a node’s operating
+    system from Ubuntu 18 to 22, for example. Upgrading the operating system is out
+    of scope for this book; for more information, check the relevant Linux documentation.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 随着时间的推移，您需要将操作系统的版本保持最新，以包含最新的安全修复。例如，这个过程可能涉及将节点的操作系统从 Ubuntu 18 升级到 22。本书不涵盖操作系统的升级；有关更多信息，请参阅相关的
+    Linux 文档。
+- en: Many Linux distributions, such as Ubuntu, come with additional tools, applications,
+    and services that are not necessarily required for operating the Kubernetes cluster.
+    It is your job as an administrator to identify security risks, disable or remove
+    any operating system-specific functionality that may expose vulnerabilities, and
+    keep the operating system patched to incorporate the latest security fixes. The
+    less functionality an operating system has, the smaller the risk.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 许多 Linux 发行版，如 Ubuntu，自带额外的工具、应用程序和服务，并非操作 Kubernetes 集群所必需。作为管理员，您的任务是识别安全风险，禁用或移除可能暴露漏洞的任何操作系统特定功能，并保持操作系统补丁，以包含最新的安全修复。操作系统的功能越少，风险就越小。
+- en: CIS benchmark for Ubuntu Linux
+  id: totrans-11
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Ubuntu Linux 的 CIS 基准
+- en: As a reference guide, you may want to compare your operating system’s configuration
+    with the [CIS benchmark for Ubuntu Linux](https://oreil.ly/AeAAE).
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为参考指南，您可以将操作系统的配置与 [Ubuntu Linux 的 CIS 基准](https://oreil.ly/AeAAE) 进行比较。
+- en: 'Scenario: An Attacker Exploits a Package Vulnerability'
+  id: totrans-13
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 场景：攻击者利用软件包漏洞
+- en: '[Figure 4-1](#os-package-attacker) illustrates an attacker exploiting a vulnerability
+    of a package installed on the system. For example, the application could be the
+    package manager [snapd](https://oreil.ly/ZOFTj). Assume that the attacker takes
+    advantage of the known vulnerability [USN-5292-1](https://oreil.ly/lw_MV) that
+    has the potential of exposing sensitive information to an attacker.'
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 4-1](#os-package-attacker) 描述了攻击者如何利用系统上安装的软件包的漏洞。例如，该应用程序可能是软件包管理器 [snapd](https://oreil.ly/ZOFTj)。假设攻击者利用已知的漏洞
+    [USN-5292-1](https://oreil.ly/lw_MV)，可能会向攻击者公开敏感信息。'
+- en: '![ckss 0401](assets/ckss_0401.png)'
+  id: totrans-15
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckss 0401](assets/ckss_0401.png)'
+- en: Figure 4-1\. An attacker exploits an OS-level vulnerability
+  id: totrans-16
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 4-1\. 攻击者利用操作系统级别的漏洞
+- en: The following section will explain how to minimize security risks for services
+    and packages that are not really needed for operating Kubernetes by simply disabling
+    or removing them.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下一节将解释如何通过简单禁用或移除不真正需要的服务和软件包，来减少操作 Kubernetes 所需的服务和软件包的安全风险。
+- en: Disabling Services
+  id: totrans-18
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 禁用服务
+- en: 'On Linux, many applications run as services in the background. Services can
+    be managed using the command line tool `systemctl`. The following `systemctl`
+    command lists all running services:'
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Linux 上，许多应用程序作为后台服务运行。可以使用命令行工具 `systemctl` 管理服务。以下 `systemctl` 命令列出所有正在运行的服务：
+- en: '[PRE0]'
+  id: totrans-20
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'One of the services we will not need for operating a cluster node is the package
+    manager snapd. For more details on the service, retrieve the status for it with
+    the `status` subcommand:'
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在操作群集节点时我们不需要的一个服务是软件包管理器snapd。 有关该服务的更多详细信息，请使用`status`子命令检索其状态：
+- en: '[PRE1]'
+  id: totrans-22
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: 'You can stop service using the `systemctl` subcommand `stop`:'
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用`systemctl`子命令`stop`停止服务：
+- en: '[PRE2]'
+  id: totrans-24
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'Execute the `disable` subcommand to prevent the service from being started
+    again upon a system restart:'
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 执行`disable`子命令以防止系统重新启动时再次启动服务：
+- en: '[PRE3]'
+  id: totrans-26
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'The service has now been stopped and disabled:'
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 服务现已停止并已禁用：
+- en: '[PRE4]'
+  id: totrans-28
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: Removing Unwanted Packages
+  id: totrans-29
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 删除不需要的软件包
+- en: 'Now that the service has been disabled, there’s no more point in keeping the
+    package around. You can remove the package to free up additional disk space and
+    memory. You can use the `apt purge` command to remove a package and its transitive
+    packages, as demonstrated in the following:'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 既然服务已停用，保留软件包也就没有意义了。 您可以删除软件包以释放额外的磁盘空间和内存。 您可以使用`apt purge`命令删除软件包及其传递的软件包，如下所示：
+- en: '[PRE5]'
+  id: totrans-31
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: You can use the same command even if the package isn’t controlled by a service.
+    Identify the packages you don’t need and simply remove them. You should end up
+    with a much slimmer footprint of your system.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 即使软件包不受服务控制，您也可以使用相同的命令。 确定您不需要的软件包，然后简单地删除它们。 您应该能够获得系统更加精简的足迹。
+- en: 'A potential attacker cannot use the snapd service anymore to exploit the system.
+    You should repeat the process for any unwanted services. As a result, the snapd
+    service ceases to exist on the system:'
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 潜在攻击者无法再使用snapd服务来利用系统。 您应该对任何不需要的服务重复此过程。 结果，snapd服务将不再存在于系统中：
+- en: '[PRE6]'
+  id: totrans-34
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: Minimizing IAM Roles
+  id: totrans-35
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 最小化IAM角色
+- en: Identity and access management (IAM) on the system level involves management
+    of Linux users, the groups they belong to, and the permissions granted to them.
+    Any directory and file will have file permissions assigned to a user.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 系统级别的身份验证和访问管理（IAM）涉及管理Linux用户、他们所属的组以及授予他们的权限。 任何目录和文件都将为用户分配文件权限。
+- en: Proper user and access management is a classic responsibility of every system
+    administrator. While your role as a Kubernetes administrator may not directly
+    involve system-level IAM, it’s important to understand the implications to security.
+    You will likely have to work with a peer to harden the system running the Kubernetes
+    cluster.
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 适当的用户和访问管理是每个系统管理员的经典责任。 尽管您作为Kubernetes管理员的角色可能不直接涉及系统级别的IAM，但理解安全性的影响至关重要。
+    您可能需要与同行合作以加固运行Kubernetes集群的系统。
+- en: This section will provide a short introduction on how to manage users and groups.
+    We will also discuss how to set file permissions and ownership to minimize access
+    as much as possible. We will only scratch the surface of the topic in this book.
+    For more information, refer to the Linux documentation of your choice.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本节将简要介绍如何管理用户和组。 我们还将讨论如何设置文件权限和所有权以尽可能减少访问权限。 在本书中，我们只是涉及这个主题的皮毛。 如需更多信息，请参考您选择的Linux文档。
+- en: 'Scenario: An Attacker Uses Credentials to Gain File Access'
+  id: totrans-39
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 场景：攻击者使用凭据获取文件访问权限
+- en: A security breach can lead to stolen user credentials. Gaining access to valid
+    user credentials opens the door for additional attack vectors. [Figure 4-2](#iam-attacker)
+    shows an attacker who could log into a cluster node with stolen user credentials
+    and can now interact with all files and directories with the permissions granted
+    to the user.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安全漏洞可能导致用户凭据被窃取。 获得有效用户凭据使攻击者可以打开其他攻击向量的大门。 [图4-2](#iam-attacker)显示一个攻击者使用窃取的用户凭据登录到群集节点，现在可以与分配给用户权限的所有文件和目录进行交互。
+- en: '![ckss 0402](assets/ckss_0402.png)'
+  id: totrans-41
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckss 0402](assets/ckss_0402.png)'
+- en: Figure 4-2\. An attacker uses stolen credentials to access files
+  id: totrans-42
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图4-2。 攻击者使用窃取的凭据访问文件
+- en: It’s recommended to follow the principle of least privilege. Only grant administrative
+    permissions to a limited group of users. All other users should only be allowed
+    to perform operations necessary to perform their jobs.
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 建议遵循最小特权原则。 只向有限的用户组授予管理权限。 所有其他用户应只被允许执行其工作所需的操作。
+- en: Understanding User Management
+  id: totrans-44
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 理解用户管理
+- en: Every user must authenticate to a system to use it. The authenticated user has
+    access to resources based on the assigned permissions. This section will walk
+    you through the primary operations required to manage users.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个用户必须对系统进行身份验证才能使用它。 认证用户根据分配的权限访问资源。 本节将为您介绍管理用户所需的主要操作。
+- en: Listing users
+  id: totrans-46
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 用户列表
+- en: 'To list all users on the system, render the contents of the file `/etc/passwd`.
+    Every entry follows the general pattern `username:password:UID:GID:com⁠ment:​home:shell`.
+    Some of the fields within the pattern may be empty:'
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要列出系统上的所有用户，请渲染文件`/etc/passwd`的内容。每个条目遵循一般模式`username:password:UID:GID:comment:home:shell`。模式内的某些字段可能为空：
+- en: '[PRE7]'
+  id: totrans-48
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: The command output renders the user root in the first position of the output.
+    The last portion of the string for the `root` user, `/bin/bash`, indicates that
+    the user is allowed to log into the system with a `bash` shell. Other users might
+    not be allowed to log in at all. For those users, you will find the string `/usr/sbin/nologin`
+    assigned to the `shell` field.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 命令输出将用户`root`呈现在输出的第一个位置。字符串的最后一部分`/bin/bash`表示用户被允许使用`bash` shell登录系统。其他用户可能根本无法登录。对于这些用户，您将在`shell`字段中找到分配给`/usr/sbin/nologin`的字符串。
+- en: 'At any given point of time, you can see which processes have been started by
+    users. The following command shows all `bash` processes, including the corresponding
+    user that started it:'
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在任何给定时间点，您可以看到由用户启动的哪些进程。以下命令显示所有`bash`进程，包括启动它的相应用户：
+- en: '[PRE8]'
+  id: totrans-51
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: Adding a user
+  id: totrans-52
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 添加用户
+- en: 'At some point, you may want to give team members access to the machines running
+    the cluster nodes, with limited permissions. You can add new users to the system
+    with the `adduser` command. Add the flag `--shell /sbin/nologin` to disable shell
+    access for the user. The following command creates the user `ben`:'
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在某些时候，您可能希望让团队成员访问运行集群节点的机器，并限制权限。您可以使用`adduser`命令将新用户添加到系统。添加标志`--shell /sbin/nologin`以禁用用户的Shell访问权限。以下命令创建用户`ben`：
+- en: '[PRE9]'
+  id: totrans-54
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: 'The user entry has been added to the file `/etc/passwd`:'
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用户条目已添加到文件`/etc/passwd`中：
+- en: '[PRE10]'
+  id: totrans-56
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: Switching to a user
+  id: totrans-57
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 切换到用户
+- en: 'You can change the user in a shell by using the `su` command. The following
+    command switches to the user `ben` we created earlier. You will be asked to enter
+    the user’s password:'
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用`su`命令在Shell中更改用户。以下命令切换到之前创建的用户`ben`。系统将要求您输入用户的密码：
+- en: '[PRE11]'
+  id: totrans-59
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: 'The shell will indicate the current user by its prompt. You will inherit the
+    environment variables from the account you used when running the `su` command.
+    To create a new environment, add the hyphen with the `su` command:'
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Shell将通过其提示指示当前用户。您将从运行`su`命令时使用的帐户继承环境变量。要创建新环境，请在`su`命令中添加连字符：
+- en: '[PRE12]'
+  id: totrans-61
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: 'Another way to temporarily switch the user is by using the `sudo` command.
+    You will need to have elevated privileges to execute the command. Therefore, the
+    `sudo` command is equivalent to “run this command as administrator”:'
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一种临时切换用户的方法是使用`sudo`命令。您需要有提升的权限来执行该命令。因此，`sudo`命令等效于“以管理员身份运行此命令”：
+- en: '[PRE13]'
+  id: totrans-63
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: Deleting a user
+  id: totrans-64
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 删除用户
+- en: 'Team members, represented by users in the system, transition to other teams
+    or may simply leave the company. You will want to revoke access to the user to
+    prevent unauthorized use of the credentials. The following command deletes the
+    user, including the user’s home directory:'
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由系统中的用户代表的团队成员转移到其他团队，或者可能只是离开公司。您将希望撤销用户的访问权限，以防止未经授权使用凭据。以下命令删除用户，包括用户的主目录：
+- en: '[PRE14]'
+  id: totrans-66
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: Understanding Group Management
+  id: totrans-67
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 理解组管理
+- en: It’s more convenient for a system administrator to group users with similar
+    access requirements to control permissions on an individual user level. Linux
+    systems offer the concept of a group as a way to organize users based on teams,
+    or specific organizational roles. We’ll briefly touch on the most important aspects
+    of group management.
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 系统管理员更方便地将具有类似访问要求的用户分组，以控制个别用户级别的权限。Linux系统提供了组的概念，用于基于团队或特定组织角色组织用户。我们将简要介绍组管理的最重要方面。
+- en: Listing groups
+  id: totrans-69
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 列出组
+- en: 'Groups can be listed by inspecting the contents of the file `/etc/group`. Every
+    entry follows the general pattern `groupname:password:GID:group members`:'
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以通过检查文件`/etc/group`的内容来列出组。每个条目遵循一般模式`groupname:password:GID:group members`：
+- en: '[PRE15]'
+  id: totrans-71
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: As you can see in the output, some of the fields may be empty. The only group
+    with an assigned member is `plugdev`, whose name is `packer`.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如您在输出中看到的那样，某些字段可能为空。唯一具有分配成员的组是`plugdev`，其名称为`packer`。
+- en: Adding a group
+  id: totrans-73
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 添加组
+- en: 'Use the command `groupadd` to add a new group. The following example adds the
+    group `kube-developers`:'
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用命令`groupadd`添加新组。以下示例添加组`kube-developers`：
+- en: '[PRE16]'
+  id: totrans-75
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: 'The group will now be listed in the file `/etc/group`. Notice that the group
+    identifier is 1004:'
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 该组现在将在文件`/etc/group`中列出。请注意，组标识符为1004：
+- en: '[PRE17]'
+  id: totrans-77
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: Assigning a user to a group
+  id: totrans-78
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 将用户分配到一个组
+- en: 'To assign a group to a user, use the `usermod` command. The following command
+    adds the user `ben` to the group `kube-developers`:'
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要将组分配给用户，请使用`usermod`命令。以下命令将用户`ben`添加到组`kube-developers`：
+- en: '[PRE18]'
+  id: totrans-80
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: 'The group identifier 1004 acts as a stand-in for the group `kube-developers`:'
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 组标识符1004充当`kube-developers`组的替代品：
+- en: '[PRE19]'
+  id: totrans-82
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: Deleting a group
+  id: totrans-83
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 删除组
+- en: 'Sometimes you want to get rid of a group entirely. Maybe the organizational
+    role referring to a Linux group that does not exist anymore. Use the `groupdel`
+    command to delete a group. You will receive an error message if the members are
+    still part of the group:'
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有时您希望完全摆脱一个组。也许是指向一个不再存在的Linux组的组织角色。使用`groupdel`命令删除一个组。如果成员仍然是该组的一部分，您将收到错误消息：
+- en: '[PRE20]'
+  id: totrans-85
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: 'Before deleting a group, you should reassign group members to a different group
+    using the `usermod` command. The following command changes the group from `kube-developers`
+    to `kube-admins`. Assume that the group `kube-admins` has been created before:'
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在删除组之前，您应该使用`usermod`命令将组成员重新分配到另一个组。以下命令将组从`kube-developers`更改为`kube-admins`。假设组`kube-admins`已经在之前创建好：
+- en: '[PRE21]'
+  id: totrans-87
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: Understanding File Permissions and Ownership
+  id: totrans-88
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 理解文件权限和所有权
+- en: Assigning the file permissions with as minimal access as possible is crucial
+    to maximizing security. This is where Linux file permissions and ownership come
+    into play. I am only going to discuss the relevant operations on a high level.
+    Refer to the [Linux Foundation’s blog post about Linux file permissions](https://oreil.ly/3IpRT)
+    for more details.
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将文件权限分配为尽可能小的访问权限对于最大化安全性至关重要。这就是Linux文件权限和所有权发挥作用的地方。我只会高层次地讨论相关操作。更多详细信息，请参考[Linux
+    Foundation关于Linux文件权限的博文](https://oreil.ly/3IpRT)。
+- en: Viewing file permissions and ownership
+  id: totrans-90
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 查看文件权限和所有权
+- en: 'Every user can create new directories and files. For example, you could use
+    the `touch` command to create an empty file. The following command creates a file
+    with the name `my-file` in the current directory:'
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个用户都可以创建新的目录和文件。例如，您可以使用`touch`命令创建一个空文件。以下命令在当前目录中创建一个名为`my-file`的文件：
+- en: '[PRE22]'
+  id: totrans-92
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: 'To see the contents of a directory in the “long” format, use the `ls` command.
+    The long format of the output requested by the `-l` command line parameter renders
+    the file permissions and the file ownership:'
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要查看目录内容的“长”格式，请使用`ls`命令。由于请求的`-l`命令行参数，输出的长格式呈现文件权限和文件所有权：
+- en: '[PRE23]'
+  id: totrans-94
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: The important portion of the output is `-rw-r--r--`. The first character is
+    a special permission character that can vary per system, followed by three groupings
+    with the notation `rwx`. The first three characters stand for the owner permissions,
+    the second set of three characters is for the group permissions, and the last
+    three characters represent the permissions for all users. The symbol `r` means
+    read permissions, `w` stands for write permissions, and `x` refers to execution
+    permissions. In the previous example, the user `root` can read and write the file,
+    whereas the group and all other users can only read the file.
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 输出的重要部分是`-rw-r--r--`。第一个字符是特殊的权限字符，可以根据系统而变化，后跟三个以`rwx`表示的组合。前三个字符代表所有者权限，第二组三个字符是组权限，最后三个字符表示所有用户的权限。符号`r`表示读取权限，`w`表示写入权限，`x`表示执行权限。在前面的示例中，用户`root`可以读取和写入文件，而组和其他用户只能读取文件。
+- en: Changing file ownership
+  id: totrans-96
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 更改文件所有权
+- en: 'Use the `chown` command to change the user and group assignment for a file
+    or directory. The syntax of the command follows the pattern `chown owner:group
+    filename`. The following command changes the ownership of the file to the user
+    `ben` but does not reassign a group. The user executing the `chown` command needs
+    to have write permissions:'
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用`chown`命令更改文件或目录的用户和组分配。命令的语法遵循`chown owner:group filename`的模式。以下命令将文件的所有权更改为用户`ben`，但不重新分配组。执行`chown`命令的用户需要具有写权限：
+- en: '[PRE24]'
+  id: totrans-98
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: Changing file permissions
+  id: totrans-99
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 更改文件权限
+- en: 'You can add or remove permissions with the `chmod` command in a variety of
+    notations. For example, use the following command to remove write permissions
+    for the file owner:'
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用`chmod`命令以多种表示法添加或删除权限。例如，使用以下命令为文件所有者删除写权限：
+- en: '[PRE25]'
+  id: totrans-101
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE25]'
+- en: Minimizing External Access to the Network
+  id: totrans-102
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 减少网络对外部访问
+- en: External access to your cluster nodes should only be allowed for the ports necessary
+    to operate Kubernetes. We already discussed the standard Kubernetes ports in [“Protecting
+    Node Metadata and Endpoints”](ch02.xhtml#node-metadata-endpoints). Access to all
+    other ports should be blocked.
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 只有允许对Kubernetes操作必需的端口进行集群节点的外部访问。我们已经在[“保护节点元数据和端点”](ch02.xhtml#node-metadata-endpoints)中讨论了标准的Kubernetes端口。所有其他端口的访问应被阻止。
+- en: Identifying and Disabling Open Ports
+  id: totrans-104
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 辨识和停用开放端口
+- en: Applications like FTP servers, web servers, and file and print services such
+    as Samba open ports as a means to expose a communication endpoint to clients.
+    Running applications that open network communication can expose a security risk.
+    You can eliminate the risk by simply disabling the service and deinstalling the
+    application.
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 像FTP服务器、Web服务器以及诸如Samba之类的文件和打印服务这样的应用程序通过开放端口来向客户端公开通信终点。运行打开网络通信的应用程序可能会带来安全风险。您可以通过简单地禁用服务并卸载应用程序来消除风险。
+- en: 'Let’s say we [installed the Apache 2 HTTP web server](https://oreil.ly/t-np3)
+    on a control plane node with the following commands:'
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设我们在控制平面节点上[安装了Apache 2 HTTP Web服务器](https://oreil.ly/t-np3)，使用以下命令：
+- en: '[PRE26]'
+  id: totrans-107
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE26]'
+- en: Update about netstat command
+  id: totrans-108
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 关于netstat命令的更新
+- en: The `netstat` command has been deprecated in favor of the faster, more human-readable
+    `ss` command. For more information, refer to the documentation of the operating
+    system you are using.
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`netstat`命令已经弃用，推荐使用更快速、更易读的`ss`命令。有关更多信息，请参阅您使用的操作系统的文档。'
+- en: 'We can inspect all open ports using the command line tool `ss`, a utility with
+    similar functionality to `netstat`. The following command renders all of the open
+    ports, including their processes. Among them is port 80, exposed by Apache 2:'
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以使用命令行工具`ss`检查所有开放端口，该工具类似于`netstat`。以下命令显示了所有开放端口及其进程，其中包括Apache 2暴露的端口80：
+- en: '[PRE27]'
+  id: totrans-111
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE27]'
+- en: 'You may have only needed the web server temporarily and may have simply forgotten
+    about installing it. The process is currently managed by a server. You can review
+    the status of a service with the `systemctl status` command:'
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可能仅临时需要Web服务器，并且可能只是忘记了安装它。该过程当前由服务器管理。您可以使用`systemctl status`命令查看服务的状态：
+- en: '[PRE28]'
+  id: totrans-113
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE28]'
+- en: 'Apache 2 is not needed by Kubernetes. We decide to shut down the service and
+    deinstall the package:'
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes不需要Apache 2。我们决定关闭该服务并卸载该软件包：
+- en: '[PRE29]'
+  id: totrans-115
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE29]'
+- en: 'Verify that the port isn’t used anymore. The `ss` command doesn’t find an application
+    exposing port 80 anymore:'
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 验证端口是否不再被使用。`ss`命令再也找不到暴露端口80的应用程序：
+- en: '[PRE30]'
+  id: totrans-117
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE30]'
+- en: Setting Up Firewall Rules
+  id: totrans-118
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 设置防火墙规则
+- en: Another way to control ports is with the help of an operating-system-level firewall.
+    On Linux, you could use the [Uncomplicated Firewall (UFW)](https://oreil.ly/iqiwv).
+    This section will give you a very brief introduction on how to enable UFW and
+    how to configure firewall rules.
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 控制端口的另一种方式是使用操作系统级防火墙的帮助。在Linux上，您可以使用[Uncomplicated Firewall (UFW)](https://oreil.ly/iqiwv)。本节将简要介绍如何启用UFW及配置防火墙规则。
+- en: 'Following the principle of least privilege, it’s a good idea to start by enabling
+    the firewall and setting up deny rules for *any* incoming and outgoing network
+    traffic. The following commands demonstrate the steps to achieve that:'
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 遵循最小权限原则，建议首先启用防火墙，并为*任何*传入和传出的网络流量设置拒绝规则。以下命令演示了实现这一目标的步骤：
+- en: '[PRE31]'
+  id: totrans-121
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE31]'
+- en: 'You will want to allow external tools like `kubectl` to connect to the API
+    server running on port 6443\. On the control plane node, execute the following
+    command to allow access to the API server port:'
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你需要允许像`kubectl`这样的外部工具连接到运行在6443端口的API服务器。在控制平面节点上，执行以下命令以允许访问API服务器端口：
+- en: '[PRE32]'
+  id: totrans-123
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE32]'
+- en: You will have to repeat the same process to open up other ports on control plane
+    and worker nodes. Ensure that all other ports not needed to operate Kubernetes
+    are blocked.
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您需要重复相同的过程以打开控制平面和工作节点上的其他端口。确保所有不需要用于操作Kubernetes的其他端口都被阻止。
+- en: Using Kernel Hardening Tools
+  id: totrans-125
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用内核硬化工具
+- en: Applications or processes running inside of a container can make system calls.
+    A typical example could be the `curl` command performing an HTTP request. A system
+    call is a programmatic abstraction running in the user space for requesting a
+    service from the kernel. We can restrict which system calls are allowed to be
+    made with the help of kernel hardening tools. The CKS exam explicitly mentions
+    two tools in this space, AppArmor and seccomp. We’ll discuss both tools and the
+    mechanics to integrate them with Kubernetes.
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器内运行的应用程序或进程可以进行系统调用。典型示例可能是 `curl` 命令执行 HTTP 请求。系统调用是用户空间中用于请求内核服务的程序抽象。我们可以使用内核硬化工具限制允许进行的系统调用。CKS
+    考试明确提到了两种工具，AppArmor 和 seccomp。我们将讨论这两种工具及其与 Kubernetes 集成的机制。
+- en: Using AppArmor
+  id: totrans-127
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用 AppArmor
+- en: '[AppArmor](https://apparmor.net) provides access control to programs running
+    on a Linux system. The tool implements an additional security layer between the
+    applications invoked in the user space and the underlying system functionality.
+    For example, we can restrict network calls or filesystem interaction. Many Linux
+    distributions (e.g., Debian, Ubuntu, openSUSE) already ship with AppArmor. Therefore,
+    AppArmor doesn’t have to be installed manually. Linux distributions that do not
+    support AppArmor use [Security-Enhanced Linux (SELinux)](https://oreil.ly/CKBr7)
+    instead, which takes a similar approach to AppArmor. Understanding SELinux is
+    out of scope for the CKS exam.'
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[AppArmor](https://apparmor.net) 提供对在 Linux 系统上运行的程序的访问控制。该工具在用户空间调用的应用程序和底层系统功能之间实现了一个额外的安全层。例如，我们可以限制网络调用或文件系统交互。许多
+    Linux 发行版（如 Debian、Ubuntu、openSUSE）已经预装了 AppArmor。因此，不需要手动安装 AppArmor。不支持 AppArmor
+    的 Linux 发行版使用 [Security-Enhanced Linux (SELinux)](https://oreil.ly/CKBr7) 代替，其与
+    AppArmor 采取了类似的方法。了解 SELinux 超出了 CKS 考试的范围。'
+- en: Understanding profiles
+  id: totrans-129
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 理解配置文件
+- en: 'The rules that define what a program can or cannot do are defined in an AppArmor
+    profile. Every profile needs to be loaded into AppArmor before it can take effect.
+    AppArmor provides a command line tool for checking the profiles that have been
+    loaded. Execute the command `aa-status` to see a summary of all loaded profiles.
+    You will see that AppArmor already comes with a set of default application profiles
+    to protect Linux services:'
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 定义程序能够执行或无法执行的规则在 AppArmor 配置文件中定义。每个配置文件在生效之前都需要加载到 AppArmor 中。AppArmor 提供了一个命令行工具，用于检查已加载的配置文件。执行命令
+    `aa-status` 可以查看所有加载配置文件的摘要。您会看到 AppArmor 已经带有一组默认的应用程序配置文件，用于保护 Linux 服务：
+- en: '[PRE33]'
+  id: totrans-131
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE33]'
+- en: 'The profile mode determines the treatment of rules at runtime should a matching
+    event happen. AppArmor distinguishes two types of profile modes:'
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 配置文件模式决定运行时对规则的处理，如果匹配事件发生。AppArmor 区分两种配置文件模式：
+- en: Enforce
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 强制执行
+- en: The system enforces the rules, reports the violation, and writes it to the syslog.
+    You will want to use this mode to prevent a program from making specific calls.
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 系统强制执行规则，并将违规情况报告并记录到系统日志中。您应该使用此模式来防止程序进行特定的调用。
+- en: Complain
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 抱怨
+- en: The system does not enforce the rules but will write violations to the log.
+    This mode is helpful if you want to discover the calls a program makes.
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 系统不强制执行规则，但会将违规情况记录到日志中。如果您希望了解程序调用的调用，请使用此模式。
+- en: '[Example 4-1](#apparmor-profile) defines a custom profile in the file `k8s-deny-write`
+    for restricting file write access. The file should be placed in the directory
+    `/etc/apparmor.d` of every worker node that executes workload. It is out of scope
+    of this book to explain all the rules in detail. For more information, have a
+    look at the [AppArmor wiki](https://oreil.ly/mNuWB).'
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[示例 4-1](#apparmor-profile) 定义了一个自定义配置文件 `k8s-deny-write`，用于限制文件写入访问权限。该文件应放置在每个执行工作负载的工作节点的目录
+    `/etc/apparmor.d` 中。本书不详细解释所有规则。要了解更多信息，请参阅 [AppArmor wiki](https://oreil.ly/mNuWB)。'
+- en: Example 4-1\. An AppArmor profile for restricting file write access
+  id: totrans-138
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 4-1\. 限制文件写入访问的 AppArmor 配置文件
+- en: '[PRE34]'
+  id: totrans-139
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE34]'
+- en: '[![1](assets/1.png)](#co_system_hardening_CO1-1)'
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_system_hardening_CO1-1)'
+- en: The identifier after the `profile` keyword is the name of the profile.
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`profile` 关键字后的标识符是配置文件的名称。'
+- en: '[![2](assets/2.png)](#co_system_hardening_CO1-2)'
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_system_hardening_CO1-2)'
+- en: Apply to file operations.
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用到文件操作。
+- en: '[![3](assets/3.png)](#co_system_hardening_CO1-3)'
+  id: totrans-144
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_system_hardening_CO1-3)'
+- en: Deny all file writes.
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 拒绝所有文件写入。
+- en: Setting a custom profile
+  id: totrans-146
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 设置自定义配置文件
+- en: 'To load the profile into AppArmor, run the following command on the worker
+    node:'
+  id: totrans-147
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要将配置文件加载到 AppArmor 中，请在工作节点上运行以下命令：
+- en: '[PRE35]'
+  id: totrans-148
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE35]'
+- en: 'The command uses the enforce mode by default. To load the profile in complain
+    mode, use the `-C` option. The `aa-status` command will now list the profile in
+    addition to the default profiles. As you can see in the output, the profile is
+    listed in enforce mode:'
+  id: totrans-149
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 该命令默认使用强制执行模式。要加载投诉模式的配置文件，请使用 `-C` 选项。现在 `aa-status` 命令将列出该配置文件以及默认配置文件。从输出中可以看到，配置文件以强制执行模式列出：
+- en: '[PRE36]'
+  id: totrans-150
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE36]'
+- en: 'AppArmor supports additional convenience commands as part of a utilities package.
+    You can manually install the package using the following commands if you want
+    to use them:'
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: AppArmor 还支持作为一个实用程序包的附加方便命令。如果你想使用它们，可以手动安装该包，并执行以下命令：
+- en: '[PRE37]'
+  id: totrans-152
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE37]'
+- en: Once installed, you can use the command `aa-enforce` to load a profile in enforce
+    mode, and `aa-complain` to load a profile in complain mode. For the exam, it’s
+    likely easier to just go with the standard `apparmor_parser` command.
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安装完成后，您可以使用 `aa-enforce` 命令以强制执行模式加载配置文件，使用 `aa-complain` 命令以投诉模式加载配置文件。对于考试来说，直接使用标准的
+    `apparmor_parser` 命令可能更容易。
+- en: Applying a profile to a container
+  id: totrans-154
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 将配置文件应用到容器上
+- en: You need to ensure a couple of prerequisites before using AppArmor rules in
+    a Pod definition. First, the container runtime needs to support AppArmor to let
+    rules take effect. In addition, AppArmor needs to be installed on the worker node
+    that runs the Pod. Last, make sure you loaded the profile, as described in the
+    previous section.
+  id: totrans-155
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在使用 Pod 定义中的 AppArmor 规则之前，您需要确保一些前提条件。首先，容器运行时需要支持 AppArmor，以便规则生效。此外，运行 Pod
+    的工作节点上需要安装 AppArmor。最后，请确保加载了配置文件，如前一节所述。
+- en: '[Example 4-2](#apparmor-pod) shows a YAML manifest for a Pod defined in the
+    file `pod.yaml`. To apply a profile to the container, you will need to set a specific
+    annotation. The annotation key needs to use the key in the format `container.apparmor.security.beta.​kuber⁠netes.io/<container-name>`.
+    In our case, the container name is `hello`. The full key is `container.apparmor.security.beta.kubernetes.io/hello`.
+    The value of the annotation follows the pattern `localhost/<profile-name>`. The
+    custom profile we want to use here is `k8s-deny-write`. For more information on
+    the configuration options, see the [Kubernetes documentation](https://oreil.ly/1o3zO).'
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[示例 4-2](#apparmor-pod) 展示了一个在文件 `pod.yaml` 中定义的 Pod 的 YAML 清单。要将配置文件应用到容器上，需要设置一个特定的注解。注解键需要使用格式
+    `container.apparmor.security.beta.kubernetes.io/<container-name>` 中的键。在我们的案例中，容器名称为
+    `hello`。完整的键是 `container.apparmor.security.beta.kubernetes.io/hello`。注解的值遵循模式
+    `localhost/<profile-name>`。这里我们想要使用的自定义配置文件是 `k8s-deny-write`。有关配置选项的更多信息，请参阅
+    [Kubernetes 文档](https://oreil.ly/1o3zO)。'
+- en: Example 4-2\. A Pod applying an AppArmor profile to a container
+  id: totrans-157
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 4-2\. 应用一个 AppArmor 配置文件到一个容器的 Pod
+- en: '[PRE38]'
+  id: totrans-158
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE38]'
+- en: '[![1](assets/1.png)](#co_system_hardening_CO2-1)'
+  id: totrans-159
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_system_hardening_CO2-1)'
+- en: The annotation key that consists of a hard-coded prefix and the container name
+    separated by a slash character.
+  id: totrans-160
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由硬编码前缀和由斜杠字符分隔的容器名称组成的注解键。
+- en: '[![2](assets/2.png)](#co_system_hardening_CO2-2)'
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_system_hardening_CO2-2)'
+- en: The profile name available on the current node indicated by `localhost`.
+  id: totrans-162
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在当前节点上指示的配置文件名称，由 `localhost` 表示。
+- en: '[![3](assets/3.png)](#co_system_hardening_CO2-3)'
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_system_hardening_CO2-3)'
+- en: The container name.
+  id: totrans-164
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器名称。
+- en: 'We are ready to create the Pod. Run the `apply` command and point it to the
+    YAML manifest. Wait until the Pod transitions into the “Running” status:'
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们已经准备好创建 Pod 了。运行 `apply` 命令，并指向 YAML 清单。等待 Pod 转换为“Running”状态：
+- en: '[PRE39]'
+  id: totrans-166
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE39]'
+- en: 'You can now shell into the container and perform a file write operation:'
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，您可以进入容器并执行文件写入操作：
+- en: '[PRE40]'
+  id: totrans-168
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE40]'
+- en: AppArmor will prevent writing a file to the container’s filesystem. The message
+    “Permission denied” will be rendered if you try to perform the operation.
+  id: totrans-169
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果尝试向容器文件系统写入文件，AppArmor 将会阻止此操作，并显示“Permission denied”的消息。
+- en: Using seccomp
+  id: totrans-170
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用 seccomp
+- en: Seccomp, short for “Secure Computing Mode,” is another Linux kernel feature
+    that can restrict the calls made from the userspace into the kernel. A seccomp
+    profile is the mechanism for defining the rules for restricting syscalls and their
+    arguments. Using seccomp can reduce the risk of exploiting a Linux kernel vulnerability.
+    For more information on seccomp on Kubernetes, see the [documentation](https://oreil.ly/B8I5L).
+  id: totrans-171
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Seccomp，即“安全计算模式”，是另一个 Linux 内核特性，可以限制从用户空间到内核的调用。Seccomp 配置文件是定义限制系统调用及其参数的规则的机制。使用
+    Seccomp 可以降低利用 Linux 内核漏洞的风险。有关 Kubernetes 上 Seccomp 的更多信息，请参阅 [文档](https://oreil.ly/B8I5L)。
+- en: Applying the default container runtime profile to a container
+  id: totrans-172
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 将默认的容器运行时配置文件应用到容器上
+- en: Container runtimes, such as Docker Engine or containerd, ship with a default
+    seccomp profile. The default seccomp profile allows the most commonly used syscalls
+    used by applications while at the same time forbidding the use of syscalls considered
+    dangerous.
+  id: totrans-173
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器运行时（如Docker Engine或containerd）附带默认的seccomp配置文件。默认的seccomp配置文件允许应用程序使用的最常用系统调用，同时禁止被认为危险的系统调用。
+- en: Kubernetes does not apply the default container runtime profile to containers
+    when creating a Pod, but you can enable it using the `SeccompDefault` [feature
+    gate](https://oreil.ly/m9g0G). Alternatively, you can opt into the feature on
+    a Pod-by-Pod basis by setting the seccomp profile type to `RuntimeDefault` with
+    the help of the security context attribute `seccompProfile`. [Example 4-3](#seccomp-default-profile-pod)
+    demonstrates its use.
+  id: totrans-174
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes在创建Pod时不会将默认容器运行时配置文件应用于容器，但可以通过设置安全上下文属性`seccompProfile`将seccomp配置文件类型设置为`RuntimeDefault`来启用它。您可以使用`SeccompDefault`
+    [功能门](https://oreil.ly/m9g0G)在Pod级别启用该功能。[示例 4-3](#seccomp-default-profile-pod)演示了其使用方法。
+- en: Example 4-3\. A Pod applying the default seccomp profile provided by the container
+    runtime profile
+  id: totrans-175
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例4-3. 一个应用了容器运行时配置文件提供的默认seccomp配置文件的Pod
+- en: '[PRE41]'
+  id: totrans-176
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE41]'
+- en: '[![1](assets/1.png)](#co_system_hardening_CO3-1)'
+  id: totrans-177
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_system_hardening_CO3-1)'
+- en: Applies the default container runtime profile.
+  id: totrans-178
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用默认的容器运行时配置文件。
+- en: 'You can start the Pod using the `apply` command and point to the YAML manifest.
+    The Pod should transition into the “Running” status:'
+  id: totrans-179
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用`apply`命令并指向YAML清单文件可以启动Pod。Pod应该会转换为“运行”状态：
+- en: '[PRE42]'
+  id: totrans-180
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE42]'
+- en: 'The `echo` command executed in the container is considered unproblematic from
+    a security perspective by the default seccomp profile. The following command inspects
+    the logs of the container:'
+  id: totrans-181
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在容器中执行的`echo`命令在安全性方面被默认的seccomp配置文件视为无问题。以下命令检查容器的日志：
+- en: '[PRE43]'
+  id: totrans-182
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE43]'
+- en: The call was permitted and resulted in writing the message “Hello seccomp!”
+    to standard output.
+  id: totrans-183
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 允许调用并导致将消息“Hello seccomp!”写入标准输出。
+- en: Setting a custom profile
+  id: totrans-184
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 设置自定义配置文件
+- en: 'You can create and set your own custom profile in addition to the default container
+    runtime profile. The standard directory for those files is `/var/lib/kubelet/seccomp`.
+    We’ll organize our custom profiles in the subdirectory `profiles`. Create the
+    directory if it doesn’t exist yet:'
+  id: totrans-185
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了默认容器运行时配置文件之外，您还可以创建和设置自定义配置文件。这些文件的标准目录是`/var/lib/kubelet/seccomp`。我们将在子目录`profiles`中组织我们的自定义配置文件。如果目录不存在，则创建该目录：
+- en: '[PRE44]'
+  id: totrans-186
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE44]'
+- en: We decide to create our custom profile in the file `mkdir-violation.json` in
+    the profile directory. [Example 4-4](#seccomp-mkdir-violation-profile) shows the
+    details of the profile definition. In a nutshell, the rule set disallows the use
+    of the `mkdir` syscall.
+  id: totrans-187
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们决定在配置文件目录中的文件`mkdir-violation.json`中创建我们的自定义配置文件。[示例 4-4](#seccomp-mkdir-violation-profile)显示了配置文件定义的详细信息。简而言之，规则集禁止使用`mkdir`系统调用。
+- en: Example 4-4\. A seccomp profile that prevents executing a `mkdir` syscall
+  id: totrans-188
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例4-4. 阻止执行`mkdir`系统调用的seccomp配置文件
+- en: '[PRE45]'
+  id: totrans-189
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE45]'
+- en: '[![1](assets/1.png)](#co_system_hardening_CO4-1)'
+  id: totrans-190
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_system_hardening_CO4-1)'
+- en: The default action applies to all system calls. Here we’ll allow all syscalls
+    using `SCMP_ACT_ALLOW`.
+  id: totrans-191
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认操作适用于所有系统调用。在这里，我们将使用`SCMP_ACT_ALLOW`允许所有系统调用。
+- en: '[![2](assets/2.png)](#co_system_hardening_CO4-2)'
+  id: totrans-192
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_system_hardening_CO4-2)'
+- en: You can filter for specific architectures the default action should apply to.
+    The definition of the field is optional.
+  id: totrans-193
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以过滤默认操作应用于的特定体系结构。该字段的定义是可选的。
+- en: '[![3](assets/3.png)](#co_system_hardening_CO4-3)'
+  id: totrans-194
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_system_hardening_CO4-3)'
+- en: The default action can be overwritten by declaring more fine-grained rules.
+    The `SCMP_ACT_ERRNO` action will prevent the execution of the `mkdir` syscall.
+  id: totrans-195
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认操作可以通过声明更细粒度的规则来覆盖。`SCMP_ACT_ERRNO`操作将阻止执行`mkdir`系统调用。
+- en: Placing a custom profile into the directory `/var/lib/kubelet/seccomp` doesn’t
+    automatically apply the rules to a Pod. You still need to configure a Pod to use
+    it.
+  id: totrans-196
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将自定义配置文件放入目录`/var/lib/kubelet/seccomp`中不会自动将规则应用于Pod。您仍然需要配置Pod以使用它。
+- en: Applying the custom profile to a container
+  id: totrans-197
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 将自定义配置文件应用于容器
+- en: Applying a custom profile follows a similar pattern to applying the default
+    container runtime profile, with minor differences. As you can see in [Example 4-5](#seccomp-custom-profile-pod),
+    we point the `seccompProfile` attribute of the security profile to the file `mkdir-violation.json`
+    and set the type to `Localhost`.
+  id: totrans-198
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用自定义配置文件与应用默认的容器运行时配置文件遵循类似的模式，但存在一些小差异。正如您在[示例 4-5](#seccomp-custom-profile-pod)中所看到的，我们将安全配置文件的`seccompProfile`属性指向文件`mkdir-violation.json`，并将类型设置为`Localhost`。
+- en: Example 4-5\. A Pod applying a custom seccomp profile prevents a `mkdir` syscall
+  id: totrans-199
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 4-5\. 应用自定义 seccomp 配置文件的 Pod 阻止了`mkdir`系统调用。
+- en: '[PRE46]'
+  id: totrans-200
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE46]'
+- en: '[![1](assets/1.png)](#co_system_hardening_CO5-1)'
+  id: totrans-201
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_system_hardening_CO5-1)'
+- en: Refers to a profile on the current node.
+  id: totrans-202
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 指的是当前节点上的一个配置文件。
+- en: '[![2](assets/2.png)](#co_system_hardening_CO5-2)'
+  id: totrans-203
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_system_hardening_CO5-2)'
+- en: Applies the profile with the name `mkdir-violation.json` in the subdirectory
+    `profiles`.
+  id: totrans-204
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用名称为`mkdir-violation.json`的配置文件位于子目录`profiles`中。
+- en: 'Create the Pod using the declarative `apply` command. Wait until the Pod transitions
+    into the “Running” status:'
+  id: totrans-205
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用声明性的`apply`命令创建 Pod。等待 Pod 转换为“运行”状态。
+- en: '[PRE47]'
+  id: totrans-206
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE47]'
+- en: 'Shell into the container to verify that seccomp properly enforced the applied
+    rules:'
+  id: totrans-207
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 进入容器的 Shell 中，验证 seccomp 是否正确执行了应用的规则：
+- en: '[PRE48]'
+  id: totrans-208
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE48]'
+- en: As you can see in output, the operation renders an error message when trying
+    to execute the `mkdir` command. The rule in the custom profile has been violated.
+  id: totrans-209
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如您在输出中所看到的，在尝试执行`mkdir`命令时，操作会生成一个错误消息。违反了自定义配置文件中的规则。
+- en: Summary
+  id: totrans-210
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 概要
+- en: Addressing security aspects isn’t limited to Kubernetes cluster components or
+    workload. There’s plenty you can do on the host system level. We discussed different
+    OS capabilities and how to use them to minimize potential security vulnerabilities.
+  id: totrans-211
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 处理安全方面不仅限于 Kubernetes 集群组件或工作负载。您可以在主机系统层面上做很多事情。我们讨论了不同的操作系统功能以及如何利用它们来减少潜在的安全漏洞。
+- en: Many operating systems come with a wealth of packages and services to offer
+    a more feature-rich experience to end users. It’s important to identify functionality
+    not required to operate a Kubernetes cluster. Purge unnecessary packages and services
+    rigorously and close ports you don’t need. You will also want to limited which
+    users are allowed to have access to specific directories, files, and applications.
+    Use Linux’s user management to restrict permissions.
+  id: totrans-212
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 许多操作系统提供了丰富的软件包和服务，以提供更丰富的用户体验。识别不需要操作 Kubernetes 集群的功能非常重要。彻底清理不必要的软件包和服务，并关闭不需要的端口。您还需要严格控制哪些用户被允许访问特定目录、文件和应用程序。利用
+    Linux 的用户管理来限制权限。
+- en: It’s very common for applications and processes running in containers to make
+    system calls. You can use Linux kernel hardening tools like AppArmor and seccomp
+    to restrict those calls. Only allow system calls crucial to fulfill the needs
+    of your application running the container.
+  id: totrans-213
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器中运行的应用程序和进程通常会进行系统调用，这是非常普遍的。您可以使用 Linux 内核加固工具如 AppArmor 和 seccomp 来限制这些调用。只允许那些对您应用运行所需至关重要的系统调用。
+- en: Exam Essentials
+  id: totrans-214
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 考试要点
+- en: Have a basic understanding of Linux OS tooling.
+  id: totrans-215
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 具备基本的 Linux 操作系统工具使用理解。
+- en: The CKS exam primarily focuses on security functionality in Kubernetes. This
+    domain crosses the boundary to Linux OS security features. It won’t hurt to explore
+    Linux-specific tools and security aspects independent from the content covered
+    in this chapter. On a high level, familiarize yourself with service, package,
+    user, and network management on Linux.
+  id: totrans-216
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CKS 考试主要关注 Kubernetes 中的安全功能。该领域跨越边界到 Linux 操作系统安全特性。熟悉 Linux 特定的工具和安全方面的高级内容不会有害。独立于本章涵盖的内容，建议熟悉
+    Linux 上的服务、包管理、用户管理和网络管理。
+- en: Know how to integrate Linux kernel hardening tools with Kubernetes.
+  id: totrans-217
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 知道如何将 Linux 内核加固工具与 Kubernetes 集成。
+- en: AppArmor and seccomp are just some kernel hardening tools that can be integrated
+    with Kubernetes to restrict system calls made from a container. Practice the process
+    of loading a profile and applying it to a container. In order to expand your horizons,
+    you may also want to explore other kernel functionality that works alongside Kubernetes,
+    such as [SELinux](https://oreil.ly/DrGbB) or [sysctl](https://oreil.ly/GyUoc).
+  id: totrans-218
+  prefs: []
+  type: TYPE_NORMAL
+  zh: AppArmor 和 seccomp 只是一些可以与 Kubernetes 集成的内核加固工具，用于限制容器中发出的系统调用。实践加载配置文件并将其应用于容器的过程。为了拓宽视野，您可能还希望探索与
+    Kubernetes 并行工作的其他内核功能，如[SELinux](https://oreil.ly/DrGbB)或[sysctl](https://oreil.ly/GyUoc)。
+- en: Sample Exercises
+  id: totrans-219
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 样例练习
+- en: Solutions to these exercises are available in the [Appendix](app01.xhtml#appendix-a).
+  id: totrans-220
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些练习的解决方案可以在[附录](app01.xhtml#appendix-a)中找到。
+- en: Navigate to the directory *app-a/ch04/close-ports* of the checked-out GitHub
+    repository [*bmuschko/cks-study-guide*](https://oreil.ly/sImXZ). Start up the
+    VMs running the cluster using the command `vagrant up`. The cluster consists of
+    a single control plane node named `kube-control-plane` and one worker node named
+    `kube-worker-1`. Once done, shut down the cluster using `vagrant destroy -f`.
+  id: totrans-221
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 进入已检出的 GitHub 代码库 [*bmuschko/cks-study-guide*](https://oreil.ly/sImXZ) 的目录 *app-a/ch04/close-ports*。使用命令
+    `vagrant up` 启动运行集群的虚拟机（VMs）。该集群包含一个名为 `kube-control-plane` 的控制平面节点和一个名为 `kube-worker-1`
+    的工作节点。完成后，使用 `vagrant destroy -f` 关闭集群。
+- en: Identify the process listening on port 21 in the VM `kube-worker-1`. You decided
+    not to expose this port to reduce the risk of attackers exploiting the port. Close
+    the port by shutting down the corresponding process.
+  id: totrans-222
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 确定在 VM `kube-worker-1` 上监听端口 21 的进程。为降低攻击者利用该端口的风险，决定关闭该端口对应的进程。
+- en: '*Prerequisite:* This exercise requires the installation of the tools [Vagrant](https://oreil.ly/FiyeH)
+    and [VirtualBox](https://oreil.ly/WW8IK).'
+  id: totrans-223
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: '*先决条件：* 此练习需要安装工具 [Vagrant](https://oreil.ly/FiyeH) 和 [VirtualBox](https://oreil.ly/WW8IK)。'
+- en: Navigate to the directory *app-a/ch04/apparmor* of the checked-out GitHub repository
+    [*bmuschko/cks-study-guide*](https://oreil.ly/sImXZ). Start up the VMs running
+    the cluster using the command `vagrant up`. The cluster consists of a single control
+    plane node named `kube-control-plane`, and one worker node named `kube-worker-1`.
+    Once done, shut down the cluster using `vagrant destroy -f`.
+  id: totrans-224
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 进入已检出的 GitHub 代码库 [*bmuschko/cks-study-guide*](https://oreil.ly/sImXZ) 的目录 *app-a/ch04/apparmor*。使用命令
+    `vagrant up` 启动运行集群的虚拟机（VMs）。该集群包含一个名为 `kube-control-plane` 的控制平面节点和一个名为 `kube-worker-1`
+    的工作节点。完成后，使用 `vagrant destroy -f` 关闭集群。
+- en: Create  an  AppArmor  profile  named  `network-deny`.  The  profile  should
+     prevent  any  incoming  and  outgoing  network  traffic.  Add  the  profile  to
+     the  set  of  AppArmor  rules  in  enforce  mode.  Apply  the  profile  to  the
+     Pod  named `network-call` running in the `default` namespace. Check the logs
+    of the Pod to ensure that network calls cannot be made anymore.
+  id: totrans-225
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 创建一个名为 `network-deny` 的 AppArmor 配置文件。该配置文件应禁止任何入站和出站网络流量。将该配置添加到处于强制执行模式的 AppArmor
+    规则集中。将该配置应用于运行在 `default` 命名空间中的名为 `network-call` 的 Pod。检查 Pod 的日志以确保无法进行网络调用。
+- en: '*Prerequisite:* This exercise requires the installation of the tools [Vagrant](https://oreil.ly/FiyeH)
+    and [VirtualBox](https://oreil.ly/WW8IK).'
+  id: totrans-226
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: '*先决条件：* 此练习需要安装工具 [Vagrant](https://oreil.ly/FiyeH) 和 [VirtualBox](https://oreil.ly/WW8IK)。'
+- en: Navigate to the directory *app-a/ch04/seccomp* of the checked-out GitHub repository
+    [*bmuschko/cks-study-guide*](https://oreil.ly/sImXZ). Start up the VMs running
+    the cluster using the command `vagrant up`. The cluster consists of a single control
+    plane node named `kube-control-plane`, and one worker node named `kube-worker-1`.
+    Once done, shut down the cluster using `vagrant destroy -f`.
+  id: totrans-227
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 进入已检出的 GitHub 代码库 [*bmuschko/cks-study-guide*](https://oreil.ly/sImXZ) 的目录 *app-a/ch04/seccomp*。使用命令
+    `vagrant up` 启动运行集群的虚拟机（VMs）。该集群包含一个名为 `kube-control-plane` 的控制平面节点和一个名为 `kube-worker-1`
+    的工作节点。完成后，使用 `vagrant destroy -f` 关闭集群。
+- en: Create a seccomp profile file named `audit.json` that logs all syscalls in the
+    standard seccomp directory. Apply the profile to the Pod named `network-call`
+    running in the `default` namespace. Check the log file `/var/log/syslog` for log
+    entries.
+  id: totrans-228
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 创建一个名为 `audit.json` 的 seccomp 配置文件，记录标准 seccomp 目录中的所有系统调用。将该配置应用于运行在 `default`
+    命名空间中的名为 `network-call` 的 Pod。检查日志文件 `/var/log/syslog` 查看日志条目。
+- en: '*Prerequisite:* This exercise requires the installation of the tools [Vagrant](https://oreil.ly/FiyeH)
+    and [VirtualBox](https://oreil.ly/WW8IK).'
+  id: totrans-229
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: '*先决条件：* 此练习需要安装工具 [Vagrant](https://oreil.ly/FiyeH) 和 [VirtualBox](https://oreil.ly/WW8IK)。'
+- en: Create a new Pod named `sysctl-pod` with the image `nginx:1.23.1`. Set the sysctl
+    parameters `net.core.somaxconn` to 1024 and `debug.iotrace` to `1`. Check on the
+    status of the Pod.
+  id: totrans-230
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 创建一个名为 `sysctl-pod` 的新 Pod，使用镜像 `nginx:1.23.1`。设置 sysctl 参数 `net.core.somaxconn`
+    为 1024 和 `debug.iotrace` 为 `1`。检查 Pod 的状态。

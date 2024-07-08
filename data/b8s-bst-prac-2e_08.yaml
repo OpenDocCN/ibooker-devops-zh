@@ -1,0 +1,1458 @@
+- en: Chapter 8\. Resource Management
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第 8 章 资源管理
+- en: In this chapter, we focus on the best practices for managing and optimizing
+    Kubernetes resources. We discuss workload scheduling, cluster management, pod
+    resource management, namespace management, and scaling applications. We also dive
+    into some of the advanced scheduling techniques that Kubernetes provides through
+    affinity, anti-affinity, taints, tolerations, and nodeSelectors.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们专注于管理和优化 Kubernetes 资源的最佳实践。我们讨论工作负载调度、集群管理、Pod 资源管理、命名空间管理和应用程序扩展。我们还深入探讨了
+    Kubernetes 通过亲和性、反亲和性、污点、容忍度和节点选择器提供的一些高级调度技术。
+- en: We show you how to implement resource limits, resource requests, pod Quality
+    of Service, `PodDisruptionBudget`s, `LimitRanger`s, and anti-affinity policies.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将向您展示如何实施资源限制、资源请求、Pod 服务质量、`PodDisruptionBudget`、`LimitRanger` 和反亲和性策略。
+- en: Kubernetes Scheduler
+  id: totrans-3
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Kubernetes 调度器
+- en: The Kubernetes scheduler is one of the main components that is hosted in the
+    control plane. The scheduler allows Kubernetes to make placement decisions for
+    pods deployed to the cluster. It deals with optimization of resources based on
+    constraints of the cluster as well as user-specified constraints. It uses a scoring
+    algorithm that is based on predicates and priorities.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 调度器是托管在控制平面中的主要组件之一。调度器允许 Kubernetes 对部署到集群中的 Pod 进行放置决策。它处理基于集群约束和用户指定约束的资源优化。它使用基于谓词和优先级的评分算法。
+- en: Predicates
+  id: totrans-5
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 谓词
+- en: The first function Kubernetes uses to make a scheduling decision is the predicate
+    function, which determines what nodes the pods can be scheduled on. It implies
+    a hard constraint, so it returns a value of true or false. An example would be
+    when a pod requests 4 GB of memory and a node cannot satisfy this requirement.
+    The node would return a false value and would be removed from viable nodes for
+    the pod to be scheduled to. Another example would be if the node is set to unschedulable;
+    it would then be removed from the scheduling decision.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 用于进行调度决策的第一个函数是谓词函数，它确定可以在哪些节点上调度 Pod。它意味着一个硬约束，因此返回一个 true 或 false
+    的值。例如，当一个 Pod 请求 4 GB 的内存，而一个节点无法满足此要求时。该节点将返回一个 false 值，并将从可用节点中移除以供 Pod 调度。另一个例子是，如果节点设置为不可调度，则将从调度决策中移除。
+- en: 'The scheduler checks the predicates based on order of restrictiveness and complexity.
+    As of this writing, the following are the predicates that the scheduler checks
+    for:'
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 调度器根据限制性和复杂性的顺序检查谓词。截至目前，调度器检查以下谓词：
+- en: '[PRE0]'
+  id: totrans-8
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: Priorities
+  id: totrans-9
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 优先级
+- en: 'Whereas predicates indicate a true or false value and dismiss a node for scheduling,
+    the priority value ranks all the valid nodes based on a relative value. The following
+    priorities are scored for nodes:'
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 而谓词指示一个 true 或 false 的值并且排除一个节点进行调度，优先级值根据相对值对所有有效节点进行排名。以下优先级为节点评分：
+- en: '[PRE1]'
+  id: totrans-11
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: The scores will be added, and then a node is given its final score to indicate
+    its priority. For example, if a pod requires 600 millicores and there are two
+    nodes, one with 900 millicores available and one with 1,800 millicores, the node
+    with 1,800 millicores available will have a higher priority.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 分数将被相加，然后节点将被赋予最终分数以指示其优先级。例如，如果一个 Pod 需要 600 毫核，而有两个节点，一个可用 900 毫核，另一个可用 1,800
+    毫核，那么可用 1,800 毫核的节点将具有更高的优先级。
+- en: If nodes are returned with the same priority, the scheduler will use a `selectHost()`
+    function, which selects a node in a round-robin fashion.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果节点返回相同的优先级，则调度器将使用 `selectHost()` 函数，以轮询方式选择一个节点。
+- en: Advanced Scheduling Techniques
+  id: totrans-14
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 高级调度技术
+- en: For most cases, Kubernetes does a good job of optimally scheduling pods for
+    you. It takes into account pods that are placed only on nodes that have sufficient
+    resources. It also tries to spread pods from the same ReplicaSet across nodes
+    to increase availability and will balance resource utilization. When this is not
+    good enough, Kubernetes gives you the flexibility to influence how resources are
+    scheduled. For example, you might want to schedule pods across availability zones
+    to mitigate a zonal failure causing downtime to your application. You might also
+    want to colocate pods to a specific host for performance benefits.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于大多数情况，Kubernetes会为您优化地安排Pod的调度。它考虑的因素包括仅将Pod放置在具有足够资源的节点上。它还试图将来自同一ReplicaSet的Pod分散到不同的节点以增加可用性，并平衡资源利用率。当这不够好时，Kubernetes为您提供了影响资源调度的灵活性。例如，您可能希望跨可用性区域安排Pod以减少因区域性故障而导致应用程序停机时间。您还可能希望将Pod放置在特定主机以获得性能优势。
+- en: Pod Affinity and Anti-Affinity
+  id: totrans-16
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Pod亲和性和反亲和性
+- en: Pod affinity and anti-affinity let you set rules to place pods relative to other
+    pods. These rules allow you to modify the scheduling behavior and override the
+    scheduler’s placement decisions.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod亲和性和反亲和性允许您设置规则以相对于其他Pod放置Pod。这些规则允许您修改调度行为并覆盖调度器的放置决策。
+- en: For example, an anti-affinity rule would allow you to spread pods from a ReplicaSet
+    across multiple datacenter zones. It does this by utilizing keylabels set on the
+    pods. Setting the key/value pairs instructs the scheduler to schedule the pods
+    on the same node (affinity) or prevent the pods from scheduling on the same nodes
+    (anti-affinity).
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，反亲和性规则允许您跨多个数据中心区域分散来自ReplicaSet的Pod。它通过利用设置在Pod上的键标签来实现这一点。设置键/值对指示调度器在同一节点上调度Pod（亲和性）或防止Pod在同一节点上调度（反亲和性）。
+- en: 'Following is an example of setting a pod anti-affinity rule:'
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下是设置Pod反亲和性规则的示例：
+- en: '[PRE2]'
+  id: totrans-20
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: This manifest of an NGINX deployment has four replicas and the selector label
+    `app=frontend`. The deployment has a PodAntiAffinity stanza configured that will
+    ensure that the scheduler does not colocate replicas on a single node. This ensures
+    that if a node fails, there are still enough replicas of NGINX to serve data from
+    its cache.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个NGINX部署清单有四个副本，并且选择标签为`app=frontend`。部署中配置了一个PodAntiAffinity段，确保调度器不会在同一节点上放置副本。这样做可以确保如果一个节点故障，仍然有足够的NGINX副本从其缓存中提供数据。
+- en: nodeSelector
+  id: totrans-22
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: nodeSelector
+- en: A nodeSelector is the easiest way to schedule pods to a particular node. It
+    uses label selectors with key/value pairs to make the scheduling decision. For
+    example, you might want to schedule pods to a specific node that has specialized
+    hardware, such as a GPU. You might ask, “Can’t I do this with a node taint?” The
+    answer is, yes, you can. The difference is that you use a nodeSelector when you
+    want to *request* a GPU-enabled node, whereas a taint *reserves* a node for only
+    GPU workloads. You can use both node taints and nodeSelectors together to reserve
+    the nodes for only GPU workloads, and use the nodeSelector to automatically select
+    a node with a GPU.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: nodeSelector是将Pod调度到特定节点的最简单方法。它使用带有键/值对的标签选择器来做出调度决策。例如，您可能希望将Pod调度到具有专用硬件（例如GPU）的特定节点。您可能会问，“我不能用节点污点做到这一点吗？”答案是，是的，您可以。区别在于，当您希望*请求*一个启用GPU的节点时，您使用nodeSelector，而污点则*保留*节点仅用于GPU工作负载。您可以同时使用节点污点和nodeSelector来仅将节点保留给GPU工作负载，并使用nodeSelector自动选择具有GPU的节点。
+- en: 'Following is an example of labeling a node and using a nodeSelector in the
+    pod specification:'
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下是标记节点和在Pod规范中使用nodeSelector的示例：
+- en: '[PRE3]'
+  id: totrans-25
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'Now, let’s create a pod specification with a nodeSelector key/value of `disktype:
+    ssd`:'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '现在，让我们创建一个带有`disktype: ssd`节点选择器键/值的Pod规范：'
+- en: '[PRE4]'
+  id: totrans-27
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: 'Using the nodeSelector schedules the pod to only nodes that have the label
+    `disktype=ssd`:'
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用nodeSelector将Pod调度到只有标签`disktype=ssd`的节点上：
+- en: Taints and Tolerations
+  id: totrans-29
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 污点和容忍
+- en: '*Taints* are used on nodes to repel pods from being scheduled on them. But
+    isn’t that what anti-affinity is for? Yes, but taints take a different approach
+    than pod anti-affinity and serve a different use case. For example, you might
+    have pods that require a specific performance profile, and you do not want to
+    schedule any other pods to the specific node. Taints work in conjunction with
+    *tolerations*, which allow you to override tainted nodes. The combination of the
+    two gives you fine-grained control over anti-affinity rules.'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*污点*用于节点上排斥调度pod。但这不是反亲和性的作用吗？是的，但污点采用了与pod反亲和性不同的方法，并且用于不同的用例。例如，您可能有需要特定性能配置文件的pod，并且不希望将任何其他pod调度到特定节点上。污点与*容忍*结合使用，允许您覆盖带有污点的节点。这两者的结合为您提供了对反亲和性规则的精细控制。'
+- en: 'In general, you will use taints and tolerations for the following use cases:'
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常情况下，您将使用污点和容忍来处理以下用例：
+- en: Specialized node hardware
+  id: totrans-32
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 专用节点硬件
+- en: Dedicated node resources
+  id: totrans-33
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 专用节点资源
+- en: Avoiding degraded nodes
+  id: totrans-34
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 避免降级节点
+- en: 'Multiple taint types affect scheduling and running containers:'
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 多种污点类型影响调度和运行容器：
+- en: NoSchedule
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: NoSchedule
+- en: A hard taint that prevents scheduling on the node
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 阻止在节点上进行调度的硬污点
+- en: PreferNoSchedule
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: PreferNoSchedule
+- en: Schedules only if pods cannot be scheduled on other nodes
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 仅在无法在其他节点上调度pod时才进行调度
+- en: NoExecute
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: NoExecute
+- en: Evicts pods already running on the node
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 驱逐已在节点上运行的pod
+- en: NodeCondition
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: NodeCondition
+- en: Taints a node if it meets a specific condition
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果满足特定条件，则对节点进行污点处理
+- en: '[Figure 8-1](#kubernetes_taints_and_tolerations) shows an example of a node
+    that is tainted with `gpu=true:NoSchedule`. Pod Spec 1 has a toleration key with
+    `gpu`, so it will be scheduled to the tainted node. Pod Spec 2 has a toleration
+    key of `no-gpu`, so it will not be scheduled to the node.'
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 8-1](#kubernetes_taints_and_tolerations) 展示了一个被`taint`为`gpu=true:NoSchedule`的节点的示例。Pod
+    Spec 1 具有一个`gpu`的容忍键，因此将被调度到带污点的节点上。Pod Spec 2 具有一个`no-gpu`的容忍键，因此不会被调度到该节点上。'
+- en: '![Kubernetes taints and tolerations](assets/kbp2_0801.png)'
+  id: totrans-45
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Kubernetes污点和容忍](assets/kbp2_0801.png)'
+- en: Figure 8-1\. Kubernetes taints and tolerations
+  id: totrans-46
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 8-1\. Kubernetes污点和容忍
+- en: 'When a pod cannot be scheduled due to tainted nodes, you’ll see an error message
+    like the following:'
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当由于带污点的节点而无法调度pod时，您将看到以下类似的错误消息：
+- en: '[PRE5]'
+  id: totrans-48
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: Now that we’ve seen how we can manually add taints to affect scheduling, there
+    is also the powerful concept of *taint-based eviction*, which allows the eviction
+    of running pods. For example, if a node becomes unhealthy due to a bad disk drive,
+    the taint-based eviction can reschedule the pods on the host to another healthy
+    node in the cluster.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经看到如何手动添加污点以影响调度，还有一个强大的概念是*taint-based eviction*，它允许驱逐正在运行的pod。例如，如果由于坏的磁盘驱动器而使节点变得不健康，基于污点的驱逐可以将pod重新调度到集群中的另一个健康节点上。
+- en: Pod Resource Management
+  id: totrans-50
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Pod资源管理
+- en: One of the most important aspects of managing applications in Kubernetes is
+    appropriately managing pod resources. Managing pod resources consists of managing
+    CPU and memory to optimize the overall utilization of your Kubernetes cluster.
+    You can manage these resources at the container level and at the namespace level.
+    There are other resources, such as network and storage, but Kubernetes doesn’t
+    yet have a way to set requests and limits for those resources.
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在Kubernetes中管理应用程序的一个最重要方面是适当管理pod资源。管理pod资源包括管理CPU和内存，以优化您的Kubernetes集群的整体利用率。您可以在容器级别和命名空间级别管理这些资源。还有其他资源，如网络和存储，但Kubernetes尚无法设置这些资源的请求和限制。
+- en: For the scheduler to optimize resources and make intelligent placement decisions,
+    it needs to understand the requirements of an application. As an example, if a
+    container (application) needs a minimum of 2 GB to perform, we need to define
+    this in our pod specification so the scheduler knows that the container requires
+    2 GB of memory on the host to which it schedules the container.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了调度程序能够优化资源并做出智能的放置决策，它需要了解应用程序的需求。例如，如果一个容器（应用程序）需要至少2 GB 的内存来运行，我们需要在pod规范中定义这一点，以便调度程序知道该容器在所调度的主机上需要2
+    GB 的内存。
+- en: Resource Request
+  id: totrans-53
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 资源请求
+- en: A Kubernetes resource *request* defines that a container requires *X* amount
+    of CPU or memory to be scheduled. If you were to specify in the pod specification
+    that a container requires 8 GB for its resource request and all your nodes have
+    7.5 GB of memory, the pod would not be scheduled. If the pod is not able to be
+    scheduled, it will go into a *pending* state until the required resources are
+    available. So let’s look at how this works in our cluster.
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 资源*请求*定义了一个容器需要调度*X*数量的 CPU 或内存。如果您在 pod 规范中指定容器需要 8 GB 的资源请求，而所有节点都有
+    7.5 GB 的内存，那么该 pod 将无法调度。如果 pod 无法调度，它将进入*挂起*状态，直到所需资源可用。所以让我们看看在我们的集群中是如何工作的。
+- en: 'To determine the available free resources in your cluster, use `kubectl top`:'
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要确定集群中可用的空闲资源，请使用 `kubectl top`：
+- en: '[PRE6]'
+  id: totrans-56
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: 'The output should look like this (the memory size might be different for your
+    cluster):'
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 输出应该像这样（您的集群的内存大小可能不同）：
+- en: '[PRE7]'
+  id: totrans-58
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: 'As this example shows, the largest amount of memory available to a host is
+    7,500 Mi, so let’s schedule a pod that requests 8,000 Mi of memory:'
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如这个例子所示，主机可用的最大内存量是 7,500 Mi，所以让我们安排一个请求 8,000 Mi 内存的 pod：
+- en: '[PRE8]'
+  id: totrans-60
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: 'Notice that the pod will stay pending, and if you look at the events on the
+    pods, you’ll see that no nodes are available to schedule the pods:'
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注意，pod 将保持挂起状态，如果查看 pod 的事件，您会看到没有可用的节点来调度 pod：
+- en: '[PRE9]'
+  id: totrans-62
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: 'The output of the event should look like this:'
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 事件的输出应该像这样：
+- en: '[PRE10]'
+  id: totrans-64
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: Resource Limits and Pod Quality of Service
+  id: totrans-65
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 资源限制和 pod 服务质量
+- en: Kubernetes resource *limits* define the maximum CPU or memory that a pod is
+    given. When you specify limits for CPU and memory, each takes a different action
+    when it reaches the specified limit. With CPU limits, the container is throttled
+    from using more than its specified limit. With memory limits, the pod is restarted
+    if it reaches its limit. The pod might be restarted on the same host or a different
+    host within the cluster.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 资源*限制*定义了 pod 可以获得的最大 CPU 或内存。当您为 CPU 和内存指定限制时，每个达到指定限制时都会采取不同的操作。对于
+    CPU 限制，容器会被限制使用超过指定限制的资源。对于内存限制，如果 pod 达到其限制，它将被重新启动。该 pod 可能会在集群中的同一主机或不同主机上重新启动。
+- en: 'Specifying limits for containers is a best practice to ensure that applications
+    are allotted their fair share of resources within the cluster:'
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为容器指定限制是一种最佳实践，以确保应用程序在集群中分配到公平的资源份额：
+- en: '[PRE11]'
+  id: totrans-68
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: '[PRE12]'
+  id: totrans-69
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: 'When a pod is created, it’s assigned one of the following Quality of Service
+    (QoS) classes:'
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当一个 pod 被创建时，它被分配以下其中之一的服务质量 (QoS) 类：
+- en: Guaranteed
+  id: totrans-71
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 保证
+- en: Burstable
+  id: totrans-72
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 突发
+- en: Best effort
+  id: totrans-73
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 最佳努力
+- en: The pod is assigned a QoS of *guaranteed* when CPU and memory both have request
+    and limits that match. A *burstable* QoS is when the limits are set higher than
+    the request, meaning that the container is guaranteed its request, but it can
+    also burst to the limit set for the container. A pod is assigned *best effort*
+    when no request or limits are set for the containers in the pod.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当 CPU 和内存都有匹配的请求和限制时，pod 被分配*保证*的 QoS。当限制设置高于请求时，即被分配*突发*的 QoS，这意味着容器保证了其请求，但也可以突发到容器设置的限制。当
+    pod 中的容器没有设置请求或限制时，被分配*最佳努力*的 QoS。
+- en: '[Figure 8-2](#kubernetes_qos) depicts how QoS is assigned to pods.'
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 8-2](#kubernetes_qos) 描述了如何为 pod 分配 QoS。'
+- en: '![Kubernetes QoS](assets/kbp2_0802.png)'
+  id: totrans-76
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Kubernetes QoS](assets/kbp2_0802.png)'
+- en: Figure 8-2\. Kubernetes QoS
+  id: totrans-77
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 8-2\. Kubernetes QoS
+- en: Note
+  id: totrans-78
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: With guaranteed QoS, if you have multiple containers in your pod, you’ll need
+    to have memory request and limits set for each container, and you’ll also need
+    CPU request and limits set for each container. If the request and limits are not
+    set for all containers, they will not be assigned guaranteed QoS.
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用保证的 QoS，如果您的 pod 中有多个容器，您将需要为每个容器设置内存请求和限制，同时还需要为每个容器设置 CPU 请求和限制。如果所有容器的请求和限制都没有设置，它们将不会被分配保证的
+    QoS。
+- en: PodDisruptionBudgets
+  id: totrans-80
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: PodDisruptionBudgets
+- en: 'At some point in time, Kubernetes might need to *evict* pods from a host. There
+    are two types of evictions: *voluntary* and *involuntary* disruptions. Involuntary
+    disruptions can be caused by hardware failure, network partitions, kernel panics,
+    or a node being out of resources. Voluntary evictions can be caused by performing
+    maintenance on the cluster, the Cluster Autoscaler deallocating nodes, or updating
+    pod templates. To minimize the impact to your application, you can set a `PodDisruptionBudget`
+    to ensure uptime of the application when pods need to be evicted. A `PodDisruptionBudget`
+    allows you to set a policy on the minimum available and maximum unavailable pods
+    during voluntary eviction events. An example of a voluntary eviction would be
+    when draining a node to perform maintenance on the node.'
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 在某个时间点可能需要从主机中*驱逐* pod。有两种类型的驱逐：*自愿*和*非自愿*中断。非自愿中断可能由硬件故障、网络分区、内核崩溃或节点资源不足引起。自愿驱逐可能由于对集群执行维护、集群自动缩放器释放节点或更新
+    pod 模板而引起。为了最小化对应用程序的影响，您可以设置`PodDisruptionBudget`以确保 pod 需要被驱逐时应用程序的正常运行时间。`PodDisruptionBudget`允许您在自愿驱逐事件中设置最小可用和最大不可用
+    pod 的策略。例如，当在节点上执行维护时，自愿驱逐的一个示例就是排空节点。
+- en: For example, you might specify that no more than 20% of pods belonging to your
+    application can be down at a given time. You could also specify this policy in
+    terms of *X* number of replicas that must always be available.
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，您可以指定您的应用程序中最多有 20% 的 pod 可以在任何给定时间内处于停机状态。您还可以根据*X*个必须始终可用的副本来指定此策略。
+- en: Minimum available
+  id: totrans-83
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 最小可用
+- en: 'In the following example, we set a `PodDisruptionBudget` to handle a minimum
+    available to 5 for app: frontend:'
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在下面的示例中，我们设置了一个`PodDisruptionBudget`来处理应用程序前端的最小可用为 5：
+- en: '[PRE13]'
+  id: totrans-85
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: In this example, the `PodDisruptionBudget` specifies that for the frontend app
+    there must always be five replica pods available at any given time. In this scenario,
+    an eviction can evict as many pods as it wants, as long as five are available.
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在此示例中，`PodDisruptionBudget`指定前端应用程序始终必须有五个复制 pod 在任何时候可用。在这种情况下，可以驱逐尽可能多的 pod，只要五个
+    pod 可用即可。
+- en: Maximum unavailable
+  id: totrans-87
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 最大不可用
+- en: 'In the next example, we set a `PodDisruptionBudget` to handle a maximum unavailable
+    to 20% for the frontend app:'
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在下一个示例中，我们设置了一个`PodDisruptionBudget`来处理前端应用程序的最大不可用为 20%：
+- en: '[PRE14]'
+  id: totrans-89
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: In this example, the `PodDisruptionBudget` specifies that no more than 20% of
+    replica pods can be unavailable at any given time. In this scenario, an eviction
+    can evict a maximum of 20% of pods during a voluntary disruption.
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在此示例中，`PodDisruptionBudget`指定在任何给定时间内不得超过 20% 的复制 pod 不可用。在这种情况下，驱逐期间可以驱逐多达
+    20% 的 pod。
+- en: It’s essential that when designing your Kubernetes cluster you think about the
+    sizing of the cluster resources so that you can handle a number of failed nodes.
+    For example, if you have a four-node cluster and one node fails, you will be losing
+    a quarter of your cluster capacity.
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在设计 Kubernetes 集群时，重要的是要考虑集群资源的大小，以便能够处理一定数量的失败节点。例如，如果您有一个四节点集群，并且一个节点失败了，那么您将失去四分之一的集群容量。
+- en: Note
+  id: totrans-92
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: When specifying a `PodDisruptionBudget` as a percentage, it might not correlate
+    to a specific number of pods. For example, if your application has seven pods
+    and you specify `maxAvailable` to `50%`, it’s not clear whether that is three
+    or four pods. In this case, Kubernetes rounds up to the closest integer, so the
+    `maxAvailable` would be four pods.
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当将`PodDisruptionBudget`指定为百分比时，可能无法与特定数量的 pod 相关联。例如，如果您的应用程序有七个 pod，并且您将`maxAvailable`指定为`50%`，那么不清楚是三个还是四个
+    pod。在这种情况下，Kubernetes 会四舍五入到最接近的整数，因此`maxAvailable`将是四个 pod。
+- en: Managing Resources by Using Namespaces
+  id: totrans-94
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 通过使用命名空间管理资源
+- en: '*Namespaces* in Kubernetes give you a nice logical separation of resources
+    deployed to a cluster. This allows you to set resource quotas per namespace, Role-Based
+    Access Control (RBAC) per namespace, and also network policies per namespace.
+    It gives you soft multitenancy features so you can separate out workloads in a
+    cluster without dedicating specific infrastructure to a team or application. This
+    allows you to get the most out of your cluster resource while also maintaining
+    a logical form of separation.'
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*命名空间*在 Kubernetes 中为您提供了资源的良好逻辑分离。这允许您为每个命名空间设置资源配额、基于角色的访问控制（RBAC）和命名空间的网络策略。它为您提供了软多租户功能，可以在集群中分隔工作负载，而无需为团队或应用程序专用特定的基础设施。这使您可以在保持逻辑分离的同时充分利用集群资源。'
+- en: For example, you could create a namespace per team and give each team a quota
+    on the number of resources that it can utilize, such as CPU and memory.
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，你可以为每个团队创建一个命名空间，并为每个团队分配资源配额，例如 CPU 和内存。
+- en: When designing how you want to configure a namespace, you should think about
+    how you want to control access to a specific set of applications. If you have
+    multiple teams that will be using a single cluster, it is typically best to allocate
+    a namespace to each team. If the cluster is dedicated to only one team, it might
+    make sense to allocate a namespace for each service deployed to the cluster. There’s
+    no single solution to this; your team organization and responsibilities will drive
+    the design.
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在设计如何配置命名空间时，应考虑如何控制对特定应用程序集的访问。如果有多个团队将使用单个集群，则通常最好为每个团队分配一个命名空间。如果集群专用于单个团队，则为部署到集群的每个服务分配一个命名空间可能是有意义的。没有单一的解决方案；你的团队组织和责任将驱动设计。
+- en: 'After deploying a Kubernetes cluster, you’ll see the following namespaces in
+    your cluster:'
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 部署 Kubernetes 集群后，你会在集群中看到以下命名空间：
+- en: '`kube-system`'
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kube-system`'
+- en: Kubernetes internal components are deployed here, such as `coredns`, `kube-proxy`,
+    and `metrics-server`.
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 内部组件已部署在这里，例如 `coredns`、`kube-proxy` 和 `metrics-server`。
+- en: '`default`'
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`default`'
+- en: This is the default namespace that is used when you don’t specify a namespace
+    in the resource object.
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是在资源对象中未指定命名空间时使用的默认命名空间。
+- en: '`kube-public`'
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kube-public`'
+- en: Used for anonymous and unauthenticated content, and reserved for system usage.
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用于匿名和未认证内容，保留用于系统使用。
+- en: You’ll want to avoid using the default namespace because users are not mandated
+    to deploy applications within specific resource constraints, and it can lead to
+    resource contention. You should also avoid using the `kube-system` namespace for
+    your applications because it is used for Kubernetes internal components.
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你应避免使用默认命名空间，因为用户不必在特定资源约束内部署应用程序，这可能导致资源争用。你还应避免将 `kube-system` 命名空间用于你的应用程序，因为它用于
+    Kubernetes 内部组件。
+- en: 'When working with namespaces, you need to use the `–namespace` flag, or `-n`
+    for short, when working with `kubectl`:'
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在使用命名空间时，使用 `kubectl` 时需要使用 `--namespace` 标志，或者简写为 `-n`：
+- en: '[PRE15]'
+  id: totrans-107
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: '[PRE16]'
+  id: totrans-108
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: 'You can also set your `kubectl` context to a specific namespace, which is useful
+    so that you don’t need to add the `–namespace` flag with every command. You can
+    set your namespace context by using the following command:'
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你还可以将 `kubectl` 上下文设置为特定的命名空间，这样你就不需要在每个命令中添加 `--namespace` 标志了。你可以使用以下命令设置你的命名空间上下文：
+- en: '[PRE17]'
+  id: totrans-110
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: Tip
+  id: totrans-111
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: When dealing with multiple namespaces and clusters, it can be a pain to set
+    different namespaces and cluster context. We’ve found that using [kubens](https://oreil.ly/ryavL)
+    and [kubectx](https://oreil.ly/kVBiL) can help make it easy to switch between
+    these different namespaces and contexts.
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当处理多个命名空间和集群时，设置不同的命名空间和集群上下文可能会很麻烦。我们发现使用 [kubens](https://oreil.ly/ryavL)
+    和 [kubectx](https://oreil.ly/kVBiL) 可以帮助轻松切换这些不同的命名空间和上下文。
+- en: ResourceQuota
+  id: totrans-113
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: ResourceQuota
+- en: 'When multiple teams or applications share a single cluster, it’s important
+    to set up `ResourceQuota`s on your namespaces. `ResourceQuota`s allow you to divvy
+    up the cluster in logical units so that no single namespace can consume more than
+    its share of resources in the cluster. The following resources can have a quota
+    set for them:'
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当多个团队或应用共享单个集群时，设置 `ResourceQuota` 对你的命名空间非常重要。`ResourceQuota` 允许你将集群分割成逻辑单元，以确保没有单个命名空间能在集群中占用超过其份额的资源。以下资源可以为它们设置配额：
+- en: 'Compute resources:'
+  id: totrans-115
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 计算资源：
+- en: '`requests.cpu`: Sum of CPU requests cannot exceed this amount'
+  id: totrans-116
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`requests.cpu`: CPU 请求的总和不得超过此数量。'
+- en: '`limits.cpu`: Sum of CPU limits cannot exceed this amount'
+  id: totrans-117
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`limits.cpu`: CPU 限制的总和不得超过此数量。'
+- en: '`requests.memory`: Sum of memory requests cannot exceed this amount'
+  id: totrans-118
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`requests.memory`: 内存请求的总和不得超过此数量。'
+- en: '`limit.memory`: Sum of memory limits cannot exceed this amount'
+  id: totrans-119
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`limit.memory`: 内存限制的总和不得超过此数量。'
+- en: 'Storage resources:'
+  id: totrans-120
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 存储资源：
+- en: '`requests.storage`: Sum of storage requests cannot exceed this value'
+  id: totrans-121
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`requests.storage`: 存储请求的总和不得超过此值。'
+- en: '`persistentvolumeclaims`: The total number of PersistentVolume claims that
+    can exist in the namespace'
+  id: totrans-122
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`persistentvolumeclaims`: 命名空间中可以存在的 PersistentVolume claim 的总数。'
+- en: '`storageclass.request`: Volume claims associated with the specified storage-class
+    cannot exceed this value'
+  id: totrans-123
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`storageclass.request`: 与指定存储类相关联的卷声明不得超过此值。'
+- en: '`storageclass.pvc`: The total number of PersistentVolume claims that can exist
+    in the namespace'
+  id: totrans-124
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`storageclass.pvc`：命名空间中可以存在的持久卷声明的总数'
+- en: 'Object count quotas (only an example set):'
+  id: totrans-125
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 对象计数配额（仅作为示例设置）：
+- en: count/pvc
+  id: totrans-126
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 计数/pvc
+- en: count/services
+  id: totrans-127
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 计数/services
+- en: count/deployments
+  id: totrans-128
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 计数/deployments
+- en: count/replicasets
+  id: totrans-129
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 计数/replicasets
+- en: As you can see from this list, Kubernetes gives you fine-grained control over
+    how you carve up resource quotas per namespace. This allows you to more efficiently
+    operate resource usage in a multitenant cluster.
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从这个列表中可以看出，Kubernetes允许您对每个命名空间的资源配额进行精细化控制。这使您能够更有效地管理多租户集群中的资源使用。
+- en: 'Let’s see how these quotas actually work by setting up a quota on a namespace.
+    Apply the following YAML file to the `team-1` namespace:'
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在让我们看看这些配额是如何通过在命名空间上设置一个配额来实际工作的。将以下YAML文件应用到`team-1`命名空间：
+- en: '[PRE18]'
+  id: totrans-132
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: '[PRE19]'
+  id: totrans-133
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: This example sets quotas for CPU, memory, and storage on the `team-1` namespace.
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此示例为`team-1`命名空间设置了CPU、内存和存储的配额。
+- en: 'Now let’s try to deploy an application to see how the resource quotas affect
+    the deployment:'
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在让我们尝试部署一个应用程序，看看资源配额如何影响部署：
+- en: '[PRE20]'
+  id: totrans-136
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: 'This deployment will fail with the following error due to the memory quota
+    exceeding 2 Gi of memory:'
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于内存配额超过了2 Gi内存，此部署将失败并显示以下错误：
+- en: '[PRE21]'
+  id: totrans-138
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: As this example demonstrates, setting resource quotas can let you deny deployment
+    of resources based on policies you set for the namespace.
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如这个示例展示的那样，设置资源配额可以根据你为命名空间设置的策略拒绝资源的部署。
+- en: LimitRange
+  id: totrans-140
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: LimitRange
+- en: We’ve discussed setting `request` and `limits` at the container level, but what
+    happens if the user forgets to set these in the pod specification? Kubernetes
+    provides an admission controller that allows you to automatically set these when
+    none are indicated in the specification.
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们已经讨论过在容器级别设置`request`和`limits`，但是如果用户忘记在pod规范中设置这些内容会发生什么？Kubernetes提供了一个准入控制器，允许在规范中没有指定这些内容时自动设置它们。
+- en: 'First, create a namespace to work with quotas and `LimitRange`s:'
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，创建一个用于配额和`LimitRange`工作的命名空间：
+- en: '[PRE22]'
+  id: totrans-143
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: 'Apply a `LimitRange` to the namespace to apply `defaultRequest` in `limits`:'
+  id: totrans-144
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在命名空间中应用`LimitRange`以应用`limits`中的`defaultRequest`：
+- en: '[PRE23]'
+  id: totrans-145
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: 'Save this to *limitranger.yaml* and then run `kubectl apply`:'
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将此保存为*limitranger.yaml*，然后运行`kubectl apply`：
+- en: '[PRE24]'
+  id: totrans-147
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: 'Verify that the `LimitRange` applies default limits and requests:'
+  id: totrans-148
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 验证`LimitRange`是否应用了默认的限制和请求：
+- en: '[PRE25]'
+  id: totrans-149
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE25]'
+- en: 'Next, let’s describe the pod to see what requests and limits were set on it:'
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，让我们描述一下pod，看看在其上设置了什么请求和限制：
+- en: '[PRE26]'
+  id: totrans-151
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE26]'
+- en: 'You should see the following requests and limits set on the pod specification:'
+  id: totrans-152
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您应该看到在pod规范上设置了以下请求和限制：
+- en: '[PRE27]'
+  id: totrans-153
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE27]'
+- en: It’s important to use `LimitRange` when using `ResourceQuota`s, because if no
+    request or limits are set in the specification, the deployment will be rejected.
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当使用`ResourceQuota`时，使用`LimitRange`非常重要，因为如果在规范中未设置请求或限制，部署将被拒绝。
+- en: Cluster Scaling
+  id: totrans-155
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 集群扩展
+- en: One of the first decisions you need to make when deploying a cluster is the
+    instance size you’ll want to use within your cluster. This becomes more of an
+    art than science, especially when you’re mixing workloads in a single cluster.
+    You’ll first want to identify a good starting point for the cluster; aiming for
+    a good balance of CPU and memory is one option. After you’ve decided on a sensible
+    size for the cluster, you can use a couple of Kubernetes core primitives to manage
+    the scaling of your cluster.
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在部署集群时，您需要做的第一个决定之一是确定您将在集群中使用的实例大小。这在将工作负载混合在单个集群中时尤为重要，更多地是一门艺术而非科学。您首先需要确定集群的良好起点；追求CPU和内存的良好平衡是一个选项。在确定了集群的合理大小后，您可以使用几个Kubernetes核心原语来管理集群的扩展。
+- en: Manual scaling
+  id: totrans-157
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 手动扩展
+- en: Kubernetes makes it easy to scale your cluster, especially if you’re using tools
+    like Kops or a managed Kubernetes offering. Scaling your cluster manually is typically
+    just choosing a new number of nodes, and the service will add the new nodes to
+    your cluster.
+  id: totrans-158
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes使得扩展您的集群变得简单，特别是如果您正在使用像Kops或托管的Kubernetes服务这样的工具。手动扩展您的集群通常只需选择一个新的节点数，服务将会将新节点添加到您的集群中。
+- en: These tools also allow you to create node pools, which allows you to add new
+    instance types to an already running cluster. This becomes very useful when running
+    mixed workloads within a single cluster. For example, one workload might be more
+    CPU driven, whereas the other workloads might be memory-driven applications. Node
+    pools allow you to mix multiple instance types within a single cluster.
+  id: totrans-159
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些工具还允许您创建节点池，这使得您可以向已运行的集群添加新的实例类型。在单个集群中运行混合工作负载时，这变得非常有用。例如，一个工作负载可能更多地依赖于
+    CPU，而其他工作负载可能是内存驱动的应用程序。节点池允许您在单个集群中混合多个实例类型。
+- en: But perhaps you don’t want to manually do this and want it to autoscale. There
+    are things that you need to take into consideration with cluster autoscaling,
+    and we have found that most users are better off starting with just manually scaling
+    their nodes proactively when resources are needed. If your workloads are highly
+    variable, cluster autoscaling can be very useful.
+  id: totrans-160
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 但也许您不想手动执行此操作，希望它自动扩展。在集群自动扩展时，您需要考虑一些事项，我们发现大多数用户最好是在需要资源时主动手动扩展其节点。如果您的工作负载高度可变，集群自动扩展将非常有用。
+- en: Cluster autoscaling
+  id: totrans-161
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 集群自动扩展
+- en: Kubernetes provides a Cluster Autoscaler add-on that allows you to set the minimum
+    nodes available to a cluster and also the maximum number of nodes to which your
+    cluster can scale. The Cluster Autoscaler bases its scale decision on when a pod
+    goes pending. For example, if the Kubernetes scheduler tries to schedule a pod
+    with a memory request of 4,000 Mib and the cluster has only 2,000 Mib available,
+    the pod will go into a pending state. After the pod is pending, the Cluster Autoscaler
+    will add a node to the cluster. As soon as the new node is added to the cluster,
+    the pending pod is scheduled to the node. The downside of the Cluster Autoscaler
+    is that a new node is added only before a pod goes pending, so your workload may
+    end up waiting for a new node to come online when it is scheduled. As of Kubernetes
+    v1.15, the Cluster Autoscaler doesn’t support scaling based on custom metrics.
+  id: totrans-162
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 提供了一个 Cluster Autoscaler 插件，允许您设置集群的最小可用节点数，以及集群可以扩展到的最大节点数。Cluster
+    Autoscaler 根据 pod 进入挂起状态时做出扩展决策。例如，如果 Kubernetes 调度器尝试调度一个需要 4,000 Mib 内存的 pod，而集群只有
+    2,000 Mib 可用，那么该 pod 将进入挂起状态。在 pod 挂起后，Cluster Autoscaler 将向集群添加一个节点。一旦新节点添加到集群中，挂起的
+    pod 就会被调度到该节点。Cluster Autoscaler 的缺点在于，只有在 pod 进入挂起状态之前才会添加新节点，因此当调度时，您的工作负载可能需要等待新节点上线。截至
+    Kubernetes v1.15，Cluster Autoscaler 不支持基于自定义指标的扩展。
+- en: The Cluster Autoscaler can also reduce the size of the cluster after resources
+    are no longer needed. When the resources are no longer needed, it will drain the
+    node and reschedule the pods to new nodes in the cluster. You’ll want to use a
+    `PodDisruptionBudget` to ensure that you don’t negatively affect your application
+    when it performs its drain operation to remove the node from the cluster.
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当不再需要资源时，Cluster Autoscaler 还可以减少集群的大小。当资源不再需要时，它将排空节点并将 pod 重新调度到集群中的新节点。您将需要使用
+    `PodDisruptionBudget` 来确保在执行排空操作以从集群中移除节点时不会对应用程序产生负面影响。
+- en: Application Scaling
+  id: totrans-164
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 应用程序扩展
+- en: Kubernetes provides multiple ways to scale applications in your cluster. You
+    can scale an application by manually changing the number of replicas within a
+    deployment. You can also change the ReplicaSet or replication controller, but
+    we don’t recommend managing your applications through those implementations. Manual
+    scaling is perfectly fine for workloads that are static or when you know the times
+    that the workload spikes, but for workloads that experience sudden spikes or workloads
+    that are not static, manual scaling is not ideal for the application. Happily,
+    Kubernetes also provides a Horizontal Pod Autoscaler (HPA) to automatically scale
+    workloads for you.
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 提供了多种方式来扩展集群中的应用程序。您可以通过手动更改部署中的副本数量来扩展应用程序。您也可以更改 ReplicaSet 或复制控制器，但我们不建议通过这些实现来管理您的应用程序。对于静态的工作负载或者您知道工作负载峰值时段的情况，手动扩展是完全可以接受的，但对于经历突发峰值或不是静态的工作负载，手动扩展并不理想。幸运的是，Kubernetes
+    还提供了 Horizontal Pod Autoscaler（HPA），可以自动为您扩展工作负载。
+- en: 'Let’s first look at how you can manually scale a deployment by applying the
+    following Deployment manifest:'
+  id: totrans-166
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们首先看看如何通过应用以下部署清单来手动扩展部署：
+- en: '[PRE28]'
+  id: totrans-167
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE28]'
+- en: 'This example deploys three replicas of our frontend service. We then can scale
+    this deployment by using the `kubectl scale` command:'
+  id: totrans-168
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本示例部署了我们的前端服务的三个副本。然后，我们可以使用 `kubectl scale` 命令来扩展此部署：
+- en: '[PRE29]'
+  id: totrans-169
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE29]'
+- en: This results in five replicas of our frontend service. This is great, but let’s
+    look at how we can add some intelligence and automatically scale the application
+    based on metrics.
+  id: totrans-170
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这导致我们的前端服务产生了五个副本。这很棒，但让我们看看如何根据指标添加一些智能化，并自动扩展应用程序。
+- en: Scaling with HPA
+  id: totrans-171
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用 HPA 进行扩展
+- en: The Kubernetes HPA allows you to scale your deployments based on CPU, memory,
+    or custom metrics. It performs a watch on the deployment and pulls metrics from
+    the Kubernetes `metrics-server`. It also allows you to set the minimum and maximum
+    number of pods available. For example, you can define an HPA policy that sets
+    the minimum number of pods to 3 and the maximum number of pods to 10, and it scales
+    when the deployment reaches 80% CPU usage. Setting the minimum and maximum is
+    critical because you don’t want the HPA to scale the replicas to an infinite amount
+    due to an application bug or issue.
+  id: totrans-172
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes HPA 允许根据 CPU、内存或自定义指标扩展您的部署。它对部署执行监视，并从 Kubernetes `metrics-server`
+    中拉取指标。它还允许您设置可用的最小和最大 pod 数量。例如，您可以定义一个 HPA 策略，将最小 pod 数量设置为 3，最大 pod 数量设置为 10，并且在部署达到
+    80% CPU 使用率时进行扩展。设置最小和最大值非常关键，因为您不希望由于应用程序错误或问题，HPA 将副本无限扩展。
+- en: 'The HPA has the following default setting for sync metrics, upscaling, and
+    downscaling replicas:'
+  id: totrans-173
+  prefs: []
+  type: TYPE_NORMAL
+  zh: HPA 具有以下同步指标、升级和降级副本的默认设置：
+- en: '`horizontal-pod-autoscaler-sync-period`'
+  id: totrans-174
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`horizontal-pod-autoscaler-sync-period`'
+- en: Default of 30 seconds for syncing metrics
+  id: totrans-175
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 指标同步的默认设置为 30 秒
+- en: '`horizontal-pod-autoscaler-upscale-delay`'
+  id: totrans-176
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`horizontal-pod-autoscaler-upscale-delay`'
+- en: Default of three minutes between two upscale operations
+  id: totrans-177
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 两次扩展操作之间的默认间隔为三分钟
+- en: '`horizontal-pod-autoscaler-downscale-delay`'
+  id: totrans-178
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`horizontal-pod-autoscaler-downscale-delay`'
+- en: Default of five minutes between two downscale operations
+  id: totrans-179
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 两次降级操作之间的默认间隔为五分钟
+- en: You can change the defaults by using their relative flags, but you need to be
+    careful when doing so. If your workload is extremely variable, it’s worth playing
+    around with the settings to optimize them for your specific use case.
+  id: totrans-180
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以通过使用它们的相关标志来更改默认值，但在这样做时需要小心。如果您的工作负载非常变化，值得尝试不同的设置以优化特定用例。
+- en: Let’s go ahead and set up an HPA policy for the frontend application you deployed
+    in the previous exercise.
+  id: totrans-181
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，让我们为你在上一个练习中部署的前端应用设置一个 HPA 策略。
+- en: 'First, expose the deployment on port 80:'
+  id: totrans-182
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，在端口 80 上公开部署：
+- en: '[PRE30]'
+  id: totrans-183
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE30]'
+- en: 'Next, set the autoscale policy:'
+  id: totrans-184
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后，设置自动缩放策略：
+- en: '[PRE31]'
+  id: totrans-185
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE31]'
+- en: This sets the policy to scale your app from a minimum of 1 replica to a maximum
+    of 10 replicas and will invoke the scale operation when the CPU load reaches 50%.
+  id: totrans-186
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这将策略设置为从最小 1 个副本扩展到最多 10 个副本，并且在 CPU 负载达到 50% 时会触发扩展操作。
+- en: 'Let’s generate some load so that we can see the deployment autoscale:'
+  id: totrans-187
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们生成一些负载，以便我们可以看到部署的自动扩展：
+- en: '[PRE32]'
+  id: totrans-188
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE32]'
+- en: '[PRE33]'
+  id: totrans-189
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE33]'
+- en: '[PRE34]'
+  id: totrans-190
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE34]'
+- en: You might need to wait a few minutes to see the replicas scale up automatically.
+  id: totrans-191
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可能需要等待几分钟以便看到副本自动扩展。
+- en: HPA with Custom Metrics
+  id: totrans-192
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: HPA 与自定义指标
+- en: In [Chapter 4](ch04.html#configuration_secrets_and_rbac), we introduced the
+    role that the metrics server plays in monitoring our systems in Kubernetes. With
+    the Metrics Server API, we can also support scaling our applications with custom
+    metrics. The Custom Metrics API and Metrics Aggregator allow third-party providers
+    to plug in and extend the metrics, and HPA can then scale based on these external
+    metrics. For example, instead of just basic CPU and memory metrics, you could
+    scale based on a metric you’re collecting on an external storage queue. By utilizing
+    custom metrics for autoscaling, you have the ability to scale application-specific
+    metrics or external service metrics.
+  id: totrans-193
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[第四章](ch04.html#configuration_secrets_and_rbac)中，我们介绍了在 Kubernetes 中监视我们系统的指标服务器扮演的角色。使用指标服务器
+    API，我们还可以支持使用自定义指标扩展我们的应用程序。自定义指标 API 和指标聚合器允许第三方提供商插入和扩展这些指标，而 HPA 则可以根据这些外部指标进行扩展。例如，您可以基于外部存储队列上收集的指标，而不仅仅是基本的
+    CPU 和内存指标进行扩展。通过利用自定义指标进行自动缩放，您可以根据应用程序特定的指标或外部服务指标进行扩展。
+- en: Vertical Pod Autoscaler
+  id: totrans-194
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 垂直 Pod 自动缩放器
+- en: The Vertical Pod Autoscaler (VPA) differs from the HPA in that it doesn’t scale
+    replicas; instead, it automatically scales requests. Earlier in the chapter, we
+    talked about setting requests on our pods and how that guarantees *X* amount of
+    resources for a given container. The VPA frees you from manually adjusting these
+    requests and automatically scales up and scales down pod requests for you. For
+    workloads that can’t scale out due to their architecture, this works well for
+    automatically scaling the resources. For example, a MySQL database doesn’t scale
+    the same way as a stateless web frontend. With MySQL, you might want to set the
+    Master nodes to automatically scale up based on workload.
+  id: totrans-195
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 垂直 Pod 自动缩放器（VPA）与 HPA 不同，它不会扩展副本；相反，它会自动扩展请求。在本章前面，我们讨论了在我们的 Pod 上设置请求以及如何保证给定容器的
+    *X* 资源量。VPA 使您无需手动调整这些请求，并为您自动缩放 Pod 请求。对于不能因其架构而进行扩展的工作负载，这对于自动缩放资源非常有效。例如，MySQL
+    数据库与无状态 Web 前端的扩展方式不同。对于 MySQL，您可能希望根据工作负载自动扩展主节点。
+- en: 'The VPA is more complex than the HPA, and it consists of three components:'
+  id: totrans-196
+  prefs: []
+  type: TYPE_NORMAL
+  zh: VPA 比 HPA 更复杂，由三个组件组成：
+- en: '`Recommender`'
+  id: totrans-197
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`推荐者`'
+- en: Monitors the current and past resource consumption, and provides recommended
+    values for the container’s CPU and memory requests
+  id: totrans-198
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 监控当前和过去的资源消耗，并为容器的 CPU 和内存请求提供推荐值。
+- en: '`Updater`'
+  id: totrans-199
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`更新者`'
+- en: Checks which of the pods have the correct resources set, and if they don’t,
+    kills them so that they can be re-created by their controllers with the updated
+    requests
+  id: totrans-200
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 检查哪些 Pod 设置了正确的资源，如果没有，则杀死它们，以便它们可以由其控制器重新创建并更新请求。
+- en: '`Admission Plugin`'
+  id: totrans-201
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`准入插件`'
+- en: Sets the correct resource requests on new pods
+  id: totrans-202
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在新的 Pod 上设置正确的资源请求。
+- en: 'Vertical scaling has two objectives:'
+  id: totrans-203
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 垂直扩展有两个目标：
+- en: Reducing the maintenance cost, by automating configuration of resource requirements.
+  id: totrans-204
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 通过自动化配置资源需求来降低维护成本。
+- en: Improving utilization of cluster resources, while minimizing the risk of containers
+    running out of memory or getting CPU starved.
+  id: totrans-205
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 提高集群资源的利用率，同时最大限度地减少容器内存耗尽或 CPU 被饥饿的风险。
+- en: Resource Management Best Practices
+  id: totrans-206
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 资源管理最佳实践
+- en: Utilize pod anti-affinity to spread workloads across multiple availability zones
+    to ensure high availability for your application.
+  id: totrans-207
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 利用 Pod 反亲和性来在多个可用性区域间分布工作负载，确保应用程序的高可用性。
+- en: If you’re using specialized hardware, such as GPU-enabled nodes, ensure that
+    only workloads that need GPUs are scheduled to those nodes by utilizing taints.
+  id: totrans-208
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如果使用了专用硬件（如支持 GPU 的节点），请通过使用污点，仅安排需要 GPU 的工作负载到这些节点。
+- en: Use `NodeCondition` taints to proactively avoid failing or degraded nodes.
+  id: totrans-209
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用 `NodeCondition` 的污点来主动避免节点的故障或降级。
+- en: Apply nodeSelectors to your pod specifications to schedule pods to specialized
+    hardware that you have deployed in the cluster.
+  id: totrans-210
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 将 nodeSelectors 应用于您的 Pod 规范，以便将 Pod 调度到集群中部署的专用硬件。
+- en: Before going to production, experiment with different node sizes to find a good
+    mix of cost and performance for node types.
+  id: totrans-211
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在进入生产环境之前，尝试不同的节点大小以找到成本和性能的良好平衡。
+- en: If you’re deploying a mix of workloads with different performance characteristics,
+    utilize node pools to have mixed node types in a single cluster.
+  id: totrans-212
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如果您部署了具有不同性能特征的混合工作负载，请利用节点池在单个集群中拥有混合节点类型。
+- en: Ensure that you set memory and CPU limits for all pods deployed to your cluster.
+  id: totrans-213
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 确保为部署到集群中的所有 Pod 设置内存和 CPU 限制。
+- en: Utilize `ResourceQuota`s to ensure that multiple teams or applications are allotted
+    their fair share of resources in the cluster.
+  id: totrans-214
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用 `ResourceQuota` 来确保集群中多个团队或应用程序得到公平分配的资源份额。
+- en: Implement `LimitRange` to set default limits and requests for pod specifications
+    that don’t set limits or requests.
+  id: totrans-215
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 实施 `LimitRange` 来为未设置限制或请求的 Pod 规范设置默认限制和请求。
+- en: Start with manual cluster scaling until you understand your workload profiles
+    on Kubernetes. You can use autoscaling, but it comes with additional considerations
+    around node spin-up time and cluster scale down.
+  id: totrans-216
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在了解 Kubernetes 上的工作负载配置文件之前，从手动集群扩展开始。您可以使用自动缩放，但需要考虑节点启动时间和集群缩减的其他问题。
+- en: Use the HPA for workloads that are variable and that have unexpected spikes
+    in their usage.
+  id: totrans-217
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 对于变量且具有意外使用量高峰的工作负载，使用 HPA。
+- en: Summary
+  id: totrans-218
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 摘要
+- en: In this chapter, we discussed how you can optimally manage Kubernetes and application
+    resources. Kubernetes provides many built-in features to manage resources that
+    you can use to maintain a reliable, highly utilized, and efficient cluster. Cluster
+    and pod sizing can be difficult at first, but through monitoring your applications
+    in production you can discover ways to optimize your resources.
+  id: totrans-219
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们讨论了如何优化管理 Kubernetes 和应用资源。Kubernetes 提供了许多内置功能来管理资源，您可以利用这些功能来维护可靠、高效利用的集群。最初可能会对集群和
+    Pod 的大小感到困惑，但通过在生产环境中监控应用程序，您可以发现优化资源的方法。

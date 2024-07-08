@@ -1,0 +1,599 @@
+- en: Chapter 16\. CustomResourceDefinitions (CRDs)
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第16章. 自定义资源定义（CRD）
+- en: Kubernetes provides primitives that support the most common use cases required
+    by operators of an application stack. For custom use cases, Kubernetes allows
+    for implementing and installing extensions to the platform.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes提供的原语支持应用程序堆栈操作员所需的最常见用例。对于定制用例，Kubernetes允许实现和安装平台扩展。
+- en: A CustomResourceDefinition (CRD) is a Kubernetes extension mechanism for introducing
+    custom API primitives to fulfill requirements not covered by built-in primitives.
+    This chapter will primarily focus on the implementation of and interaction with
+    CRDs.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CustomResourceDefinition（CRD）是Kubernetes的扩展机制，用于引入自定义API原语，以满足内置原语无法覆盖的需求。本章将主要关注CRD的实现和与之交互。
+- en: Working with CRDs
+  id: totrans-3
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用CRD
+- en: CRDs can be understood as the schema that defines the blueprint for a custom
+    object, and then the instantiation of those objects with the newly introduced
+    type. For a CRD to be useful, it has to be backed by a *controller*. Controllers
+    interact with the Kubernetes API and implement the reconciliation logic that interacts
+    with CRD objects. The combination of CRDs and controllers is commonly referred
+    to as the *operator pattern*. The exam does not require you to have an understanding
+    of controllers; therefore, their implementation won’t be covered in this chapter.
+    [Figure 16-1](#operator_pattern) shows the operator patterns with all its moving
+    parts.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CRD可以被理解为定义自定义对象蓝图的模式，然后使用新引入的类型实例化这些对象。对于CRD的实用性，必须由*控制器*支持。控制器与Kubernetes
+    API交互，并实现与CRD对象交互的协调逻辑。CRD和控制器的组合通常称为*操作者模式*。考试不要求您理解控制器，因此不会涵盖它们的实现。[图16-1](#operator_pattern)显示了带有其所有组成部分的操作者模式。
+- en: '![ckd2 1601](Images/ckd2_1601.png)'
+  id: totrans-5
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckd2 1601](Images/ckd2_1601.png)'
+- en: Figure 16-1\. The Kubernetes operator pattern
+  id: totrans-6
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图16-1\. Kubernetes操作者模式
+- en: The Kubernetes community has implemented many useful operators discoverable
+    on [OperatorHub.io](https://operatorhub.io/). You can install many of those operators
+    with a single `kubectl`. A prominent operator is the [External Secrets Operator](https://external-secrets.io/)
+    that helps with integrating external Secret managers, like AWS Secrets Manager
+    and HashiCorp Vault, with Kubernetes. For the exam, you will need to understand
+    how to discover CRD schemas provided by external operators and how to interact
+    with objects that follow the CRD schema. We’ll go a little further in this chapter
+    and talk about creating your own CRD schemas.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes社区在[OperatorHub.io](https://operatorhub.io/)上实施了许多有用的操作者。您可以使用单个`kubectl`安装其中许多操作者。一个重要的操作者是[External
+    Secrets Operator](https://external-secrets.io/)，它帮助集成外部的秘密管理器（如AWS Secrets Manager和HashiCorp
+    Vault）与Kubernetes。在考试中，您需要理解如何发现外部操作者提供的CRD模式以及如何与遵循CRD模式的对象进行交互。本章节我们将进一步讨论如何创建自己的CRD模式。
+- en: Example CRD
+  id: totrans-8
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 示例CRD
+- en: The implementation of and interaction with a CRD is best explained by example.
+    We will implement and instantiate a CRD that represents a smoke test for a Service
+    object to be executed after an application stack has been deployed to Kubernetes.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最佳实践是通过示例来解释CRD的实现和交互。我们将实现和实例化一个CRD，该CRD代表在将应用程序堆栈部署到Kubernetes后执行的服务对象的烟测试。
+- en: Technical baseline
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 技术基线
+- en: Assume you are in charge of managing a web-based application. The Kubernetes
+    objects needed to manage the application consist of a Deployment for running an
+    application in Pods and the Service object that routes the network traffic to
+    the replicas.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设您负责管理一个基于Web的应用程序。管理该应用程序所需的Kubernetes对象包括用于在Pod中运行应用程序的部署（Deployment）对象和用于将网络流量路由到副本的服务（Service）对象。
+- en: Desired functionality
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 期望的功能
+- en: A smoke test should be triggered automatically after deploying the Kubernetes
+    objects responsible for operating the application. At runtime, the smoke test
+    executes HTTPS calls to an endpoint of the application by targeting the Service’s
+    DNS name. The result of the smoke test (in the case of success or failure) will
+    be sent to an external service so it can be rendered as charts and graphs in a
+    dashboard.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应在部署负责操作应用程序的Kubernetes对象后自动触发烟测试。在运行时，烟测试通过目标服务的DNS名称执行HTTPS调用到应用程序的端点。烟测试的结果（成功或失败）将被发送到外部服务，以便在仪表盘上呈现为图表和图形。
+- en: Goal
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 目标
+- en: To implement this functionality, you could decide to write a CRD and controller.
+    In this chapter, we are only going to cover the CRD for a smoke test, not the
+    controller that would do the heavy lifting of executing the smoke test.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要实现此功能，您可以决定编写一个 CRD 和控制器。在本章中，我们仅讨论了用于 smoke test 的 CRD，而不是执行 smoke test 的控制器。
+- en: Implementing a CRD Schema
+  id: totrans-16
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 实现 CRD 架构
+- en: 'To make a CRD operational, you have to create two objects: the custom resource
+    schema and the custom resource object. The custom resource schema specifies the
+    CRD blueprint in the form of an OpenAPI v3 specification. The custom resource
+    object follows the specification of the CRD schema and assigns values to properties
+    available to the schema.'
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要使 CRD 运行，您必须创建两个对象：自定义资源架构和自定义资源对象。自定义资源架构根据 OpenAPI v3 规范指定 CRD 蓝图。自定义资源对象遵循
+    CRD 架构的规范，并为架构可用的属性分配值。
+- en: Using Kubebuilder to generate CRDs
+  id: totrans-18
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用 Kubebuilder 生成 CRD
+- en: A CRD schema specification can become quite extensive. To avoid writing those
+    specification by hand, take a look at the [Kubebuilder](https://github.com/kubernetes-sigs/kubebuilder)
+    project. One Kubebuilder functionality is the ability to generate CRD schemas
+    with minimal input provided by the user. Using the tool can help save time getting
+    a Kubernetes operator project started.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CRD 架构规范可以变得非常广泛。为了避免手工编写这些规范，请查看 [Kubebuilder](https://github.com/kubernetes-sigs/kubebuilder)
+    项目。Kubebuilder 的一个功能是能够使用用户提供的最小输入生成 CRD 架构。使用这个工具可以帮助节省启动 Kubernetes 操作者项目的时间。
+- en: First, let’s look at the custom resource schema of the smoke test. The schema
+    uses the kind CustomResourceDefinition, as shown in [Example 16-1](#custom_resource_schema).
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，让我们看一下 smoke test 的自定义资源架构。如 [示例 16-1](#custom_resource_schema) 所示，架构使用 kind
+    CustomResourceDefinition。
+- en: While I can’t explain the meaning of every attribute of a CustomResourceDefinition
+    here, I want to point out some important aspects. The CustomResourceDefinition
+    specifies the group, version, and names of the custom primitive. It also spells
+    out all configurable attributes, including their data types. For a more detailed
+    description of the CustomResourceDefinition see the [Kubernetes documentation](https://kubernetes.io/docs/concepts/extend-kubernetes/api-extension/custom-resources/).
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然我不能在此处解释每个 CustomResourceDefinition 属性的含义，但我想指出一些重要的方面。CustomResourceDefinition
+    指定了自定义基元的组、版本和名称。它还详细说明了所有可配置的属性，包括它们的数据类型。有关 CustomResourceDefinition 的更详细描述，请参阅
+    [Kubernetes 文档](https://kubernetes.io/docs/concepts/extend-kubernetes/api-extension/custom-resources/)。
+- en: Example 16-1\. A custom resource schema to represent a smoke test
+  id: totrans-22
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 16-1\. 代表 smoke test 的自定义资源架构
+- en: '[PRE0]'
+  id: totrans-23
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: '[![1](Images/1.png)](#co_customresourcedefinitions__crds__CO1-1)'
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](Images/1.png)](#co_customresourcedefinitions__crds__CO1-1)'
+- en: The combination of the identifiers `<plural>`.`<group>`.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 结合标识符 `<plural>`.`<group>` 的组合。
+- en: '[![2](Images/2.png)](#co_customresourcedefinitions__crds__CO1-2)'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](Images/2.png)](#co_customresourcedefinitions__crds__CO1-2)'
+- en: The API group to be used by CRD.
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用于 CRD 的 API 组。
+- en: '[![3](Images/3.png)](#co_customresourcedefinitions__crds__CO1-3)'
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](Images/3.png)](#co_customresourcedefinitions__crds__CO1-3)'
+- en: The versions supported by the CRD. A version can define 0..n attributes.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CRD 支持的版本。一个版本可以定义 0..n 个属性。
+- en: '[![4](Images/4.png)](#co_customresourcedefinitions__crds__CO1-4)'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](Images/4.png)](#co_customresourcedefinitions__crds__CO1-4)'
+- en: The attributes to be set by the custom type.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要设置的自定义类型属性。
+- en: '[![5](Images/5.png)](#co_customresourcedefinitions__crds__CO1-5)'
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](Images/5.png)](#co_customresourcedefinitions__crds__CO1-5)'
+- en: The identifiers for the custom type, e.g., the kind and the singular/plural/short
+    names.
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 自定义类型的标识符，例如 kind 和单数/复数/短名称。
+- en: 'The file *smoketest-resource.yaml* contains the YAML content shown in the previous
+    example. You can now create the object for the schema with the typical `kubectl`
+    commands:'
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 文件 *smoketest-resource.yaml* 包含了前面示例中显示的 YAML 内容。您现在可以使用典型的 `kubectl` 命令为架构创建对象：
+- en: '[PRE1]'
+  id: totrans-35
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: Instantiating an Object for the CRD
+  id: totrans-36
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 为 CRD 实例化一个对象
+- en: Once the schema object has been created, you can create objects for the new
+    custom type. The YAML manifest in [Example 16-2](#custom_resource_object) defines
+    a primitive of type SmokeTest named `backend-smoke-test` for the Service named
+    `backend`. As you can see in the manifest, additional attributes can be specified
+    to fine-tune its runtime behavior.
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦架构对象创建完成，您可以为新的自定义类型创建对象。在 [示例 16-2](#custom_resource_object) 中的 YAML 文件定义了一个名为
+    `backend-smoke-test` 的类型为 SmokeTest 的基元，用于名为 `backend` 的服务。正如您在示例中所见，可以指定额外的属性以微调其运行时行为。
+- en: Example 16-2\. Instantiation of CRD kind SmokeTest
+  id: totrans-38
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 16-2\. 实例化 CRD 种类 SmokeTest
+- en: '[PRE2]'
+  id: totrans-39
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: '[![1](Images/1.png)](#co_customresourcedefinitions__crds__CO2-1)'
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](Images/1.png)](#co_customresourcedefinitions__crds__CO2-1)'
+- en: The group and Version of the custom kind.
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 自定义类型的组和版本。
+- en: '[![2](Images/2.png)](#co_customresourcedefinitions__crds__CO2-2)'
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](Images/2.png)](#co_customresourcedefinitions__crds__CO2-2)'
+- en: The kind defined by CRD.
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由 CRD 定义的种类。
+- en: '[![3](Images/3.png)](#co_customresourcedefinitions__crds__CO2-3)'
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](Images/3.png)](#co_customresourcedefinitions__crds__CO2-3)'
+- en: The attributes and their values that make the custom kind configurable.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使自定义类型可配置的属性及其值。
+- en: 'Go ahead and create the SmokeTest object from the file *smoketest.yaml*:'
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 继续并从文件 *smoketest.yaml* 创建 SmokeTest 对象：
+- en: '[PRE3]'
+  id: totrans-47
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'You can interact with the `backend-smoke-test` like any other object in Kubernetes.
+    For example, to list the object use the `get` command. To delete the object, use
+    the `delete` command. The following commands show those operations in action:'
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可以像操作 Kubernetes 中的任何其他对象一样与`backend-smoke-test`交互。例如，要列出对象，请使用`get`命令。要删除对象，请使用`delete`命令。以下命令展示了这些操作的执行过程：
+- en: '[PRE4]'
+  id: totrans-49
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: You can create more objects of this type as needed to execute smoke tests against
+    other Services, although each of the objects needs a unique name. We now have
+    the CRD schema object in place. In the next section, we’ll interact with it.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以根据需要创建更多此类型的对象以执行针对其他服务的冒烟测试，尽管每个对象都需要一个唯一的名称。我们现在已经放置了 CRD 模式对象。在下一节中，我们将与其交互。
+- en: Discovering CRDs
+  id: totrans-51
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 发现 CRD
+- en: 'A CRD schema registers a new API resource. Every API resource can be discovered.
+    You can list custom API resources in the same way as you would for built-in API
+    resources. The following command lists API resources by the API group `stable.bmuschko.com`:'
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CRD 模式注册了一个新的 API 资源。每个 API 资源都可以被发现。您可以按照与内置 API 资源相同的方式列出自定义 API 资源。以下命令按
+    API 组 `stable.bmuschko.com` 列出 API 资源：
+- en: '[PRE5]'
+  id: totrans-53
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'CRD objects can be interacted with like any other object using `kubectl`. You
+    can create, read, update, and delete them. The following command lists all CRDs
+    installed in the cluster:'
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以像使用 `kubectl` 操作任何其他对象一样与 CRD 对象进行交互。您可以创建、读取、更新和删除它们。以下命令列出了集群中安装的所有 CRD：
+- en: '[PRE6]'
+  id: totrans-55
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: The CRD you see in the output is the one representing a smoke test. If you see
+    other CRDs in the output then they may have been provided by the external operator
+    installed in your cluster.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在输出中看到的 CRD 是代表冒烟测试的一个。如果在输出中看到其他 CRD，则可能是由您集群中安装的外部运算符提供的。
+- en: Implementing a Controller
+  id: totrans-57
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 实现控制器
+- en: The smoke test object just represents data and won’t be useful by itself. You
+    need to add a controller implementation that does something with those objects.
+    In a nutshell, a controller acts as a reconciliation process by inspecting the
+    state of CRD objects via calls to the Kubernetes API.
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 冒烟测试对象只表示数据，并且本身不会有用。您需要添加一个控制器实现，该实现对这些对象进行操作。简而言之，控制器通过调用 Kubernetes API 检查
+    CRD 对象的状态来作为协调过程。
+- en: At runtime, a controller implementation needs to poll for new SmokeTest objects
+    and perform the HTTPS requests to the configured Service endpoint. Finally, the
+    controller inspects the response from the request, evaluates the result, and sends
+    it to an external service to be recorded in a database. A dashboard can then tap
+    into historical results and render them as needed, e.g., as charts and graphs.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在运行时，控制器实现需要轮询新的 SmokeTest 对象，并执行 HTTPS 请求到配置的服务端点。最后，控制器检查请求的响应，评估结果，并将其发送到外部服务以记录在数据库中。然后，仪表板可以查看历史结果，并根据需要渲染，例如作为图表和图形。
+- en: Controllers can use one of the Kubernetes [client libraries](https://kubernetes.io/docs/reference/using-api/client-libraries/),
+    written in Go or Python, to access custom resources. Visit the relevant documentation
+    for more information and examples on how to implement a controller.
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 控制器可以使用 Kubernetes [客户端库](https://kubernetes.io/docs/reference/using-api/client-libraries/)之一（使用
+    Go 或 Python 编写）来访问自定义资源。访问相关文档以获取有关如何实现控制器的更多信息和示例。
+- en: Summary
+  id: totrans-61
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 摘要
+- en: A CRD schema defines the structure of a custom resource. The schema includes
+    the group, name, version, and its configurable attributes. New objects of this
+    kind can be created after registering the schema. You can interact with a custom
+    object using `kubectl` with the same CRUD commands used by any other primitive.
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CRD 模式定义了自定义资源的结构。模式包括组、名称、版本及其可配置的属性。在注册模式后，可以创建此类新对象。您可以使用 `kubectl` 与任何其他原语使用的相同
+    CRUD 命令来与自定义对象交互。
+- en: CRDs realize their full potential when combined with a controller implementation.
+    The controller implementation inspects the state of specific custom objects and
+    reacts based on their discovered state. Kubernetes refers to the CRD and the corresponding
+    controller as the operator pattern. The Kubernetes community has implemented many
+    operators to fulfill custom requirements. You can install them into your cluster
+    to reuse the functionality.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当与控制器实现结合使用时，CRDs能够发挥其全部潜力。控制器实现检查特定自定义对象的状态，并根据其发现的状态做出反应。Kubernetes将CRD及其对应的控制器称为操作员模式。Kubernetes社区已经实现了许多操作员以满足定制需求。您可以将它们安装到您的集群中以重复使用这些功能。
+- en: Exam Essentials
+  id: totrans-64
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 考试要点
+- en: Acquire a high-level understanding of configurable options for a CRD schema
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 获取CRD模式的可配置选项的高级理解
+- en: You are not expected to implement a CRD schema. All you need to know is how
+    to discover and use them with `kubectl`. Controller implementations are definitely
+    outside the scope of the exam.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您不需要实现CRD模式。您只需要知道如何使用`kubectl`发现和使用它们。控制器实现明显超出了考试范围。
+- en: Practice the commands for installing and discovering CRDs
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 练习安装和发现CRD的命令
+- en: Learn how to use the `kubectl get crds` command to discover installed CRDs,
+    and how to create objects from a CRD schema. If you want to explore further, install
+    an open source CRD, such as the [Prometheus operator](https://github.com/prometheus-operator/prometheus-operator)
+    or the [Jaeger operator](https://github.com/jaegertracing/jaeger-operator), and
+    inspect its schema.
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 学习如何使用`kubectl get crds`命令来发现已安装的CRDs，并学习如何根据CRD模式创建对象。如果您想进一步探索，请安装一个开源的CRD，比如[Prometheus
+    operator](https://github.com/prometheus-operator/prometheus-operator)或者[Jaeger
+    operator](https://github.com/jaegertracing/jaeger-operator)，并检查它们的模式。
+- en: Sample Exercises
+  id: totrans-69
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 示例练习
+- en: Solutions to these exercises are available in [Appendix A](app01_split_012.xhtml#appendix_a_crds).
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些练习的解决方案可以在[附录A](app01_split_012.xhtml#appendix_a_crds)中找到。
+- en: You decide to manage a [MongoDB](https://www.mongodb.com/) installation in Kubernetes
+    with the help of the [official community operator](https://github.com/mongodb/mongodb-kubernetes-operator).
+    This operator provides a CRD. After installing the operator, you will interact
+    with the CRD.
+  id: totrans-71
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 您决定通过[官方社区操作员](https://github.com/mongodb/mongodb-kubernetes-operator)的帮助，在Kubernetes中管理[MongoDB](https://www.mongodb.com/)安装。此操作员提供了一个CRD。安装操作员后，您将与CRD进行交互。
+- en: 'Navigate to the directory *app-a/ch16/mongodb-operator* of the checked-out
+    GitHub repository [*bmuschko/ckad-study-guide*](https://github.com/bmuschko/ckad-study-guide).
+    Install the operator using the following command: `kubectl apply -f` `mongodbcommunity.mongodb.com_mongodbcommunity.yaml`.'
+  id: totrans-72
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 导航到已签出的GitHub仓库[*bmuschko/ckad-study-guide*](https://github.com/bmuschko/ckad-study-guide)的*app-a/ch16/mongodb-operator*目录。使用以下命令安装操作员：`kubectl
+    apply -f` `mongodbcommunity.mongodb.com_mongodbcommunity.yaml`。
+- en: List all CRDs using the appropriate `kubectl` command. Can you identify the
+    CRD that was installed by the installation procedure?
+  id: totrans-73
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 使用适当的`kubectl`命令列出所有CRDs。您能识别出安装过程中安装的CRD吗？
+- en: Inspect the schema of the CRD. What are the type and property names of this
+    CRD?
+  id: totrans-74
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 检查CRD的模式。此CRD的类型和属性名称是什么？
+- en: As an application developer, you may want to install Kubernetes functionality
+    that extends the platform using the Kubernetes operator pattern. The objective
+    of this exercise is to familiarize yourself with creating and managing CRDs. You
+    will not need to write a controller.
+  id: totrans-75
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 作为应用程序开发者，您可能希望通过Kubernetes操作员模式安装扩展平台的Kubernetes功能。本练习的目标是熟悉创建和管理CRDs。您不需要编写控制器。
+- en: 'Create a CRD resource named `backup.example.com` with the following specifications:'
+  id: totrans-76
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 使用以下规格创建名为`backup.example.com`的CRD资源：
+- en: 'Group: `example.com`'
+  id: totrans-77
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 分组：`example.com`
+- en: 'Version: `v1`'
+  id: totrans-78
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 版本：`v1`
+- en: 'Kind: `Backup`'
+  id: totrans-79
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 类型：`Backup`
+- en: 'Singular: `backup`'
+  id: totrans-80
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 单数形式：`backup`
+- en: 'Plural: `backups`'
+  id: totrans-81
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 复数形式：`backups`
+- en: 'Properties of type `string`: `cronExpression`, `podName`, `path`'
+  id: totrans-82
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 类型为`string`的属性：`cronExpression`、`podName`、`path`
+- en: Retrieve the details for the `Backup` custom resource created in the previous
+    step.
+  id: totrans-83
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 检索在前一步创建的`Backup`自定义资源的详细信息。
+- en: 'Create a custom object named `nginx-backup` for the CRD. Provide the following
+    property values:'
+  id: totrans-84
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 为CRD创建名为`nginx-backup`的自定义对象。提供以下属性值：
+- en: '`cronExpression`: `0 0 * * *`'
+  id: totrans-85
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`cronExpression`：`0 0 * * *`'
+- en: '`podName`: `nginx`'
+  id: totrans-86
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`podName`：`nginx`'
+- en: '`path`: `/usr/local/nginx`'
+  id: totrans-87
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`path`：`/usr/local/nginx`'
+- en: Retrieve the details for the `nginx-backup` object created in the previous step.
+  id: totrans-88
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 检索在前一步创建的`nginx-backup`对象的详细信息。

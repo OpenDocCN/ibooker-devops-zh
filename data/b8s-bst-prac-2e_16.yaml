@@ -1,0 +1,681 @@
+- en: Chapter 16\. Managing State and Stateful Applications
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第16章 管理状态和有状态应用程序
+- en: In the early days of container orchestration, the targeted workloads were usually
+    stateless applications that used external systems to store state when it was needed.
+    The thought was that containers are very temporal, and orchestration of the backing
+    storage needed to keep state consistently was difficult at best. Over time, the
+    need for container-based workloads that kept state became a reality, and, in select
+    cases, this need might be more performant. As more organizations looked to the
+    cloud for computing power and Kubernetes became the de facto container runtime
+    for applications, the impeding factor became the amount of data and performant
+    access to the data, sometimes called “data gravity.” Kubernetes adapted over many
+    iterations. Now, not only does it allow for storage volumes mounted into the pod,
+    but it also allows for those volumes to be managed by Kubernetes directly. This
+    was an important component in orchestration of storage with the workloads that
+    require it.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在容器编排的早期阶段，目标工作负载通常是无状态应用程序，当需要时使用外部系统来存储状态。当时的想法是容器非常短暂，保持状态一致性的后备存储编排在最佳情况下也是困难的。随着时间的推移，基于容器的保持状态的工作负载成为了现实，并且在某些情况下，这种需求可能更高效。随着越来越多的组织寻求云计算能力，并且Kubernetes成为应用程序的事实标准容器运行时，阻碍因素成为数据量和对数据的高效访问，有时称为“数据引力”。Kubernetes在多次迭代中进行了适应。现在，它不仅允许将存储卷挂载到Pod中，还允许Kubernetes直接管理这些卷。这是与需要存储的工作负载编排中的一个重要组成部分。
+- en: If the ability to mount an external volume to the container was enough, many
+    more examples of stateful applications running at scale in Kubernetes would exist.
+    The reality is that volume mounting is the easy component in the grand scheme
+    of stateful applications. The majority of applications that require state to be
+    maintained after node failure are complicated data-state engines such as relational
+    database systems, distributed key/value stores, and complex document management
+    systems. This class of applications requires more coordination among how members
+    of the clustered application communicate with one another, how the members are
+    identified, and the order in which members either appear or disappear in the system.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果能够将外部卷挂载到容器就足够了，那么在Kubernetes中运行的规模化有状态应用程序的示例将更多。现实是，在有状态应用程序的大计划中，卷挂载只是一个简单的组成部分。大多数需要在节点故障后维护状态的应用程序是复杂的数据状态引擎，如关系数据库系统、分布式键/值存储和复杂文档管理系统。这类应用程序需要更多协调，包括集群应用程序成员之间的通信方式、成员的识别方式以及成员出现或消失的顺序。
+- en: This chapter focuses on best practices for managing state, from simple patterns
+    such as saving a file to a network share, to complex data management systems like
+    MongoDB, MySQL, or Kafka. There is a small section on a new pattern for complex
+    systems called Operators that brings not only Kubernetes primitives, but also
+    allows for business or application logic to be added as custom controllers that
+    can help make operating complex data management systems easier.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本章重点介绍了管理状态的最佳实践，从简单模式，比如将文件保存到网络共享，到复杂的数据管理系统，如MongoDB、MySQL或Kafka。还有一个关于名为操作员的新模式的小节，该模式不仅引入了Kubernetes的基本组件，还允许将业务或应用逻辑添加为自定义控制器，有助于更轻松地操作复杂的数据管理系统。
+- en: Volumes and Volume Mounts
+  id: totrans-4
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 卷和卷挂载
+- en: Not every workload that requires a way to maintain state needs to be a complex
+    database or high-throughput data queue service. Often, applications that are being
+    moved to containerized workloads expect certain directories to exist and to be
+    able to read and write pertinent information to those directories. The ability
+    to inject data into a volume that can be read by containers in a pod is covered
+    in [Chapter 4](ch04.html#configuration_secrets_and_rbac); however, data mounted
+    from ConfigMaps or secrets is usually read-only, and this section focuses on giving
+    containers volumes that can be written to and will survive a container failure
+    or, even better, a pod failure.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 并非每个需要维护状态的工作负载都需要成为复杂的数据库或高吞吐量数据队列服务。通常，将应用程序移动到容器化工作负载中的应用程序希望某些目录存在，并且能够读取和写入这些目录中的相关信息。可以从[第4章](ch04.html#configuration_secrets_and_rbac)中注入数据到可以由Pod中的容器读取的卷中，但是从ConfigMaps或秘密中挂载的数据通常是只读的，本节关注提供容器可以写入并能够在容器或甚至更好，Pod故障后幸存的卷。
+- en: 'Every major container runtime, such as Docker, rkt, CRI-O, and even Singularity,
+    allows for mounting volumes into a container that is mapped to an external storage
+    system. At its simplest, external storage can be a memory location, a path on
+    the container’s host, or an external filesystem such as NFS, Glusterfs, CIFS,
+    or Ceph. Why would this be needed? A useful example is that of a legacy application
+    that was written to log application-specific information to a local filesystem.
+    Many possible solutions, such as updating the application code to log out to a
+    `stdout` or `stderr` of a sidecar container, can stream log data to an outside
+    source via a shared pod volume. Some will take an infrastructure approach by using
+    a host-based logging tool that can read a volume for both host logs and container
+    application logs by using a volume mount in the container using a Kubernetes `hostPath`
+    mount, as shown in the following:'
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个主要的容器运行时，如 Docker、rkt、CRI-O，甚至 Singularity，都允许将卷挂载到映射到外部存储系统的容器中。在其最简单形式下，外部存储可以是内存位置、容器主机上的路径，或外部文件系统，如
+    NFS、Glusterfs、CIFS 或 Ceph。为什么会需要这样做呢？一个有用的例子是，一个传统应用程序被编写为将应用程序特定信息记录到本地文件系统。许多可能的解决方案，如更新应用程序代码以将日志输出到侧车容器的`stdout`或`stderr`，可以通过共享的
+    pod 卷流式传输日志数据到外部源。有些方法会采用基础设施方法，通过使用可以读取容器应用程序日志和主机日志的卷的主机基于日志工具来进行卷挂载，使用 Kubernetes
+    `hostPath` 挂载，如下所示：
+- en: '[PRE0]'
+  id: totrans-7
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: Volume Best Practices
+  id: totrans-8
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 卷最佳实践
+- en: Try to limit the use of volumes to pods requiring multiple containers that need
+    to share data, such as adapter or ambassador-type patterns. Use the `emptyDir`
+    for those types of sharing patterns.
+  id: totrans-9
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 尽量限制将卷用于需要多个容器共享数据的 pod，如适配器或大使类型模式。对于这些共享模式，请使用`emptyDir`。
+- en: Use `hostDir` when access to the data is required by node-based agents or services.
+  id: totrans-10
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 当需要通过基于节点的代理或服务访问数据时，请使用`hostDir`。
+- en: Try to identify any services that write their critical application logs and
+    events to local disk, and if possible change those to `stdout` or `stderr` and
+    let a true Kubernetes-aware log aggregation system stream the logs instead of
+    leveraging the volume map.
+  id: totrans-11
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 尝试识别任何将其关键应用程序日志和事件写入本地磁盘的服务，并在可能的情况下将其更改为`stdout`或`stderr`，让真正的 Kubernetes
+    感知日志聚合系统流式传输日志，而不是依赖卷映射。
+- en: Kubernetes Storage
+  id: totrans-12
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Kubernetes 存储
+- en: The examples we’ve walked through so far show basic volume mapping into a container
+    in a pod, which is just a basic container engine capability. The real key is allowing
+    Kubernetes to manage the storage backing the volume mounts. This allows for more
+    dynamic scenarios where pods can live and die as needed, and the storage backing
+    the pod will transition accordingly to wherever the pod may live. Kubernetes manages
+    storage for pods using two distinct APIs, the PersistentVolume and PersistentVolumeClaim.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，我们走过的示例展示了将卷基本映射到 pod 中的容器中，这只是基本的容器引擎能力。真正的关键是允许 Kubernetes 管理支持卷挂载的存储。这允许更动态的场景，其中
+    pod 可以根据需要存活和死亡，支持 pod 的存储将相应地过渡到 pod 可能生活的任何地方。Kubernetes 使用两个不同的 API 管理 pod
+    的存储，即 PersistentVolume 和 PersistentVolumeClaim。
+- en: PersistentVolume
+  id: totrans-14
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 持久卷
+- en: 'It is best to think of a PersistentVolume as a disk that will back any volumes
+    that are mounted to a pod. A PersistentVolume will have a claim policy that will
+    define the scope of life of the volume independent of the life cycle of the pod
+    that uses the volume. Kubernetes can use either dynamic or statically defined
+    volumes. To allow for dynamically created volumes, there must be a StorageClass
+    defined in Kubernetes. PersistentVolumes of varying types and classes can be created
+    in the cluster, and only when a PersistentVolumeClaim matches the PersistentVolume
+    will it actually be assigned to a pod. The volume itself is backed by a volume
+    plug-in. Numerous plug-ins are supported directly in Kubernetes, and each has
+    different configuration parameters to adjust:'
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最好将 PersistentVolume 视为支持挂载到 pod 的任何卷的磁盘。PersistentVolume 将具有声明策略，定义卷的生命周期范围，独立于使用卷的
+    pod 的生命周期。Kubernetes 可以使用动态或静态定义的卷。要允许动态创建卷，必须在 Kubernetes 中定义一个 StorageClass。可以在集群中创建不同类型和类别的
+    PersistentVolumes，只有当 PersistentVolumeClaim 匹配 PersistentVolume 时，它才会真正分配给一个 pod。卷本身由卷插件支持。直接在
+    Kubernetes 中支持多种插件，并且每种插件都有不同的配置参数可供调整：
+- en: '[PRE1]'
+  id: totrans-16
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: PersistentVolumeClaims
+  id: totrans-17
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: PersistentVolumeClaims
+- en: 'PersistentVolumeClaims are a way to give Kubernetes a resource requirement
+    definition for storage that a pod will use. Pods will reference the claim, and
+    then if a `persistentVolume` that matches the claim request exists, it will allocate
+    that volume to that specific pod. At minimum, a storage request size and access
+    mode must be defined, but a specific StorageClass can also be defined. Selectors
+    can also be used to ensure PersistentVolumes that meet a certain criteria will
+    be allocated appropriately. In the following example, the label with key `tier`
+    has a value of `"silver"`:'
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: PersistentVolumeClaims 是 Kubernetes 中为存储定义资源需求的一种方式，Pods 将引用这些声明，如果存在与声明请求匹配的
+    `persistentVolume`，则将为该特定 Pod 分配该卷。至少需要定义存储请求大小和访问模式，但也可以定义特定的 StorageClass。选择器也可以用来确保分配符合特定条件的
+    PersistentVolumes。在以下示例中，具有键 `tier` 和值 `"silver"` 的标签：
+- en: '[PRE2]'
+  id: totrans-19
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: The claim will match the PersistentVolume created earlier because the StorageClass
+    name, the selector match, the size, and the access mode are all equal.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此声明将与之前创建的 PersistentVolume 匹配，因为 StorageClass 名称、选择器匹配、大小和访问模式都相等。
+- en: 'Kubernetes will match the PersistentVolume with the claim and bind them together.
+    To use the volume, the `pod.spec` should reference the claim by name, as follows:'
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 将匹配 PersistentVolume 与声明并将它们绑定在一起。要使用该卷，`pod.spec` 应通过名称引用声明，如下所示：
+- en: '[PRE3]'
+  id: totrans-22
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: StorageClasses
+  id: totrans-23
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: StorageClasses
+- en: 'Instead of manually defining the PersistentVolumes ahead of time, administrators
+    might elect to create StorageClass objects, which define the volume plug-in to
+    use. They can also create any specific mount options and parameters that all PersistentVolumes
+    of that class will use. This then allows the claim to be defined with the specific
+    StorageClass to use, and Kubernetes will dynamically create the PersistentVolume
+    based on the StorageClass parameters and options:'
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 管理员可以选择创建 StorageClass 对象，而不是手动预先定义 PersistentVolumes，这些对象定义了要使用的卷插件。他们还可以创建所有该类
+    PersistentVolumes 将使用的任何特定挂载选项和参数。然后可以根据 StorageClass 的参数和选项动态创建 PersistentVolume，并定义声明要使用的特定
+    StorageClass，Kubernetes 将基于 StorageClass 参数和选项动态创建 PersistentVolume：
+- en: '[PRE4]'
+  id: totrans-25
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: Kubernetes also allows operators to create a default storage class using the
+    DefaultStorageClass admission plug-in. If this has been enabled on the API server,
+    then a default StorageClass can be defined, and any PersistentVolumeClaims that
+    do not explicitly define a StorageClass will be assigned to the default class.
+    Some cloud providers will include a default storage class to map to the cheapest
+    storage allowed by their instances.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 还允许操作员使用 DefaultStorageClass 准入插件创建默认存储类。如果已在 API 服务器上启用此选项，则可以定义默认
+    StorageClass，并且任何未明确定义 StorageClass 的 PersistentVolumeClaims 将分配给默认类。某些云提供商将包括默认存储类，以映射到其实例允许的最便宜的存储。
+- en: Container Storage Interface and FlexVolume
+  id: totrans-27
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 容器存储接口和 FlexVolume
+- en: Most volume plug-ins today need to wait for direct code additions to the Kubernetes
+    codebase. However, the Container Storage Interface (CSI) and FlexVolume, often
+    referred to as “Out-of-Tree” volume plug-ins, enable storage vendors to create
+    custom storage plug-ins without the need to wait for these direct code additions.
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大多数卷插件今天需要等待 Kubernetes 代码库的直接代码添加。然而，容器存储接口 (CSI) 和 FlexVolume（通常称为“Out-of-Tree”卷插件）使存储供应商能够创建自定义存储插件，而无需等待这些直接代码添加。
+- en: The CSI and FlexVolume plug-ins are deployed on Kubernetes clusters as extensions
+    by operators and can be updated by the storage vendors when needed to expose new
+    functionality.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CSI 和 FlexVolume 插件作为运营商在 Kubernetes 集群上部署的扩展，并且可以在需要时由存储供应商进行更新以公开新功能。
+- en: 'The CSI states its objective on [GitHub](https://oreil.ly/AuMgE) as:'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CSI 在 [GitHub](https://oreil.ly/AuMgE) 上表明其目标是：
+- en: To define an industry standard Container Storage Interface that will enable
+    storage vendors (SP) to develop a plug-in once and have it work across a number
+    of container orchestration (CO) systems.
+  id: totrans-31
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 定义一个行业标准的容器存储接口，使存储供应商（SP）可以开发一次插件并在多个容器编排系统（CO）中运行。
+- en: The FlexVolume interface has been the traditional method used to add additional
+    features for a storage provider. It does require specific drivers to be installed
+    on all the nodes of the cluster that will use it. This basically becomes an executable
+    that is installed on the hosts of the cluster. This last component is the main
+    detractor to using FlexVolumes, especially in managed service providers, because
+    access to the nodes is frowned upon and accessing the control plane is practically
+    impossible. The CSI plug-in solves this by exposing the same functionality and
+    being as easy to use as deploying a pod into the cluster.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: FlexVolume 接口一直是添加存储提供程序附加功能的传统方法。它确实需要在将使用它的集群的所有节点上安装特定驱动程序。这基本上成为集群主机上安装的可执行文件。这个最后的组件是使用
+    FlexVolumes 的主要缺点，特别是在托管服务提供商中，因为访问节点是不受欢迎的，而访问控制平面几乎是不可能的。CSI 插件通过暴露相同的功能并像部署
+    pod 到集群一样容易使用解决了这个问题。
+- en: Kubernetes Storage Best Practices
+  id: totrans-33
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Kubernetes 存储最佳实践
+- en: 'Cloud native application design principles try to enforce stateless application
+    design as much as possible; however, the growing footprint of container-based
+    services has created the need for data storage persistence. These best practices
+    around storage in Kubernetes will help to design an effective approach to providing
+    the required storage implementations to the application design:'
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 云原生应用程序设计原则尽可能强制无状态应用程序设计；然而，基于容器的服务的不断增长使得数据存储持久性成为必要。这些关于 Kubernetes 存储的最佳实践将有助于设计一种有效的方法来提供应用程序设计所需的存储实现：
+- en: If possible, enable the DefaultStorageClass admission plug-in and define a default
+    storage class. Often, Helm charts for applications that require PersistentVolumes
+    default to a `default` storage class for the chart, which allows the application
+    to be installed without too much modification.
+  id: totrans-35
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如果可能的话，启用 DefaultStorageClass 准入插件，并定义一个默认的存储类。通常，需要 PersistentVolumes 的应用程序的
+    Helm charts 默认使用 `default` 存储类，这使得应用程序可以在不太多修改的情况下安装。
+- en: When designing the architecture of the cluster, either on premises or in a cloud
+    provider, take into consideration zone and connectivity between the compute and
+    data layers. You will want to use the proper labels for both nodes and PersistentVolumes,
+    and use affinity to keep the data and workload as close as possible. The last
+    thing you want is a pod on a node in zone A trying to mount a volume that is attached
+    to a node in zone B.
+  id: totrans-36
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在设计集群架构时（不论是在本地还是在云提供商），考虑计算和数据层之间的区域和连接。您将希望为节点和 PersistentVolumes 使用适当的标签，并使用亲和性使数据和工作负载尽可能接近。你最不希望的情况是，位于
+    A 区域的节点上的 pod 尝试挂载附加到 B 区域节点上的卷。
+- en: Consider very carefully which workloads require state to be maintained on disk.
+    Can that be handled by an outside service like a database system? Or, can your
+    instance run in a cloud provider, by a hosted service that is API-consistent with
+    currently used APIs, say a MongoDB or MySQL as a service?
+  id: totrans-37
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 非常仔细地考虑哪些工作负载需要在磁盘上维护状态。这是否可以通过外部服务来处理，比如数据库系统？或者，您的实例是否可以在云提供商中运行，通过与当前使用的
+    API 一致的托管服务，比如作为服务的 MongoDB 或 MySQL？
+- en: Determine how much effort would be involved in modifying the application code
+    to be more stateless.
+  id: totrans-38
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 确定修改应用程序代码以实现更无状态化需要付出多大的努力。
+- en: While Kubernetes will track and mount the volumes as workloads are scheduled,
+    it does not yet handle redundancy and backup of the data that is stored in those
+    volumes. The CSI specification has added an API for vendors to plug in native
+    snapshot technologies if the storage backend can support it.
+  id: totrans-39
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 虽然 Kubernetes 将跟踪和挂载卷随着工作负载的调度，但它尚未处理存储在这些卷中的数据的冗余和备份。CSI 规范已添加了一个 API，供供应商插入本地快照技术，如果存储后端支持的话。
+- en: Verify the proper life cycle of the data that volumes will hold. By default
+    the reclaim policy is set for dynamically provisioned PersistentVolumes, which
+    will delete the volume from the backing storage provider when the pod is deleted.
+    Sensitive data or data that can be used for forensic analysis should be set to
+    reclaim.
+  id: totrans-40
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 验证卷将保存的数据的适当生命周期。默认情况下，为动态配置的 PersistentVolumes 设置回收策略，这将在删除 pod 时从后备存储提供程序中删除卷。应设置敏感数据或可用于取证分析的数据以回收。
+- en: Stateful Applications
+  id: totrans-41
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 有状态应用程序
+- en: Contrary to popular belief, Kubernetes has supported stateful applications since
+    its infancy, from MySQL, Kafka, and Cassandra to other technologies. Those pioneering
+    days, however, were fraught with complexities and were usually only for small
+    workloads with lots of work required to get things like scaling and durability
+    to function.
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与流行观念相反，Kubernetes 从其初始阶段就支持有状态应用程序，从 MySQL、Kafka 和 Cassandra 到其他技术。然而，这些先驱时期充满了复杂性，并且通常只适用于小型工作负载，需要大量工作才能使缩放和耐久性等功能正常运行。
+- en: 'To fully grasp the critical differences, you must understand how a typical
+    ReplicaSet schedules and manages pods, and how this could be detrimental to traditional
+    stateful applications:'
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要完全理解关键差异，你必须了解典型 ReplicaSet 如何调度和管理 Pods，以及这如何对传统有状态应用程序有害：
+- en: Pods in a ReplicaSet are scaled out and assigned random names when scheduled.
+  id: totrans-44
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: ReplicaSet 中的 Pods 在调度时被分配随机名称并进行扩展。
+- en: Pods in a ReplicaSet are scaled down arbitrarily.
+  id: totrans-45
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: ReplicaSet 中的 Pods 随意缩减。
+- en: Pods in a ReplicaSet are never called directly through their name or IP address
+    but through their association with a `Service`.
+  id: totrans-46
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: ReplicaSet 中的 Pods 不会通过其名称或 IP 地址直接调用，而是通过与 Service 的关联。
+- en: Pods in a ReplicaSet can be restarted and moved to another node at any time.
+  id: totrans-47
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: ReplicaSet 中的 Pods 可以随时重新启动并移动到另一个节点。
+- en: Pods in a ReplicaSet that have a PersistentVolume mapped are linked only by
+    the claim, but any new pod with a new name can take over the claim if needed when
+    rescheduled.
+  id: totrans-48
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: ReplicaSet 中具有映射 PersistentVolume 的 Pods 仅通过声明链接，但如果需要重新调度，任何具有新名称的新 Pod 都可以接管该声明。
+- en: Those who have only cursory knowledge of cluster data management systems can
+    immediately begin to see issues with these characteristics of ReplicaSet-based
+    pods. Imagine a pod that has the current writable copy of the database just all
+    of a sudden getting deleted! Pure pandemonium would ensue for sure.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 那些对集群数据管理系统只有粗浅了解的人可以立即看到 ReplicaSet 基础 Pods 的这些特性存在问题。想象一下，一个拥有当前可写副本的数据库的
+    Pod 突然被删除！肯定会造成纯粹的混乱。
+- en: Most neophytes to the Kubernetes world assume that StatefulSet applications
+    are automatically database applications and therefore equate the two. This could
+    not be farther from the truth. Kubernetes has no sense of what type of application
+    it is deploying. It does not know that your database system requires leader election
+    processes, that it can or cannot handle data replication between members of the
+    set, or, for that matter, that it is a database system at all. This is where StatefulSets
+    come into play.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 中的大多数新手都认为 StatefulSet 应用程序自动是数据库应用程序，因此等同起来。事实并非如此。Kubernetes 不知道它正在部署的应用程序类型。它不知道你的数据库系统需要领导选举过程，它是否能够处理集合成员之间的数据复制，或者它是否是数据库系统。这就是
+    StatefulSets 发挥作用的地方。
+- en: StatefulSets
+  id: totrans-51
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: StatefulSets
+- en: 'What StatefulSets do is make it easier to run application systems that expect
+    more reliable node/pod behavior. If we look back at the list of typical pod characteristics
+    in a ReplicaSet, StatefulSets offer almost the complete opposite. The original
+    spec back in Kubernetes version 1.3 called `PetSets` was introduced to answer
+    some of the critical scheduling and management needs for stateful-type applications
+    such as complex data management systems:'
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: StatefulSets 的作用是更容易运行期望更可靠节点/Pod 行为的应用系统。如果我们回顾一下 ReplicaSet 中典型 Pods 特性的列表，StatefulSets
+    几乎完全相反。最初在 Kubernetes 版本 1.3 中提出的 PetSets（现在的 StatefulSets）是为了满足诸如复杂数据管理系统等有状态应用程序的关键调度和管理需求：
+- en: Pods in a StatefulSet are scaled out and assigned sequential names. As the set
+    scales up, the pods get ordinal names, and by default a new pod must be fully
+    online (pass its liveness and/or readiness probes) before the next pod is added.
+  id: totrans-53
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: StatefulSet 中的 Pods 将会被扩展并分配顺序名称。随着集合的扩展，Pods 将得到序数名称，默认情况下，新的 Pod 必须完全在线（通过其健康检查和/或准备就绪探针）才能添加下一个
+    Pod。
+- en: Pods in a StatefulSet are scaled down in reverse sequence.
+  id: totrans-54
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: StatefulSet 中的 Pods 按相反的顺序缩减。
+- en: Pods in a StatefulSet can be addressed individually by name behind a headless
+    Service.
+  id: totrans-55
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: StatefulSet 中的 Pods 可以通过头部无服务的方式按名称单独访问。
+- en: Pods in a StatefulSet that require a volume mount must use a defined PersistentVolume
+    template. Volumes claimed by pods in a StatefulSet are not deleted when the StatefulSet
+    is deleted.
+  id: totrans-56
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: StatefulSet 中需要挂载卷的 Pods 必须使用定义好的 PersistentVolume 模板。StatefulSet 中的 Pods 所声明的卷在删除
+    StatefulSet 时不会被删除。
+- en: 'A StatefulSet specification looks very similar to a Deployment except for the
+    Service declaration and the PersistentVolume template. The headless Service should
+    be created first, which defines the Service that the pods will be addressed with
+    individually. The headless Service is the same as a regular Service but does not
+    do the normal load balancing:'
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: StatefulSet规范与Deployment非常相似，除了Service声明和PersistentVolume模板之外。应首先创建无头Service，它定义了将逐个为pod寻址的Service。无头Service与常规Service相同，但不执行正常的负载均衡：
+- en: '[PRE5]'
+  id: totrans-58
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'The StatefulSet definition will also look exactly like a Deployment with a
+    few changes:'
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: StatefulSet定义看起来也和Deployment几乎一模一样，只有少许不同之处：
+- en: '[PRE6]'
+  id: totrans-60
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: Operators
+  id: totrans-61
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 运算符
+- en: StatefulSets have been a major factor in introducing complex stateful data systems
+    as feasible workloads in Kubernetes. The only real issue, as stated earlier, is
+    that Kubernetes does not really understand the workload that is running in the
+    StatefulSet. All the other complex operations, like backups, failover, leader
+    registration, new replica registration, and upgrades, are operations that need
+    to happen regularly and will require some careful consideration when running as
+    StatefulSets.
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: StatefulSets在将复杂有状态数据系统引入Kubernetes中作为可行工作负载方面起了重要作用。正如前面所述，唯一真正的问题是Kubernetes实际上并不了解在StatefulSet中运行的工作负载。所有其他复杂操作，如备份、故障转移、领导者注册、新副本注册和升级，都是需要定期执行的操作，在作为StatefulSets运行时需要仔细考虑。
+- en: Early on in the growth of Kubernetes, CoreOS site reliability engineers (SREs)
+    created a new class of cloud native software for Kubernetes called Operators.
+    The original intent was to encapsulate domain-specific knowledge of running a
+    specific application into a specific controller that extends Kubernetes. Imagine
+    building up on the StatefulSet controller to be able to deploy, scale, upgrade,
+    back up, and run general maintenance operations on Cassandra or Kafka. Some of
+    the first Operators that were created were for etcd and Prometheus, which uses
+    a time-series database to keep metrics over time. The proper creation, backup,
+    and restore configuration of Prometheus or etcd instances can be handled by an
+    Operator and are new Kubernetes-managed objects just like a pod or Deployment.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在Kubernetes的早期阶段，CoreOS的可靠性工程师（SREs）创建了一种称为运算符的新型云原生软件，用于Kubernetes。最初的目的是将运行特定应用程序的领域特定知识封装到一个控制器中，从而扩展Kubernetes的能力。想象一下在StatefulSet控制器的基础上构建能够部署、扩展、升级、备份和运行Cassandra或Kafka等操作的控制器。最早创建的一些运算符是为etcd和Prometheus创建的，后者使用时间序列数据库长期保存指标。通过运算符可以正确创建、备份和恢复配置Prometheus或etcd实例，并且它们是新的由Kubernetes管理的对象，就像pod或Deployment一样。
+- en: Until recently, Operators have been one-off tools created by SREs or by software
+    vendors for their specific application. In mid-2018, Red Hat created the Operator
+    Framework, a set of tools including an SDK life cycle manager and future modules
+    that will enable features such as metering, marketplace, and registry type functions.
+    Operators are not only for stateful applications, but because of their custom
+    controller logic they are definitely more amenable to complex data services and
+    stateful systems.
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 直到最近，运算符一直是由SRE或软件供应商为其特定应用程序创建的一次性工具。在2018年中期，Red Hat创建了Operator Framework，这是一套工具，包括SDK生命周期管理器和未来模块，将支持计量、市场和注册表类型功能。运算符不仅适用于有状态应用程序，而且由于其自定义控制逻辑，它们确实更适合复杂数据服务和有状态系统。
+- en: Operators have become a standard way not only of extending the Kubernetes API
+    but also bringing in best practice and operational oversight to complex system
+    processes in Kubernetes. A good place to discover existing Operators published
+    for the Kubernetes ecosystem is [OperatorHub](http://operatorhub.io). They maintain
+    an updated list of curated Operators.
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运算符不仅成为扩展Kubernetes API的标准方式，还将最佳实践和操作监控引入到Kubernetes中复杂系统流程中。发现已发布的Kubernetes生态系统运算符的好地方是[OperatorHub](http://operatorhub.io)。他们维护一个更新的经过策划的运算符列表。
+- en: If you are interested in learning how Operators work, [Chapter 21](ch21.html#implementing_an_operator)
+    is new to this edition and will give you a primer on the development of an Operator
+    and best practices to use. Also check out [*Kubernetes Operators*](https://oreil.ly/zaEEo)
+    (O’Reilly) by Jason Dobies and Joshua Wood for a more in-depth run-through of
+    building Operators.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你有兴趣了解运算符的工作原理，[第21章](ch21.html#implementing_an_operator)是这版新增的内容，会为你提供开发运算符和使用的最佳实践基础。此外，可以查阅《*Kubernetes
+    Operators*》（O'Reilly）由Jason Dobies和Joshua Wood撰写，深入了解构建运算符的详细步骤。
+- en: StatefulSet and Operator Best Practices
+  id: totrans-67
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: StatefulSet 和运营商最佳实践
+- en: 'Large distributed applications that require state and possibly complicated
+    management and configuration operations benefit from Kubernetes StatefulSets and
+    Operators. Operators are still evolving, but they have the backing of the community
+    at large, so these best practices are based on current capabilities at the time
+    of publication:'
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 需要状态和可能复杂管理和配置操作的大型分布式应用程序受益于 Kubernetes StatefulSets 和 Operators。运营商仍在发展中，但它们得到了社区的大力支持，因此这些最佳实践基于发布时的当前能力：
+- en: The decision to use StatefulSets should be taken judiciously because stateful
+    applications usually require much deeper management that the orchestrator cannot
+    manage well yet (read [“Operators”](#Operators) for the possible future answer
+    to this deficiency in Kubernetes).
+  id: totrans-69
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用 StatefulSets 应谨慎，因为状态型应用通常需要更深入的管理，目前编排器无法很好地管理（请阅读[“运营商”](#Operators)，可能会对
+    Kubernetes 的这一不足提供未来的解决方案）。
+- en: The headless Service for the StatefulSet is not automatically created and must
+    be created at deployment time to properly address the pods as individual nodes.
+  id: totrans-70
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: StatefulSet 的无头 Service 不会自动创建，必须在部署时创建，以正确地将 pod 地址作为单独的节点处理。
+- en: When an application requires ordinal naming and dependable scaling, this does
+    not always mean it requires the assignment of PersistentVolumes.
+  id: totrans-71
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 当应用程序需要顺序命名和可靠的扩展时，并不总是意味着需要分配 PersistentVolumes。
+- en: If a node in the cluster becomes unresponsive, any pods that are part of a StatefulSet
+    are not automatically deleted; instead they will enter a `Terminating` or `Unknown`
+    state after a grace period. The only ways to clear this pod are to remove the
+    node object from the cluster, the kubelet beginning to work again and deleting
+    the pod directly, or an Operator force deleting the pod. The force delete should
+    be the last option, and great care should be taken that the node that had the
+    deleted pod does not come back online, because there will now be two pods with
+    the same name in the cluster. You can use `kubectl delete pod nginx-0 --grace-period=0
+    --force` to force delete the pod.
+  id: totrans-72
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如果集群中的节点变得无响应，则 StatefulSet 的任何 pod 都不会自动删除；相反，在优雅期限后，它们将进入 `Terminating` 或
+    `Unknown` 状态。清除此 pod 的唯一方法是从集群中删除节点对象，kubelet 开始重新工作并直接删除 pod，或者运营商强制删除 pod。强制删除应该是最后的选择，并且应该小心确保删除
+    pod 的节点不会再次上线，因为现在集群中将有两个具有相同名称的 pod。您可以使用 `kubectl delete pod nginx-0 --grace-period=0
+    --force` 强制删除该 pod。
+- en: 'Even after force deleting a pod, it might stay in an `Unknown` state, so a
+    patch to the API server will delete the entry and cause the StatefulSet controller
+    to create a new instance of the deleted pod: `kubectl patch pod nginx-0 -p ''{"metadata":{"finalizers":null}}''`.'
+  id: totrans-73
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 即使强制删除 pod 后，它可能仍然处于 `Unknown` 状态，因此对 API 服务器的修补将删除该条目，并导致 StatefulSet 控制器创建已删除
+    pod 的新实例：`kubectl patch pod nginx-0 -p '{"metadata":{"finalizers":null}}'`。
+- en: If you’re running a complex data system with some type of leader election or
+    data replication confirmation processes, use `preStop hook` to properly close
+    any connections, force leader election, or verify data synchronization before
+    the pod is deleted using a graceful shutdown process.
+  id: totrans-74
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如果正在运行具有某种类型的领导者选举或数据复制确认过程的复杂数据系统，请使用 `preStop hook` 来适当关闭任何连接，强制进行领导者选举或在使用优雅关闭进程删除
+    pod 前验证数据同步。
+- en: When the application that requires stateful data is a complex data management
+    system, look to determine whether an Operator exists to help manage the more complicated
+    life-cycle components of the application. If the application is built in-house,
+    it might be worth investigating whether it would be useful to package the application
+    as an Operator to add more manageability to the application. See [the CoreOS Operator
+    SDK](https://oreil.ly/gRIej) for an example.
+  id: totrans-75
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 当需要有状态数据的应用程序是复杂的数据管理系统时，请查看是否存在运营商来帮助管理应用程序更复杂的生命周期组件。如果应用程序是内部构建的，则值得调查是否将应用程序打包为运营商以增加应用程序的可管理性。参见[CoreOS
+    运营商 SDK](https://oreil.ly/gRIej) 作为示例。
+- en: Summary
+  id: totrans-76
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 概要
+- en: Most organizations look to containerize their stateless applications and leave
+    the stateful applications as is. As more cloud native applications run in cloud
+    provider Kubernetes offerings, data gravity becomes an issue. Stateful applications
+    require much more due diligence, but the reality of running them in clusters has
+    been accelerated by the introduction of StatefulSets and Operators. Mapping volumes
+    into containers allows Operators to abstract the storage subsystem specifics away
+    from any application development. Managing stateful applications such as database
+    systems in Kubernetes is still a complex distributed system and needs to be carefully
+    orchestrated using the native Kubernetes primitives of pods, ReplicaSets, Deployments,
+    and StatefulSets. Using Operators that have specific application knowledge built
+    into them as Kubernetes-native APIs may help to elevate these systems into production-based
+    clusters.
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大多数组织希望将其无状态应用程序容器化，而将有状态应用程序保持不变。随着越来越多的云原生应用在云服务提供商的Kubernetes平台上运行，数据引力成为一个问题。有状态应用程序需要更多的尽职调查，但通过引入StatefulSets和Operators，将它们运行在集群中的现实性已经加快。将卷映射到容器中允许Operators将存储子系统的具体细节与任何应用程序开发分离开来。在Kubernetes中管理诸如数据库系统之类的有状态应用程序仍然是一个复杂的分布式系统，需要使用Pods、ReplicaSets、Deployments和StatefulSets等原生Kubernetes基元进行仔细的编排。使用具有特定应用程序知识的Operators作为Kubernetes本地API可能有助于将这些系统提升到基于生产的集群中。

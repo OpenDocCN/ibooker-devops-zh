@@ -1,0 +1,1699 @@
+- en: Chapter 5\. Developing Templates
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第5章 开发模板
+- en: Templates are at the heart of Helm charts, and they make up a majority of the
+    files and content of a chart. These are the files that live within the *templates*
+    directory. Helm will render the templates and send them to Kubernetes when you
+    run commands like `helm install` and `helm upgrade`. If you use the `helm template`
+    command, the templates are rendered and displayed as output (i.e., sent to standard
+    out).
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 模板是Helm图表的核心，它们占据了图表中大部分文件和内容。这些文件存放在*templates*目录中。当您运行`helm install`和`helm
+    upgrade`等命令时，Helm会渲染这些模板并将它们发送到Kubernetes。如果使用`helm template`命令，则会将模板渲染并显示为输出（即发送到标准输出）。
+- en: The template engine enables a wide range of ways to build templates. In simple
+    situations, you can substitute values in Kubernetes manifest YAML files with values
+    passed in by the user or from the *values.yaml* file. In more complex situations,
+    you can build logic into templates that simplify what chart consumers need to
+    input. Or you can build in features that can configure applications themselves.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 模板引擎支持多种构建模板的方式。在简单情况下，您可以用用户提供或*values.yaml*文件中传递的值替换Kubernetes清单YAML文件中的值。在更复杂的情况下，您可以构建逻辑到模板中，简化图表消费者需要输入的内容。或者您可以构建能够配置应用程序本身的功能。
+- en: In this chapter you will learn how to develop templates and understand how the
+    template syntax works. We’ll also cover a number of cool features that Helm has
+    added to the templates that enable you to work with YAML and interact with Kubernetes.
+    Along the way we will look at some patterns you can apply to your own templates.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，您将学习如何开发模板以及理解模板语法的工作原理。我们还将介绍一些Helm添加到模板中的酷炫功能，使您能够与YAML一起工作并与Kubernetes交互。在此过程中，我们将看一些您可以应用于自己模板的模式。
+- en: The Template Syntax
+  id: totrans-4
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 模板语法
+- en: Helm uses the Go text template engine provided as part of the Go standard library.
+    The syntax is used in `kubectl` (the command-line application for Kubernetes)
+    templates, Hugo (the static site generator), and numerous other applications built
+    in Go. The template engine, as it is used in Helm, is designed to work with various
+    types of text files.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Helm使用Go标准库提供的Go文本模板引擎。该语法用于`kubectl`（Kubernetes的命令行应用程序）模板，Hugo（静态站点生成器）以及许多其他使用Go构建的应用程序。模板引擎在Helm中的设计是为了处理各种类型的文本文件。
+- en: You don’t need to know the Go programming language to develop templates. There
+    are some Go-isms in the template engine, but if you don’t know Go you can treat
+    them as nuances of the template language. We will call them out as you learn to
+    develop templates.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您不需要了解Go编程语言来开发模板。模板引擎中有一些Go特有的东西，但如果您不了解Go，可以将它们视为模板语言的细微差别。在学习开发模板时，我们会特别指出它们。
+- en: Actions
+  id: totrans-7
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 动作
+- en: Logic, control structures, and data evaluations are wrapped by `{{` and `}}`.
+    These are called actions. Anything outside of actions is copied to output.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 逻辑、控制结构和数据评估由`{{` 和 `}}` 包裹。这些称为动作。任何不在动作内的内容都会被复制到输出中。
+- en: 'When the curly brackets are used to start and stop actions they can be accompanied
+    by a `-` to remove leading or trailing whitespace. The following example illustrates
+    this:'
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当花括号用于开始和结束动作时，它们可以伴随 `-` 以删除前导或尾随空格。以下示例说明了这一点：
+- en: '[PRE0]'
+  id: totrans-10
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: The generated output of this is “Hello,World.” The whitespace has been removed
+    from the side with the `-` up to the next nonwhitespace character. There needs
+    to be an ASCII whitespace between the `-` and the rest of the action. For example,
+    `{{–12}}` evaluates to –12 because the `-` is considered part of the number instead
+    of the bracket.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此生成的输出为“Hello,World.” 从 `-` 一直到下一个非空白字符，侧面的空白已被删除。`-` 和其余动作之间需要有ASCII空格。例如，`{{–12}}`
+    评估为 –12，因为 `-` 被视为数字的一部分而不是括号的一部分。
+- en: Within actions there are a wide variety of features you can leverage, including
+    pipelines, if/else statements, loops, variables, subtemplates, and functions.
+    Using these together provides a powerful way to program templates.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在动作中，您可以利用各种功能，包括管道、if/else语句、循环、变量、子模板和函数等。将它们结合使用提供了一种强大的模板编程方式。
+- en: Information Helm Passes to Templates
+  id: totrans-13
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Helm传递给模板的信息
+- en: When Helm renders a template it passes a single data object to the template
+    with information you can access. Inside the template that object is represented
+    as a `.` (i.e., a period). It is referred to as a dot. This object has a wide
+    variety of information available on it.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当 Helm 渲染模板时，它将一个数据对象传递给模板，您可以访问该对象中的信息。在模板中，该对象表示为 `.`（即一个句点）。它被称为点。此对象具有广泛的可用信息。
+- en: In [Chapter 4](ch04.xhtml#building_a_chart), you already saw how values in the
+    *values.yaml* file are available as properties on `.Values`. The properties on
+    `.Values` are specific to each chart based entirely on the values in the *values.yaml*
+    file and those passed into a chart. The properties on `.Values` do not have a
+    schema and vary from chart to chart.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 [第四章](ch04.xhtml#building_a_chart) 中，您已经看到 *values.yaml* 文件中的值如何作为 `.Values`
+    上的属性可用。`.Values` 上的属性完全基于 *values.yaml* 文件中的值以及传递到图表中的值，每个图表的属性都不具有模式，并且因图表而异。
+- en: 'In addition to the values, information about the release, as first described
+    in [Chapter 2](ch02.xhtml#Using_Helm), can be accessed as properties of `.Release`.
+    This information includes:'
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了值之外，关于发布的信息，正如 [第二章](ch02.xhtml#Using_Helm) 中首次描述的那样，可以作为 `.Release` 的属性访问。此信息包括：
+- en: '`.Release.Name`'
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`.Release.Name`'
+- en: The name of the release.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 发布名称。
+- en: '`.Release.Namespace`'
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`.Release.Namespace`'
+- en: Contains the namespace the chart is being released to.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 包含正在发布到的命名空间。
+- en: '`.Release.IsInstall`'
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`.Release.IsInstall`'
+- en: Set to `true` when the release is a workload being installed.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 设置为 `true` 时，表示发布的是一个工作负载。
+- en: '`.Release.IsUpgrade`'
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`.Release.IsUpgrade`'
+- en: Set to `true` when the release is an upgrade or rollback.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 设置为 `true` 时，表示发布是升级或回滚。
+- en: '`.Release.Service`'
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`.Release.Service`'
+- en: Lists the service performing the release. When Helm installs a chart, this value
+    is set to `"Helm"`. Different applications, those that build on Helm, can set
+    this to their own value.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 列出执行发布的服务。当 Helm 安装图表时，此值设置为 `"Helm"`。不同的应用程序，即构建在 Helm 上的应用程序，可以将此值设置为它们自己的值。
+- en: 'The information in the *Chart.yaml* file can also be found on the data object
+    at `.Chart`. This information does follow the schema for the *Chart.yaml* file.
+    This includes:'
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*Chart.yaml* 文件中的信息也可以在 `.Chart` 数据对象中找到。此信息确实遵循 *Chart.yaml* 文件的模式。包括：'
+- en: '`.Chart.Name`'
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`.Chart.Name`'
+- en: Contains the name of the chart.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 包含图表的名称。
+- en: '`.Chart.Version`'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`.Chart.Version`'
+- en: The version of the chart.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 图表的版本。
+- en: '`.Chart.AppVersion`'
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`.Chart.AppVersion`'
+- en: The application version, if set.
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用程序版本（如果已设置）。
+- en: '`.Chart.Annotations`'
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`.Chart.Annotations`'
+- en: Contains a key/value list of annotations.
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 包含注释的键/值列表。
+- en: Each of the properties that can be in a *Chart.yaml* file is accessible. The
+    names differ in that they start with a lowercase letter in *Chart.yaml* but start
+    with an uppercase letter when they are properties on the `.Chart` object.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以在 *Chart.yaml* 文件中的每个属性都可以访问。名称不同之处在于它们在 *Chart.yaml* 中以小写字母开头，但作为 `.Chart`
+    对象属性时以大写字母开头。
+- en: If you want to pass custom information from the *Chart.yaml* file to the templates,
+    you need to use annotations. The `.Chart` object only contains the fields from
+    the *Chart.yaml* file that are in the schema. You can’t add new fields to pass
+    them in, but you can add your custom information to the annotations.
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果要从 *Chart.yaml* 文件传递自定义信息到模板，则需要使用注释。`.Chart` 对象仅包含在模式中的 *Chart.yaml* 文件中的字段。您不能添加新字段以传递它们，但可以将自定义信息添加到注释中。
+- en: 'Different Kubernetes clusters can have different capabilities. This can depend
+    on things like the version of Kubernetes you are using or if there are custom
+    resource definitions (CRDs) installed. Helm provides some data about the capabilities
+    of the cluster as properties of `.Capabilities`. Helm interrogates the cluster
+    you are deploying an application into to get this information. This includes:'
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不同的 Kubernetes 集群可以具有不同的能力。这可能取决于您使用的 Kubernetes 版本或安装的自定义资源定义（CRD）。Helm 作为
+    `.Capabilities` 的属性提供了有关集群能力的一些数据。Helm 在部署应用程序时会查询您部署的集群以获取此信息。包括：
+- en: '`.Capabilities.APIVersions`'
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`.Capabilities.APIVersions`'
+- en: Contains the API versions and resource types available in your cluster. You
+    will learn how to use this in a little bit.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 包含集群中可用的 API 版本和资源类型。您将在稍后学习如何使用此信息。
+- en: '`.Capabilities.KubeVersion.Version`'
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`.Capabilities.KubeVersion.Version`'
+- en: The full Kubernetes version.
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 完整的 Kubernetes 版本。
+- en: '`.Capabilities.KubeVersion.Major`'
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`.Capabilities.KubeVersion.Major`'
+- en: Contains the major Kubernetes version. Because Kubernetes has not been incrementing
+    the major version, this is set to `1`.
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 包含主要的 Kubernetes 版本。由于 Kubernetes 的主要版本未增加，因此设置为 `1`。
+- en: '`.Capabilities.KubeVersion.Minor`'
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`.Capabilities.KubeVersion.Minor`'
+- en: The minor version of Kubernetes being used in the cluster.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 集群中使用的Kubernetes的次要版本。
+- en: When `helm template` is used, Helm does not interrogate a cluster the same way
+    it does for `helm install` or `helm upgrade`. The capabilities information provided
+    to templates being processed when `helm template` is run is default information
+    Helm already knows about compliant Kubernetes clusters. Helm works this way because
+    the `template` command is expected to only be used for processing templates and
+    doing so in a manner that does not accidentally leak information from a configured
+    cluster.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当使用`helm template`时，Helm不会像对`helm install`或`helm upgrade`那样对集群进行调查。处理`helm template`时提供给模板的能力信息是Helm已经知道的符合Kubernetes集群的默认信息。Helm之所以这样工作，是因为`template`命令预期仅用于处理模板，并且以一种不会意外泄露配置的方式进行处理。
+- en: Charts can contain custom files. For example, you can have a configuration file
+    you want to pass to an application through a `ConfigMap` or `Secret` as a file
+    in the chart. The nonspecial files in a chart that are not listed in the *.helmignore*
+    file are available on `.Files` within templates. This will not give you access
+    to the template files.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 图表可以包含自定义文件。例如，您可以通过`ConfigMap`或`Secret`将配置文件作为图表中的文件传递给应用程序。在图表中未列在*.helmignore*文件中的非特殊文件在模板中可以通过`.Files`访问。这不会让您访问模板文件。
+- en: 'The final piece of data passed into the template is details about the current
+    template being executed. Helm passes in:'
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 传递给模板的最后一个数据片段是关于当前正在执行的模板的详细信息。Helm传递：
+- en: '`.Template.Name`'
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`.Template.Name`'
+- en: Contains the namespaced filepath to the template. For example, in the *anvil*
+    chart from [Chapter 4](ch04.xhtml#building_a_chart) a path would be *anvil/templates/deployment.yaml*.
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 包含模板的命名空间文件路径。例如，在[第四章](ch04.xhtml#building_a_chart)的*anvil*图中，路径将是*anvil/templates/deployment.yaml*。
+- en: '`.Template.BasePath`'
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`.Template.BasePath`'
+- en: The namespaced path to the *templates* directory of the current chart (e.g.,
+    *anvil/templates*).
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当前图表的*templates*目录的命名空间路径（例如，*anvil/templates*）。
+- en: Later in this chapter you will learn how you can change the scope of `.` in
+    some circumstances. When the scope changes, properties like `.Capabilities.KubeVersion.Minor`
+    will become inaccessible at that location. When template execution begins, `.`
+    is mapped to `$` and `$` does not change. Even when the scope changes, `$.Capabilities.KubeVersion.Minor`
+    and other passed-in data is still accessible. You will find `$` is typically only
+    used when the scope has changed.
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章后面，您将了解在某些情况下如何更改`.`的范围。当范围发生变化时，像`.Capabilities.KubeVersion.Minor`这样的属性将无法在该位置访问。当模板执行开始时，`.`被映射到`$`，并且`$`不会改变。即使范围发生变化，`$.Capabilities.KubeVersion.Minor`和其他传入的数据仍然可访问。您会发现在范围发生变化时，通常仅使用`$`。
+- en: Now that you’ve learned about the data being passed into the template, we will
+    look at how you can use and manipulate that data within a template.
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在您已经了解了传递到模板的数据，我们将看看如何在模板中使用和操作该数据。
+- en: Pipelines
+  id: totrans-56
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 流水线
+- en: 'A pipeline is a sequence of commands, functions, and variables chained together.
+    The value of a variable or the output of a function is used as the input to the
+    next function in a pipeline. The output of the final element of a pipeline is
+    the output of the pipeline. The following illustrates a simple pipeline:'
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 流水线是一系列命令、函数和变量链接在一起。变量的值或函数的输出作为流水线中下一个函数的输入。流水线的最后一个元素的输出是流水线的输出。以下是一个简单流水线的示例：
+- en: '[PRE1]'
+  id: totrans-58
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: There are three parts to this pipeline, each separated by a `|`. The first is
+    `.Values.character`, which is a calculated value of `character`. This is either
+    the value of `character` from the *values.yaml* file or one passed in when the
+    chart is being rendered by `helm install`, `helm upgrade`, or `helm template`.
+    This value is passed as the last argument to the `default` function. If the value
+    is empty, `default` will use the value of “Sylvester” in its place. The output
+    of `default` is passed as an input to `quote`, which ensures the value is wrapped
+    in quotation marks. The output of `quote` is returned from the action.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个流水线分为三部分，每部分由`|`分隔。第一部分是`.Values.character`，这是`character`的计算值。这可以是来自*values.yaml*文件的值，或者在使用`helm
+    install`、`helm upgrade`或`helm template`渲染图表时传入的值。此值作为最后一个参数传递给`default`函数。如果值为空，`default`将使用“Sylvester”的值代替。`default`的输出作为`quote`函数的输入，确保该值用引号包裹。`quote`的输出从操作中返回。
+- en: Pipelines are a powerful tool you can use to transform data you want in the
+    template. They can be used for a variety of purposes, from creating powerful transformations
+    to protecting against simple bugs. Can you spot the bug in the following YAML
+    output?
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 流水线是一个强大的工具，您可以在模板中使用它来转换所需的数据。它们可用于各种目的，从创建强大的转换到防止简单错误。您能在以下YAML输出中发现错误吗？
+- en: '[PRE2]'
+  id: totrans-61
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'The value of `id` looks like a string, but it is not. The only letter is an
+    *e*, and the rest are numbers. YAML parsers, including the one used by Kubernetes,
+    will interpret that as a number in scientific notation. This will cause errors.
+    A short string like this is a common output when you get a shortened version of
+    a digest or commit ID from Git. A simple fix is to wrap the value in quotes:'
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`id`的值看起来像一个字符串，但它不是。唯一的字母是*e*，其余都是数字。包括Kubernetes在内的YAML解析器将其解释为科学记数法中的数字。这将导致错误。当您从Git获取摘要或提交ID的缩短版本时，这样的简短字符串是常见的输出。一个简单的解决方法是将值用引号括起来：'
+- en: '[PRE3]'
+  id: totrans-63
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: When the value is wrapped in quotes, the YAML parsers will interpret it as a
+    string. This is a case where using the `quote` function on the end of a pipeline
+    can fix or avoid a bug.
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当值被引号包裹时，YAML解析器将其解释为字符串。这是使用管道末尾的`quote`函数可以修复或避免错误的情况之一。
+- en: Template Functions
+  id: totrans-65
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 函数模板
+- en: Within actions and pipelines, there are template functions you can use. You
+    have already seen some of these, including the `default` and `quote` functions
+    described earlier in this chapter. Functions provide a means to transform the
+    data you have into the format you need rendered or to generate data where none
+    exists.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在操作和流水线中，您可以使用模板函数。您已经看到了其中一些，包括本章前面描述的`default`和`quote`函数。函数提供了一种将您拥有的数据转换为所需呈现格式或生成不存在数据的方式。
+- en: Most of the functions are provided by Helm and are designed to be useful when
+    building charts. The functions range from the simple, like the `indent` and `nindent`
+    functions used to indent output, to the complex ones that are able to reach into
+    the cluster and get information on current resources and resource types.
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大多数函数由Helm提供，并且设计用于在构建图表时提供帮助。这些函数从简单的函数如`indent`和`nindent`（用于缩进输出）到能够访问集群并获取当前资源和资源类型信息的复杂函数，功能齐全。
+- en: 'To illustrate functions we can look at a common pattern used in charts to improve
+    readability. When `helm create` is run, as you saw in [Chapter 4](ch04.xhtml#building_a_chart),
+    a Kubernetes `Deployment` template is created as part of the chart. The `Deployment`
+    template includes a section for a security context:'
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了说明函数，我们可以查看图表中常用的一种模式，以提高可读性。当运行`helm create`时，正如您在[第四章](ch04.xhtml#building_a_chart)中看到的，作为图表的一部分创建了一个Kubernetes
+    `Deployment`模板。`Deployment`模板包括一个用于安全上下文的部分：
+- en: '[PRE4]'
+  id: totrans-69
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: Tip
+  id: totrans-70
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: Read the full chart from [Chapter 4](ch04.xhtml#building_a_chart) at [*https://github.com/Masterminds/learning-helm/tree/main/chapter4/anvil*](https://github.com/Masterminds/learning-helm/tree/main/chapter4/anvil).
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从[第四章](ch04.xhtml#building_a_chart)的完整图表读取，在[*https://github.com/Masterminds/learning-helm/tree/main/chapter4/anvil*](https://github.com/Masterminds/learning-helm/tree/main/chapter4/anvil)。
+- en: In the *values.yaml* file there is a YAML entry for `podSecurityContext`. This
+    is meant to be the exact YAML passed in the `template` section of a `Deployment`
+    for `securityContext`. Inside, the template the information from the *values.yaml*
+    file is no longer YAML. Instead it is a data object. The `toYaml` function turns
+    the data into YAML.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在*values.yaml*文件中，为`podSecurityContext`有一个YAML条目。这意味着在`securityContext`的`template`部分传递的确切YAML。在模板内，*values.yaml*文件中的信息不再是YAML。而是一个数据对象。`toYaml`函数将数据转换为YAML格式。
+- en: The YAML under `securityContext` needs to be indented properly or the Deployment’s
+    manifest will have YAML errors due to a section not being properly indented. This
+    is accomplished through the use of two functions. To the left of `toYaml` a `-`
+    is used with `{{` to remove all the whitespace up to the `:` on the previous line.
+    The output of `toYaml` is passed to `nindent`. This function adds a newline at
+    the start of the text it receives and then indents each line.
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`securityContext`下的YAML需要正确缩进，否则部署清单将由于某个部分未正确缩进而产生YAML错误。这通过使用两个函数来实现。在`toYaml`的左边，使用了一个带有`{{`的`-`，以删除直到前一行上的`:`之前的所有空白。`toYaml`的输出传递给`nindent`。此函数在接收到的文本开头添加一个换行符，然后对每一行进行缩进。'
+- en: '`nindent` is used instead of the `indent` function for readability. The `indent`
+    function does not add a newline at the beginning. `nindent` is used so that the
+    YAML under `securityContext` can be on a new line. This is another common pattern
+    found in templates.'
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了增强可读性，使用 `nindent` 而不是 `indent` 函数。`indent` 函数不在开头添加换行符。使用 `nindent` 是为了让
+    `securityContext` 下的 YAML 能够在新行上。这是模板中另一个常见的模式。
+- en: Tip
+  id: totrans-75
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: In addition to `toYaml`, Helm has functions to convert data to JSON with `toJson`
+    and to TOML with `toToml`. `toYaml` is often used when creating Kubernetes manifests,
+    while `toJson` and `toToml` are more often used when creating configuration files
+    to be passed to applications through `Secret`s and `ConfigMap`s.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了 `toYaml`，Helm 还有将数据转换为 JSON 的函数 `toJson` 和转换为 TOML 的函数 `toToml`。`toYaml`
+    经常用于创建 Kubernetes 清单，而 `toJson` 和 `toToml` 更常用于创建通过 `Secret` 和 `ConfigMap` 传递给应用程序的配置文件。
+- en: The order of arguments passed into a function is intentional. When pipelines
+    are used, the output of one function is passed as the last argument to the next
+    function in the pipeline. In the previous example the output of `toYaml` is passed
+    as the last argument to `nindent`, which takes two arguments. The order of arguments
+    on functions is designed for common pipeline use cases.
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 函数中传递参数的顺序是有意义的。当使用管道时，一个函数的输出作为管道中下一个函数的最后一个参数传递。在前面的例子中，`toYaml` 的输出作为 `nindent`
+    的最后一个参数传递，`nindent` 接受两个参数。函数参数的顺序设计用于常见的管道用例。
+- en: There are more than a [hundred functions](https://oreil.ly/Xtoya) available
+    to use within templates. These include functions for handling math, dictionaries
+    and lists, reflection, hash generation, date functions, and much more.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在模板中有超过 [百个函数](https://oreil.ly/Xtoya) 可供使用。这些包括处理数学、字典和列表、反射、哈希生成、日期函数等等。
+- en: Methods
+  id: totrans-79
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 方法
+- en: Up to this point, you have seen template functions. Helm also includes functions
+    that detect the capabilities of a Kubernetes cluster and methods to work with
+    files.
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，您已经看到了模板函数。Helm 还包括检测 Kubernetes 集群能力和处理文件的函数方法。
+- en: The `.Capabilities` object has the method `.Capabilities.APIVersions.Has`, which
+    takes in a single argument for the Kubernetes API or type you want to check the
+    existence of. It returns either true or false to let you know if that resource
+    is available in your cluster. You can check for a group and version such as `batch/v1`
+    or a resource type such as `apps/v1/Deployment`.
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`.Capabilities` 对象具有方法 `.Capabilities.APIVersions.Has`，接受一个参数用于检查您想要检查的 Kubernetes
+    API 或类型的存在。它返回 true 或 false 来告知您该资源在您的集群中是否可用。您可以检查一个组和版本，例如 `batch/v1` 或资源类型如
+    `apps/v1/Deployment`。'
+- en: Tip
+  id: totrans-82
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: Checking for the existence of resources and API groups is useful when dealing
+    with custom resource definitions and multiple versions of Kubernetes resource
+    types. As Kubernetes API versions move from alpha, to beta, to released versions,
+    you want to use the latest version of a resource type as alpha and beta are deprecated
+    and removed from Kubernetes. If your application will be installed on a wide range
+    of Kubernetes versions, it is useful to support API versions in all of those clusters.
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在处理自定义资源定义和多版本 Kubernetes 资源类型时，检查资源和 API 组的存在非常有用。随着 Kubernetes API 版本从 alpha
+    到 beta，再到发布版本的变化，您希望使用资源类型的最新版本，因为 alpha 和 beta 将会被废弃并从 Kubernetes 中移除。如果您的应用程序将安装在广泛的
+    Kubernetes 版本上，支持所有这些集群中的 API 版本将非常有用。
+- en: Warning
+  id: totrans-84
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: When `helm template` is used, Helm will use a default set of API versions for
+    a compliant Kubernetes cluster instead of interacting with your cluster to generate
+    the known capabilities.
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当使用 `helm template` 时，Helm 将使用符合 Kubernetes 集群的默认 API 版本集，而不是与您的集群交互以生成已知能力。
+- en: 'The other place you will find methods is on `.Files`. It includes the following
+    methods to help you work with files:'
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您将找到方法的另一个地方是在 `.Files` 上。它包括以下方法来帮助您处理文件：
+- en: '`.Files.Get name`'
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`.Files.Get name`'
+- en: Provides a means of getting the contents of the file as a string. `name`, in
+    this case, is the name including filepath from the root of the chart.
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 提供了一种将文件内容作为字符串获取的方法。在这种情况下，`name` 是从图表根目录开始的包含文件路径的名称。
+- en: '`.Files.GetBytes`'
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`.Files.GetBytes`'
+- en: Similar to `.Files.Get` but instead of returning a string, the file is returned
+    as an array of bytes. In Go terms, this is a byte slice (i.e., `[]byte`).
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与 `.Files.Get` 类似，但返回的是文件作为字节的数组。在 Go 术语中，这是一个字节切片（即 `[]byte`）。
+- en: '`.Files.Glob`'
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`.Files.Glob`'
+- en: Accepts a glob pattern and returns another `files` object containing only the
+    files whose names match the pattern.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接受一个glob模式，并返回另一个`files`对象，其中仅包含文件名与模式匹配的文件。
+- en: '`.Files.AsConfig`'
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`.Files.AsConfig`'
+- en: Takes a files group and returns it as flattened YAML suitable to include in
+    the `data` section of a Kubernetes `ConfigMap` manifest. This is useful when paired
+    with `.Files.Glob`.
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接受文件组并将其作为适合包含在Kubernetes `ConfigMap`清单的`data`部分中的扁平化YAML返回。当与`.Files.Glob`配对使用时很有用。
+- en: '`.Files.AsSecrets`'
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`.Files.AsSecrets`'
+- en: Similar to `.Files.AsConfig`. Instead of returning flattened YAML it returns
+    the data in a format that can be included in the `data` section of a Kubernetes
+    `Secret` manifest. It’s Base64 encoded. This is useful when paired with `.Files.Glob`.
+    For example, `{{ .Files.Glob("mysecrets/**").AsSecrets }}`.
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与`.Files.AsConfig`类似。它不是返回扁平化的YAML而是返回可以包含在Kubernetes `Secret`清单的`data`部分中的数据格式。它是Base64编码的。当与`.Files.Glob`配对使用时很有用。例如，`{{
+    .Files.Glob("mysecrets/**").AsSecrets }}`。
+- en: '`.Files.Lines`'
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`.Files.Lines`'
+- en: Has an argument for a filename and returns the contents of the file as an array
+    split by newlines (i.e., `\n`).
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有一个文件名参数，返回文件内容作为以新行分隔的数组（即`\n`）。
+- en: 'To illustrate the use of these, the following template is from an *example*
+    chart. It reads all the files in the *config* subdirectory of a chart and embeds
+    each one in a `Secret`:'
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了说明这些的使用，以下模板来自一个*example*图表。它读取图表的*config*子目录中的所有文件，并将每个文件嵌入一个`Secret`中：
+- en: '[PRE5]'
+  id: totrans-100
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'As the following example output from Helm shows, each file can be found at
+    its own key in the file:'
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如Helm的以下示例输出所示，每个文件可以在其自己的键中找到：
+- en: '[PRE6]'
+  id: totrans-102
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: Querying Kubernetes Resources In Charts
+  id: totrans-103
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 在图表中查询Kubernetes资源
+- en: Helm contains a template function that enables you to look up resources in the
+    Kubernetes cluster. The `lookup` template function is able to return either an
+    individual object or a list of objects. This function returns an empty response
+    when commands that do not interact with the cluster are executed.
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Helm包含一个模板函数，使您能够在Kubernetes集群中查找资源。`lookup`模板函数能够返回单个对象或对象列表。在执行不与集群交互的命令时，此函数返回空响应。
+- en: 'The following example looks up a `Deployment` named *runner* in the *anvil*
+    namespace and makes the metadata annotations available:'
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下示例查找在*anvil*命名空间中名为*runner*的`Deployment`，并使元数据注释可用：
+- en: '[PRE7]'
+  id: totrans-106
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: 'There are four arguments passed into the `lookup` function:'
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`lookup`函数传入四个参数：'
+- en: API version
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: API 版本
+- en: This is the version of any object, whether included in Kubernetes or installed
+    as part of an add-on. Examples of this look like `"v1"` and `"apps/v1"`.
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是任何对象的版本，无论是包含在Kubernetes中还是作为插件的一部分安装的。此类示例看起来像`"v1"`和`"apps/v1"`。
+- en: Kind of object
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对象的种类
+- en: This can be any resource type.
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这可以是任何资源类型。
+- en: Namespace to look for the object in
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要查找对象的命名空间
+- en: This can be left blank to look in all namespaces you have access to or for global
+    resources such as Namespace.
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这可以留空以查找您有权限访问的所有命名空间或全局资源，例如Namespace。
+- en: Name of the resource you are looking for
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要查找的资源的名称
+- en: This can be left blank to return a list of resources instead of a specific one.
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这可以留空以返回资源列表而不是特定的一个。
+- en: When a list of resources is returned, you will need to loop over the results
+    to access the data on each of the individual objects. Where a lookup for an object
+    returns a *dict*, a lookup for a list of objects returns a *list*. These are two
+    different types Helm provides for use in templates.
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当返回资源列表时，您需要循环遍历结果以访问每个单独对象的数据。当对象的查找返回一个*dict*时，列表对象的查找返回一个*list*。这两种类型是Helm在模板中提供的。
+- en: 'When a list is returned, the objects are on the `items` property:'
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当返回列表时，对象位于`items`属性中：
+- en: '[PRE8]'
+  id: totrans-118
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: The items can be iterated over using a loop, which you will learn about later
+    in the chapter. This example returns all the `ConfigMap`s in the *anvil* namespace,
+    assuming you have access to the namespace.
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以使用循环迭代这些项，您将在本章后面学习。以下示例返回在*anvil*命名空间中的所有`ConfigMap`，假设您有权限访问该命名空间。
+- en: You should be careful when using this function. For example, it will return
+    different results when used as part of a dry run as opposed to when an upgrade
+    is run. A dry run does not interact with a cluster, so this function will return
+    no results. When an upgrade is run it will return results.
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在使用此函数时应该小心。例如，当作为干预运行时，它将返回与升级运行时不同的结果。干预运行不会与集群交互，因此此函数将不返回结果。当运行升级时它将返回结果。
+- en: The results returned when installing or upgrading in various clusters can also
+    be different. For example, in a development environment and in a production environment
+    the resources installed in a cluster will have differences that can lead to unequal
+    responses.
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安装或升级各个集群时返回的结果也可能不同。例如，在开发环境和生产环境中，安装在集群中的资源将有可能导致不平等的响应。
+- en: if/else/with
+  id: totrans-122
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: if/else/with
+- en: 'Go templates have `if` and `else` statements along with something similar but
+    mildly different called `with`. `if` and `else` work the same way they do in most
+    programming languages. To illustrate an `if` statement, we can look at a pattern
+    from the chart generated using the `helm create` command covered in [Chapter 4](ch04.xhtml#building_a_chart).
+    In that chart the *values.yaml* file contains a section on `ingress` with an enabled
+    property. It looks like:'
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Go模板有`if`和`else`语句，以及类似但略有不同的`with`。`if`和`else`的工作方式与大多数编程语言中的相同。为了说明`if`语句，我们可以查看使用`helm
+    create`命令生成的图表中的模式，该命令在[第四章](ch04.xhtml#building_a_chart)中涵盖了。在该图表中，*values.yaml*文件包含一个关于`ingress`的部分，其中包含一个enabled属性。看起来像：
+- en: '[PRE9]'
+  id: totrans-124
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: 'In the *ingress.yaml* file that creates the `Ingress` resource for Kubernetes,
+    the first and last lines are for the `if` statement that implements this:'
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在创建用于Kubernetes的`Ingress`资源的*ingress.yaml*文件中，第一行和最后一行是实现此目的的`if`语句：
+- en: '[PRE10]'
+  id: totrans-126
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: In this case, the `if` statement evaluates whether the output of the pipeline
+    following the `if` statement is true or false. If it’s true, the content inside
+    is evaluated. In order to know where the end of the block is, you need an `end`
+    statement. This is important because indentation or more typical brackets could
+    be part of the material you want rendered.
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这种情况下，`if`语句评估`if`语句后面管道的输出是真还是假。如果为真，则评估内部内容。为了知道块的结尾在哪里，您需要一个`end`语句。这很重要，因为缩进或更典型的括号可能是您想呈现的材料的一部分。
+- en: Using `if` statements is how the common *enabled* pattern is typically implemented.
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用`if`语句是通常实现的常见*enabled*模式。
+- en: '`if` statements can have an `else` statement that is executed if the `if` statement
+    evaluates to false. The following example prints a YAML comment to output when
+    `Ingress` is not enabled:'
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`if`语句可以有一个`else`语句，如果`if`语句评估为false，则执行该语句。以下示例在*Ingress*未启用时将YAML注释打印到输出中：'
+- en: '[PRE11]'
+  id: totrans-130
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: 'Sometimes you will want to have multiple elements evaluated in an `if` statement
+    by combining them with an `and` or an `or` statement. In templates this is a little
+    different than you might be used to. Consider the following segment from a template:'
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有时，您将希望通过将它们与`and`或`or`语句结合来评估多个元素的`if`语句。在模板中，这与您习惯的方式有所不同。考虑来自模板的以下片段：
+- en: '[PRE12]'
+  id: totrans-132
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: In this case `and` is implemented as a function with two arguments. That means
+    `and` comes before either of the two items being used. The same idea applies to
+    the use of `or`, which is also implemented as a function.
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这种情况下，`and`被实现为具有两个参数的函数。这意味着`and`出现在使用的两个项目之前。相同的想法适用于`or`的使用，它也作为一个函数实现。
+- en: 'When one of the elements to be used with `and` or `or` is a function or pipeline,
+    you can use parentheses. The following example has one of the arguments to `or`
+    being an equal check:'
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当要与`and`或`or`一起使用的元素之一是函数或管道时，可以使用括号。以下示例中的一个参数是`or`的相等检查：
+- en: '[PRE13]'
+  id: totrans-135
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: The output of the equality check, implemented using the `eq` function, is passed
+    as the first argument to `or`. The parentheses enable you to group elements together
+    to build more complex logic.
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用`eq`函数实现的相等性检查的输出作为`or`的第一个参数传递。括号使您能够将元素分组在一起以构建更复杂的逻辑。
+- en: '`with` is similar to `if` with the caveat that the scope within a `with` block
+    changes. To continue with an example from `Ingress`, the following block shows
+    the scope change:'
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`with`类似于`if`，但`with`块内的作用域会发生变化。继续使用来自`Ingress`的示例，以下块显示了作用域的更改：'
+- en: '[PRE14]'
+  id: totrans-138
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: If the value passed into `with` is empty, the block is skipped. If the value
+    is not empty, the block is executed and the value of `.` inside the block is `.Values.ingress.annotations`.
+    In this situation, the scope within the block has changed to the value checked
+    by `with`.
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果传入`with`的值为空，则跳过该块。如果值不为空，则执行块，并且块内的`.`的值是`.Values.ingress.annotations`。在这种情况下，块内的作用域已更改为`with`检查的值。
+- en: Tip
+  id: totrans-140
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: The pattern of checking a value using `with` and then sending it to output using
+    the `toYaml` and `nindent` functions is common for elements you have in a *values.yaml*
+    file that you want to directly output in a template. This is regularly used for
+    image pull secrets, node selectors, and more.
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 `with` 检查值并使用 `toYaml` 和 `nindent` 函数将其发送到输出的模式，在 *values.yaml* 文件中是常见的，您希望直接在模板中输出它们。这通常用于镜像拉取密钥、节点选择器等。
+- en: Just like with `if` statements, `with` can have an accompanying `else` block
+    that you can use when the value is empty.
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与 `if` 语句一样，`with` 可以有一个伴随的 `else` 块，当值为空时可以使用。
+- en: Variables
+  id: totrans-143
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 变量
+- en: Within templates you can create your own variables and use them to pass as arguments
+    to functions, print in the output, and more. Variables start with a `$` and are
+    typed. Once a variable is created for one type, such as a string, you cannot set
+    the value to another type, such as an integer.
+  id: totrans-144
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在模板中，您可以创建自己的变量，并将它们用作函数参数传递、输出打印等。变量以 `$` 开头并且有类型。一旦为一个类型（如字符串）创建了变量，就不能将其值设置为另一种类型（如整数）。
+- en: 'Creating and initializing a variable has a special syntax through the use of
+    `:=`, like the following example:'
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 `:=` 创建和初始化变量具有特殊语法，例如以下示例：
+- en: '[PRE15]'
+  id: totrans-146
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: 'In this case a new variable is created and the value of `.Values.character`
+    is assigned to it. This variable can be used elsewhere; for example:'
+  id: totrans-147
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这种情况下，创建一个新变量并将 `.Values.character` 的值分配给它。此变量可以在其他地方使用；例如：
+- en: '[PRE16]'
+  id: totrans-148
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: The value of `$var` is passed to `default` in the same way `.Values.character`
+    was passed earlier in the chapter.
+  id: totrans-149
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`$var` 的值与之前章节中传递 `.Values.character` 的方式相同，传递给 `default`。'
+- en: 'The method to create a variable with an initial value is different from the
+    method used to change the value of an existing variable. When you assign a new
+    value to the existing variable, you use `=`. For example:'
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建具有初始值的变量的方法与更改现有变量的值的方法不同。当您为现有变量分配新值时，使用 `=`。例如：
+- en: '[PRE17]'
+  id: totrans-151
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: In this case the variable is changed in another action. Variables live on for
+    the life of the template execution and are available in the same action or different
+    ones later in the template.
+  id: totrans-152
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这种情况下，变量在另一个操作中更改。变量在模板执行的整个生命周期内存在，并且可以在模板的后续相同或不同的操作中使用。
+- en: Note
+  id: totrans-153
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Variable handling is reflective of the syntax and style used in the Go programming
+    language. It follows the same semantics through the use of `:=`, `=`, and typing.
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 变量处理反映了 Go 编程语言中使用的语法和风格。它通过 `:=`、`=` 和类型来遵循相同的语义。
+- en: Loops
+  id: totrans-155
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 循环
+- en: Using loops is a common method to simplify a user’s interaction with a chart.
+    For example, you can use loops to collect a list of hosts to use when exposing
+    a web application, through values, and then loop over the list to create more
+    complex Kubernetes `Ingress` resources.
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用循环是简化用户与图表交互的常用方法。例如，您可以使用循环来收集在公开 Web 应用程序时使用的主机列表，并循环遍历该列表以创建更复杂的 Kubernetes
+    `Ingress` 资源。
+- en: The loop syntax in templates is a little different than that in many programming
+    languages. Instead of `for` loops, there are `range` loops that can be used to
+    iterate over *dicts* (also known as maps) and lists.
+  id: totrans-157
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 模板中的循环语法与许多编程语言中的不同。不是使用 `for` 循环，而是使用 `range` 循环来迭代 *dicts*（也称为映射）和列表。
+- en: 'The following example illustrates dicts and lists:'
+  id: totrans-158
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下面的示例说明了 dicts 和 lists：
+- en: '[PRE18]'
+  id: totrans-159
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: You can think of a list as an array, while a map, with a key name and value,
+    is similar to dictionaries in Python or a HashMap in Java. Within Helm templates
+    you can create your own dictionaries and lists using the `dict` and `list` functions.
+  id: totrans-160
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以将列表视为数组，而映射具有键名和值，类似于 Python 中的字典或 Java 中的 HashMap。在 Helm 模板中，您可以使用 `dict`
+    和 `list` 函数创建自己的字典和列表。
+- en: 'There are two ways you can use the `range` function. The following example
+    iterates over the *characters* while changing the scope, which is the value of
+    `.`:'
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用 `range` 函数的两种方式。以下示例遍历 *characters* 并更改范围，即 `.` 的值：
+- en: '[PRE19]'
+  id: totrans-162
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: In this case `range` iterates over each item in the list and sets the value
+    of `.` to the value of each item in the list as Helm iterates over the item. In
+    this example, the value is passed to `quote` in the pipeline. The scope for `.`
+    is changed in the block up to `end`, which acts as the closing bracket or statement
+    for the loop.
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这种情况下，`range` 遍历列表中的每个项，并将 `.` 的值设置为 Helm 在迭代项时的每个项的值。在此示例中，该值被传递到管道中的 `quote`。`.
+    `的范围在块中更改到` end`，它作为循环的闭合括号或语句。
+- en: 'The output of this snippet is:'
+  id: totrans-164
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此代码段的输出是：
+- en: '[PRE20]'
+  id: totrans-165
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: 'The other way to use `range` is by having it create new variables for the key
+    and value. This will work on both lists and dicts. This next example creates the
+    variables that you can use in the block:'
+  id: totrans-166
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一种使用`range`的方式是让它为键和值创建新变量。这将适用于列表和字典。下一个示例创建了您可以在块中使用的变量：
+- en: '[PRE21]'
+  id: totrans-167
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: 'The `$key` variable contains the key in a map or dict and a number in a list.
+    `$value` contains the value. If this is a complex type, such as another dict,
+    that will be available as the `$value`. The new variables are in scope up to the
+    end of the `range` block, which is signified by the corresponding `end` action.
+    The output of this example is:'
+  id: totrans-168
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`$key`变量包含映射或字典中的键和列表中的数字。`$value`包含值。如果这是复杂类型（如另一个字典），那么它将作为`$value`可用。新变量在`range`块的末尾处于作用域中，这由相应的`end`动作表示。此示例的输出是：'
+- en: '[PRE22]'
+  id: totrans-169
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: Named Templates
+  id: totrans-170
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 命名模板
+- en: There are times where you will want to create a template to call from within
+    your template of a Kubernetes manifest—for example, when you have a value generated
+    by some complex logic or when you have a section that is repeated across numerous
+    Kubernetes manifests. You can create your own templates, which Helm won’t automatically
+    render, and use them within templates of Kubernetes manifests.
+  id: totrans-171
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有时候，当您需要在 Kubernetes 清单模板中调用模板时，例如，当您通过一些复杂逻辑生成的值或者当您有一个在众多 Kubernetes 清单中重复的部分时，您可以创建自己的模板。Helm
+    不会自动渲染这些模板，但可以在 Kubernetes 清单的模板中使用它们。
+- en: An example of this can be found when you run `helm create` to generate a chart.
+    By default Helm creates several Kubernetes manifests with some shared elements,
+    such as labels. To keep the labels consistent and so they only need to be updated
+    in one place, Helm generates a template and then calls that template each time
+    the labels are needed.
+  id: totrans-172
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个例子是当您运行`helm create`生成图表时。默认情况下，Helm 会创建几个带有共享元素（如标签）的 Kubernetes 清单。为了保持标签的一致性，并且只需在一个地方更新它们，Helm
+    会生成一个模板，然后每次需要标签时调用该模板。
+- en: There are two types of labels used in the templates. There are the labels used
+    on higher-level resources, such as `Deployment`s, and then there are the labels
+    used in specifications that are paired with selectors used for updates. These
+    labels need to be treated differently because the labels used on specifications
+    and selectors are typically immutable. This means you won’t want them to contain
+    elements such as application versions because those can change as an application
+    is upgraded, but the specifications and selectors cannot be updated with new versions.
+  id: totrans-173
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 模板中使用的标签有两种类型。一种是用于高级资源（如`Deployment`）的标签，另一种是用于与更新选择器配对的规范中的标签。这些标签需要有所区别，因为规范和选择器中使用的标签通常是不可变的。这意味着你不希望它们包含诸如应用程序版本之类的元素，因为这些元素可能会随着应用程序升级而变化，但规范和选择器不能更新为新版本。
+- en: 'The following template selection contains the selector labels used to generate
+    specifications and selector sections in the generated template. The name, *anvil*,
+    is from the chart generated in [Chapter 4](ch04.xhtml#building_a_chart):'
+  id: totrans-174
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下面的模板选择包含用于生成生成模板中规范和选择器部分的选择器标签。名称*anvil*来自于[第 4 章](ch04.xhtml#building_a_chart)生成的图表：
+- en: '[PRE23]'
+  id: totrans-175
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: '[![1](Images/1.png)](#co_developing_templates_CO1-1)'
+  id: totrans-176
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](Images/1.png)](#co_developing_templates_CO1-1)'
+- en: A comment prior to defining the function. Comments in actions open with `/*`
+    and are closed by `*/`.
+  id: totrans-177
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在定义函数之前的注释。动作中的注释以`/*`开头，并以`*/`结尾。
+- en: '[![2](Images/2.png)](#co_developing_templates_CO1-2)'
+  id: totrans-178
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](Images/2.png)](#co_developing_templates_CO1-2)'
+- en: You define a template with a `define` statement followed by the name for the
+    template.
+  id: totrans-179
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可以使用`define`语句定义一个模板，后跟模板的名称。
+- en: '[![3](Images/3.png)](#co_developing_templates_CO1-3)'
+  id: totrans-180
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](Images/3.png)](#co_developing_templates_CO1-3)'
+- en: The content of a template is just like the content of any other template.
+  id: totrans-181
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 模板的内容就像任何其他模板的内容一样。
+- en: '[![4](Images/4.png)](#co_developing_templates_CO1-4)'
+  id: totrans-182
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](Images/4.png)](#co_developing_templates_CO1-4)'
+- en: The definition for a template is closed through an `end` statement that matches
+    to the `define` statement.
+  id: totrans-183
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过与`define`语句匹配的`end`语句关闭模板的定义。
+- en: 'This template includes several useful things you should consider using in your
+    own templates:'
+  id: totrans-184
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此模板包含了一些您应考虑在自己的模板中使用的有用内容：
+- en: A comment describing the template. This is ignored when the template is rendered
+    but is useful in the same way code comments are.
+  id: totrans-185
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 描述模板的注释。在模板渲染时会被忽略，但在代码注释中同样有用。
+- en: The name is namespaced, using `.` as the separator, to include the chart name.
+    In [Chapter 6](ch06.xhtml#advanced_charts) you will learn about library charts
+    and dependent charts. Using a namespace on a template name enables the use of
+    library charts and avoids collisions on dependent charts.
+  id: totrans-186
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 名称使用`.`作为分隔符进行命名空间处理，以包含图表名称。在[第6章](ch06.xhtml#advanced_charts)中，您将了解库图表和依赖图表。在模板名称上使用命名空间使得能够使用库图表，并避免在依赖图表上发生冲突。
+- en: The `define` and `end` calls use actions that remove whitespace before and after
+    them so that their use does not add extra lines to the final output YAML.
+  id: totrans-187
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: '`define`和`end`调用使用操作来移除它们之前和之后的空格，以便它们的使用不会向最终输出的YAML添加额外的行。'
+- en: 'This template is called in the `spec` section of resources, such as the `Deployment`
+    in the *anvil* chart:'
+  id: totrans-188
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此模板在资源的`spec`部分被称为，例如*anvil*图表中的`Deployment`：
+- en: '[PRE24]'
+  id: totrans-189
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: The `matchLabels` section here is immutable, so it cannot be changed and it
+    looks for the `labels` in the `template` section.
+  id: totrans-190
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此处的`matchLabels`部分是不可变的，因此不能更改，并且它查找`template`部分中的`labels`。
+- en: There are two functions you can use to include another template in your template.
+    The `template` function is a basic function for including another template. It
+    cannot be used in pipelines. Then there is the `include` function that works in
+    a similar manner but can be used in pipelines. In the preceding example, `include`
+    is used to call another template and the output of that template is passed to
+    `nindent` to ensure the output has the proper indentation level. Since the output
+    has a different indentation level for each call, the indentation level cannot
+    be included as part of the template that defines it.
+  id: totrans-191
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有两个函数可用于在您的模板中包含另一个模板。`template`函数是一个基本函数，用于包含另一个模板。它不能在管道中使用。然后是`include`函数，以类似的方式工作，但可以在管道中使用。在上述示例中，`include`用于调用另一个模板，并将该模板的输出传递给`nindent`，以确保输出具有正确的缩进级别。由于每次调用的输出具有不同的缩进级别，因此缩进级别不能作为定义其自身的模板的一部分。
+- en: The `include` function takes two arguments. The first is the name of the template
+    to call. This needs to be the full name including any namespace. The second is
+    the data object to pass. This can be one you create yourself, using the `dict`
+    function, or it can be all or part of the global object used within the template.
+    In this case the whole global object is passed in.
+  id: totrans-192
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`include`函数接受两个参数。第一个是要调用的模板的名称。这需要是完整的名称，包括任何命名空间。第二个是要传递的数据对象。这可以是您自己创建的对象，使用`dict`函数，或者它可以是模板内部使用的全局对象的全部或部分。在这种情况下，传递整个全局对象。'
+- en: 'The template function Helm created to generate the wider selection of labels,
+    used on the labels for the higher-level resources where the labels are mutable,
+    both adds labels and includes the selector labels. It has user-defined templates
+    that call other user-defined templates:'
+  id: totrans-193
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Helm创建的模板函数用于生成更广泛的标签选择，用于标签为可变的高级资源的标签。它具有调用其他用户定义模板的用户定义模板：
+- en: '[PRE25]'
+  id: totrans-194
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE25]'
+- en: Because these labels are mutable, there are useful labels included here that
+    will change for various reasons. So as not to repeat the labels used for selectors,
+    which are useful here as well, those labels are included by calling the function
+    that generates them.
+  id: totrans-195
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因为这些标签是可变的，因此包含了这里将因各种原因而更改的有用标签。为了不重复用于选择器的标签，在这里也包括通过调用生成它们的函数来包含这些标签。
+- en: 'Another situation you may find yourself in where a named template would be
+    useful is when you want to encapsulate complex logic. To illustrate this idea,
+    consider a chart where you want to be able to pass in a container version as a
+    tag, a digest, or fall back on the application version as a default. The part
+    of the `Pod` specification that accepts the container image, including the version,
+    is a single line. To provide all three of those options you need many lines of
+    logic:'
+  id: totrans-196
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一种可能遇到的情况是，命名模板很有用的情况，是当您希望封装复杂逻辑时。为了说明这个想法，考虑一个图表，您希望能够将容器版本作为标签、摘要或者回退到应用程序版本作为默认值传递。接受包含容器图像的Pod规范的部分是一个单独的行。为了提供这三个选项，您需要许多行逻辑：
+- en: '[PRE26]'
+  id: totrans-197
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE26]'
+- en: This new `getImage` template is able to handle a digest, tag, and default to
+    the application version if neither of the other two are present. First, a digest
+    is checked for and used. A digest is immutable, and it is the most precise method
+    to specify the revision of an image to use. If no digest is passed in, a tag is
+    checked. Tags are pointers to digests and can be changed. If no tag is found,
+    the `AppVersion` is used as a tag.
+  id: totrans-198
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个新的`getImage`模板能够处理摘要、标签，并且如果前两者都不存在，默认使用应用程序版本。首先会检查并使用摘要。摘要是不可变的，是指定要使用的镜像修订版本的最精确方法。如果没有传入摘要，则会检查标签。标签是指向摘要的指针，可以更改。如果找不到标签，则使用`AppVersion`作为标签。
+- en: This function targets the structure of the *anvil* chart, first created for
+    [Chapter 4](ch04.xhtml#building_a_chart). The image details are expected to be
+    within the structure of that chart and its *values.yaml* file.
+  id: totrans-199
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此函数针对*anvil*图表的结构，最初是为[第四章](ch04.xhtml#building_a_chart)创建的。预期图像细节位于该图表及其*values.yaml*文件的结构中。
+- en: 'In the template for the `Deployment`, the image would be referenced using the
+    new function:'
+  id: totrans-200
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在`Deployment`的模板中，使用新函数引用镜像：
+- en: '[PRE27]'
+  id: totrans-201
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE27]'
+- en: Templates can act like functions in a software program. They are a useful way
+    for you to break off complex logic and have shared functionality.
+  id: totrans-202
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 模板可以像软件程序中的函数一样工作。这是一种您可以拆分复杂逻辑和共享功能的有用方式。
+- en: Structuring Your Templates for Maintainability
+  id: totrans-203
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 为了保持模板的可维护性
+- en: There is limited structure that is enforced on the templates in the *templates*
+    directory. Multiple Kubernetes manifests can be in the same YAML file, which means
+    that the templates for multiple Kubernetes manifests can be in the same file,
+    too. Named templates can live in any of the template files and be referenced in
+    the others. The *NOTES.txt* template is a special file that displays to the user,
+    and tests are handled in a special way. Tests are covered in [Chapter 6](ch06.xhtml#advanced_charts).
+    Other than that, it is a blank canvas for you to create templates.
+  id: totrans-204
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在*templates*目录中，对模板的强制结构有限。多个 Kubernetes 清单可以位于同一 YAML 文件中，这意味着多个 Kubernetes
+    清单的模板也可以位于同一文件中。命名模板可以存在于任何模板文件中，并且可以在其他文件中引用。*NOTES.txt*模板是向用户显示的特殊文件，并且测试有特殊处理方式。测试在[第六章](ch06.xhtml#advanced_charts)中进行了覆盖。除此之外，这是一个空白画布，供您创建模板。
+- en: 'To aid in creating maintainable templates that are easy to navigate, the Helm
+    maintainers recommend several patterns. These patterns are useful for a few reasons:'
+  id: totrans-205
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了帮助创建易于维护且易于导航的模板，Helm 维护者建议采用几种模式。这些模式之所以有用，有以下几个原因：
+- en: You may go long periods without making structural changes to the templates in
+    a chart and then come back to it. Being able to quickly rediscover the layout
+    will make the processes faster.
+  id: totrans-206
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 您可能长时间不会对图表中的模板进行结构性更改，然后再回来。能够快速重新发现布局将加快流程。
+- en: Other people will look at the templates in charts. This may be team members
+    who create the chart or those that consume it. Consumers can, and sometimes do,
+    open up a chart to inspect it prior to installing it or as part of a process to
+    fork it.
+  id: totrans-207
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 其他人将查看图表中的模板。这些可能是创建图表的团队成员或使用它的人。消费者有时可能会打开图表以检查它，以便在安装之前或作为复制的一部分进行操作。
+- en: When you debug a chart, which is covered in the next section, it is easier to
+    do so with some structure in the templates.
+  id: totrans-208
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在调试图表时（下一节会讲到），如果模板有一定结构，会更容易进行调试。
+- en: The first pattern is that each Kubernetes manifest should be in its own template
+    file and that file should have a descriptive name. For example, name your template
+    *deployment.yaml* if there is a single deployment. If you have the case of multiple
+    manifests of the same type, such as the case when you have a database deployed
+    using primaries and replicas, you use names such as *statefulset-primary.yaml*
+    and *statefulset-replica.yaml*.
+  id: totrans-209
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 第一个模式是每个 Kubernetes 清单应该在其自己的模板文件中，并且该文件应该有一个描述性的名称。例如，如果只有一个部署，则命名模板为*deployment.yaml*。如果有多个相同类型的清单，例如使用主数据库和副本部署时，可以使用类似*statefulset-primary.yaml*和*statefulset-replica.yaml*的命名。
+- en: A second guideline is to put the named templates, which you include in your
+    own templates, into a file named *_helpers.tpl*. Because these are essentially
+    helper templates for your other templates, the name is descriptive. As mentioned
+    earlier, the _ at the start of the name causes it to bubble up to the top of directory
+    listings so you can easily find it among your templates.
+  id: totrans-210
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 第二个指导原则是将命名模板放入您自己模板的文件中，命名为 *_helpers.tpl*。 因为这些本质上是您其他模板的辅助模板，所以名称很描述性。 如前所述，名称开头的
+    _ 会导致它在目录列表的顶部显示，因此您可以在模板中轻松找到它。
+- en: When you use the `helm create` command to start a new chart, the contents of
+    the templates it starts with, by default, will already follow these patterns.
+  id: totrans-211
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您使用 `helm create` 命令启动一个新的图表时，默认情况下，模板的内容已经遵循这些模式。
+- en: Debugging Templates
+  id: totrans-212
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 调试模板
+- en: When developing templates it’s useful to debug the templates. Helm provides
+    three features you can use in your development workflow to find issues. These
+    are in addition to testing, which is covered in [Chapter 6](ch06.xhtml#advanced_charts).
+  id: totrans-213
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在开发模板时调试模板非常有用。 Helm 提供了三个功能，您可以在开发工作流中使用这些功能来查找问题。 这些功能是除了测试之外，测试在[第 6 章](ch06.xhtml#advanced_charts)中介绍。
+- en: Dry Run
+  id: totrans-214
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 干冷运行
+- en: 'The commands to install, upgrade, roll back, and uninstall Helm charts all
+    have a flag to initiate a dry run and simulate the process but not fully execute
+    on that process. This is accomplished using the `--dry-run` flag on these commands.
+    For example, if you use the `--dry-run` flag on the `install` command on the *anvil*
+    chart, you could use the command `helm install myanvil anvil --dry-run`. Helm
+    would render the templates, check the templates to make sure what would be sent
+    to Kubernetes was well formed, and would then send it to output. The output would
+    look similar to the output on a normal install but would have two additional sections:'
+  id: totrans-215
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安装、升级、回滚和卸载 Helm 图表的命令都有一个标志来启动干冷运行，并模拟过程但不完全执行该过程。 这是通过这些命令上的 `--dry-run` 标志来实现的。
+    例如，如果您在 *anvil* 图表上的 `install` 命令上使用 `--dry-run` 标志，则可以使用命令 `helm install myanvil
+    anvil --dry-run`。 Helm 将渲染模板，检查模板以确保发送到 Kubernetes 的内容格式正确，并将其发送到输出。 输出看起来类似于正常安装时的输出，但会有两个额外的部分：
+- en: '[PRE28]'
+  id: totrans-216
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE28]'
+- en: The two new sections are the *HOOKS* and *MANIFEST* sections that will contain
+    the YAML Helm would normally pass to Kubernetes. Instead it is sent to the output.
+    For brevity the full generated YAML is not included because this would be pages
+    long.
+  id: totrans-217
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 两个新部分是 *HOOKS* 和 *MANIFEST* 部分，它们将包含 YAML Helm 通常会传递给 Kubernetes 的内容。 而不是发送到输出。
+    为了简洁起见，不包含完整生成的 YAML，因为这将非常长。
+- en: 'If there were a problem in the templates, the response would be quite different.
+    To illustrate this, try removing the first `}` from the *deployment.yaml* file
+    in the *anvil* chart and performing a dry-run install again. Removing the `}`
+    will cause an error parsing the actions in the templates. Instead of outputting
+    the status, Helm will output an error like:'
+  id: totrans-218
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果模板中有问题，响应将会大不相同。 为了说明这一点，请尝试从 *anvil* 图表的 *deployment.yaml* 文件中删除第一个 `}`，然后再次执行干冷运行安装。
+    删除 `}` 将导致解析模板中的操作时出错。 Helm 不会输出状态，而会输出如下错误：
+- en: '[PRE29]'
+  id: totrans-219
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE29]'
+- en: 'The information here outlines a hint where to look for the issue. It includes:'
+  id: totrans-220
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此处提供了一个提示，用于查找问题所在的地方。 它包括：
+- en: The file where the error is occurring. *anvil/templates/deployment.yaml*, in
+    this case.
+  id: totrans-221
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 出错的文件。 *anvil/templates/deployment.yaml*，在这种情况下。
+- en: The line number in the file where the error occurred. Here it is line 4.
+  id: totrans-222
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 文件中发生错误的行号。 在这里是第 4 行。
+- en: An error message with a hint about the problem. The error message will often
+    not display what the issue is, but rather where the parser is having an issue.
+    In this case a single `}` is unexpected.
+  id: totrans-223
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一个关于问题的提示错误消息。 错误消息通常不会显示问题所在，而是显示解析器出现问题的地方。 在这种情况下，一个单独的 `}` 是意外的。
+- en: 'Helm will check for more than errors in the template syntax. It will also check
+    the syntax of the output. To illustrate this, in the same *deployment.yaml* file
+    remove the `apiVersion:` at the start of it. Make sure to add back the missing
+    `}` so that the action is fixed. The beginning of the file will now look like:'
+  id: totrans-224
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Helm 将检查模板语法中的错误超过错误。 它还将检查输出语法的语法。 为了说明这一点，在相同的 *deployment.yaml* 文件中删除开头的
+    `apiVersion:`。 确保补充缺失的 `}`，以修复操作。 现在文件的开头看起来像：
+- en: '[PRE30]'
+  id: totrans-225
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE30]'
+- en: 'Performing a dry-run install will produce the following output:'
+  id: totrans-226
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 执行干冷运行安装将产生以下输出：
+- en: '[PRE31]'
+  id: totrans-227
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE31]'
+- en: You might be wondering why there is an error converting between YAML and JSON.
+    This is a product of the YAML parsing library that Helm and Kubernetes use. The
+    useful part of the error message is the part that starts with `line 2`. The first
+    line is not complete, so the second line is in the wrong context even though it
+    is well formed. The file is not valid YAML, and Helm is telling you where to start
+    looking for the problem. If you took the same section of YAML and tested it in
+    an online YAML validator, you would get the same error.
+  id: totrans-228
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 也许你想知道为什么在YAML和JSON之间转换时会出错。这是Helm和Kubernetes使用的YAML解析库的产物。错误消息中有用的部分是从`line
+    2`开始的部分。第一行不完整，因此第二行处于错误的上下文中，尽管它格式良好。文件不是有效的YAML，Helm告诉你从哪里开始查找问题。如果你将同样的YAML部分在在线YAML验证器中测试，你会得到相同的错误。
+- en: 'Helm is also able to validate the schemas of Kubernetes resources. This is
+    accomplished because Kubernetes provides schema definitions for its manifests.
+    To illustrate this, change the `apiVersion` in the *deployment.yaml* to be `foo`:'
+  id: totrans-229
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Helm也能够验证Kubernetes资源的模式。这是因为Kubernetes为其清单提供了模式定义。为了说明这一点，在*deployment.yaml*中将`apiVersion`更改为`foo`：
+- en: '[PRE32]'
+  id: totrans-230
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE32]'
+- en: 'Performing a dry-run install will produce the following output:'
+  id: totrans-231
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 执行dry-run安装将产生以下输出：
+- en: '[PRE33]'
+  id: totrans-232
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE33]'
+- en: The deployment is no longer valid, and Helm was able to provide specific feedback
+    on what is missing. In this case, the `apiVersion` property is not set.
+  id: totrans-233
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 部署不再有效，Helm能够提供关于缺失内容的具体反馈。在这种情况下，`apiVersion`属性未设置。
+- en: Utilizing a dry-run isn’t the only way you can get access to this feature. The
+    `helm template` command provides a similar experience but without the full debugging
+    feature set. The `template` command does turn the `template` commands into YAML.
+    At this point it will provide an error if the generated YAML cannot be parsed.
+    What it won’t do is validate the YAML against the Kubernetes schema. The `template`
+    command won’t warn you if `apiVersion` is turned to `foo`. This is due to Helm
+    not communicating with a Kubernetes cluster to get the schema for validation when
+    the `template` command is used.
+  id: totrans-234
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用dry-run并不是你获取此功能的唯一方式。`helm template`命令提供了类似的体验，但没有完整的调试功能集。`template`命令会将`template`命令转换为YAML。在此阶段，如果生成的YAML无法解析，它会提供一个错误。但`template`命令不会根据Kubernetes模式验证YAML。当使用`template`命令时，Helm不会警告您如果`apiVersion`被转换为`foo`。这是因为在使用`template`命令时，Helm不会与Kubernetes集群通信以获取验证模式。
+- en: Getting Installed Manifests
+  id: totrans-235
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 获取已安装的清单
+- en: There are times where you install an application into a cluster and something
+    else changes the manifests afterwards. This leads to differences between what
+    you declared and what you have running. One example of this is when a service
+    mesh automatically adds a sidecar container to the `Pod`s created by your Helm
+    charts.
+  id: totrans-236
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有时候你在集群中安装一个应用程序，然后其他东西会在之后改变清单。这导致你声明的内容与实际运行的内容之间存在差异。一个例子是服务网格自动向由你的Helm图表创建的`Pod`添加一个Sidecar容器。
+- en: You can get the original manifests deployed by Helm using the `helm get manifest`
+    command. This command will retrieve the manifests for a release as they were when
+    Helm installed the release. It is able to retrieve this information for any revision
+    of a release still available in the history, as found using the `helm history`
+    command.
+  id: totrans-237
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用`helm get manifest`命令获取由Helm部署的原始清单。该命令将检索释放时Helm安装的清单。它能够为历史中仍然可用的任何版本的释放检索此信息，如使用`helm
+    history`命令查找的那样。
+- en: 'To continue the *myanvil* example, to retrieve the manifests for this instance
+    of the *anvil* chart you would run:'
+  id: totrans-238
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 继续*myanvil*示例，要检索此*anvil*图表实例的清单，您可以运行：
+- en: '[PRE34]'
+  id: totrans-239
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE34]'
+- en: 'The output will include all of the manifests with `---` at the start of each
+    new manifest. The following is the first 15 lines from the output:'
+  id: totrans-240
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 输出将包括所有清单，每个新清单的开头都有`---`。以下是输出的前15行：
+- en: '[PRE35]'
+  id: totrans-241
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE35]'
+- en: '`---` is used as a separator between YAML documents. In addition to that, Helm
+    adds a YAML comment with the source template used to generate the manifest.'
+  id: totrans-242
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`---`用作YAML文档之间的分隔符。除此之外，Helm还会添加一个YAML注释，注明生成清单所使用的源模板。'
+- en: Linting Charts
+  id: totrans-243
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 检查图表
+- en: Some of the problems you will encounter don’t show up as violations of the API
+    specification and aren’t problems in the templates. For example, Kubernetes resources
+    are required to have names that can be used as part of a domain name. This restricts
+    the characters that you can use in names and their length. The OpenAPI schema
+    provided by Kubernetes does not provide enough information to detect names that
+    will fail when sent to Kubernetes. The *lint* command, previously covered in [Chapter 4](ch04.xhtml#building_a_chart),
+    is able to detect problems like this and tell you where they are.
+  id: totrans-244
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您将遇到的一些问题不会显示为 API 规范的违规，并且也不是模板中的问题。例如，Kubernetes 资源需要具有可用作域名的名称。这限制了名称中可以使用的字符及其长度。Kubernetes
+    提供的 OpenAPI 模式未提供足够的信息来检测发送到 Kubernetes 时将失败的名称。前文在 [第 4 章](ch04.xhtml#building_a_chart)
+    中提到的 *lint* 命令能够检测到此类问题，并告诉您问题出现的位置。
+- en: 'To illustrate this you can modify the *anvil* chart to add `Wile` to the end
+    of the Deployment name in *deployment.yaml*:'
+  id: totrans-245
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了说明这一点，您可以修改 *anvil* 图表，在 *deployment.yaml* 中将 `Wile` 添加到部署名称的末尾：
+- en: '[PRE36]'
+  id: totrans-246
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE36]'
+- en: 'Running `helm lint anvil` will produce an error informing you of the issue:'
+  id: totrans-247
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运行 `helm lint anvil` 将生成一个错误，告知您存在的问题：
+- en: '[PRE37]'
+  id: totrans-248
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE37]'
+- en: In this case, `helm lint` is pointing you to a problem and telling you where
+    it is happening.
+  id: totrans-249
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这种情况下，`helm lint` 正在指向一个问题，并告诉您它发生的地方。
+- en: Conclusion
+  id: totrans-250
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 结论
+- en: The templates you include in a chart provide a powerful ability to create resources
+    within Kubernetes. It’s akin to a programming language around templates. The template
+    system has features like logic, built-in functions, custom templates, and debugging.
+    This means you can collect the input you desire through values and generate the
+    Kubernetes manifests you need.
+  id: totrans-251
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在图表中包含的模板能够强大地在 Kubernetes 内创建资源。这类似于模板周围的编程语言。模板系统具有逻辑、内置函数、自定义模板和调试功能。这意味着您可以通过值收集所需的输入，并生成所需的
+    Kubernetes 清单。
+- en: There is still more to charts, including dependencies, testing, schemas for
+    values files, and more. [Chapter 6](ch06.xhtml#advanced_charts) is going to expand
+    on what you can have and do with charts.
+  id: totrans-252
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些图表还包括依赖项、测试、值文件模式等更多内容。[第 6 章](ch06.xhtml#advanced_charts)将详细介绍图表的功能和应用。

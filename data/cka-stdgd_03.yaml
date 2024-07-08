@@ -1,0 +1,1465 @@
+- en: Chapter 3\. Workloads
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第3章。工作负载
+- en: When we talk about [workloads in Kubernetes](https://oreil.ly/Uz1gG), we mean
+    the API resource types that run an application. Those API resource types include
+    a Deployment, ReplicaSet, StatefulSet, DaemonSet, Job, CronJob, and of course
+    the Pod. The curriculum of the CKA is very specific about the types of workload
+    you need to be familiar with. The exam will include only the Deployment, ReplicaSet,
+    and Pod. You will need to understand replication and rollout features managed
+    by a Deployment and understand the API primitives for injecting configuration
+    data into a Pod.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当我们谈论[Kubernetes中的工作负载](https://oreil.ly/Uz1gG)时，我们指的是运行应用程序的API资源类型。这些API资源类型包括Deployment、ReplicaSet、StatefulSet、DaemonSet、Job、CronJob和当然Pod。CKA的课程对你需要熟悉的工作负载类型非常具体。考试只包括Deployment、ReplicaSet和Pod。您需要理解Deployment管理的复制和升级功能，并理解将配置数据注入Pod的API原语。
+- en: Note
+  id: totrans-2
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: This chapter will use the concept of a volume. Take a look through [Chapter 6](ch06.xhtml#storage)
+    for more information if you’re not familiar with Kubernetes’ persistent storage
+    options.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本章将使用体积的概念。如果您对Kubernetes的持久存储选项不熟悉，请查看[第6章](ch06.xhtml#storage)以获取更多信息。
+- en: 'At a high level, this chapter covers the following concepts:'
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在高层次上，本章涵盖以下概念：
+- en: A basic understanding of Deployments
+  id: totrans-5
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 对Deployments的基本理解
+- en: Deployment rollout and rollback functionality
+  id: totrans-6
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Deployment的部署和回滚功能
+- en: Manual and automatic scaling of the replicas controlled by a ReplicaSet
+  id: totrans-7
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 由ReplicaSet控制的副本的手动和自动扩展
+- en: ConfigMap and Secret
+  id: totrans-8
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: ConfigMap和Secret
+- en: Managing Workloads with Deployments
+  id: totrans-9
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用Deployments管理工作负载
+- en: In Kubernetes, a workload is executed in a Pod. There are various API resources
+    that manage one or many Pods. In this section, we’ll concentrate on the API resources
+    Deployment and ReplicaSet, which are most relevant to the exam. Moreover, we’ll
+    briefly touch on the StatefulSet, which manages workloads that hold state.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在Kubernetes中，工作负载在Pod中执行。有多种API资源来管理一个或多个Pod。在本节中，我们将集中讨论Deployment和ReplicaSet这两个最与考试相关的API资源。此外，我们将简要介绍管理保持状态的工作负载的StatefulSet。
+- en: Understanding Deployments
+  id: totrans-11
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 理解Deployments
+- en: The central API resource for running an application in a container is the Pod.
+    Using a single instance of a Pod to operate an application has its flaws. It represents
+    a single point of failure as all traffic targeting the application is funneled
+    to this Pod. This behavior is specifically problematic when the load increases
+    due to higher demand (e.g., during peak shopping season for an e-commerce application
+    or when a central microservice like an authentication provider is used by an increasing
+    number of other microservices within the system). Another important aspect of
+    running an application in a Pod is failure tolerance. A Pod will not be rescheduled
+    in the case of a node failure and therefore can lead to a system outage for end
+    users. In this section, we’ll talk about the Kubernetes mechanics that support
+    aspects such as application scalability and failure tolerance.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在容器中运行应用程序的中心API资源是Pod。使用单个Pod实例来运行应用程序存在缺陷。它代表一个单点故障，因为所有针对应用程序的流量都被引导到此Pod。当负载因需求增加而增加时（例如，在电子商务应用程序的高峰购物季节期间，或者当中心微服务（如认证提供者）被系统内其他微服务越来越多地使用时），这种行为特别有问题。在Pod中运行应用程序的另一个重要方面是故障容忍性。在节点故障的情况下，Pod将不会重新调度，因此可能导致终端用户的系统中断。在本节中，我们将讨论支持应用程序可伸缩性和故障容忍等方面的Kubernetes机制。
+- en: A *ReplicaSet* is a Kubernetes API resource that controls multiple, identical
+    instances of a Pod running the application, so-called replicas. It has the capability
+    of scaling the number of replicas up or down on demand. Moreover, it knows how
+    to roll out a new version of the application across all replicas.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*ReplicaSet*是控制运行应用程序的多个相同Pod实例的Kubernetes API资源，称为副本。它具有根据需求扩展或缩减副本数量的能力。此外，它知道如何在所有副本中部署新版本的应用程序。'
+- en: A *Deployment* abstracts the functionality of ReplicaSet and manages it internally.
+    In practice, this means that you do not have to create, modify, or delete ReplicaSet
+    objects yourself. The Deployment keeps a history of application versions and can
+    roll back to an older version to counteract a blocking or potentially costly production
+    issue. Furthermore, it offers the capability of scaling the number of replicas.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*Deployment*将ReplicaSet的功能抽象化，并在内部进行管理。在实际应用中，这意味着您无需自行创建、修改或删除ReplicaSet对象。Deployment会保留应用程序版本的历史记录，并能够回滚到旧版本，以应对可能导致生产问题的阻塞或成本高昂的情况。此外，它还提供了扩展副本数量的能力。'
+- en: '[Figure 3-1](#deployment_replicaset) illustrates the relationship between a
+    Deployment, a ReplicaSet, and its controlled replicas.'
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图3-1](#deployment_replicaset)说明了Deployment、ReplicaSet及其受控副本之间的关系。'
+- en: '![ckas 0301](Images/ckas_0301.png)'
+  id: totrans-16
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckas 0301](Images/ckas_0301.png)'
+- en: Figure 3-1\. Relationship between a Deployment and a ReplicaSet
+  id: totrans-17
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图3-1\. Deployment与ReplicaSet之间的关系
+- en: The following sections will explain how to manage Deployments, including scaling
+    and rollout features.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来的几节将解释如何管理Deployments，包括扩展和回滚功能。
+- en: Creating Deployments
+  id: totrans-19
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 创建Deployments
+- en: You can create a Deployment using the imperative command `create deployment`.
+    The command offers a range of options, some of which are mandatory. At a minimum,
+    you need to provide the name of the Deployment and the container image that should
+    be used by the replicas. The default number of replicas created is 1; however,
+    you can define a higher number of replicas using the option `--replicas`.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用命令`create deployment`创建一个Deployment。该命令提供了多种选项，其中一些是必填的。至少，您需要提供Deployment的名称和副本应该使用的容器镜像。默认创建的副本数量为1；不过，您可以使用选项`--replicas`定义更多的副本数量。
+- en: 'Let’s see the command in action. The following command creates the Deployment
+    named `app-cache`, which runs the object cache [Memcached](https://memcached.org)
+    inside of the container on four replicas:'
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们看看命令的实际效果。以下命令创建名为`app-cache`的Deployment，在四个副本中运行对象缓存[Memcached](https://memcached.org)：
+- en: '[PRE0]'
+  id: totrans-22
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: The mapping between the Deployment and the replicas it controls happens through
+    label selection. When you run the imperative command, `kubectl` already sets up
+    the mapping for you. [Example 3-1](#yaml_manifest_deployment) shows the label
+    selection in the YAML manifest. This YAML manifest can be used to create a Deployment
+    declaratively or by inspecting the live object created by the previous imperative
+    command.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过标签选择，Deployment与其控制的副本之间的映射发生。当您运行命令式命令时，`kubectl`已为您设置好映射。[示例3-1](#yaml_manifest_deployment)展示了YAML清单中的标签选择。此YAML清单可用于声明性地创建Deployment，或通过检查前述命令式命令创建的现有对象来使用。
+- en: Example 3-1\. A YAML manifest for a Deployment
+  id: totrans-24
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例3-1\. 用于Deployment的YAML清单
+- en: '[PRE1]'
+  id: totrans-25
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: 'When created by the imperative command, `app` is the label key the Deployment
+    uses by default. You can find this key in three different places in the YAML output:'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当通过命令式命令创建时，默认情况下，Deployment使用的标签键是`app`。您可以在YAML输出的三个不同位置找到此键：
+- en: '`metadata.labels`'
+  id: totrans-27
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: '`metadata.labels`'
+- en: '`spec.selector.matchLabels`'
+  id: totrans-28
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: '`spec.selector.matchLabels`'
+- en: '`spec.template.metadata.labels`'
+  id: totrans-29
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: '`spec.template.metadata.labels`'
+- en: For label selection to work properly, the assignment of `spec.selector.matchLabels`
+    and `spec.template.metadata` needs to match, as shown in [Figure 3-2](#deployment_label_selection).
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要使标签选择正常工作，`spec.selector.matchLabels`和`spec.template.metadata`的分配需要匹配，如[图3-2](#deployment_label_selection)所示。
+- en: '![ckas 0302](Images/ckas_0302.png)'
+  id: totrans-31
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckas 0302](Images/ckas_0302.png)'
+- en: Figure 3-2\. Deployment label selection
+  id: totrans-32
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图3-2\. Deployment标签选择
+- en: 'The values of `metadata.labels` is irrelevant for mapping the Deployment to
+    the Pod template. As you can see in [Figure 3-2](#deployment_label_selection),
+    the label assignment to `metadata.labels` has been changed deliberately to `deploy:
+    app-cache` to underline that it is not important for the Deployment to Pod template
+    selection.'
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`metadata.labels`的值对于将Deployment映射到Pod模板是无关紧要的。正如您在[图3-2](#deployment_label_selection)中所看到的，将`metadata.labels`的标签分配故意更改为`deploy:
+    app-cache`，以强调对于Deployment到Pod模板选择而言并不重要。'
+- en: Listing Deployments and Their Pods
+  id: totrans-34
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 列出Deployments及其Pods
+- en: 'You can inspect a Deployment after its creation by using the `get deployments`
+    command. The output of the command renders the important details of its replicas,
+    as shown here:'
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用命令`get deployments`在创建后检查Deployment。该命令的输出呈现了其副本的重要细节，如下所示：
+- en: '[PRE2]'
+  id: totrans-36
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: You can observe the following column titles relevant to the replicas controlled
+    by the Deployment in [Table 3-1](#runtime_replica_information).
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可以观察到与 Deployment 控制的副本相关的以下列标题，在[表 3-1](#runtime_replica_information)中。
+- en: Table 3-1\. Runtime replica information when listing deployments
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 3-1\. 运行时副本信息在列出部署时
+- en: '| Column Title | Description |'
+  id: totrans-39
+  prefs: []
+  type: TYPE_TB
+  zh: '| 列标题 | 描述 |'
+- en: '| --- | --- |'
+  id: totrans-40
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| READY | Lists the number of replicas available to end users in the format
+    of <ready>/<desired>. The number of desired replicas corresponds to the value
+    of `spec.replicas`. |'
+  id: totrans-41
+  prefs: []
+  type: TYPE_TB
+  zh: '| READY | 列出格式为<ready>/<desired>的副本数，用于向最终用户显示。所需副本数对应于`spec.replicas`的值。 |'
+- en: '| UP-TO-DATE | Lists the number of replicas that have been updated to achieve
+    the desired state. |'
+  id: totrans-42
+  prefs: []
+  type: TYPE_TB
+  zh: '| UP-TO-DATE | 列出已更新以达到期望状态的副本数。 |'
+- en: '| AVAILABLE | Lists the number of replicas available to end users. |'
+  id: totrans-43
+  prefs: []
+  type: TYPE_TB
+  zh: '| AVAILABLE | 列出对最终用户可用的副本数。 |'
+- en: 'The Pods controlled by the Deployment can be identified by the naming prefix
+    in their names. In the case of the previously created Deployment, the Pods’ names
+    start with `app-cache-`. The hash following the prefix is autogenerated and assigned
+    to the name upon creation:'
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过它们的名称中的前缀可以识别由部署控制的 Pods。在之前创建的部署的情况下，Pod 的名称以 `app-cache-` 开头。紧随前缀的哈希在创建时自动生成并分配给名称：
+- en: '[PRE3]'
+  id: totrans-45
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: Rendering Deployment Details
+  id: totrans-46
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 渲染部署详情
+- en: 'You can render the details of a Deployment. Those details include the label
+    selection criteria that can be extremely valuable when troubleshooting a misconfigured
+    Deployment. The following output provides the full gist:'
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可以渲染部署的详细信息。这些细节包括标签选择标准，当排除故障配置错误的部署时，这些细节可能非常有价值。以下输出提供了整体要点：
+- en: '[PRE4]'
+  id: totrans-48
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: You might have noticed that the output contains a reference to a ReplicaSet.
+    The purpose of a ReplicaSet is to *replicate* a set of identical Pods. You do
+    not need to deeply understand the core functionality of a ReplicaSet for the exam.
+    Just be aware that the ReplicaSet is automatically created by a Deployment and
+    uses the Deployment’s name as a prefix for the ReplicaSet similar to the Pods
+    it controls. In the case of the previous Deployment named `app-cache`, the name
+    of the ReplicaSet is `app-cache-596bc5586d`.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可能已经注意到输出中包含对 ReplicaSet 的引用。 ReplicaSet 的目的是*复制*一组相同的 Pods。你不需要深入理解 ReplicaSet
+    的核心功能来通过考试。只需知道 ReplicaSet 由部署自动创建，并使用与其控制的 Pods 类似的部署名称作为 ReplicaSet 的前缀。在前面命名为
+    `app-cache` 的部署的情况下，ReplicaSet 的名称为 `app-cache-596bc5586d`。
+- en: Deleting a Deployment
+  id: totrans-50
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 删除部署
+- en: 'A Deployment takes full charge of the creation and deletion of the objects
+    it controls, Pods and ReplicaSets. When you delete a Deployment, the corresponding
+    objects are deleted as well. Say you are dealing with the following set of objects
+    shown in the output:'
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 部署全权负责创建和删除它所控制的对象，即 Pods 和 ReplicaSets。当你删除一个部署时，相应的对象也会被删除。假设你正在处理以下输出中显示的对象集：
+- en: '[PRE5]'
+  id: totrans-52
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'Run the `delete deployment` command for a cascading deletion of its managed
+    objects:'
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运行`delete deployment`命令以级联删除其管理的对象：
+- en: '[PRE6]'
+  id: totrans-54
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: Performing Rolling Updates and Rollbacks
+  id: totrans-55
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 执行滚动更新和回滚
+- en: 'Rollout and rollback capabilities are built into certain API resources. Once
+    the definition of the Pod template in a Deployment has been changed, Kubernetes
+    knows how to apply the change to all Pods managed by the object. In this section,
+    we’ll talk about both scenarios: deploying a new version of an application and
+    reverting to an old version of an application.'
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 部分 API 资源内置了部署的发布和回滚功能。一旦更改了部署中的 Pod 模板的定义，Kubernetes 就知道如何将更改应用于对象管理的所有 Pods。在本节中，我们将讨论两种情况：部署应用程序的新版本和恢复应用程序的旧版本。
+- en: Rolling Out a New Revision
+  id: totrans-57
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 滚动部署新版本
+- en: Deployments make it very easy to roll out a new version of the application to
+    all replicas it controls. Say you want to upgrade the version of Memcached from
+    1.6.8 to 1.6.10 to benefit from the latest features and bug fixes. All you need
+    to do is to change the desired state of the object by updating the Pod template.
+    The Deployment takes care of updating all replicas to the new version one by one.
+    This process is called a *rolling update*.
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 部署使得将应用程序的新版本滚动到它所控制的所有副本变得非常容易。假设你想将 Memcached 的版本从 1.6.8 升级到 1.6.10，以便获得最新的功能和错误修复。你只需要通过更新
+    Pod 模板来更改对象的期望状态。部署会逐一更新所有副本到新版本。这个过程称为*滚动更新*。
+- en: 'At any time, you can modify the live object using the command `edit deployment`.
+    Alternatively, the command `set image` offers a quick and convenient way to change
+    the image of a Deployment, as shown in the following command:'
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 随时可以使用命令`edit deployment`修改活动对象。或者，命令`set image`提供了一种快速便捷的方式来更改 Deployment 的镜像，如下所示：
+- en: '[PRE7]'
+  id: totrans-60
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: The flag `--record` is optional and defaults to the value `false`. If provided
+    without a value or set to the value `true`, the command used for the change will
+    be recorded. Internally, the `set image` command preserves the change cause by
+    assigning the annotation with the key `kubernetes.io/change-cause` to the Deployment.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 标志`--record`是可选的，默认值为`false`。如果提供而没有值或设置为`true`，则将记录用于更改的命令。在内部，`set image`命令通过分配具有键`kubernetes.io/change-cause`的注释来保留更改原因到
+    Deployment。
+- en: 'You can check the current status of a rollout while in progress. The command
+    to use is `rollout status`. The output gives you an indication of the number of
+    replicas that have already been updated since emitting the command:'
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在进行中检查滚动发布的当前状态。要使用的命令是`rollout status`。输出会给出已自命令发出后已更新的副本数量的指示：
+- en: '[PRE8]'
+  id: totrans-63
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: 'Kubernetes keeps track of the changes you make to a Deployment over time in
+    the rollout history. Every change is represented by a so-called *revision*. You
+    can check the rollout history by running the following command. You will see two
+    revisions listed:'
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 在滚动历史中跟踪您对 Deployment 所做的更改。每个更改都由所谓的*修订版本*表示。您可以通过运行以下命令检查滚动历史。您将看到列出了两个修订版本：
+- en: '[PRE9]'
+  id: totrans-65
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: The first revision was recorded for the original state of the Deployment when
+    you created the object. The second revision was added for changing the image tag.
+    Note that the column “CHANGE-CAUSE” renders the command used for the change.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 第一个修订版本是记录了创建对象时 Deployment 的原始状态。第二个修订版本是为更改镜像标签而添加的。请注意，“CHANGE-CAUSE”列显示了用于更改的命令。
+- en: 'To get a more detailed view on the revision, run the following command. You
+    can see that the image uses the value `memcached:1.6.10`:'
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要获取修订版本的更详细视图，请运行以下命令。您可以看到镜像使用的值为`memcached:1.6.10`：
+- en: '[PRE10]'
+  id: totrans-68
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: Rolling Back to a Previous Revision
+  id: totrans-69
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 回滚到之前的修订版本
+- en: 'Problems may arise in production that require swift action. For example, say
+    that the container image that you just rolled out contains a crucial bug. Kubernetes
+    gives you the option to roll back to one of the previous revisions in the rollout
+    history. You can achieve this by using the `rollout undo` command. To pick a specific
+    revision, provide the command-line option `--to-revision`. The command rolls back
+    to the previous revision if you do not provide the option. Here, we are rolling
+    back to revision 1:'
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在生产环境中可能会出现需要快速处理的问题。例如，假设刚刚发布的容器镜像包含一个关键的 bug。Kubernetes 允许您回滚到滚动历史中的先前修订版本之一。您可以使用`rollout
+    undo`命令来实现这一点。要选择特定的修订版本，请提供命令行选项`--to-revision`。如果不提供选项，该命令将回滚到先前的修订版本。在这里，我们回滚到修订版本
+    1：
+- en: '[PRE11]'
+  id: totrans-71
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: 'As a result, Kubernetes performs a rolling update to all replicas with the
+    revision 1\. Checking the rollout history now lists revision 3\. Given that we
+    rolled back to revision 1, there’s no more need to keep that entry as a duplicate.
+    Kubernetes simply turns revision 1 into 3 and removes 1 from the list:'
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，Kubernetes 对所有副本执行了带有修订版本 1 的滚动更新。现在检查滚动历史，会列出修订版本 3。考虑到我们回滚到了修订版本 1，就没有必要再保留该条目作为重复的了。Kubernetes
+    简单地将修订版本 1 转换为 3，并从列表中删除 1：
+- en: '[PRE12]'
+  id: totrans-73
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: Scaling Workloads
+  id: totrans-74
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 扩展工作负载
+- en: Scalability is one of Kubernetes’ built-in capabilities. We’ll learn how to
+    manually scale the number of replicas as a reaction to increased load on the application.
+    Furthermore, we’ll talk about the API resource Horizontal Pod Autoscaler, which
+    allows to automatically scale the managed set of Pods based on resource thresholds
+    like CPU and memory.
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 扩展性是 Kubernetes 内置的能力之一。我们将学习如何根据应用程序负载的增加手动扩展副本数。此外，我们还将讨论 API 资源 Horizontal
+    Pod Autoscaler，它允许根据 CPU 和内存等资源阈值自动扩展管理的 Pod 集合。
+- en: Manually Scaling a Deployment
+  id: totrans-76
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 手动扩展 Deployment
+- en: 'Scaling the number of replicas controlled by a Deployment up or down is a straightforward
+    process. You can either manually edit the live object using `edit deployment`
+    and change the value of the attribute `spec.replicas` or use the imperative `scale
+    deployment` command. The following command increases the number of replicas from
+    four to six:'
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 增加或减少由 Deployment 控制的副本数量是一个简单的过程。您可以通过手动编辑活动对象使用`edit deployment`并更改`spec.replicas`属性的值，或者使用命令式`scale
+    deployment`命令。以下命令将副本数量从四个增加到六个：
+- en: '[PRE13]'
+  id: totrans-78
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: 'You can observe the creation of replicas in real time. If you are fast enough,
+    you might still see the change of status for the newly created Pods turning from
+    `ContainerCreating` to `Running`:'
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以实时观察副本的创建过程。如果您速度足够快，您可能仍然可以看到新创建的 Pod 的状态从 `ContainerCreating` 变为 `Running`：
+- en: '[PRE14]'
+  id: totrans-80
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: Manually scaling the number of replicas takes a little bit of guesswork. You
+    will still have to monitor the load on your system to see if your number of replicas
+    is sufficient to handle the incoming traffic.
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 手动扩展副本数需要一些猜测。您仍需监视系统负载，以确定副本数量是否足以处理传入的流量。
+- en: Manually Scaling a StatefulSet
+  id: totrans-82
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 手动扩展 StatefulSet
+- en: Another API resource that can be scaled manually is the StatefulSet. StatefulSets
+    are meant for managing stateful applications by a set of Pods (e.g., databases).
+    Similar to a Deployment, the StatefulSet defines a Pod template; however, each
+    of its replicas guarantees a unique and persistent identity. Similar to a Deployment,
+    a StatefulSet uses a ReplicaSet to manage the replicas.
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个可以手动扩展的 API 资源是 StatefulSet。StatefulSet 用于通过一组 Pod（例如数据库）管理有状态应用程序。与部署类似，StatefulSet
+    定义了一个 Pod 模板；然而，每个副本保证具有独特和持久的标识。与部署类似，StatefulSet 使用 ReplicaSet 来管理副本。
+- en: We are not going to discuss StatefulSets in more detail, but you can read more
+    about them in the [documentation](https://oreil.ly/dXJhh). The reason we are discussing
+    the StatefulSet API resource here is that it can be manually scaled in a similar
+    fashion as the Deployment.
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们不会详细讨论 StatefulSet，但您可以在 [文档](https://oreil.ly/dXJhh) 中进一步了解它们。我们在这里讨论 StatefulSet
+    API 资源的原因是它可以像部署一样进行手动扩展。
+- en: Let’s say we’d deal with the YAML definition for a StatefulSet and a Service
+    that run and expose a Redis database, as illustrated in [Example 3-2](#yaml_manifest_statefulset_service).
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设我们要处理 StatefulSet 和 Service 的 YAML 定义，运行并公开 Redis 数据库，如 [示例 3-2](#yaml_manifest_statefulset_service)
+    所示。
+- en: Example 3-2\. A YAML manifest for a StatefulSet and Service
+  id: totrans-86
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 3-2\. 用于 StatefulSet 和 Service 的 YAML 清单
+- en: '[PRE15]'
+  id: totrans-87
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: 'After its creation, listing the StatefulSet shows the number of replicas in
+    the “READY” column. As you can see in the following output, we set the number
+    of replicas to 1:'
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建完成后，列出 StatefulSet 在 “READY” 列中的副本数。正如下面的输出所示，我们将副本数设置为 1：
+- en: '[PRE16]'
+  id: totrans-89
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: 'The `scale` command we explored in the context of a Deployment works here as
+    well. In the following command, we scale the number of replicas from one to three:'
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在部署环境中探索的 `scale` 命令在这里同样有效。在以下命令中，我们将副本数从一个扩展到三个：
+- en: '[PRE17]'
+  id: totrans-91
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: It’s important to mention that the process for scaling down a StatefulSet requires
+    all replicas to be in a healthy state. Any long-term, unresolved issues in Pods
+    controlled by a StatefulSet can lead to a situation that can result in the application
+    becoming unavailable to end users.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 需要提到的是，缩减 StatefulSet 的过程需要所有副本处于健康状态。由 StatefulSet 控制的 Pod 中长期未解决的问题可能会导致应用不可用于最终用户。
+- en: Autoscaling a Deployment
+  id: totrans-93
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 自动扩展部署
+- en: Another way to scale a Deployment is with the help of a Horizontal Pod Autoscaler
+    (HPA). The HPA is an API primitive that defines rules for automatically scaling
+    the number of replicas under certain conditions. The only currently supported
+    scaling condition in the stable API version of an HPA is CPU utilization. At runtime,
+    the HPA checks the metrics collected by the [metrics server](https://oreil.ly/Lmamb)
+    to determine if the average maximum CPU usage across all replicas of a Deployment
+    is less than or greater than the defined threshold. [Figure 3-3](#autoscaling_deployment)
+    shows a high-level architecture diagram involving an HPA.
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一种扩展部署的方式是借助水平 Pod 自动扩展器（HPA）。HPA 是一个 API 原语，用于在特定条件下自动扩展副本数。当前稳定 API 版本的 HPA
+    仅支持 CPU 利用率作为扩展条件。运行时，HPA 会检查由 [metrics server](https://oreil.ly/Lmamb) 收集的指标，以确定部署的所有副本的平均最大
+    CPU 使用率是否低于或高于定义的阈值。[图 3-3](#autoscaling_deployment) 展示了涉及 HPA 的高级架构图。
+- en: '![ckas 0303](Images/ckas_0303.png)'
+  id: totrans-95
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckas 0303](Images/ckas_0303.png)'
+- en: Figure 3-3\. Autoscaling a Deployment
+  id: totrans-96
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-3\. 自动扩展部署
+- en: Creating Horizontal Pod Autoscalers
+  id: totrans-97
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 创建水平 Pod 自动扩展器
+- en: 'You can use the `autoscale deployment` command to create an HPA for an existing
+    Deployment. The option `--cpu-percent` defines the average maximum CPU usage threshold.
+    The options `--min` and `--max` provide the minimum number of replicas to scale
+    down to and the maximum number of replicas the HPA can create to handle the increased
+    load, respectively:'
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用`autoscale deployment`命令为现有的Deployment创建HPA。选项`--cpu-percent`定义平均最大CPU使用率阈值。选项`--min`和`--max`分别提供了缩减至的最小副本数以及HPA可创建的处理增加负载的最大副本数：
+- en: '[PRE18]'
+  id: totrans-99
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: The previous command is a great shortcut for creating an HPA for a Deployment.
+    The YAML manifest representation of the HPA object looks like [Example 3-3](#yaml_manifest_hpa).
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 上述命令是为Deployment创建HPA的绝佳快捷方式。HPA对象的YAML清单表示如[示例 3-3](#yaml_manifest_hpa)所示。
+- en: Example 3-3\. A YAML manifest for an HPA
+  id: totrans-101
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 3-3\. 用于HPA的YAML清单
+- en: '[PRE19]'
+  id: totrans-102
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: Listing Horizontal Pod Autoscalers
+  id: totrans-103
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 列出水平Pod自动缩放器
+- en: 'The short-form command for a Horizontal Pod Autoscaler is `hpa`. Listing all
+    of the HPA objects transparently describes their current state: the usage of CPU
+    utilization and the number of replicas at this time:'
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 水平Pod自动缩放器的简称命令是`hpa`。透明地列出所有HPA对象描述了它们当前的状态：此时的CPU利用率使用情况和副本数量：
+- en: '[PRE20]'
+  id: totrans-105
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: If the Pod template of the Deployment does not define CPU resource requirements
+    or if the CPU metrics cannot be retrieved from the metrics server, the left value
+    of the column “TARGETS” says <unknown>. [Example 3-4](#cpu_resource_requirements_pod_template)
+    sets the resource requirements for the Pod template so that the HPA can work properly.
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果Deployment的Pod模板未定义CPU资源需求，或者无法从指标服务器检索CPU指标，则“TARGETS”列的左值显示为<unknown>。[示例 3-4](#cpu_resource_requirements_pod_template)设置Pod模板的资源需求，以便HPA正常工作。
+- en: Example 3-4\. Setting CPU resource requirements for Pod template
+  id: totrans-107
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 3-4\. 设置Pod模板的CPU资源需求
+- en: '[PRE21]'
+  id: totrans-108
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: 'Once traffic hits the replicas, the current CPU usage is reflected in a percentage
+    as shown in the following output. Here the average maximum CPU utilization is
+    15%:'
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦流量达到副本，当前CPU使用情况将以百分比的形式反映在以下输出中。这里平均最大CPU利用率为15%：
+- en: '[PRE22]'
+  id: totrans-110
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: Rendering Horizontal Pod Autoscaler Details
+  id: totrans-111
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 渲染水平Pod自动缩放器详情
+- en: 'The event log of a HPA can provide additional insight into the rescaling activities.
+    Rendering the HPA details can be a great tool for overseeing when the number of
+    replicas was scaled up or down, as well as their scaling conditions:'
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: HPA的事件日志可以提供关于重新调整活动的额外见解。渲染HPA的详细信息可以是监视副本何时扩展或缩减及其缩放条件的好工具：
+- en: '[PRE23]'
+  id: totrans-113
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: Using the Beta API Version of an Horizontal Pod Autoscaler
+  id: totrans-114
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用水平Pod自动缩放器的Beta API版本
+- en: Kubernetes 1.12 introduced the beta API version `autoscaling/v2beta2` for a
+    HPA, which became a final API named `autoscaling/v2` with Kubernetes 1.23\. The
+    YAML manifest of the API resource models observed metrics in a more generic way.
+    As you can see in [Example 3-5](#autoscaler_hpa), we are inspecting CPU and memory
+    utilization to determine if the replicas of a Deployment need to be scaled up
+    or down.
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 1.12引入了HPA的Beta API版本`autoscaling/v2beta2`，该版本在Kubernetes 1.23中成为名为`autoscaling/v2`的最终API。API资源模型的YAML清单以更通用的方式观察指标。正如在[示例 3-5](#autoscaler_hpa)中所示，我们正在检查CPU和内存利用率，以确定是否需要扩展或缩减Deployment的副本。
+- en: Example 3-5\. A YAML manifest for a HPA using v2
+  id: totrans-116
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 3-5\. 使用v2的HPA的YAML清单
+- en: '[PRE24]'
+  id: totrans-117
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: To ensure that the HPA determines the currently used resources, we’ll set the
+    memory resource requirements for the Pod template as well, as shown in [Example 3-6](#memory_resource_requirements_pod_template).
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为确保HPA确定当前使用的资源，我们还将设置Pod模板的内存资源需求，如[示例 3-6](#memory_resource_requirements_pod_template)所示。
+- en: Example 3-6\. Setting memory resource requirements for Pod template
+  id: totrans-119
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 3-6\. 设置Pod模板的内存资源需求
+- en: '[PRE25]'
+  id: totrans-120
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE25]'
+- en: 'Listing the HPA renders both metrics in the “TARGETS” column, as in the output
+    of the `get` command shown here:'
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 列出HPA会在“TARGETS”列中呈现两个指标，如此处显示的`get`命令输出：
+- en: '[PRE26]'
+  id: totrans-122
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE26]'
+- en: Defining and Consuming Configuration Data
+  id: totrans-123
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 定义和使用配置数据
+- en: It’s common to encounter an application that evaluates environment variables
+    to control its runtime behavior. For example, the application may define an environment
+    variable that points to the URL of an external service, or it could inject an
+    API key used to authenticate with another microservice.
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 遇到评估环境变量以控制其运行行为的应用程序是很常见的。例如，应用程序可以定义一个环境变量，指向外部服务的URL，或者注入用于与另一个微服务进行身份验证的API密钥。
+- en: Declaring environment variables for a container is easy. You simply list them
+    as key-value pairs under the attribute `spec.containers[].env[]`. [Example 3-7](#environment_variables_container)
+    defines the environment variables `MEMCACHED_CONNECTIONS` and `MEMCACHED_THREADS`
+    for the container named `memcached`.
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为容器声明环境变量很简单。你只需将它们作为键值对列在属性`spec.containers[].env[]`下即可。[示例 3-7](#environment_variables_container)定义了容器`memcached`的环境变量`MEMCACHED_CONNECTIONS`和`MEMCACHED_THREADS`。
+- en: Example 3-7\. Environment variables set for a container
+  id: totrans-126
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例3-7\. 为容器设置的环境变量
+- en: '[PRE27]'
+  id: totrans-127
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE27]'
+- en: If those environment variables become a common commodity across multiple Pod
+    manifests within the same namespace, there’s no way around copy-pasting the definition.
+    For that particular use case, Kubernetes introduced the concept of configuration
+    data represented by dedicated API resources.
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果这些环境变量成为同一命名空间内多个Pod清单中的常见商品，则无法避免复制粘贴定义。针对这种特定用例，Kubernetes引入了由专用API资源表示的配置数据概念。
+- en: Those API resources are called ConfigMap and Secret. Both define a set of key-values
+    pairs and can be injected into a container as environment variables or mounted
+    as a volume. [Figure 3-4](#configuration_data) illustrates the options.
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些API资源称为ConfigMap和Secret。它们都定义了一组键值对，并可以作为环境变量注入到容器中或者作为卷挂载。[图 3-4](#configuration_data)说明了这些选项。
+- en: Values of a Secret are only encoded
+  id: totrans-130
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Secret的值只能被编码
+- en: Secrets expect the value of each entry to be Base64-encoded. Base64 encodes
+    only a value, but it doesn’t encrypt it. Therefore, anyone with access to its
+    value can decode it without problems. A Secret is distributed only to the nodes
+    running Pods that actually require access to it. Moreover, Secrets are stored
+    in memory and are never written to physical storage.
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Secrets期望每个条目的值都是Base64编码的。Base64仅编码值，但不加密它。因此，任何拥有访问权限的人都可以无问题地解码它。Secret仅分发给实际需要访问它的Pod所在的节点。此外，Secrets存储在内存中，永远不会写入物理存储。
+- en: '![ckas 0304](Images/ckas_0304.png)'
+  id: totrans-132
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckas 0304](Images/ckas_0304.png)'
+- en: Figure 3-4\. Configuration data in Kubernetes
+  id: totrans-133
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图3-4\. Kubernetes中的配置数据
+- en: Creating a ConfigMap
+  id: totrans-134
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 创建一个ConfigMap
+- en: You can create a ConfigMap by emitting the imperative `create configmap` command.
+    This command requires you to provide the source of the data as an option. Kubernetes
+    distinguishes the four different options shown in [Table 3-2](#source_options_configmap).
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以通过发出命令`create configmap`来创建一个ConfigMap。此命令要求您以选项的形式提供数据的来源。Kubernetes区分了[表 3-2](#source_options_configmap)中显示的四种不同选项。
+- en: Table 3-2\. Source options for data parsed by a ConfigMap
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表3-2\. 由ConfigMap解析数据的源选项
+- en: '| Option | Example | Description |'
+  id: totrans-137
+  prefs: []
+  type: TYPE_TB
+  zh: '| 选项 | 示例 | 描述 |'
+- en: '| --- | --- | --- |'
+  id: totrans-138
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- |'
+- en: '| `--from-literal` | `--from-literal=locale=en_US` | Literal values, which
+    are key-value pairs as plain text |'
+  id: totrans-139
+  prefs: []
+  type: TYPE_TB
+  zh: '| `--from-literal` | `--from-literal=locale=en_US` | 字面值，即明文的键值对 |'
+- en: '| `--from-env-file` | `--from-env-file=config.env` | A file that contains key-value
+    pairs and expects them to be environment variables |'
+  id: totrans-140
+  prefs: []
+  type: TYPE_TB
+  zh: '| `--from-env-file` | `--from-env-file=config.env` | 包含键值对并期望它们成为环境变量的文件 |'
+- en: '| `--from-file` | `--from-file=app-config.json` | A file with arbitrary contents
+    |'
+  id: totrans-141
+  prefs: []
+  type: TYPE_TB
+  zh: '| `--from-file` | `--from-file=app-config.json` | 一个带有任意内容的文件 |'
+- en: '| `--from-file` | `--from-file=config-dir` | A directory with one or many files
+    |'
+  id: totrans-142
+  prefs: []
+  type: TYPE_TB
+  zh: '| `--from-file` | `--from-file=config-dir` | 一个包含一个或多个文件的目录 |'
+- en: It’s easy to confuse the options `--from-env-file` and `--from-file`. The option
+    `--from-env-file` expects a file that contains environment variables in the format
+    `KEY=value` separated by a new line. The key-value pairs follow typical naming
+    conventions for environment variables (e.g., the key is uppercased, and individual
+    words are separated by an underscore character). Historically, this option has
+    been used to process [Docker Compose `.env` file](https://oreil.ly/Sd85f), though
+    you can use it for any other file containing environment variables. This option
+    does not enforce or normalize the typical naming conventions for environment variables.
+    The option `--from-file` points to a file or directory containing *any* arbitrary
+    content. It’s an appropriate option for files with structured configuration data
+    to be read by an application (e.g., a properties file, a JSON file, or an XML
+    file).
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 很容易混淆选项`--from-env-file`和`--from-file`。选项`--from-env-file`期望一个文件，其中包含格式为`KEY=value`的环境变量，每行分隔。键值对遵循环境变量的典型命名约定（例如，键大写，单词之间用下划线分隔）。历史上，此选项已用于处理[Docker
+    Compose `.env`文件](https://oreil.ly/Sd85f)，尽管您可以将其用于包含环境变量的任何其他文件。此选项不强制或规范环境变量的典型命名约定。选项`--from-file`指向包含*任何*任意内容的文件或目录。这是一个适合由应用程序读取的结构化配置数据文件的选项（例如，属性文件、JSON
+    文件或 XML 文件）。
+- en: 'The following command shows the creation of a ConfigMap in action. We are simply
+    providing the key-value pairs as literals:'
+  id: totrans-144
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下命令显示了创建 ConfigMap 的过程。我们只是提供键值对作为字面值：
+- en: '[PRE28]'
+  id: totrans-145
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE28]'
+- en: The resulting YAML object looks like the one shown in [Example 3-8](#configmap_yaml_manifest).
+    As you can see, the object defines the key-value pairs in a section named `data`.
+    A ConfigMap does not have a `spec` section.
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 结果的 YAML 对象看起来像[示例 3-8](#configmap_yaml_manifest)中显示的对象。正如你所见，该对象在一个名为`data`的部分定义了键值对。ConfigMap
+    没有`spec`部分。
+- en: Example 3-8\. ConfigMap YAML manifest
+  id: totrans-147
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 3-8\. ConfigMap YAML 文件
+- en: '[PRE29]'
+  id: totrans-148
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE29]'
+- en: Consuming a ConfigMap as Environment Variables
+  id: totrans-149
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 将 ConfigMap 作为环境变量使用
+- en: With the ConfigMap created, you can now inject its key-value pairs as environment
+    variables into a container. [Example 3-9](#injecting_configmap_environment_variables)
+    shows the use of `spec.containers[].envFrom[].configMapRef` to reference the ConfigMap
+    by name.
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建 ConfigMap 后，现在可以将其键值对作为环境变量注入到容器中。[示例 3-9](#injecting_configmap_environment_variables)展示了使用`spec.containers[].envFrom[].configMapRef`引用
+    ConfigMap 的名称。
+- en: Example 3-9\. Injecting ConfigMap key-value pairs into the container
+  id: totrans-151
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 3-9\. 将 ConfigMap 键值对注入容器
+- en: '[PRE30]'
+  id: totrans-152
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE30]'
+- en: 'After creating the Pod from the YAML manifest, you can inspect the environment
+    variables available in the container by running the `env` Unix command:'
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从 YAML 文件清单创建 Pod 后，可以通过运行`env`Unix命令检查容器中可用的环境变量。
+- en: '[PRE31]'
+  id: totrans-154
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE31]'
+- en: Mounting a ConfigMap as a Volume
+  id: totrans-155
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 将 ConfigMap 挂载为卷
+- en: Another way to configure applications at runtime is by processing a machine-readable
+    configuration file. Say we have decided to store the database configuration in
+    a JSON file named `db.json` with the structure shown in [Example 3-10](#json_file_database_information).
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一种在运行时配置应用程序的方法是处理一个机器可读的配置文件。假设我们决定将数据库配置存储在名为`db.json`的 JSON 文件中，其结构如[示例 3-10](#json_file_database_information)所示。
+- en: Example 3-10\. A JSON file used for configuring database information
+  id: totrans-157
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 3-10\. 用于配置数据库信息的 JSON 文件
+- en: '[PRE32]'
+  id: totrans-158
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE32]'
+- en: 'Given that we are not dealing with literal key-value pairs, we need to provide
+    the option `--from-file` when creating the ConfigMap object:'
+  id: totrans-159
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 鉴于我们不处理字面键值对，创建 ConfigMap 对象时需要提供选项`--from-file`：
+- en: '[PRE33]'
+  id: totrans-160
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE33]'
+- en: The Pod mounts the ConfigMap as a volume to a specific path inside of the container.
+    The assumption is that the application will read the configuration file when starting
+    up. [Example 3-11](#mounting_configmap_volume) demonstrates the YAML definition.
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod 将 ConfigMap 作为卷挂载到容器内的特定路径。假设应用程序在启动时将读取配置文件。[示例 3-11](#mounting_configmap_volume)演示了
+    YAML 定义。
+- en: Example 3-11\. Mounting a ConfigMap as a volume
+  id: totrans-162
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 3-11\. 将 ConfigMap 挂载为卷
+- en: '[PRE34]'
+  id: totrans-163
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE34]'
+- en: 'To verify the correct behavior, open an interactive shell to the container.
+    As you can see in the following commands, the directory `/etc/config` contains
+    a file with the key we used in the ConfigMap. The content represents the JSON
+    configuration:'
+  id: totrans-164
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 若要验证正确的行为，请打开容器的交互式 shell。如以下命令所示，目录`/etc/config`包含一个使用在 ConfigMap 中使用的键的文件。内容表示
+    JSON 配置：
+- en: '[PRE35]'
+  id: totrans-165
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE35]'
+- en: Creating a Secret
+  id: totrans-166
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 创建一个 Secret
+- en: You can create a Secret with the imperative command `create secret`. In addition,
+    a mandatory subcommand needs to be provided that determines the type of the Secret.
+    [Table 3-3](#options_creating_secret) lists the different types.
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用命令 `create secret` 创建一个秘密。此外，必须提供一个强制性子命令，确定秘密的类型。 [表 3-3](#options_creating_secret)
+    列出了不同的类型。
+- en: Table 3-3\. Options for creating a Secret
+  id: totrans-168
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 3-3\. 创建秘密的选项
+- en: '| Option | Description |'
+  id: totrans-169
+  prefs: []
+  type: TYPE_TB
+  zh: '| 选项 | 描述 |'
+- en: '| --- | --- |'
+  id: totrans-170
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| `generic` | Creates a secret from a file, directory, or literal value. |'
+  id: totrans-171
+  prefs: []
+  type: TYPE_TB
+  zh: '| `generic` | 从文件、目录或字面值创建秘密。 |'
+- en: '| `docker-registry` | Creates a secret for use with a Docker registry. |'
+  id: totrans-172
+  prefs: []
+  type: TYPE_TB
+  zh: '| `docker-registry` | 为 Docker 注册表创建秘密。 |'
+- en: '| `tls` | Creates a TLS secret. |'
+  id: totrans-173
+  prefs: []
+  type: TYPE_TB
+  zh: '| `tls` | 创建一个 TLS 秘密。 |'
+- en: The most commonly used Secret type is `generic`. The options for a generic Secret
+    are exactly the same as for a ConfigMap, as shown in [Table 3-4](#source_options_data_secret).
+  id: totrans-174
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最常用的秘密类型是 `generic`。通用秘密的选项与 ConfigMap 完全相同，如 [表 3-4](#source_options_data_secret)
+    所示。
+- en: Table 3-4\. Source options for data parsed by a Secret
+  id: totrans-175
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 3-4\. 由秘密解析的数据的源选项
+- en: '| Option | Example | Description |'
+  id: totrans-176
+  prefs: []
+  type: TYPE_TB
+  zh: '| 选项 | 示例 | 描述 |'
+- en: '| --- | --- | --- |'
+  id: totrans-177
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- |'
+- en: '| `--from-literal` | `--from-literal=password=secret` | Literal values, which
+    are key-value pairs as plain text |'
+  id: totrans-178
+  prefs: []
+  type: TYPE_TB
+  zh: '| `--from-literal` | `--from-literal=password=secret` | 字面值，即键值对，以纯文本形式呈现 |'
+- en: '| `--from-env-file` | `--from-env-file=config.env` | A file that contains key-value
+    pairs and expects them to be environment variables |'
+  id: totrans-179
+  prefs: []
+  type: TYPE_TB
+  zh: '| `--from-env-file` | `--from-env-file=config.env` | 包含键值对并期望它们成为环境变量的文件 |'
+- en: '| `--from-file` | `--from-file=id_rsa=~/.ssh/id_rsa` | A file with arbitrary
+    contents |'
+  id: totrans-180
+  prefs: []
+  type: TYPE_TB
+  zh: '| `--from-file` | `--from-file=id_rsa=~/.ssh/id_rsa` | 包含任意内容的文件 |'
+- en: '| `--from-file` | `--from-file=config-dir` | A directory with one or many files
+    |'
+  id: totrans-181
+  prefs: []
+  type: TYPE_TB
+  zh: '| `--from-file` | `--from-file=config-dir` | 包含一个或多个文件的目录 |'
+- en: 'To demonstrate the functionality, let’s create a Secret of type `generic`.
+    The command sources the key-value pairs from the literals provided as a command-line
+    option:'
+  id: totrans-182
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了演示其功能，让我们创建一个类型为 `generic` 的秘密。该命令将从作为命令行选项提供的字面值中获取键值对：
+- en: '[PRE36]'
+  id: totrans-183
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE36]'
+- en: When created using the imperative command, a Secret will automatically Base64-encode
+    the provided value. This can be observed by taking a look at the produced YAML
+    manifest. You can see in [Example 3-12](#secret_base64_encoded_values) that the
+    value `s3cre!` has been turned into `czNjcmUh`, the Base64-encoded equivalent.
+  id: totrans-184
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在使用命令创建时，秘密将自动对提供的值进行 Base64 编码。这可以通过查看生成的 YAML 清单来观察到。您可以在 [示例 3-12](#secret_base64_encoded_values)
+    中看到，值 `s3cre!` 已经转换为 `czNjcmUh`，即其 Base64 编码等效形式。
+- en: Example 3-12\. A Secret with Base64-encoded values
+  id: totrans-185
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 3-12\. 带有 Base64 编码值的秘密
+- en: '[PRE37]'
+  id: totrans-186
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE37]'
+- en: 'If you start with the YAML manifest to create the Secret object, you will need
+    to create the Base64-encoded value yourself. A Unix tool that does the job is
+    `base64`. The following command achieves exactly that:'
+  id: totrans-187
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您从 YAML 清单开始创建秘密对象，则需要自行创建 Base64 编码的值。一个完成此任务的 Unix 工具是 `base64`。以下命令正是如此：
+- en: '[PRE38]'
+  id: totrans-188
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE38]'
+- en: Alternatively, you can also use one of the specialized [Secret types](https://oreil.ly/e1Cfz)
+    to avoid having to provide a Base64-encoded value. The type `kubernetes.io/basic-auth`
+    is meant for basic authentication and expects the keys `username` and `password`.
+    The created object from this definition automatically Base64-encodes the values
+    for both keys. [Example 3-13](#secret_type_basic_auth) illustrates a YAML manifest
+    for a Secret with type `kubernetes.io/basic-auth`. Notice that the attribute defining
+    the key-value pairs is called `stringData` instead of `data` as used by the `Opaque`
+    Secret type.
+  id: totrans-189
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 或者，您还可以使用其中一个专门的 [秘密类型](https://oreil.ly/e1Cfz) 来避免提供 Base64 编码的值。类型 `kubernetes.io/basic-auth`
+    适用于基本身份验证，期望键 `username` 和 `password`。从此定义创建的对象将自动为这两个键的值进行 Base64 编码。 [示例 3-13](#secret_type_basic_auth)
+    展示了一个类型为 `kubernetes.io/basic-auth` 的秘密的 YAML 清单。请注意，定义键值对的属性称为 `stringData`，而不是
+    `Opaque` 秘密类型使用的 `data`。
+- en: Example 3-13\. Usage of the Secret type kubernetes.io/basic-auth
+  id: totrans-190
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 3-13\. 使用类型为 kubernetes.io/basic-auth 的秘密
+- en: '[PRE39]'
+  id: totrans-191
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE39]'
+- en: Consuming a Secret as Environment Variables
+  id: totrans-192
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 作为环境变量消耗秘密
+- en: Consuming a Secret as environment variable works similar to the way you’d do
+    it for ConfigMaps. Here, you’d use the YAML expression `spec.containers[].envFrom[].secretRef`
+    to reference the name of the Secret. [Example 3-14](#injecting_secret_container)
+    injects the Secret named `secret-basic-auth` as environment variables into the
+    container named `backend`.
+  id: totrans-193
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为环境变量消耗秘密与为ConfigMaps做法类似。在这里，您将使用YAML表达式`spec.containers[].envFrom[].secretRef`引用秘密的名称。[示例
+    3-14](#injecting_secret_container) 将名为`secret-basic-auth`的秘密注入为环境变量到名为`backend`的容器中。
+- en: Example 3-14\. Injecting Secret key-value pairs into the container
+  id: totrans-194
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 3-14. 将秘密键值对注入到容器中
+- en: '[PRE40]'
+  id: totrans-195
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE40]'
+- en: 'Inspecting the environment variables in the container reveals that the Secret
+    values do not have to be decoded. That’s something Kubernetes does automatically.
+    Therefore, the running application doesn’t need to implement custom logic to decode
+    the value. Note that Kubernetes does not verify nor normalize the typical naming
+    conventions of environment variables, as you can see in the following output:'
+  id: totrans-196
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 检查容器中的环境变量，显示秘密值无需解码。这是Kubernetes自动完成的。因此，运行应用程序无需实现自定义逻辑来解码该值。请注意，Kubernetes不验证也不规范环境变量的典型命名约定，正如您在以下输出中看到的：
+- en: '[PRE41]'
+  id: totrans-197
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE41]'
+- en: Mounting a Secret as a Volume
+  id: totrans-198
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 将一个秘密作为卷挂载
+- en: 'To demonstrate mounting a Secret as a volume, we’ll create a new Secret of
+    type `kubernetes.io/ssh-auth`. This Secret type captures the value of an SSH private
+    key that you can view using the command `cat ~/.ssh/id_rsa`. To process the SSH
+    private key file with the `create secret` command, it needs to be available as
+    a file with the name `ssh-privatekey`:'
+  id: totrans-199
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要演示将一个秘密作为卷挂载，我们将创建一个新的类型为`kubernetes.io/ssh-auth`的秘密。这种秘密类型捕获了一个SSH私钥的值，您可以使用命令`cat
+    ~/.ssh/id_rsa`查看。要使用`create secret`命令处理SSH私钥文件，需要将其作为名为`ssh-privatekey`的文件可用：
+- en: '[PRE42]'
+  id: totrans-200
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE42]'
+- en: 'Mounting the Secret as a volume follows the two-step approach: define the volume
+    first and then reference it as a mount path for one or many containers. The volume
+    type is called `secret` as used in [Example 3-15](#mounting_secret_volume).'
+  id: totrans-201
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将秘密作为卷挂载遵循两步方法：首先定义卷，然后将其引用为一个或多个容器的挂载路径。卷类型称为`secret`，如在[示例 3-15](#mounting_secret_volume)中使用的。
+- en: Example 3-15\. Mounting a Secret as a volume
+  id: totrans-202
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 3-15. 将一个秘密作为卷挂载
+- en: '[PRE43]'
+  id: totrans-203
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE43]'
+- en: 'You will find the file named `ssh-privatekey` in the mount path `/var/app`.
+    To verify, open an interactive shell and render the file contents. The contents
+    of the file are not Base64-encoded:'
+  id: totrans-204
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您将在挂载路径`/var/app`中找到名为`ssh-privatekey`的文件。要验证，请打开一个交互式shell并渲染文件内容。文件的内容不是Base64编码：
+- en: '[PRE44]'
+  id: totrans-205
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE44]'
+- en: Summary
+  id: totrans-206
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 总结
+- en: The workload portion covered by the CKA includes the API resources Deployment,
+    ReplicaSet, and Pod. A Deployment controls a ReplicaSet responsible for managing
+    multiple, identical Pods, so-called replicas. The number of replicas can be scaled
+    up or down using the Deployment manually or automatically with the help of a Horizontal
+    Pod Autoscaler. Any changes made to the replica template defined by the Deployment
+    will be rolled out to the replicas. As an end user, you can inspect the rollout
+    history, the current rollout status, and its progress.
+  id: totrans-207
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CKA涵盖的工作负载部分包括API资源部署、副本集和Pod。部署控制着负责管理多个相同Pod的副本集。这些副本的数量可以通过手动或使用水平Pod自动缩放器自动缩放。对部署定义的副本模板进行的任何更改都将应用于副本。作为最终用户，您可以检查卷出历史记录、当前卷出状态及其进度。
+- en: Application runtime behavior can be controlled either by injecting configuration
+    data as environment variables or by mounting a volume to a path. In Kubernetes,
+    this configuration data is represented by the API resources ConfigMap and Secret
+    in the form of key-value pairs. A ConfigMap is meant for plain-text data, and
+    a Secret encodes the values in Base64 to obfuscate the values. Secrets are usually
+    a better fit for sensitive information like credentials and SSH private keys.
+  id: totrans-208
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用程序的运行时行为可以通过将配置数据作为环境变量注入或将卷挂载到路径来控制。在Kubernetes中，这些配置数据以键值对的形式表示为API资源ConfigMap和Secret。ConfigMap用于纯文本数据，而Secret将值编码为Base64以混淆值。Secret通常更适合包含敏感信息如凭证和SSH私钥的情况。
+- en: Exam Essentials
+  id: totrans-209
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 考试要点
+- en: Know how to scale a Deployment and roll out updates
+  id: totrans-210
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 知道如何扩展一个部署并滚动更新
+- en: Deployments have superior management capabilities for a set of Pods. Using them
+    should be preferred over creating, updating, and deleting individual Pods. You
+    need to be familiar with all aspects of a Deployment, which includes manually
+    scaling the number of replicas or autoscaling them with the help of a Horizontal
+    Pod Autoscaler. The rollout history keeps track of the revisions made to a Pod
+    template. You can roll out new revisions or roll back to a previous revision.
+    Practice those techniques and the effect it has on the replicas.
+  id: totrans-211
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 部署具有一组Pod的卓越管理功能。与创建、更新和删除单个Pod相比，应优先使用它们。您需要熟悉部署的所有方面，包括手动扩展副本数量或借助水平Pod自动伸缩器进行自动扩展。回滚历史记录跟踪对Pod模板所做的修订。您可以部署新的修订版或回滚到先前的修订版。练习这些技术以及它对副本的影响。
+- en: Practice the creation and usage of ConfigMaps and Secrets
+  id: totrans-212
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 练习创建和使用ConfigMaps和Secrets。
+- en: Configuration data can be injected into a Pod using a ConfigMap or a Secret.
+    Practice the creation of those objects using the imperative and declarative approach
+    by providing different data sources (e.g., literal values, files, and directories).
+    Secrets offer specialized types. Try the different ways those can be set up. You
+    need to be proficient with the different ways of injecting the data defined by
+    ConfigMaps and Secrets into a container.
+  id: totrans-213
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以使用ConfigMap或Secret将配置数据注入到Pod中。通过提供不同的数据源（例如文字值、文件和目录），实践使用命令式和声明式方法创建这些对象。Secrets提供专门的类型。尝试不同的设置方式。您需要精通将ConfigMaps和Secrets定义的数据注入到容器中的不同方式。
+- en: Sample Exercises
+  id: totrans-214
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 示例练习
+- en: Solutions to these exercises are available in the [Appendix](app01.xhtml#appendix-a).
+  id: totrans-215
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些练习的解决方案位于[附录](app01.xhtml#appendix-a)中。
+- en: Create a Deployment named `nginx` that uses the image `nginx:1.17.0`. Set two
+    replicas to begin with.
+  id: totrans-216
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 创建名为`nginx`的部署（Deployment），使用镜像`nginx:1.17.0`。初始设置两个副本。
+- en: Scale the Deployment to seven replicas using the `scale` command. Ensure that
+    the correct number of Pods exist.
+  id: totrans-217
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 使用`scale`命令将部署扩展到七个副本。确保存在正确数量的Pod。
+- en: Create a Horizontal Pod Autoscaler named `nginx-hpa` for the Deployment with
+    an average utilization of CPU to 65% and an average utilization of memory to 1Gi.
+    Set the minimum number of replicas to 3 and the maximum number of replicas to
+    20.
+  id: totrans-218
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 为部署创建水平Pod自动伸缩器（Horizontal Pod Autoscaler），将CPU的平均利用率设置为65%，内存的平均利用率设置为1Gi。将最小副本数设置为3，最大副本数设置为20。
+- en: Update the Pod template of the Deployment to use the image `nginx:1.21.1`. Make
+    sure that the changes are recorded. Inspect the revision history. How many revisions
+    should be rendered? Roll back to the first revision.
+  id: totrans-219
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 更新部署的Pod模板，使用镜像`nginx:1.21.1`。确保记录更改。检查修订历史记录。应该呈现多少个修订版本？回滚到第一个修订版本。
+- en: Create a new Secret named `basic-auth` of type `kubernetes.io/basic-auth`. Assign
+    the key-value pairs `username=super` and `password=my-s8cr3t`. Mount the Secret
+    as a volume with the path `/etc/secret` and read-only permissions to the Pods
+    controlled by the Deployment.
+  id: totrans-220
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 创建名为`basic-auth`的新Secret，类型为`kubernetes.io/basic-auth`。分配键值对`username=super`和`password=my-s8cr3t`。将Secret作为卷挂载到路径`/etc/secret`，并为部署控制的Pod设置只读权限。

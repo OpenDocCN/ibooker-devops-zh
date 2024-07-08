@@ -1,0 +1,1044 @@
+- en: Chapter 10\. Deployments
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第 10 章\. 部署
+- en: A big selling point of Kubernetes is its scalability and replication. To support
+    those features, Kubernetes offers the Deployment primitive. In this chapter we’ll
+    show the creation of a Deployment scaled to multiple replicas, how to roll out
+    a revision of your application, how to roll back to a previous revision, and how
+    to use auto-scalers to handle scaling concerns automatically based on the current
+    workload.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 的一个重要卖点是其可伸缩性和复制功能。为支持这些功能，Kubernetes 提供了部署原语。在本章中，我们将展示如何创建部署以多个副本进行扩展，如何推出应用程序的修订版本，如何回滚到以前的修订版本，以及如何使用自动扩展器根据当前工作负载自动处理扩展问题。
+- en: Working with Deployments
+  id: totrans-2
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 处理部署
+- en: The primitive for running an application in a container is the Pod. Using a
+    single instance of a Pod to operate an application has its flaws—it represents
+    a single point of failure because all traffic targeting the application is funneled
+    to this Pod. This behavior is specifically problematic when the load increases
+    due to higher demand (e.g., during peak shopping season for an e-commerce application
+    or when an increasing number of microservices communicate with a centralized microservice
+    functionality, e.g. an authentication provider).
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在容器中运行应用程序的基本单位是 Pod。使用单个 Pod 实例来运行应用程序存在缺陷——它代表了一个单点故障，因为所有针对应用程序的流量都会汇集到这个
+    Pod。当负载增加时，这种行为特别有问题（例如，在电子商务应用程序的高峰购物季节期间，或者当越来越多的微服务与集中的微服务功能（例如认证提供程序）进行通信时）。
+- en: Another important aspect of running an application in a Pod is failure tolerance.
+    The scheduler cluster component will not reschedule a Pod in the case of a node
+    failure, which can lead to a system outage for end users. In this chapter, we’ll
+    talk about the Kubernetes mechanics that support application scalability and failure
+    tolerance.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Pod 中运行应用程序的另一个重要方面是容错性。调度器集群组件不会在节点故障的情况下重新调度 Pod，这可能会导致终端用户的系统中断。在本章中，我们将讨论支持应用程序可伸缩性和容错性的
+    Kubernetes 机制。
+- en: A *ReplicaSet* is a Kubernetes API resource that controls multiple, identical
+    instances of a Pod running the application, so-called replicas. It has the capability
+    of scaling the number of replicas up or down on demand. Moreover, it knows how
+    to roll out a new version of the application across all replicas.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*复本集* 是 Kubernetes API 资源，控制运行应用程序的多个相同 Pod 实例，即所谓的副本。它具有根据需求增加或减少副本数量的能力。此外，它还知道如何在所有副本中推出应用程序的新版本。'
+- en: A *Deployment* abstracts the functionality of ReplicaSet and manages it internally.
+    In practice, this means you do not have to create, modify, or delete ReplicaSet
+    objects yourself. The Deployment keeps a history of application versions and can
+    roll back to an older version to counteract a blocking or potentially costly production
+    issue. Furthermore, it offers the capability of scaling the number of replicas.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*部署* 抽象了复本集的功能并在内部进行管理。在实践中，这意味着您不必自己创建、修改或删除复本集对象。部署保留应用程序版本的历史记录，并可以回滚到旧版本以应对生产问题的阻塞或潜在成本问题。此外，它还能够扩展副本的数量。'
+- en: '[Figure 10-1](#deployment_replicaset) illustrates the relationship between
+    a Deployment, a ReplicaSet, and its controlled replicas.'
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 10-1](#deployment_replicaset) 描述了部署、复本集及其控制副本之间的关系。'
+- en: '![ckd2 1001](Images/ckd2_1001.png)'
+  id: totrans-8
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckd2 1001](Images/ckd2_1001.png)'
+- en: Figure 10-1\. Relationship between a Deployment and a ReplicaSet
+  id: totrans-9
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 10-1\. 部署和复本集之间的关系
+- en: The following sections explain how to manage Deployments, including scaling
+    and rollout features.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来的几节将解释如何管理部署，包括扩展和推出功能。
+- en: Creating Deployments
+  id: totrans-11
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 创建部署
+- en: You can create a Deployment using the imperative command `create deployment`.
+    The command offers a range of options, some of which are mandatory. At a minimum,
+    you need to provide the name of the Deployment and the container image. The Deployment
+    passes this information to the ReplicaSet, which uses it to manage the replicas.
+    The default number of replicas created is 1; however, you can define a higher
+    number of replicas using the option `--replicas`.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用命令 `create deployment` 创建部署。该命令提供一系列选项，其中一些是强制性的。至少，您需要提供部署的名称和容器镜像。部署将此信息传递给复本集，复本集使用它来管理副本。创建的默认副本数量为
+    1；但是，您可以使用选项 `--replicas` 定义更高数量的副本。
+- en: 'Let’s observe the command in action. The following command creates the Deployment
+    named `app-cache`, which runs the object cache [Memcached](https://memcached.org)
+    inside the container on four replicas:'
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们观察该命令的执行。以下命令创建名为`app-cache`的Deployment，在其中运行容器内的对象缓存[Memcached](https://memcached.org)的四个副本：
+- en: '[PRE0]'
+  id: totrans-14
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: The mapping between the Deployment and the replicas it controls happens through
+    label selection. When you run the imperative command, `kubectl` sets up the mapping
+    for you. [Example 10-1](#yaml_manifest_deployment) shows the label selection in
+    the YAML manifest. This YAML manifest can be used to create a Deployment declaratively
+    or by inspecting the live object created by the previous imperative command.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Deployment与其控制的副本之间的映射通过标签选择发生。当您运行命令时，`kubectl`会为您设置映射关系。[示例 10-1](#yaml_manifest_deployment)显示了YAML清单中的标签选择。该YAML清单可用于声明性地创建部署或通过检查由先前命令创建的实时对象来使用。
+- en: Example 10-1\. A YAML manifest for a Deployment
+  id: totrans-16
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 10-1\. Deployment的YAML清单
+- en: '[PRE1]'
+  id: totrans-17
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: 'When created by the imperative command, `app` is the label key the Deployment
+    uses by default. You can find this key in three different places in the YAML output:'
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在由命令创建时，`app`是Deployment默认使用的标签键。您可以在YAML输出的三个不同位置找到此键：
+- en: '`metadata.labels`'
+  id: totrans-19
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: '`metadata.labels`'
+- en: '`spec.selector.matchLabels`'
+  id: totrans-20
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: '`spec.selector.matchLabels`'
+- en: '`spec.template.metadata.labels`'
+  id: totrans-21
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: '`spec.template.metadata.labels`'
+- en: For label selection to work properly, the assignment of `spec.selector.matchLabels`
+    and `spec.template.metadata` needs to match, as shown in [Figure 10-2](#deployment_label_selection).
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了使标签选择正常工作，`spec.selector.matchLabels`和`spec.template.metadata`的分配需要匹配，如[图 10-2](#deployment_label_selection)所示。
+- en: 'The values of `metadata.labels` is irrelevant for mapping the Deployment to
+    the Pod template. As you can see in the figure, the label assignment to `metadata.labels`
+    has been changed deliberately to `deploy: app-cache` to underline that it is not
+    important for the Deployment to Pod template selection.'
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`metadata.labels`的值对于将Deployment映射到Pod模板是不相关的。如图所示，将`metadata.labels`的标签分配更改为`deploy:
+    app-cache`是有意的，以突出显示对Deployment到Pod模板选择的重要性。'
+- en: '![ckd2 1002](Images/ckd2_1002.png)'
+  id: totrans-24
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckd2 1002](Images/ckd2_1002.png)'
+- en: Figure 10-2\. Deployment label selection
+  id: totrans-25
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 10-2\. Deployment标签选择
+- en: Listing Deployments and Their Pods
+  id: totrans-26
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 列出Deployments及其Pods
+- en: 'You can inspect a Deployment after its creation by using the `get deployments`
+    command. The output of the command renders the important details of its replicas,
+    as shown here:'
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以通过使用`get deployments`命令检查部署后的部署。命令的输出显示了其副本的重要细节，如下所示：
+- en: '[PRE2]'
+  id: totrans-28
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: The column titles relevant to the replicas controlled by the Deployment are
+    shown in [Table 10-1](#runtime_replica_information).
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与由Deployment控制的副本相关的列标题显示在[表格 10-1](#runtime_replica_information)中。
+- en: Table 10-1\. Runtime replica information when listing deployments
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 10-1\. 列出部署时的运行时副本信息
+- en: '| Column Title | Description |'
+  id: totrans-31
+  prefs: []
+  type: TYPE_TB
+  zh: '| Column Title | Description |'
+- en: '| --- | --- |'
+  id: totrans-32
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| READY | Lists the number of replicas available to end users in the format
+    of <ready>/<desired>. The number of desired replicas corresponds to the value
+    of `spec.replicas`. |'
+  id: totrans-33
+  prefs: []
+  type: TYPE_TB
+  zh: '| READY | 以<ready>/<desired>格式列出最终用户可用的副本数。期望副本数对应于`spec.replicas`的值。 |'
+- en: '| UP-TO-DATE | Lists the number of replicas that have been updated to achieve
+    the desired state. |'
+  id: totrans-34
+  prefs: []
+  type: TYPE_TB
+  zh: '| UP-TO-DATE | 列出已更新以实现期望状态的副本数。 |'
+- en: '| AVAILABLE | Lists the number of replicas available to end users. |'
+  id: totrans-35
+  prefs: []
+  type: TYPE_TB
+  zh: '| AVAILABLE | 列出最终用户可用的副本数。 |'
+- en: 'You can identify the Pods controlled by the Deployment by their naming prefix.
+    In the case of the previously created Deployment, the Pods’ names start with `app-cache-`.
+    The hash following the prefix is autogenerated and appended to the name upon creation:'
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以通过它们的命名前缀识别由Deployment控制的Pods。在先前创建的Deployment中，Pods的名称以`app-cache-`开头。在创建时，生成的哈希会自动附加到名称后面：
+- en: '[PRE3]'
+  id: totrans-37
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: Rendering Deployment Details
+  id: totrans-38
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 渲染Deployment详细信息
+- en: 'You can render the details of a Deployment. Those details include the label
+    selection criteria, which can be extremely valuable when troubleshooting a misconfigured
+    Deployment. The following output provides the full gist:'
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以渲染Deployment的详细信息。这些详细信息包括标签选择标准，在排除部署配置错误时可能非常有价值。以下输出提供了完整的要点：
+- en: '[PRE4]'
+  id: totrans-40
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: You might have noticed that the output contains a reference to a ReplicaSet.
+    The purpose of a ReplicaSet is to *replicate* a set of identical Pods. You do
+    not need to deeply understand the core functionality of a ReplicaSet for the exam.
+    Just be aware that the Deployment automatically creates the ReplicaSet and uses
+    the Deployment’s name as a prefix for the ReplicaSet, similar to the Pods it controls.
+    In the case of the previous Deployment named `app-cache`, the name of the ReplicaSet
+    is `app-⁠cache-596bc5586d`.
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可能已经注意到输出中包含对 ReplicaSet 的引用。ReplicaSet 的目的是*复制*一组相同的 Pod。您无需深入了解 ReplicaSet
+    的核心功能即可参加考试。只需知道部署会自动创建 ReplicaSet，并使用部署的名称作为 ReplicaSet 的前缀，类似于它控制的 Pods。对于名为
+    `app-cache` 的前一个部署，ReplicaSet 的名称为 `app-cache-596bc5586d`。
+- en: Deleting a Deployment
+  id: totrans-42
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 删除部署
+- en: 'A Deployment takes full charge of the creation and deletion of the objects
+    it controls: Pods and ReplicaSets. When you delete a Deployment, the corresponding
+    objects are deleted as well. Say you are dealing with the following set of objects
+    shown in the output:'
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 部署完全负责创建和删除它控制的对象：Pod 和 ReplicaSet。当您删除一个部署时，相应的对象也会被删除。假设您正在处理输出中显示的以下一组对象：
+- en: '[PRE5]'
+  id: totrans-44
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'Run the `delete deployment` command for a cascading deletion of its managed
+    objects:'
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运行 `delete deployment` 命令以级联删除其管理的对象：
+- en: '[PRE6]'
+  id: totrans-46
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: Performing Rolling Updates and Rollbacks
+  id: totrans-47
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 执行滚动更新和回滚
+- en: 'A Deployment fully abstracts rollout and rollback capabilities by delegating
+    this responsibility to the ReplicaSet(s) it manages. Once a user changes the definition
+    of the Pod template in a Deployment, it will create a new ReplicaSet that applies
+    the changes to the replicas it controls and then shut down the previous ReplicaSet.
+    In this section, we’ll talk about both scenarios: deploying a new version of an
+    application and reverting to an old version of an application.'
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 部署通过委托给它管理的 ReplicaSet(s) 来完全抽象滚动更新和回滚功能。一旦用户更改了部署中 Pod 模板的定义，它将创建一个新的 ReplicaSet，将更改应用于它控制的副本，然后关闭之前的
+    ReplicaSet。在这一部分，我们将讨论两种情况：部署应用程序的新版本和回滚到旧版本的应用程序。
+- en: Updating a Deployment’s Pod Template
+  id: totrans-49
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 更新部署的 Pod 模板
+- en: You can choose from a range of options to update the definition of replicas
+    controlled by a Deployment. Any of those options is valid, but they vary in ease
+    of use and operational environment.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以从多种选项中选择，以更新由部署控制的副本的定义。这些选项都是有效的，但在使用和操作环境上有所不同。
+- en: 'In real-world projects, you should check your manifest files into version control.
+    Changes to the definition would then be made by directly editing the file. The
+    `kubectl apply` can update a live object by pointing to the changed manifest:'
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在实际项目中，您应该将清单文件检入版本控制。然后，可以通过直接编辑文件来进行定义更改。`kubectl apply` 可以通过指向更改后的清单更新 live
+    对象：
+- en: '[PRE7]'
+  id: totrans-52
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: 'The `kubectl edit` command lets you change the Pod template interactively by
+    modifying the live object’s manifest in an editor. To edit the Deployment live
+    object named `web-server`, use the following command:'
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 命令 `kubectl edit` 允许您通过在编辑器中修改 live 对象的清单来交互式地更改 Pod 模板。要编辑名为 `web-server` 的部署
+    live 对象，请使用以下命令：
+- en: '[PRE8]'
+  id: totrans-54
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: 'The imperative `kubectl set image` command changes only the container image
+    assigned to a Pod template by selecting the name of the container. For example,
+    you could use his command to assign the image `nginx:1.25.2` to the container
+    named `nginx` in the Deployment `web-server`:'
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 命令 `kubectl set image` 只更改分配给 Pod 模板的容器映像，选择容器的名称。例如，您可以使用此命令将映像 `nginx:1.25.2`
+    分配给名为 `web-server` 的部署中名为 `nginx` 的容器：
+- en: '[PRE9]'
+  id: totrans-56
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: 'The `kubectl replace` command lets you replace the existing Deployment with
+    a new definition that contains your change to the manifest. The optional `--force`
+    flag first deletes the existing object and then creates it from scratch. The following
+    command assumes that you changed the container image assignment in `deployment.yaml`:'
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kubectl replace` 命令允许您使用包含对清单更改的新定义替换现有的部署。可选的 `--force` 标志首先删除现有对象，然后从头开始创建。以下命令假定您在
+    `deployment.yaml` 中更改了容器映像分配：'
+- en: '[PRE10]'
+  id: totrans-58
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: 'The command `kubectl patch` requires you to provide the merges as a patch to
+    update a Deployment. The following command shows the operation in action. Here,
+    you are sending the changes to be made in the form of a JSON structure:'
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 命令 `kubectl patch` 要求您以补丁的形式提供合并，以更新部署。以下命令展示了操作的过程。在这里，您以 JSON 结构的形式发送要进行的更改：
+- en: '[PRE11]'
+  id: totrans-60
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: Rolling Out a New Revision
+  id: totrans-61
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 推出新版本
+- en: Deployments make it easy to roll out a new version of the application to all
+    replicas it controls. Say you want to upgrade the version of Memcached from 1.6.8
+    to 1.6.10 to benefit from the latest features and bug fixes. All you need to do
+    is change the desired state of the object by updating the Pod template. The Deployment
+    updates all replicas to the new version one by one. This process is called the
+    *rolling update* strategy.
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Deployment 使得向其控制的所有副本部署新版本的应用程序变得容易。假设您希望将 Memcached 的版本从 1.6.8 升级到 1.6.10
+    以获得最新功能和错误修复。您只需通过更新 Pod 模板更改对象的期望状态。Deployment 逐个将所有副本更新到新版本。这个过程称为 *滚动更新* 策略。
+- en: 'The command `set image` offers a quick, convenient way to change the image
+    of a Deployment, as shown in the following command:'
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 命令 `set image` 提供了一个快速、方便的方法来更改 Deployment 的图像，如下所示的命令：
+- en: '[PRE12]'
+  id: totrans-64
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: 'You can check the current status of a rollout that’s in progress using the
+    command `rollout status`. The output indicates the number of replicas that have
+    already been updated since emitting the command:'
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用命令 `rollout status` 检查正在进行中的滚动更新的当前状态。输出指示自发出命令以来已更新的副本数量：
+- en: '[PRE13]'
+  id: totrans-66
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: 'Kubernetes keeps track of the changes you make to a Deployment over time in
+    the rollout history. Every change is represented by a *revision*. When changing
+    the Pod template of a Deployment—for example, by updating the image—the Deployment
+    triggers the creation of a new ReplicaSet. The Deployment will gradually migrate
+    the Pods from the old ReplicaSet to the new one. You can check the rollout history
+    by running the following command. You will see two revisions listed:'
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 会在滚动历史中跟踪您对 Deployment 所做的更改。每个更改由一个 *修订版* 表示。当更改 Deployment 的 Pod
+    模板（例如通过更新图像）时，Deployment 会触发新的 ReplicaSet 的创建。Deployment 将逐步将 Pods 从旧 ReplicaSet
+    迁移到新 ReplicaSet。您可以通过运行以下命令来检查滚动历史记录。您将看到列出的两个修订版：
+- en: '[PRE14]'
+  id: totrans-68
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: The first revision was recorded for the original state of the Deployment when
+    you created the object. The second revision was added for changing the image tag.
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 第一个修订版记录了创建对象时 Deployment 的原始状态。第二个修订版是为更改图像标签而添加的。
+- en: Note
+  id: totrans-70
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: By default, a Deployment persists for a maximum of 10 revisions in its history.
+    You can change the limit by assigning a different value to `spec.revisionHistoryLimit`.
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，Deployment 在其历史记录中持续保留最多 10 个修订版。您可以通过为 `spec.revisionHistoryLimit` 分配不同的值来更改此限制。
+- en: 'To get a more detailed view of the revision, run the following command. You
+    can see that the image uses the value `memcached:1.6.10`:'
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要获取修订版的更详细视图，请运行以下命令。您可以看到图像使用值 `memcached:1.6.10`：
+- en: '[PRE15]'
+  id: totrans-73
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: The rolling update strategy ensures that the application is always available
+    to end users. This approach implies that two versions of the same application
+    are available during the update process. As an application developer, you have
+    to be aware that convenience doesn’t come without potential side effects. If you
+    happen to introduce a breaking change to the public API of your application, you
+    might temporarily break consumers, as they could hit revision 1 or 2 of the application.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 滚动更新策略确保应用程序始终对最终用户可用。此方法意味着在更新过程中会有两个版本的同一应用程序可用。作为应用程序开发者，您必须意识到便利并非没有潜在的副作用。如果您碰巧对应用程序的公共
+    API 引入了破坏性更改，可能会暂时破坏消费者，因为他们可能会访问应用程序的修订版 1 或 2。
+- en: You can change the default update strategy of a Deployment by providing a different
+    value to the attribute `spec.strategy.type`; however, consider the trade-offs.
+    For example, the value `Recreate` kills all Pods first, then creates new Pods
+    with the latest revision, causing potential downtime for consumers. See [Chapter 11](ch11.xhtml#deployment_strategies)
+    for a more detailed description of common deployment strategies.
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以通过为属性 `spec.strategy.type` 提供不同的值来更改 Deployment 的默认更新策略；然而，请考虑其中的权衡。例如，值
+    `Recreate` 首先终止所有 Pods，然后创建具有最新修订版的新 Pods，可能会导致消费者的潜在停机时间。请参阅 [第 11 章](ch11.xhtml#deployment_strategies)
+    以获取常见部署策略的更详细描述。
+- en: Adding a Change Cause for a Revision
+  id: totrans-76
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 为修订版添加更改原因
+- en: The rollout history renders the column `CHANGE-CAUSE`. You can populate the
+    information for a revision to document *why* you introduced a new change or *which*
+    `kubectl` command you use to make the change.
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 滚动历史显示列 `CHANGE-CAUSE`。您可以填写修订版的信息来记录 *为什么* 您引入了新更改或者 *使用了* 哪个 `kubectl` 命令来进行更改。
+- en: 'By default, changing the Pod template does not automatically record a change
+    cause. To add a change cause to the current revision, add an annotation with the
+    reserved key `kubernetes.io/change-cause` to the Deployment object. The following
+    imperative `annotate` command assigns the change cause “Image updated to 1.6.10”:'
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，更改 Pod 模板不会自动记录变更原因。要为当前版本添加变更原因，请向 Deployment 对象添加具有保留键 `kubernetes.io/change-cause`
+    的注释。以下命令使用 `annotate` 命令分配变更原因“Image updated to 1.6.10”：
+- en: '[PRE16]'
+  id: totrans-79
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: 'The rollout history now renders the change cause value for the current revision:'
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在回滚历史记录会显示当前版本的变更原因值：
+- en: '[PRE17]'
+  id: totrans-81
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: Rolling Back to a Previous Revision
+  id: totrans-82
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 回滚到以前的版本
+- en: 'Problems can arise in production that require swift action. For example, the
+    container image you just rolled out contains a crucial bug. Kubernetes gives you
+    the option to roll back to one of the previous revisions in the rollout history.
+    You can achieve this by using the `rollout undo` command. To pick a specific revision,
+    provide the command-line option `--to-revision`. The command rolls back to the
+    previous revision if you do not provide the option. Here, we are rolling back
+    to revision 1:'
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在生产环境中可能会出现需要快速处理的问题。例如，您刚刚发布的容器镜像包含一个关键的 bug。Kubernetes 允许您在发布历史中回滚到以前的某个版本。您可以使用
+    `rollout undo` 命令来实现这一点。要选择特定版本，请提供命令行选项 `--to-revision`。如果不提供选项，该命令将回滚到上一个版本。在这里，我们正在回滚到版本
+    1：
+- en: '[PRE18]'
+  id: totrans-84
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: As a result, Kubernetes performs a rolling update to all replicas with the revision
+    1.
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，Kubernetes 对具有版本 1 的所有副本执行滚动更新。
+- en: Rollbacks and persistent data
+  id: totrans-86
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 回滚和持久数据
+- en: The `rollout undo` command does not restore any persistent data associated with
+    applications. Rather, it simply restores to a new instance of the previous declared
+    state of the ReplicaSet.
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`rollout undo` 命令不会恢复与应用程序关联的任何持久数据。相反，它只是恢复到 ReplicaSet 的先前声明状态的新实例。'
+- en: 'The rollout history now lists revision 3\. Given that we rolled back to revision
+    1, there’s no more need to keep that entry as a duplicate. Kubernetes simply turns
+    revision 1 into 3 and removes 1 from the list:'
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在回滚历史记录显示版本 3。鉴于我们已经回滚到版本 1，没有必要保留该条目作为重复项。Kubernetes 简单地将版本 1 变为 3 并从列表中删除
+    1：
+- en: '[PRE19]'
+  id: totrans-89
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: Scaling Workloads
+  id: totrans-90
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 扩展工作负载
+- en: Scalability is one of Kubernetes’ built-in capabilities. We’ll learn how to
+    manually scale the number of replicas as a reaction to increased application load.
+    Furthermore, we’ll talk about the API resource Horizontal Pod Autoscaler, which
+    allows you to automatically scale the managed set of Pods based on resource thresholds
+    such as CPU and memory.
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 扩展性是 Kubernetes 内置的能力之一。我们将学习如何在应用程序负载增加时手动扩展副本数量。此外，我们将讨论 API 资源 Horizontal
+    Pod Autoscaler，它允许您根据 CPU 和内存等资源阈值自动扩展管理的 Pod 集。
+- en: Manually Scaling a Deployment
+  id: totrans-92
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 手动扩展部署
+- en: 'Scaling (up or down) the number of replicas controlled by a Deployment is a
+    straightforward process. You can either manually edit the live object using the
+    `edit deployment` command and change the value of the attribute `spec.replicas`,
+    or you can use the imperative `scale deployment` command. In real-world production
+    environments, you want to edit the Deployment YAML manifest, check it into version
+    control, and apply the changes. The following command increases the number of
+    replicas from four to six:'
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 扩展（增加或减少）由 Deployment 控制的副本数量是一个简单的过程。您可以使用 `edit deployment` 命令手动编辑活动对象，并更改
+    `spec.replicas` 属性的值，也可以使用命令式的 `scale deployment` 命令。在现实世界的生产环境中，您希望编辑 Deployment
+    YAML 清单，将其检入版本控制，并应用更改。以下命令将副本数量从四个增加到六个：
+- en: '[PRE20]'
+  id: totrans-94
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: 'You can observe the creation of replicas in real time using the `-w` command
+    line flag. You’ll see a change of status for the newly created Pods turning from
+    `ContainerCreat⁠ing` to `Running`:'
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用 `-w` 命令行标志实时观察副本的创建过程。您将看到新创建的 Pod 的状态从 `ContainerCreating` 变为 `Running`
+    的变化：
+- en: '[PRE21]'
+  id: totrans-96
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: Manually scaling the number of replicas takes a bit of guesswork. You will still
+    have to monitor the load on your system to see if your number of replicas is sufficient
+    to handle the incoming traffic.
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 手动扩展副本数量需要一些猜测工作。您仍然需要监视系统的负载，以查看您的副本数量是否足以处理传入的流量。
+- en: Autoscaling a Deployment
+  id: totrans-98
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 自动扩展部署
+- en: Another way to scale a Deployment is with the help of a Horizontal Pod Autoscaler
+    (HPA). The HPA is an API primitive that defines rules for automatically scaling
+    the number of replicas under certain conditions. Common scaling conditions include
+    a target value, an average value, or an average utilization of a specific metric
+    (e.g., for CPU and/or memory). Refer to the [MetricTarget API](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#metrictarget-v2-autoscaling)
+    for more information.
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一种缩放部署的方法是借助水平 Pod 自动伸缩器（HPA）。HPA 是一个 API 原语，定义了在特定条件下自动调整副本数量的规则。常见的缩放条件包括目标值、平均值或特定指标（例如
+    CPU 和/或内存）的平均利用率。更多信息请参阅 [MetricTarget API](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#metrictarget-v2-autoscaling)。
+- en: Let’s say you want to define average CPU utilization of CPU as the scaling condition.
+    At runtime, the HPA checks the metrics collected by the [metrics server](https://oreil.ly/Lmamb)
+    to determine if the average maximum CPU or memory usage across all replicas of
+    a Deployment is less than or greater than the defined threshold. Make sure that
+    you have the metrics server installed in the cluster. Collecting metrics may take
+    a couple of minutes initially after installing the component. See [“Inspecting
+    Resource Metrics”](ch15.xhtml#metrics_server) for more information.
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设您想定义 CPU 利用率的平均 CPU 作为缩放条件。在运行时，HPA 检查由 [metrics server](https://oreil.ly/Lmamb)
+    收集的指标，以确定部署的所有副本的平均最大 CPU 或内存使用是否低于或高于定义的阈值。确保在集群中安装了 metrics server。安装组件后，收集指标可能需要几分钟时间。有关更多信息，请参阅
+    [“Inspecting Resource Metrics”](ch15.xhtml#metrics_server)。
+- en: '[Figure 10-3](#autoscaling_deployment) shows an overview architecture diagram
+    involving an HPA.'
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 10-3](#autoscaling_deployment) 展示了涉及 HPA 的概述架构图。'
+- en: '![ckd2 1003](Images/ckd2_1003.png)'
+  id: totrans-102
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckd2 1003](Images/ckd2_1003.png)'
+- en: Figure 10-3\. Autoscaling a Deployment
+  id: totrans-103
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 10-3\. 自动缩放部署
+- en: Creating Horizontal Pod Autoscalers
+  id: totrans-104
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 创建水平 Pod 自动伸缩器
+- en: '[Figure 10-4](#horizonal_pod_autoscaler) shows the use of an HPA that will
+    scale up the number of replicas if an average of 80% CPU utilization is reached
+    across all available Pods controlled by the Deployment.'
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 10-4](#horizonal_pod_autoscaler) 显示了一个 HPA 的使用情况，如果所有由部署控制的可用 Pod 的平均 CPU
+    利用率达到 80%，将扩展副本数量。'
+- en: '![ckd2 1004](Images/ckd2_1004.png)'
+  id: totrans-106
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckd2 1004](Images/ckd2_1004.png)'
+- en: Figure 10-4\. Autoscaling a Deployment horizontally
+  id: totrans-107
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 10-4\. 自动缩放部署的水平扩展
+- en: 'You can use the `autoscale deployment` command to create an HPA for an existing
+    Deployment. The option `--cpu-percent` defines the average maximum CPU usage threshold.
+    At the time of writing, the imperative command doesn’t offer an option for defining
+    the average maximum memory utilization threshold. The options `--min` and `--max`
+    provide the minimum number of replicas to scale down to and the maximum number
+    of replicas the HPA can create to handle the increased load, respectively:'
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用`autoscale deployment`命令为现有部署创建一个 HPA。选项`--cpu-percent`定义了平均最大 CPU 使用阈值。在撰写本文时，该命令并未提供用于定义平均最大内存利用率阈值的选项。选项`--min`和`--max`分别提供了要缩减到的最小副本数量以及
+    HPA 可以创建以处理增加负载的最大副本数量：
+- en: '[PRE22]'
+  id: totrans-109
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: This command is a great shortcut for creating an HPA for a Deployment. The YAML
+    manifest representation of the HPA object looks like [Example 10-2](#yaml_manifest_hpa).
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个命令是创建部署的 HPA 的一个很好的快捷方式。HPA 对象的 YAML 清单表示看起来像是 [示例 10-2](#yaml_manifest_hpa)。
+- en: Example 10-2\. A YAML manifest for an HPA
+  id: totrans-111
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 10-2\. HPA 的 YAML 清单
+- en: '[PRE23]'
+  id: totrans-112
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: Listing Horizontal Pod Autoscalers
+  id: totrans-113
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 列出水平 Pod 自动伸缩器
+- en: 'The short-form command for a Horizontal Pod Autoscaler is `hpa`. Listing all
+    of the HPA objects transparently describes their current state: the CPU utilization
+    and the number of replicas at this time:'
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 水平 Pod 自动伸缩器的简写命令是 `hpa`。透明列出所有 HPA 对象描述了它们当前的状态：此时的 CPU 利用率和副本数量：
+- en: '[PRE24]'
+  id: totrans-115
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: If the Pod template of the Deployment does not define CPU resource requirements
+    or if the CPU metrics cannot be retrieved from the metrics server, the left-side
+    value of the column `TARGETS` says <unknown>. [Example 10-3](#cpu_resource_requirements_pod_template)
+    sets the resource requirements for the Pod template so that the HPA can work properly.
+    You can learn more about defining resource requirements in [“Working with Resource
+    Requirements”](ch18.xhtml#container_resource_requirements).
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果部署的 Pod 模板未定义 CPU 资源要求，或者无法从指标服务器检索 CPU 指标，则“目标”列的左侧值显示为 <unknown>。[示例 10-3](#cpu_resource_requirements_pod_template)
+    设置了 Pod 模板的资源要求，以便 HPA 可正常工作。您可以在 [“使用资源要求”](ch18.xhtml#container_resource_requirements)
+    中了解更多有关定义资源要求的信息。
+- en: Example 10-3\. Setting CPU resource requirements for Pod template
+  id: totrans-117
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 10-3\. 为 Pod 模板设置 CPU 资源要求
+- en: '[PRE25]'
+  id: totrans-118
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE25]'
+- en: 'Once traffic hits the replicas, the current CPU usage is shown as a percentage.
+    Here the average maximum CPU utilization is 15%:'
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦流量到达副本，当前的 CPU 使用率将显示为百分比。这里的平均最大 CPU 利用率为 15%：
+- en: '[PRE26]'
+  id: totrans-120
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE26]'
+- en: Rendering Horizontal Pod Autoscaler Details
+  id: totrans-121
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 渲染水平 Pod 自动扩展器详细信息
+- en: 'The event log of an HPA can provide additional insight into the rescaling activities.
+    Rendering the HPA details can be a great tool for overseeing when the number of
+    replicas was scaled up or down, as well as their scaling conditions:'
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: HPA 的事件日志可以提供有关重新调整活动的额外见解。渲染 HPA 详细信息可以是监控何时扩展副本数以及其扩展条件的强大工具：
+- en: '[PRE27]'
+  id: totrans-123
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE27]'
+- en: Defining Multiple Scaling Metrics
+  id: totrans-124
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 定义多个扩展度量
+- en: You can define more than a single resource type as a scaling metric. As you
+    can see in [Example 10-4](#autoscaler_hpa), we are inspecting CPU and memory utilization
+    to determine if the replicas of a Deployment need to be scaled up or down.
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以将多个资源类型定义为扩展度量。如 [示例 10-4](#autoscaler_hpa) 所示，我们正在检查 CPU 和内存利用率，以确定是否需要扩展或缩小部署的副本。
+- en: Example 10-4\. A YAML manifest for a HPA with multiple metrics
+  id: totrans-126
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 10-4\. 具有多个指标的 HPA 的 YAML 清单
+- en: '[PRE28]'
+  id: totrans-127
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE28]'
+- en: To ensure that the HPA determines the currently used resources, we’ll set the
+    memory resource requirements for the Pod template as well, as shown in [Example 10-5](#memory_resource_requirements_pod_template).
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了确保 HPA 确定当前使用的资源，我们还将为 Pod 模板设置内存资源要求，如 [示例 10-5](#memory_resource_requirements_pod_template)
+    所示。
+- en: Example 10-5\. Setting memory resource requirements for Pod template
+  id: totrans-129
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 10-5\. 为 Pod 模板设置内存资源要求
+- en: '[PRE29]'
+  id: totrans-130
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE29]'
+- en: 'Listing the HPA renders both metrics in the `TARGETS` column, as in the output
+    of the `get` command shown here:'
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 列出 HPA 时会显示“目标”列中的两个指标，如此处显示的 `get` 命令的输出：
+- en: '[PRE30]'
+  id: totrans-132
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE30]'
+- en: Summary
+  id: totrans-133
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 摘要
+- en: The Deployment is an essential primitive for providing declarative updates and
+    life cycle management of Pods. The ReplicaSet performs the heavy lifting of managing
+    those Pods, commonly referred to as replicas. Application developers do not have
+    to interact directly with the ReplicaSet; a Deployment manages the ReplicaSet
+    under the hood.
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 部署是 Kubernetes 提供声明性更新和 Pod 生命周期管理的基本原语。ReplicaSet 执行管理这些 Pod（通常称为副本）的繁重工作。应用程序开发人员无需直接与
+    ReplicaSet 交互；部署在幕后管理 ReplicaSet。
+- en: Deployments can easily roll out and roll back revisions of the application represented
+    by an image running in the container. In this chapter you learned about the commands
+    for controlling the revision history and its operations. Scaling a Deployment
+    manually requires deep insight into the requirements and the load of an application.
+    A Horizontal Pod Autoscaler can automatically scale the number of replicas based
+    on CPU and memory thresholds observed at runtime.
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 部署可以轻松地推出和回滚由容器中运行的镜像表示的应用程序的修订版。在本章中，您学习了控制修订历史及其操作的命令。手动扩展部署需要深入了解应用程序的需求和负载。水平
+    Pod 自动扩展器可以根据运行时观察到的 CPU 和内存阈值自动扩展副本的数量。
+- en: Exam Essentials
+  id: totrans-136
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 考试要点
+- en: Know the ins and outs of a Deployment
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 详细了解部署的各个方面
+- en: Given that a Deployment is such a central primitive in Kubernetes, you can expect
+    that the exam will test you on it. Know how to create a Deployment and learn how
+    to scale to multiple replicas. One of the superior features of a Deployment is
+    its rollout functionality for new revisions. Practice how to roll out a new revision,
+    inspect the rollout history, and roll back to a previous revision.
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 考虑到部署在 Kubernetes 中是一个如此核心的原语，您可以期待考试将在此方面对您进行测试。了解如何创建部署并学习如何扩展到多个副本。部署的一个卓越特性是其新修订的推出功能。练习如何推出新的修订版，检查推出历史记录，并回滚到先前的修订版。
+- en: Understand the implications of using a Horizontal Pod Autoscaler
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 理解使用水平Pod Autoscaler的影响
+- en: The number of replicas controlled by a Deployment can be scaled up or down using
+    the Horizontal Pod Autoscaler (HPA). An HPA defines thresholds for resources like
+    CPU and memory that will tell the object that a scaling event needs to happen.
+    It’s important to understand that the HPA functions properly only if you install
+    the metrics server component and define resource requests and limits for containers.
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由Deployment控制的副本数量可以使用Horizontal Pod Autoscaler（HPA）进行缩放。HPA定义资源（如CPU和内存）的阈值，告诉对象需要进行缩放事件。重要的是要了解，只有在安装度量服务器组件并为容器定义资源请求和限制时，HPA才能正常工作。
+- en: Sample Exercises
+  id: totrans-141
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 示例练习
+- en: Solutions to these exercises are available in [Appendix A](app01_split_006.xhtml#appendix_a_deployments).
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些练习的解决方案在[附录A](app01_split_006.xhtml#appendix_a_deployments)中提供。
+- en: Create a Deployment named `nginx` with 3 replicas. The Pods should use the `nginx:1.23.0`
+    image and the name `nginx`. The Deployment uses the label `tier=backend`. The
+    Pod template should use the label `app=v1`.
+  id: totrans-143
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 创建名为`nginx`的Deployment，有3个副本。Pod应使用`nginx:1.23.0`镜像，名称为`nginx`。Deployment使用标签`tier=backend`。Pod模板应使用标签`app=v1`。
+- en: List the Deployment and ensure that the correct number of replicas is running.
+  id: totrans-144
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 列出Deployment并确保正在运行正确数量的副本。
+- en: Update the image to `nginx:1.23.4`.
+  id: totrans-145
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 将镜像更新为`nginx:1.23.4`。
+- en: Verify that the change has been rolled out to all replicas.
+  id: totrans-146
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 验证变更已部署到所有副本。
+- en: Assign the change cause “Pick up patch version” to the revision.
+  id: totrans-147
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 将变更原因“拾取补丁版本”分配给修订版本。
+- en: Scale the Deployment to 5 replicas.
+  id: totrans-148
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 将Deployment缩放到5个副本。
+- en: Have a look at the Deployment rollout history. Revert the Deployment to revision
+    1.
+  id: totrans-149
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 查看Deployment的部署历史。将Deployment回滚到修订版本1。
+- en: Ensure that the Pods use the image `nginx:1.23.0`.
+  id: totrans-150
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 确保Pod使用镜像`nginx:1.23.0`。
+- en: Create a Deployment named `nginx` with 1 replica. The Pod template of the Deployment
+    should use container image `nginx:1.23.4`; set the CPU resource request to 0.5
+    and the memory resource request/limit to 500Mi.
+  id: totrans-151
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 创建名为`nginx`的Deployment，有1个副本。Deployment的Pod模板应使用容器镜像`nginx:1.23.4`；将CPU资源请求设置为0.5，内存资源请求/限制设置为500Mi。
+- en: Create a HorizontalPodAutoscaler for the Deployment named `nginx-hpa` that scales
+    to a minimum of 3 and a maximum of 8 replicas. Scaling should happen based on
+    an average CPU utilization of 75% and an average memory utilization of 60%.
+  id: totrans-152
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 为名为`nginx-hpa`的Deployment创建HorizontalPodAutoscaler，其最小缩放到3个副本，最大缩放到8个副本。缩放应基于平均CPU利用率75%和平均内存利用率60%。
+- en: Inspect the HorizontalPodAutoscaler object and identify the currently-utilized
+    resources. How many replicas do you expect to exist?
+  id: totrans-153
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 检查HorizontalPodAutoscaler对象并确定当前使用的资源。您期望存在多少副本？

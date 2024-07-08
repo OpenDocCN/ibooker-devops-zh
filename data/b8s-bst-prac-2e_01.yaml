@@ -1,0 +1,1108 @@
+- en: Chapter 1\. Setting Up a Basic Service
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第1章\. 设置基本服务
+- en: 'This chapter describes the procedure for setting up a simple multitier application
+    in Kubernetes. The example we’ll walk through consists of two tiers: a simple
+    web application and a database. Though this might not be the most complicated
+    application, it is a good place to start when learning to manage an application
+    in Kubernetes.'
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本章描述了在Kubernetes中设置简单多层应用程序的步骤。我们将详细介绍的示例由两个层组成：一个简单的Web应用程序和一个数据库。尽管这可能不是最复杂的应用程序，但这是学习在Kubernetes中管理应用程序时的一个很好的起点。
+- en: Application Overview
+  id: totrans-2
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 应用程序概述
+- en: 'The application that we will use for our example is fairly straightforward.
+    It’s a simple journal service with the following details:'
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们示例中将使用的应用程序非常简单直接。它是一个带有以下细节的简单日志服务：
+- en: It has a separate static file server using NGINX.
+  id: totrans-4
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 它使用NGINX运行一个独立的静态文件服务器。
+- en: It has a RESTful application programming interface (API) https://some-host-name.io/api
+    on the */api* path.
+  id: totrans-5
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 它在*/api*路径上有一个RESTful应用程序编程接口（API）https://some-host-name.io/api。
+- en: It has a file server on the main URL, https://some-host-name.io.
+  id: totrans-6
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 它在主URL上有一个文件服务器，https://some-host-name.io。
+- en: It uses the [Let’s Encrypt service](https://oreil.ly/7XN3G) for managing Secure
+    Sockets Layer (SSL).
+  id: totrans-7
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 它使用[Let’s Encrypt服务](https://oreil.ly/7XN3G)来管理安全套接字层（SSL）。
+- en: '[Figure 1-1](#figure-0101) presents a diagram of this application. Don’t be
+    worried if you don’t understand all the pieces right away; they will be explained
+    in greater detail throughout the chapter. We’ll walk through building this application
+    step by step, first using YAML configuration files and then Helm charts.'
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图1-1](#figure-0101)展示了该应用程序的图表。如果您一时不理解所有部件，不要担心；它们将在本章节中详细解释。我们将逐步构建这个应用程序，首先使用YAML配置文件，然后使用Helm图表。'
+- en: '![Application Diagram](assets/kbp2_0101.png)'
+  id: totrans-9
+  prefs: []
+  type: TYPE_IMG
+  zh: '![应用程序图表](assets/kbp2_0101.png)'
+- en: Figure 1-1\. A diagram of our journal service as it is deployed in Kubernetes
+  id: totrans-10
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图1-1\. 作为部署在Kubernetes中的日志服务的图表
+- en: Managing Configuration Files
+  id: totrans-11
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 管理配置文件
+- en: Before we get into the details of how to construct this application in Kubernetes,
+    it is worth discussing how we manage the configurations themselves. With Kubernetes,
+    everything is represented *declaratively*. This means that you write down the
+    desired state of the application in the cluster (generally in YAML or JSON files),
+    and these declared desired states define all the pieces of your application. This
+    declarative approach is far preferable to an *imperative* approach in which the
+    state of your cluster is the sum of a series of changes to the cluster. If a cluster
+    is configured imperatively, it is difficult to understand and replicate how the
+    cluster came to be in that state, making it challenging to understand or recover
+    from problems with your application.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在深入研究如何在Kubernetes中构建此应用程序的细节之前，讨论如何管理配置本身是值得的。在Kubernetes中，一切都是*声明性*的。这意味着您在集群中编写应用程序的期望状态（通常是YAML或JSON文件），这些声明的期望状态定义了应用程序的所有部分。这种声明性方法远比*命令式*方法更可取，后者的集群状态是对集群一系列更改的总和。如果集群以命令式方式配置，那么理解和复制集群如何达到该状态是困难的，这使得理解或解决应用程序问题变得具有挑战性。
+- en: When declaring the state of your application, people typically prefer YAML to
+    JSON, though Kubernetes supports them both. This is because YAML is somewhat less
+    verbose and more human editable than JSON. However, it’s worth noting that YAML
+    is indentation sensitive; often errors in Kubernetes configurations can be traced
+    to incorrect indentation in YAML. If things aren’t behaving as expected, checking
+    your indentation is a good place to start troubleshooting. Most editors have syntax
+    highlighting support for both JSON and YAML. When working with these files it
+    is a good idea to install such tools to make it easier to find both author and
+    file errors in your configurations. There is also an excellent extension for Visual
+    Studio Code that supports richer error checking for Kubernetes files.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在声明应用程序状态时，人们通常更喜欢YAML而不是JSON，尽管Kubernetes支持两者。这是因为YAML比JSON略微不那么冗长，更适合人类编辑。然而，值得注意的是，YAML对缩进很敏感；在Kubernetes配置中经常会出现由于YAML中不正确的缩进而导致的错误。如果应用程序的行为不如预期，检查缩进是开始故障排除的一个好方法。大多数编辑器都支持JSON和YAML的语法高亮显示。在处理这些文件时，安装这样的工具以便更容易找到配置中的作者和文件错误是一个好主意。还有一个优秀的Visual
+    Studio Code扩展，支持Kubernetes文件的更丰富的错误检查。
+- en: Because the declarative state contained in these YAML files serves as the source
+    of truth for your application, correct management of this state is critical to
+    the success of your application. When modifying your application’s desired state,
+    you will want to be able to manage changes, validate that they are correct, audit
+    who made changes, and possibly roll things back if they fail. Fortunately, in
+    the context of software engineering, we have already developed the tools necessary
+    to manage both changes to the declarative state as well as audit and rollback.
+    Namely, the best practices around both version control and code review directly
+    apply to the task of managing the declarative state of your application.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于这些 YAML 文件中包含的声明性状态作为应用程序的真相来源，正确管理这种状态对应用程序的成功至关重要。在修改应用程序的期望状态时，您希望能够管理更改，验证其正确性，审计谁进行了更改，并在失败时可能回滚。幸运的是，在软件工程的背景下，我们已经开发了管理声明性状态以及审计和回滚所需工具。换句话说，围绕版本控制和代码审查的最佳实践直接适用于管理应用程序的声明性状态的任务。
+- en: These days most people store their Kubernetes configurations in Git. Though
+    the specific details of the version control system are unimportant, many tools
+    in the Kubernetes ecosystem expect files in a Git repository. For code review
+    there is much more heterogeneity; though clearly GitHub is quite popular, others
+    use on-premises code review tools or services. Regardless of how you implement
+    code review for your application configuration, you should treat it with the same
+    diligence and focus that you apply to source control.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如今，大多数人将他们的 Kubernetes 配置存储在 Git 中。尽管版本控制系统的具体细节并不重要，但 Kubernetes 生态系统中的许多工具都期望在
+    Git 存储库中找到文件。对于代码审查，存在更多的异构性；尽管显然 GitHub 非常受欢迎，但其他人使用本地代码审查工具或服务。无论您如何为应用程序配置实施代码审查，都应该像对待源代码控制一样认真和专注。
+- en: When it comes to laying out the filesystem for your application, it’s worthwhile
+    to use the directory organization that comes with the filesystem to organize your
+    components. Typically, a single directory is used to encompass an *Application
+    Service*. The definition of what constitutes an Application Service can vary in
+    size from team to team, but generally, it is a service developed by a team of
+    8–12 people. Within that directory, subdirectories are used for subcomponents
+    of the application.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在为应用程序布置文件系统时，值得使用文件系统提供的目录组织来组织您的组件。通常，一个单独的目录用于包含一个*应用服务*。构成应用服务的定义在团队之间的大小可能有所不同，但通常是由
+    8-12 人团队开发的服务。在该目录中，子目录用于应用程序的子组件。
+- en: 'For our application, we lay out the files as follows:'
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于我们的应用程序，我们将文件布置如下：
+- en: '[PRE0]'
+  id: totrans-18
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: Within each directory are the concrete YAML files needed to define the service.
+    As you’ll see later on, as we begin to deploy our application to multiple different
+    regions or clusters, this file layout will become more complicated.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在每个目录中都有定义服务所需的具体 YAML 文件。随着我们开始将应用程序部署到多个不同的区域或集群时，您将看到这种文件布局会变得更加复杂。
+- en: Creating a Replicated Service Using Deployments
+  id: totrans-20
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用部署创建复制服务
+- en: To describe our application, we’ll begin at the frontend and work downward.
+    The frontend application for the journal is a Node.js application implemented
+    in TypeScript. The [complete application](https://oreil.ly/70kFT) is too large
+    to include in the book, so we’ve hosted it on our GitHub. You’ll be able to find
+    code for future examples there, too, so it’s worth bookmarking. The application
+    exposes an HTTP service on port 8080 that serves requests to the */api/** path
+    and uses the Redis backend to add, delete, or return the current journal entries.
+    If you plan to work through the YAML examples that follow on your local machine,
+    you’ll want to build this application into a container image using the Dockerfile
+    and push it to your own image repository. Then, rather than using our example
+    file name, you’ll want to include your container image name in your code.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要描述我们的应用程序，我们将从前端开始向下工作。期刊的前端应用程序是一个使用 TypeScript 实现的 Node.js 应用程序。[完整的应用程序](https://oreil.ly/70kFT)太大，无法包含在书中，因此我们将其托管在我们的
+    GitHub 上。您也可以在那里找到未来示例的代码，因此值得收藏。该应用程序在端口 8080 上公开一个 HTTP 服务，用于服务 */api/** 路径的请求，并使用
+    Redis 后端来添加、删除或返回当前的期刊条目。如果您计划在本地计算机上使用后续的 YAML 示例，请使用 Dockerfile 将此应用程序构建为容器映像，并将其推送到您自己的映像存储库。然后，您将需要在代码中包含您的容器映像名称，而不是使用我们的示例文件名。
+- en: Best Practices for Image Management
+  id: totrans-22
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 图像管理的最佳实践
+- en: Though in general, building and maintaining container images is beyond the scope
+    of this book, it’s worthwhile to identify some general best practices for building
+    and naming images. In general, the image build process can be vulnerable to “supply-chain
+    attacks.” In such attacks, a malicious user injects code or binaries into some
+    dependency from a trusted source that is then built into your application. Because
+    of the risk of such attacks, it is critical that when you build your images you
+    base them on only well-known and trusted image providers. Alternatively, you can
+    build all your images from scratch. Building from scratch is easy for some languages
+    (e.g., Go) that can build static binaries, but it is significantly more complicated
+    for interpreted languages like Python, JavaScript, or Ruby.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然总体上，构建和维护容器镜像超出了本书的范围，但确定一些通用的最佳实践以进行镜像构建和命名仍然是值得的。总体上，镜像构建过程可能容易受到“供应链攻击”的影响。在这种攻击中，恶意用户将代码或二进制文件注入到来自受信任源的某个依赖项中，然后构建到您的应用程序中。因为存在这种攻击的风险，因此在构建镜像时，基于仅知名和可信的镜像提供者是至关重要的。或者，您可以从头开始构建所有镜像。对于某些语言（例如
+    Go），构建静态二进制文件很容易，但对于像 Python、JavaScript 或 Ruby 这样的解释性语言来说，则复杂得多。
+- en: The other best practices for images relate to naming. Though the version of
+    a container image in an image registry is theoretically mutable, you should treat
+    the version tag as immutable. In particular, some combination of the semantic
+    version and the SHA hash of the commit where the image was built is a good practice
+    for naming images (e.g., *v1.0.1-bfeda01f*). If you don’t specify an image version,
+    `latest` is used by default. Although this can be convenient in development, it
+    is a bad idea for production usage because `latest` is clearly being mutated every
+    time a new image is built.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 关于镜像的其他最佳实践与命名有关。尽管镜像注册表中容器镜像的版本理论上是可变的，但应将版本标签视为不可变。特别是，使用语义版本和构建镜像的提交的 SHA
+    散列的组合作为命名镜像的良好实践（例如，*v1.0.1-bfeda01f*）。如果不指定镜像版本，则默认使用 `latest`。尽管这在开发中可能很方便，但在生产环境中使用
+    `latest` 是一个不好的做法，因为每次构建新镜像时 `latest` 明显在变化。
+- en: Creating a Replicated Application
+  id: totrans-25
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 创建一个复制的应用程序
+- en: Our frontend application is *stateless*; it relies entirely on the Redis backend
+    for its state. As a result, we can replicate it arbitrarily without affecting
+    traffic. Though our application is unlikely to sustain large-scale usage, it’s
+    still a good idea to run with at least two replicas so that you can handle an
+    unexpected crash or roll out a new version of the application without downtime.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们的前端应用程序是*无状态*的；它完全依赖于 Redis 后端来维护其状态。因此，我们可以随意复制它，而不会影响流量。虽然我们的应用程序不太可能支持大规模使用，但最好仍然至少运行两个副本，以便能够处理意外崩溃或无需停机即可推出新版本的应用程序。
+- en: In Kubernetes, the ReplicaSet resource is the one that directly manages replicating
+    a specific version of your containerized application. Since the version of all
+    applications changes over time as you modify the code, it is not a best practice
+    to use a ReplicaSet directly. Instead, you use the Deployment resource. A Deployment
+    combines the replication capabilities of ReplicaSet with versioning and the ability
+    to perform a staged rollout. By using a Deployment you can use Kubernetes’ built-in
+    tooling to move from one version of the application to the next.
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 中，ReplicaSet 资源直接管理复制容器化应用程序的特定版本。由于随着代码修改，所有应用程序的版本都会随时间变化，直接使用
+    ReplicaSet 并不是最佳实践。相反，应使用 Deployment 资源。Deployment 结合了 ReplicaSet 的复制功能与版本控制以及执行分阶段部署的能力。通过使用
+    Deployment，您可以利用 Kubernetes 的内置工具从一个应用程序版本迁移到下一个版本。
+- en: 'The Kubernetes Deployment resource for our application looks as follows:'
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们应用程序的 Kubernetes Deployment 资源如下所示：
+- en: '[PRE1]'
+  id: totrans-29
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: 'There are several things to note in this Deployment. First is that we are using
+    Labels to identify the Deployment as well as the ReplicaSets and the pods that
+    the Deployment creates. We’ve added the `app: frontend` label to all these resources
+    so that we can examine all resources for a particular layer in a single request.
+    You’ll see that as we add other resources, we’ll follow the same practice.'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '在这个 Deployment 中需要注意的几个事项。首先是我们使用 Labels 来标识 Deployment、ReplicaSets 和 Deployment
+    创建的 pod。我们为所有这些资源添加了 `app: frontend` 标签，以便可以在单个请求中检查特定层的所有资源。随着我们添加其他资源，您将看到我们将遵循同样的实践。'
+- en: Additionally, we’ve added comments in a number of places in the YAML. Although
+    these comments don’t make it into the Kubernetes resource stored on the server,
+    just like comments in code, they serve to guide people who are looking at this
+    configuration for the first time.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另外，我们在 YAML 中的许多地方添加了注释。虽然这些注释不会出现在存储在服务器上的 Kubernetes 资源中，就像代码中的注释一样，它们用于指导第一次查看此配置的人员。
+- en: You should also note that for the containers in the Deployment we have specified
+    both Request and Limit resource requests, and we’ve set Request equal to Limit.
+    When running an application, the Request is the reservation that is guaranteed
+    on the host machine where it runs. The Limit is the maximum resource usage that
+    the container will be allowed. When you are starting out, setting Request equal
+    to Limit will lead to the most predictable behavior of your application. This
+    predictability comes at the expense of resource utilization. Because setting Request
+    equal to Limit prevents your applications from overscheduling or consuming excess
+    idle resources, you will not be able to drive maximal utilization unless you tune
+    Request and Limit very, very carefully. As you become more advanced in your understanding
+    of the Kubernetes resource model, you might consider modifying Request and Limit
+    for your application independently, but in general most users find that the stability
+    from predictability is worth the reduced utilization.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你还应该注意，在我们的 Deployment 中为容器指定了请求和限制资源请求，我们已将请求设置为限制。在运行应用程序时，请求是保证在运行的主机机器上的预留。限制是容器被允许的最大资源使用量。当您刚开始时，将请求设置为限制将导致应用程序的行为最可预测。这种可预测性是以资源利用率为代价的。因为将请求设置为限制会防止您的应用程序过度调度或消耗过多的空闲资源，所以除非您非常仔细地调整请求和限制，否则您将无法实现最大利用率。随着您对
+    Kubernetes 资源模型的理解越来越深入，您可能会考虑独立地修改应用程序的请求和限制，但总体而言，大多数用户发现从可预测性中获得的稳定性值得降低利用率。
+- en: Often times, as our comment suggests, it is difficult to know the right values
+    for these resource limits. Starting by overestimating the estimates and then using
+    monitoring to tune to the right values is a pretty good approach. However, if
+    you are launching a new service, remember that the first time you see large-scale
+    traffic, your resource needs will likely increase significantly. Additionally,
+    there are some languages, especially garbage-collected languages, that will happily
+    consume all available memory, which can make it difficult to determine the correct
+    minimum for memory. In this case, some form of binary search may be necessary,
+    but remember to do this in a test environment so that it doesn’t affect your production!
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常情况下，正如我们的评论所示，很难知道这些资源限制的正确值。首先高估估计值，然后使用监控来调整到正确的值是一个相当不错的方法。然而，如果您正在启动一个新的服务，请记住，第一次看到大规模流量时，您的资源需求可能会显著增加。此外，有些语言，特别是垃圾回收语言，会愉快地消耗所有可用内存，这可能会使确定内存正确最小值变得困难。在这种情况下，可能需要进行某种形式的二分搜索，但请记住要在测试环境中执行此操作，以免影响生产环境！
+- en: 'Now that we have the Deployment resource defined, we’ll check it into version
+    control, and deploy it to Kubernetes:'
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经定义了 Deployment 资源，我们将其提交到版本控制，并将其部署到 Kubernetes 中。
+- en: '[PRE2]'
+  id: totrans-35
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: It is also a best practice to ensure that the contents of your cluster exactly
+    match the contents of your source control. The best pattern to ensure this is
+    to adopt a GitOps approach and deploy to production only from a specific branch
+    of your source control, using continuous integration/continuous delivery (CI/CD)
+    automation. In this way you’re guaranteed that source control and production match.
+    Though a full CI/CD pipeline might seem excessive for a simple application, the
+    automation by itself, independent of the reliability it provides, is usually worth
+    the time taken to set it up. And CI/CD is extremely difficult to retrofit into
+    an existing, imperatively deployed application.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 确保您的集群内容与源控件的内容完全匹配也是最佳实践。确保这一点的最佳模式是采用 GitOps 方法，并仅从源控件的特定分支中部署到生产环境，使用持续集成/持续交付（CI/CD）自动化。通过这种方式，您可以确保源控件和生产环境匹配。尽管对于一个简单的应用程序来说，完整的
+    CI/CD 管道可能看起来过于复杂，但自动化本身独立于它提供的可靠性，通常都是花时间设置的值得。而将 CI/CD 管道应用于现有的命令式部署的应用程序则非常困难。
+- en: We’ll come back to this application description YAML in later sections to examine
+    additional elements such as the ConfigMap and secret volumes as well as pod Quality
+    of Service.
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将在后续章节回顾此应用程序描述的YAML，以检查其他元素，如ConfigMap和secret卷，以及Pod的服务质量。
+- en: Setting Up an External Ingress for HTTP Traffic
+  id: totrans-38
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 设置用于HTTP流量的外部Ingress
+- en: The containers for our application are now deployed, but it’s not currently
+    possible for anyone to access the application. By default, cluster resources are
+    available only within the cluster itself. To expose our application to the world,
+    we need to create a service and load balancer to provide an external IP address
+    and to bring traffic to our containers. For the external exposure we are going
+    to use two Kubernetes resources. The first is a service that load-balances Transmission
+    Control Protocol (TCP) or User Datagram Protocol (UDP) traffic. In our case, we’re
+    using the TCP protocol. And the second is an Ingress resource, which provides
+    HTTP(S) load balancing with intelligent routing of requests based on HTTP paths
+    and hosts. With a simple application like this, you might wonder why we choose
+    to use the more complex Ingress, but as you’ll see in later sections, even this
+    simple application will be serving HTTP requests from two different services.
+    Furthermore, having an Ingress at the edge enables flexibility for future expansion
+    of our service.
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们的应用程序容器已经部署，但目前任何人都无法访问该应用程序。默认情况下，集群资源仅在集群内部可用。为了将我们的应用程序暴露给外部世界，我们需要创建一个服务和负载均衡器，以提供外部IP地址并将流量引导到我们的容器。为了进行外部暴露，我们将使用两个Kubernetes资源。第一个是负载均衡传输控制协议（TCP）或用户数据报协议（UDP）流量的服务。在我们的情况下，我们使用的是TCP协议。第二个是Ingress资源，它提供基于HTTP路径和主机的HTTP（S）负载均衡请求智能路由。对于像这样简单的应用程序，您可能会想知道为什么选择使用更复杂的Ingress，但正如您将在后续章节中看到的，即使是这样简单的应用程序也将为来自两个不同服务的HTTP请求提供服务。此外，在边缘部署Ingress使得未来扩展我们的服务变得更加灵活。
+- en: Note
+  id: totrans-40
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The Ingress resource is one of the older resources in Kubernetes, and over the
+    years numerous issues have been raised with the way that it models HTTP access
+    to microservices. This has led to the development of the Gateway API for Kubernetes.
+    The Gateway API has been designed as an extension to Kubernetes and requires additional
+    components to be installed in your cluster. If you find that Ingress doesn’t meet
+    your needs, consider moving to the Gateway API.
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Ingress资源是Kubernetes中较早的资源之一，多年来已经提出了许多关于它如何模拟对微服务的HTTP访问的问题。这导致开发了适用于Kubernetes的Gateway
+    API。Gateway API被设计为Kubernetes的扩展，需要在您的集群中安装额外的组件。如果发现Ingress不能满足您的需求，请考虑转向Gateway
+    API。
+- en: 'Before the Ingress resource can be defined, there needs to be a Kubernetes
+    Service for the Ingress to point to. We’ll use Labels to direct the Service to
+    the pods that we created in the previous section. The Service is significantly
+    simpler to define than the Deployment and looks as follows:'
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在定义Ingress资源之前，需要为Ingress指向的Kubernetes服务创建一个Kubernetes服务。我们将使用标签来将服务指向我们在上一节中创建的Pod。与部署相比，服务的定义要简单得多，如下所示：
+- en: '[PRE3]'
+  id: totrans-43
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'After you’ve defined the Service, you can define an Ingress resource. Unlike
+    Service resources, Ingress requires an Ingress controller container to be running
+    in the cluster. There are a number of different implementations you can choose
+    from, either offered by your cloud provider, or implemented using open source
+    servers. If you choose to install an open source Ingress provider, it’s a good
+    idea to use the [Helm package manager](https://helm.sh) to install and maintain
+    it. The `nginx` or `haproxy` Ingress providers are popular choices:'
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在定义了服务之后，您可以定义一个Ingress资源。与服务资源不同，Ingress需要在集群中运行一个Ingress控制器容器。您可以选择多种不同的实现方式，可以是您的云提供商提供的，也可以使用开源服务器来实现。如果选择安装开源Ingress提供程序，建议使用[Helm软件包管理器](https://helm.sh)来安装和维护它。流行的选择有`nginx`或`haproxy`
+    Ingress提供程序：
+- en: '[PRE4]'
+  id: totrans-45
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: With our Ingress resource created, our application is ready to serve traffic
+    from web browsers around the world. Next, we’ll look at how you can set up your
+    application for easy configuration and customization.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有了我们创建的Ingress资源，我们的应用程序已经准备好为全球的Web浏览器提供流量服务。接下来，我们将看看如何设置应用程序以便进行简单的配置和定制。
+- en: Configuring an Application with ConfigMaps
+  id: totrans-47
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用ConfigMaps配置应用程序
+- en: Every application needs a degree of configuration. This could be the number
+    of journal entries to display per page, the color of a particular background,
+    a special holiday display, or many other types of configuration. Typically, separating
+    such configuration information from the application itself is a best practice
+    to follow.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个应用程序都需要一定程度的配置。这可能包括每页显示的日志条目数、特定背景的颜色、特殊假期显示，或者其他类型的配置。通常，将这些配置信息与应用程序本身分开是一种最佳实践。
+- en: There are several reasons for this separation. The first is that you might want
+    to configure the same application binary with different configurations depending
+    on the setting. In Europe you might want to light up an Easter special, whereas
+    in China you might want to display a special for Chinese New Year. In addition
+    to this environmental specialization, there are agility reasons for the separation.
+    Usually a binary release contains multiple different new features; if you turn
+    on these features via code, the only way to modify the active features is to build
+    and release a new binary, which can be an expensive and slow process.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有几个原因需要进行这种分离。首先，你可能希望根据不同的设置配置相同的应用程序二进制文件。在欧洲，你可能希望推出复活节特别活动，而在中国，你可能希望展示中国新年的特别活动。除了这种环境专业化外，分离还有敏捷性的原因。通常一个二进制发布包含多个不同的新功能；如果通过代码打开这些功能，修改活动功能的唯一方法是构建和发布新的二进制文件，这可能是一个昂贵和缓慢的过程。
+- en: The use of configuration to activate a set of features means that you can quickly
+    (and even dynamically) activate and deactivate features in response to user needs
+    or application code failures. Features can be rolled out and rolled back on a
+    per-feature basis. This flexibility ensures that you are continually making forward
+    progress with most features even if some need to be rolled back to address performance
+    or correctness problems.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用配置来激活一组功能意味着你可以快速（甚至动态地）根据用户需求或应用程序代码失败来激活和停用功能。功能可以按功能单元进行推出和回滚。这种灵活性确保你即使需要回滚以解决性能或正确性问题，也能持续推进大多数功能。
+- en: 'In Kubernetes this sort of configuration is represented by a resource called
+    a ConfigMap. A ConfigMap contains multiple key/value pairs representing configuration
+    information or a file. This configuration information can be presented to a container
+    in a pod via either files or environment variables. Imagine that you want to configure
+    your online journal application to display a configurable number of journal entries
+    per page. To achieve this, you can define a ConfigMap as follows:'
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 中，这种配置被称为 ConfigMap 资源。ConfigMap 包含多个键值对，表示配置信息或文件。这些配置信息可以通过文件或环境变量的方式提供给
+    Pod 中的容器。假设你想要配置你的在线日志应用程序，以显示每页可配置的日志条目数量。为了实现这一点，你可以定义一个如下的 ConfigMap：
+- en: '[PRE5]'
+  id: totrans-52
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'To configure your application, you expose the configuration information as
+    an environment variable in the application itself. To do that, you can add the
+    following to the `container` resource in the Deployment that you defined earlier:'
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要配置你的应用程序，你需要在应用程序本身中将配置信息公开为一个环境变量。为了实现这一点，你可以将以下内容添加到之前定义的 Deployment 的 `container`
+    资源中：
+- en: '[PRE6]'
+  id: totrans-54
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: 'Although this demonstrates how you can use a ConfigMap to configure your application,
+    in the real world of Deployments, you’ll want to roll out regular changes to this
+    configuration at least weekly. It might be tempting to roll this out by simply
+    changing the ConfigMap itself, but this isn’t really a best practice, for reasons:
+    the first is that changing the configuration doesn’t actually trigger an update
+    to existing pods. The configuration is applied only when the pod is restarted.
+    As a result, the rollout isn’t health based and can be ad hoc or random. Another
+    reason is that the only versioning for the ConfigMap is in your version control,
+    and it can be very difficult to perform a rollback.'
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管这演示了如何使用 ConfigMap 配置你的应用程序，但在实际的部署环境中，你至少每周需要对这些配置进行定期更改。可能会诱惑你简单地通过改变 ConfigMap
+    自身来进行这些更改，但这并不是一个最佳实践，原因如下：首先，改变配置实际上并不会触发对现有 Pod 的更新。配置只有在 Pod 重新启动时才会应用。因此，部署并不是基于健康状况进行的，可能是临时或随机的。另一个原因是，ConfigMap
+    的唯一版本控制在你的版本控制中，而执行回滚可能非常困难。
+- en: A better approach is to put a version number in the name of the ConfigMap itself.
+    Instead of calling it `frontend-config`, call it `frontend-config-v1`. When you
+    want to make a change, instead of updating the ConfigMap in place, you create
+    a new `v2` ConfigMap, and then update the Deployment resource to use that configuration.
+    When you do this, a Deployment rollout is automatically triggered, using the appropriate
+    health checking and pauses between changes. Furthermore, if you ever need to roll
+    back, the `v1` configuration is sitting in the cluster and rollback is as simple
+    as updating the Deployment again.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 更好的方法是在ConfigMap的名称中放入版本号。不要称其为`frontend-config`，而是称其为`frontend-config-v1`。当您想要进行更改时，不要直接更新ConfigMap，而是创建一个新的`v2`
+    ConfigMap，然后更新Deployment资源以使用该配置。当您执行此操作时，将自动触发Deployment的滚动升级，使用适当的健康检查和更改之间的暂停。此外，如果您需要回滚，`v1`配置仍然保存在集群中，回滚只需再次更新Deployment即可。
+- en: Managing Authentication with Secrets
+  id: totrans-57
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用秘密管理身份验证
+- en: So far, we haven’t really discussed the Redis service to which our frontend
+    is connecting. But in any real application we need to secure connections between
+    our services. In part, this is to ensure the security of users and their data,
+    and in addition, it is essential to prevent mistakes like connecting a development
+    frontend with a production database.
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，我们并没有真正讨论我们的前端连接的Redis服务。但在任何实际应用程序中，我们需要保护服务之间的连接。部分原因是确保用户及其数据的安全，此外，防止诸如将开发前端与生产数据库连接的错误也是至关重要的。
+- en: The Redis database is authenticated using a simple password. It might be convenient
+    to think that you would store this password in the source code of your application,
+    or in a file in your image, but these are both bad ideas for a variety of reasons.
+    The first is that you have leaked your secret (the password) into an environment
+    where you aren’t necessarily thinking about access control. If you put a password
+    into your source control, you are aligning access to your source with access to
+    all secrets. This isn’t the best course of action because you will probably have
+    a broader set of users who can access your source code than should really have
+    access to your Redis instance. Likewise, someone who has access to your container
+    image shouldn’t necessarily have access to your production database.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Redis数据库使用简单密码进行身份验证。或许方便的想法是将此密码存储在应用程序的源代码中，或者在镜像的文件中，但这些都是因为各种原因不好的做法。首先，您已经泄露了您的秘密（密码），使其进入了一个您并没有考虑访问控制的环境。如果您将密码放入源代码控制中，您就是将源代码访问权限与所有秘密的访问权限对齐。这不是最佳行动，因为可以访问您的源代码的用户群体可能比真正应该访问您的Redis实例的用户群体要广泛。同样，能够访问您的容器镜像的人不一定应该访问您的生产数据库。
+- en: In addition to concerns about access control, another reason to avoid binding
+    secrets to source control and/or images is parameterization. You want to be able
+    to use the same source code and images in a variety of environments (e.g., development,
+    canary, and production). If the secrets are tightly bound in source code or an
+    image, you need a different image (or different code) for each environment.
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了访问控制的考虑之外，避免将秘密绑定到源代码和/或镜像的另一个原因是参数化。您希望能够在各种环境（例如开发、金丝雀和生产）中使用相同的源代码和镜像。如果秘密紧密绑定在源代码或镜像中，则需要为每个环境使用不同的镜像（或不同的代码）。
+- en: Having seen ConfigMaps in the previous section, you might immediately think
+    that the password could be stored as a configuration and then populated into the
+    application as an application-specific configuration. You’re absolutely correct
+    to believe that the separation of configuration from application is the same as
+    the separation of secrets from application. But the truth is that a secret is
+    an important concept by itself. You likely want to handle access control, handling,
+    and updates of secrets in a different way than a configuration. More important,
+    you want your developers *thinking* differently when they are accessing secrets
+    than when they are accessing configuration. For these reasons, Kubernetes has
+    a built-in Secret resource for managing secret data.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在前一节看到ConfigMaps后，您可能立即认为密码可以存储为配置，然后作为特定于应用程序的配置填充到应用程序中。您绝对正确，认为配置与应用程序的分离与秘密与应用程序的分离是相同的。但事实是，秘密本身是一个重要的概念。您可能希望以不同于配置的方式处理秘密的访问控制、处理和更新。更重要的是，您希望您的开发人员在访问秘密时与访问配置时有不同的思考方式。因此，Kubernetes为管理秘密数据提供了内置的Secret资源。
+- en: 'You can create a secret password for your Redis database as follows:'
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可以如下创建 Redis 数据库的秘密密码：
+- en: '[PRE7]'
+  id: totrans-63
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: Obviously, you might want to use something other than a random number for your
+    password. Additionally, you likely want to use a secret/key management service,
+    either via your cloud provider, like Microsoft Azure Key Vault, or an open source
+    project, like HashiCorp’s Vault. When you are using a key management service,
+    they generally have tighter integration with Kubernetes secrets.
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 显然，你可能希望为你的密码使用比随机数更复杂的内容。此外，你可能想要使用秘密/密钥管理服务，可以是你的云提供商如 Microsoft Azure Key
+    Vault，也可以是开源项目如 HashiCorp 的 Vault。当使用密钥管理服务时，它们通常与 Kubernetes Secrets 有更紧密的集成。
+- en: After you have stored the Redis password as a secret in Kubernetes, you then
+    need to *bind* that secret to the running application when deployed to Kubernetes.
+    To do this, you can use a Kubernetes Volume. A Volume is effectively a file or
+    directory that can be mounted into a running container at a user-specified location.
+    In the case of secrets, the Volume is created as a tmpfs RAM-backed filesystem
+    and then mounted into the container. This ensures that even if the machine is
+    physically compromised (quite unlikely in the cloud, but possible in the datacenter),
+    the secrets are much more difficult for an attacker to obtain.
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 中将 Redis 密码存储为一个 Secret 后，你需要在将应用程序部署到 Kubernetes 后，将该 Secret *绑定*
+    到运行中的应用程序。为此，可以使用 Kubernetes Volume。Volume 实际上是一个文件或目录，可以挂载到运行容器中的用户指定位置。对于 Secrets，Volume
+    被创建为 tmpfs 内存支持的文件系统，然后挂载到容器中。这样即使机器被物理攻击（在云中不太可能，但在数据中心可能），对攻击者来说获取 Secrets 将更加困难。
+- en: Note
+  id: totrans-66
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Secrets in Kubernetes are stored unencrypted by default. If you want to store
+    secrets encrypted, you can integrate with a key provider to give you a key that
+    Kubernetes will use to encrypt all the secrets in the cluster. Note that although
+    this secures the keys against direct attacks to the `etcd` database, you still
+    need to ensure that access via the Kubernetes API server is properly secured.
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 中的 Secrets 默认以明文形式存储。如果你希望以加密方式存储 Secrets，可以集成密钥提供者，以获取一个由 Kubernetes
+    使用的密钥，用于加密集群中的所有 Secrets。请注意，虽然这样可以保护密钥免受对 `etcd` 数据库的直接攻击，但仍需确保通过 Kubernetes
+    API 服务器的访问得到适当的安全保护。
+- en: 'To add a secret Volume to a Deployment, you need to specify two new entries
+    in the YAML for the Deployment. The first is a `volume` entry for the pod that
+    adds the Volume to the pod:'
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要将秘密 Volume 添加到部署中，你需要在部署的 YAML 文件中指定两个新条目。第一个是为 Pod 添加 Volume 的 `volume` 条目：
+- en: '[PRE8]'
+  id: totrans-69
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: 'Container Storage Interface (CSI) drivers enable you to use key management
+    systems (KMS) that are located outside of your Kubernetes cluster. This is often
+    a requirement for compliance and security within large or regulated organizations.
+    If you use one of these CSI drivers your Volume would instead look like:'
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Container Storage Interface (CSI) 驱动程序使你能够使用位于 Kubernetes 集群外部的密钥管理系统（KMS）。这通常是大型或受管制组织内部合规性和安全性的要求。如果使用这些
+    CSI 驱动程序之一，你的 Volume 将会如下所示：
+- en: '[PRE9]'
+  id: totrans-71
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: 'Regardless of which method you use, with the Volume defined in the pod, you
+    need to mount it into a specific container. You do this via the `volumeMounts`
+    field in the container description:'
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 无论你使用哪种方法，在 Pod 中定义了 Volume 后，你需要将其挂载到特定的容器中。你可以通过容器描述中的 `volumeMounts` 字段来实现这一点：
+- en: '[PRE10]'
+  id: totrans-73
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: 'This mounts the secret Volume into the `redis-passwd` directory for access
+    from the client code. Putting this all together, you have the complete Deployment
+    as follows:'
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这将秘密 Volume 挂载到 `redis-passwd` 目录，以便客户端代码访问。将这一切组合起来，你将得到完整的部署如下所示：
+- en: '[PRE11]'
+  id: totrans-75
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: At this point we have configured the client application to have a secret available
+    to authenticate to the Redis service. Configuring Redis to use this password is
+    similar; we mount it into the Redis pod and load the password from the file.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，我们已经配置了客户端应用程序，使其可以使用秘密进行身份验证以连接到 Redis 服务。配置 Redis 使用这个密码类似；我们将其挂载到 Redis
+    Pod 并从文件中加载密码。
+- en: Deploying a Simple Stateful Database
+  id: totrans-77
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 部署一个简单的有状态数据库
+- en: Although conceptually deploying a stateful application is similar to deploying
+    a client like our frontend, state brings with it more complications. The first
+    is that in Kubernetes a pod can be rescheduled for a number of reasons, such as
+    node health, an upgrade, or rebalancing. When this happens, the pod might move
+    to a different machine. If the data associated with the Redis instance is located
+    on any particular machine or within the container itself, that data will be lost
+    when the container migrates or restarts. To prevent this, when running stateful
+    workloads in Kubernetes it’s important to use remote *PersistentVolume*s to manage
+    the state associated with the application.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管在概念上部署有状态应用类似于部署像我们的前端这样的客户端，但状态带来了更多的复杂性。首先，在 Kubernetes 中，Pod 可能因为节点健康问题、升级或重新平衡等原因而重新调度。当发生这种情况时，Pod
+    可能会迁移到另一台机器上。如果 Redis 实例的数据位于任何特定的机器上或容器内部，那么当容器迁移或重新启动时，该数据将会丢失。为了防止这种情况发生，在
+    Kubernetes 中运行有状态工作负载时，使用远程 *PersistentVolume* 管理应用程序关联的状态非常重要。
+- en: There are a wide variety of implementations of PersistentVolumes in Kubernetes,
+    but they all share common characteristics. Like secret Volumes described earlier,
+    they are associated with a pod and mounted into a container at a particular location.
+    Unlike secrets, PersistentVolumes are generally remote storage mounted through
+    some sort of network protocol, either file based, such as Network File System
+    (NFS) or Server Message Block (SMB), or block based (iSCSI, cloud-based disks,
+    etc.). Generally, for applications such as databases, block-based disks are preferable
+    because they offer better performance, but if performance is less of a consideration,
+    file-based disks sometimes offer greater flexibility.
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 中，有各种实现持久卷（PersistentVolumes），但它们都有共同的特点。像前面描述的密钥卷一样，它们与一个 Pod
+    相关联，并被挂载到容器的特定位置。与密钥不同的是，持久卷通常是通过某种网络协议挂载的远程存储，可以是基于文件的，例如网络文件系统（NFS）或服务器消息块（SMB），也可以是基于块的（iSCSI、云磁盘等）。一般来说，对于像数据库这样的应用，基于块的磁盘更可取，因为它们提供更好的性能，但如果性能不是首要考虑因素，有时基于文件的磁盘提供了更大的灵活性。
+- en: Note
+  id: totrans-80
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Managing state in general is complicated, and Kubernetes is no exception. If
+    you are running in an environment that supports stateful services (e.g., MySQL
+    as a service, Redis as a service), it is generally a good idea to use those stateful
+    services. Initially, the cost premium of a stateful software as a service (SaaS)
+    might seem expensive, but when you factor in all the operational requirements
+    of state (backup, data locality, redundancy, etc.), and the fact that the presence
+    of state in a Kubernetes cluster makes it difficult to move applications between
+    clusters, it becomes clear that, in most cases, storage SaaS is worth the price
+    premium. In on-premises environments where storage SaaS isn’t available, having
+    a dedicated team provide storage as a service to the entire organization is definitely
+    a better practice than allowing each team to build it themselves.
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 管理一般状态是复杂的，Kubernetes 也不例外。如果在支持有状态服务的环境中运行（例如 MySQL 作为服务、Redis 作为服务），通常最好使用这些有状态服务。最初，有状态软件即服务（SaaS）的成本溢价可能看起来很高，但考虑到状态的所有操作要求（备份、数据本地性、冗余等）以及在
+    Kubernetes 集群中存在状态会使应用程序难以在集群之间移动，大多数情况下，存储 SaaS 是值得额外花费的。在本地环境中，如果没有存储 SaaS 可用，那么有一个专门的团队为整个组织提供存储作为服务绝对比允许每个团队自行构建要好。
+- en: To deploy our Redis service, we use a StatefulSet resource. Added after the
+    initial Kubernetes release as a complement to ReplicaSet resources, a StatefulSet
+    gives slightly stronger guarantees such as consistent names (no random hashes!)
+    and a defined order for scale-up and scale-down. When you are deploying a singleton,
+    this is somewhat less important, but when you want to deploy replicated state,
+    these attributes are very convenient.
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要部署我们的 Redis 服务，我们使用 StatefulSet 资源。StatefulSet 在初始 Kubernetes 发布后作为 ReplicaSet
+    资源的补充添加，它提供了稍微更强的保证，如一致的名称（没有随机哈希！）和定义的扩展和缩减顺序。当部署单实例时，这些可能不太重要，但当您想要部署复制状态时，这些属性非常方便。
+- en: To obtain a PersistentVolume for our Redis, we use a PersistentVolumeClaim.
+    You can think of a claim as a “request for resources.” Our Redis declares abstractly
+    that it wants 50 GB of storage, and the Kubernetes cluster determines how to provision
+    an appropriate PersistentVolume. There are two reasons for this. The first is
+    so we can write a StatefulSet that is portable between different clouds and on
+    premises, where the details of disks might be different. The other reason is that
+    although many PersistentVolume types can be mounted to only a single pod, we can
+    use Volume claims to write a template that can be replicated and still have each
+    pod assigned its own specific PersistentVolume.
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要为我们的Redis获取一个PersistentVolume，我们使用PersistentVolumeClaim。您可以将声明视为“资源请求”。我们的Redis抽象地声明它需要50
+    GB的存储空间，Kubernetes集群决定如何提供适当的PersistentVolume。有两个原因。第一个是为了我们可以编写一个在不同云和本地部署之间可移植的StatefulSet，磁盘细节可能不同。另一个原因是，虽然许多PersistentVolume类型只能挂载到单个pod，我们可以使用Volume
+    claim编写一个模板，可以复制，并且每个pod仍然分配有自己特定的PersistentVolume。
+- en: 'The following example shows a Redis StatefulSet with PersistentVolumes:'
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下示例显示了一个具有PersistentVolumes的Redis StatefulSet：
+- en: '[PRE12]'
+  id: totrans-85
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: This deploys a single instance of your Redis service, but suppose you want to
+    replicate the Redis cluster for scale-out of reads and resiliency to failures.
+    To do this you obviously need to increase the number of replicas to three, but
+    you also need to ensure that the two new replicas connect to the write master
+    for Redis. We’ll see how to make this connection in the following section.
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这部署了您的Redis服务的单个实例，但假设您想要复制Redis集群以扩展读取和提高故障恢复能力。为此，您显然需要将副本数增加到三个，但您还需要确保两个新的副本连接到Redis的写主。我们将在下一节中看到如何进行此连接。
+- en: 'When you create the headless Service for the Redis StatefulSet, it creates
+    a DNS entry `redis-0.redis`; this is the IP address of the first replica. You
+    can use this to create a simple script that can launch in all the containers:'
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您为Redis StatefulSet创建无头服务时，它会创建一个DNS条目`redis-0.redis`；这是第一个副本的IP地址。您可以使用此条目在所有容器中启动一个简单的脚本：
+- en: '[PRE13]'
+  id: totrans-88
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: 'You can create this script as a ConfigMap:'
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以将此脚本创建为ConfigMap：
+- en: '[PRE14]'
+  id: totrans-90
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: You then add this ConfigMap to your StatefulSet and use it as the command for
+    the container. Let’s also add in the password for authentication that we created
+    earlier in the chapter.
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后，您将此ConfigMap添加到您的StatefulSet，并将其用作容器的命令。让我们还添加章节前面创建的用于身份验证的密码。
+- en: 'The complete three-replica Redis looks as follows:'
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 完整的三副本Redis如下所示：
+- en: '[PRE15]'
+  id: totrans-93
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: Now your Redis is clustered for fault tolerance. If any one of the three Redis
+    replicas fails for any reason, your application can keep running with the two
+    remaining replicas until the third replica is restored.
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在您的Redis已经集群化以实现容错。如果任何一个三个Redis副本因任何原因失败，您的应用程序可以继续运行，直到第三个副本被恢复。
+- en: Creating a TCP Load Balancer by Using Services
+  id: totrans-95
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用服务创建TCP负载均衡器
+- en: 'Now that we’ve deployed the stateful Redis service, we need to make it available
+    to our frontend. To do this, we create two different Kubernetes Services. The
+    first is the Service for reading data from Redis. Because Redis is replicating
+    the data to all three members of the StatefulSet, we don’t care which read our
+    request goes to. Consequently, we use a basic Service for the reads:'
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经部署了有状态的Redis服务，我们需要将其提供给我们的前端。为此，我们创建了两个不同的Kubernetes服务。第一个是用于从Redis读取数据的服务。因为Redis将数据复制到StatefulSet的所有三个成员中，我们不关心我们的请求去哪里读取。因此，我们使用了一个基本的读取服务：
+- en: '[PRE16]'
+  id: totrans-97
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: 'To enable writes, you need to target the Redis master (replica #0). To do this,
+    create a *headless* Service. A headless Service doesn’t have a cluster IP address;
+    instead, it programs a DNS entry for every pod in the StatefulSet. This means
+    that we can access our master via the `redis-0.redis` DNS name:'
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要启用写入，您需要定位Redis主（副本＃0）。为此，创建一个*headless*服务。无头服务没有集群IP地址；相反，它为StatefulSet中的每个pod编程了一个DNS条目。这意味着我们可以通过`redis-0.redis`
+    DNS名称访问我们的主节点：
+- en: '[PRE17]'
+  id: totrans-99
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: Thus, when we want to connect to Redis for writes or transactional read/write
+    pairs, we can build a separate write client connected to the `redis-0.redis-write`
+    server.
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，当我们希望连接Redis进行写入或事务读/写对时，我们可以构建一个单独的写客户端，连接到`redis-0.redis-write`服务器。
+- en: Using Ingress to Route Traffic to a Static File Server
+  id: totrans-101
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用Ingress将流量路由到静态文件服务器
+- en: The final component in our application is a *static file server*. The static
+    file server is responsible for serving HTML, CSS, JavaScript, and image files.
+    It’s both more efficient and more focused for us to separate static file serving
+    from our API serving frontend described earlier. We can easily use a high-performance
+    static off-the-shelf file server like NGINX to serve files while we allow our
+    development teams to focus on the code needed to implement our API.
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们应用的最后一个组件是*静态文件服务器*。静态文件服务器负责提供HTML、CSS、JavaScript和图像文件。将静态文件服务与之前描述的API服务前端分离，既更高效又更专注。我们可以轻松地使用像NGINX这样的高性能静态文件服务器来提供文件，同时允许我们的开发团队专注于实现API所需的代码。
+- en: 'Fortunately, the Ingress resource makes this sort of mini-microservice architecture
+    very easy. Just like the frontend, we can use a Deployment resource to describe
+    a replicated NGINX server. Let’s build the static images into the NGINX container
+    and deploy them to each replica. The Deployment resource looks as follows:'
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 幸运的是，Ingress资源使得这种微型微服务架构变得非常简单。就像前端一样，我们可以使用一个Deployment资源来描述一个复制的NGINX服务器。让我们将静态图像构建到NGINX容器中，并将它们部署到每个副本中。Deployment资源如下所示：
+- en: '[PRE18]'
+  id: totrans-104
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: 'Now that there is a replicated static web server up and running, you will likewise
+    create a Service resource to act as a load balancer:'
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在已经有一个复制的静态网页服务器正在运行，你也将创建一个服务资源作为负载均衡器：
+- en: '[PRE19]'
+  id: totrans-106
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: 'Now that you have a Service for your static file server, extend the Ingress
+    resource to contain the new path. It’s important to note that you must place the
+    `/` path *after* the `/api` path, or else it would subsume `/api` and direct API
+    requests to the static file server. The new Ingress looks like this:'
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在你已经为静态文件服务器创建了一个服务，扩展Ingress资源以包含新路径。重要的是要注意，必须将`/`路径放在`/api`路径*之后*，否则它将包含`/api`并将API请求指向静态文件服务器。新的Ingress如下所示：
+- en: '[PRE20]'
+  id: totrans-108
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: Now that you have set up an Ingress resource for your file server, in addition
+    to the Ingress for the API you set up earlier, the application’s user interface
+    is ready to use. Most modern applications combine static files, typically HTML
+    and JavaScript, with a dynamic API server implemented in a server-side programming
+    language like Java, .NET, or Go.
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在你已经为文件服务器设置了一个Ingress资源，除了之前设置的API的Ingress之外，应用的用户界面已经准备好使用了。大多数现代应用程序将静态文件（通常是HTML和JavaScript）与使用Java、.NET或Go等服务器端编程语言实现的动态API服务器结合在一起，更加高效。
+- en: Parameterizing Your Application by Using Helm
+  id: totrans-110
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用Helm通过参数化你的应用
+- en: Everything that we have discussed so far focuses on deploying a single instance
+    of our service to a single cluster. However, in reality, nearly every service
+    and every service team is going to need to deploy to multiple environments (even
+    if they share a cluster). Even if you are a single developer working on a single
+    application, you likely want to have at least a development version and a production
+    version of your application so that you can iterate and develop without breaking
+    production users. After you factor in integration testing and CI/CD, it’s likely
+    that even with a single service and a handful of developers, you’ll want to deploy
+    to at least three different environments, and possibly more if you consider handling
+    datacenter-level failures. Let’s explore a few options for deployment.
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，我们讨论的一切都集中在将服务的单个实例部署到单个集群上。然而，在现实中，几乎每个服务和每个服务团队都需要部署到多个环境（即使它们共享一个集群）。即使你是一个单独开发者，只工作于一个应用程序，你可能也想要至少有一个开发版本和一个生产版本的应用程序，以便你可以迭代和开发而不会影响生产用户。考虑到集成测试和CI/CD，即使是一个服务和一小撮开发人员，你可能也想要部署至少三种不同的环境，如果考虑处理数据中心级别的故障，可能还会更多。让我们探讨一些部署选项。
+- en: An initial failure mode for many teams is to simply copy the files from one
+    cluster to another. Instead of having a single *frontend/* directory, have a *frontend-production/*
+    and *frontend-development/* pair of directories. While this is a viable option,
+    it’s also dangerous because you are now in charge of ensuring that these files
+    remain synchronized with one another. If they were intended to be entirely identical,
+    this might be easy, but some skew between development and production is expected
+    because you will be developing new features. It’s critical that the skew is both
+    intentional and easily managed.
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于许多团队来说，最初的失败模式是简单地将文件从一个集群复制到另一个集群。不要只有一个*frontend/*目录，而是有一个*frontend-production/*和*frontend-development/*的目录对。虽然这是一个可行的选择，但也是危险的，因为现在你需要确保这些文件保持彼此同步。如果它们本来就应该完全相同，那么这可能很容易，但由于你将开发新功能，开发和生产之间可能会有一些偏差是预期的。关键是这种偏差既是有意的，又容易管理。
+- en: Another option to achieve this would be to use branches and version control,
+    with the production and development branches leading off from a central repository
+    and the differences between the branches clearly visible. This can be a viable
+    option for some teams, but the mechanics of moving between branches are challenging
+    when you want to simultaneously deploy software to different environments (e.g.,
+    a CI/CD system that deploys to a number of different cloud regions).
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个实现这一点的选项是使用分支和版本控制，生产和开发分支从一个中央仓库分开，并且分支之间的差异清晰可见。对一些团队来说，这可能是一个可行的选择，但当你想要同时将软件部署到不同环境（例如，一个部署到多个不同云区域的CI/CD系统）时，分支之间的移动机制是具有挑战性的。
+- en: Consequently, most people end up with a *templating system*. A templating system
+    combines templates, which form the centralized backbone of the application configuration,
+    with parameters that *specialize* the template to a specific environment configuration.
+    In this way, you can have a generally shared configuration, with intentional (and
+    easily understood) customization as needed. There are a variety of template systems
+    for Kubernetes, but the most popular by far is [Helm](https://helm.sh).
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，大多数人最终会使用一个*模板系统*。模板系统结合了模板，这些模板形成了应用程序配置的中心骨干，以及*专门化*模板以特定环境配置。通过这种方式，你可以拥有一个通常共享的配置，同时根据需要进行有意义（和易于理解）的定制。对于Kubernetes，有各种模板系统，但迄今为止最流行的是[Helm](https://helm.sh)。
+- en: In Helm, an application is packaged in a collection of files called a *chart*
+    (nautical jokes abound in the world of containers and Kubernetes).
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在Helm中，一个应用程序被打包成一组称为*chart*的文件（在容器和Kubernetes的世界中充满了航海笑话）。
+- en: 'A chart begins with a *chart.yaml* file, which defines the metadata for the
+    chart itself:'
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个chart以*chart.yaml*文件开始，该文件定义了chart本身的元数据：
+- en: '[PRE21]'
+  id: totrans-117
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: 'This file is placed in the root of the chart directory (e.g., *frontend/*).
+    Within this directory, there is a *templates* directory, which is where the templates
+    are placed. A template is basically a YAML file from the previous examples, with
+    some of the values in the file replaced with parameter references. For example,
+    imagine that you want to parameterize the number of replicas in your frontend.
+    Previously, here’s what the Deployment had:'
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个文件放在图表目录的根目录下（例如*frontend/*）。在这个目录中，有一个*templates*目录，其中放置了模板。模板基本上是前面示例中的一个YAML文件，其中一些值在文件中被替换为参数引用。例如，想象一下，你想要对前端的副本数量进行参数化。以前，部署中有这样的内容：
+- en: '[PRE22]'
+  id: totrans-119
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: 'In the template file (*frontend-deployment.tmpl*), it instead looks like the
+    following:'
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在模板文件（*frontend-deployment.tmpl*）中，它看起来像这样：
+- en: '[PRE23]'
+  id: totrans-121
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: 'This means that when you deploy the chart, you’ll substitute the value for
+    replicas with the appropriate parameter. The parameters themselves are defined
+    in a *values.yaml* file. There will be one values file per environment where the
+    application should be deployed. The values file for this simple chart would look
+    like this:'
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这意味着当你部署chart时，你将用适当的参数替换副本的值。这些参数本身在一个*values.yaml*文件中定义。每个应用程序应该部署的环境都会有一个values文件。对于这个简单的chart来说，values文件看起来像这样：
+- en: '[PRE24]'
+  id: totrans-123
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: 'Putting this all together, you can deploy this chart using the `helm` tool,
+    as follows:'
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 把这些全部结合起来，你可以使用`helm`工具来部署这个图表，如下所示：
+- en: '[PRE25]'
+  id: totrans-125
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE25]'
+- en: This parameterizes your application and deploys it to Kubernetes. Over time
+    these parameterizations will grow to encompass the variety of environments for
+    your application.
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这将使你的应用程序参数化并部署到Kubernetes中。随着时间的推移，这些参数化将增长，涵盖应用程序的各种环境。
+- en: Deploying Services Best Practices
+  id: totrans-127
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 部署服务最佳实践
+- en: 'Kubernetes is a powerful system that can seem complex. But setting up a basic
+    application for success can be straightforward if you use the following best practices:'
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes是一个功能强大的系统，看起来可能很复杂。但如果您遵循以下最佳实践，为应用程序的成功设置基本环境可能会很简单：
+- en: Most services should be deployed as Deployment resources. Deployments create
+    identical replicas for redundancy and scale.
+  id: totrans-129
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 大多数服务应该部署为部署资源。部署可以创建相同的副本以实现冗余和扩展。
+- en: Deployments can be exposed using a Service, which is effectively a load balancer.
+    A Service can be exposed either within a cluster (the default) or externally.
+    If you want to expose an HTTP application, you can use an Ingress controller to
+    add things like request routing and SSL.
+  id: totrans-130
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 可以使用服务来暴露部署，服务实际上是一个负载均衡器。服务可以在集群内（默认）或外部公开。如果要公开一个HTTP应用程序，可以使用Ingress控制器来添加诸如请求路由和SSL等功能。
+- en: Eventually you will want to parameterize your application to make its configuration
+    more reusable in different environments. Packaging tools like [Helm](https://helm.sh)
+    are the best choice for this kind of parameterization.
+  id: totrans-131
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 最终，您将希望参数化您的应用程序，以使其在不同环境中的配置更具重用性。像[Helm](https://helm.sh)这样的打包工具是进行这种参数化的最佳选择。
+- en: Summary
+  id: totrans-132
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 摘要
+- en: The application built in this chapter is a simple one, but it contains nearly
+    all the concepts you’ll need to build larger, more complicated applications. Understanding
+    how the pieces fit together and how to use foundational Kubernetes components
+    is key to successfully working with Kubernetes.
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本章构建的应用程序很简单，但几乎包含了构建更大更复杂应用所需的所有概念。理解各部分如何组合以及如何使用基础的Kubernetes组件是成功使用Kubernetes的关键。
+- en: Laying the correct foundation via version control, code review, and continuous
+    delivery of your service ensures that no matter what you build, it is built solidly.
+    As we go through the more advanced topics in subsequent chapters, keep this foundational
+    information in mind.
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过版本控制、代码审查和持续交付你的服务来奠定正确的基础，确保无论构建什么，都能够稳固地构建起来。当我们在接下来的章节中深入讨论更高级的主题时，请记住这些基础信息。

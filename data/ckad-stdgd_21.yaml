@@ -1,0 +1,1192 @@
+- en: Chapter 21\. Services
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第21章。服务
+- en: In [“Using a Pod’s IP Address for Network Communication”](ch05.xhtml#pod_network_communication),
+    we learned that you can communicate with a Pod by its IP address. A restart of
+    a Pod will automatically assign a new virtual cluster IP address. Therefore, other
+    parts of your system cannot rely on the Pod’s IP address if they need to talk
+    to one another.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[“使用Pod的IP地址进行网络通信”](ch05.xhtml#pod_network_communication)中，我们了解到可以通过其IP地址与Pod进行通信。重新启动Pod将自动分配新的虚拟集群IP地址。因此，如果需要彼此通信，则系统的其他部分不能依赖于Pod的IP地址。
+- en: Building a microservices architecture, where each of the components runs in
+    its own Pod with the need to communicate with each other through a stable network
+    interface, requires a different primitive, the Service.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 构建微服务架构，其中每个组件在其自己的Pod中运行，并需要通过稳定的网络接口相互通信，需要一个不同的原语，即服务。
+- en: The Service implements an abstraction layer on top of Pods, assigning a fixed
+    virtual IP fronting all the Pods with matching labels, and that virtual IP is
+    called Cluster IP. This chapter will focus on the ins and outs of Services, and
+    most importantly the exposure of Pods inside and outside of the cluster based
+    on their declared type.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 服务在Pod上实现了一个抽象层，为所有具有匹配标签的Pod分配一个固定的虚拟IP，并且该虚拟IP称为集群IP。本章将重点介绍服务的各个方面，尤其是基于声明类型在集群内外部暴露Pods的方法。
+- en: Accessing a Service in minikube
+  id: totrans-4
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 在minikube中访问服务
+- en: Accessing Services of type `NodePort` and `LoadBalancer` in minikube requires
+    special handling. Refer to the [documentation](https://minikube.sigs.k8s.io/docs/handbook/accessing/#getting-the-nodeport-using-the-service-command)
+    for detailed instructions.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在minikube中访问类型为`NodePort`和`LoadBalancer`的服务需要特殊处理。有关详细说明，请参阅[文档](https://minikube.sigs.k8s.io/docs/handbook/accessing/#getting-the-nodeport-using-the-service-command)。
+- en: Working with Services
+  id: totrans-6
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用服务
+- en: In a nutshell, Services provide discoverable names and load balancing to a set
+    of Pods. The Service remains agnostic from IP addresses with the help of the Kubernetes
+    DNS control-plane component, an aspect we’ll discuss in [“Discovering the Service
+    by DNS lookup”](Images/#discovering_service_by_dns_lookup). Similar to a Deployment,
+    the Service determines the Pods it works on with the help of label selection.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 简而言之，服务为一组Pod提供可发现的名称和负载平衡。服务利用Kubernetes DNS控制平面组件帮助保持对IP地址的不可知性，这是我们将在[“通过DNS查找发现服务”](Images/#discovering_service_by_dns_lookup)中讨论的一个方面。类似于部署，服务通过标签选择确定其工作的Pods。
+- en: '[Figure 21-1](#service_traffic_routing) illustrates the functionality. Pod
+    1 receives traffic as its assigned label matches with the label selection defined
+    in the Service. Pod 2 does not receive traffic as it defines a nonmatching label.'
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 21-1](#service_traffic_routing)说明了其功能。Pod 1接收流量，因为其分配的标签与服务中定义的标签选择匹配。Pod
+    2由于定义了不匹配的标签，因此不接收流量。'
+- en: '![ckd2 2101](Images/ckd2_2101.png)'
+  id: totrans-9
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckd2 2101](Images/ckd2_2101.png)'
+- en: Figure 21-1\. Service traffic routing based on label selection
+  id: totrans-10
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图21-1。基于标签选择的服务流量路由
+- en: Note that it is possible to create a Service without a label selector to support
+    other scenarios. Refer to the relevant [Kubernetes documentation](https://kubernetes.io/docs/concepts/services-networking/service/#services-without-selectors)
+    for more information.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，可以创建一个没有标签选择器的服务来支持其他场景。有关更多信息，请参阅相关的[Kubernetes文档](https://kubernetes.io/docs/concepts/services-networking/service/#services-without-selectors)。
+- en: Services and Deployments
+  id: totrans-12
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 服务与部署
+- en: Services are a complementary concept to Deployments. Services route network
+    traffic to a set of Pods, and Deployments manage a set of Pods, the replicas.
+    While you can use both concepts in isolation, it is recommended to use Deployments
+    and Services together. The primary reason is the ability to scale the number of
+    replicas and at the same time being able to expose an endpoint to funnel network
+    traffic to those Pods.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 服务是部署的补充概念。服务将网络流量路由到一组Pods，而部署则管理一组Pods，即副本。虽然可以单独使用这两个概念，但建议同时使用部署和服务。主要原因是能够扩展副本数量，并同时能够暴露端点以将网络流量引导到这些Pods。
+- en: Service Types
+  id: totrans-14
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 服务类型
+- en: Every Service defines a type. The type is responsible for exposing the Service
+    inside and/or outside of the cluster. [Table 21-1](#service_types) lists the Service
+    types relevant to the exam.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个服务定义了一种类型。这种类型负责在集群内部和/或外部公开服务。[表 21-1](#service_types)列出了与考试相关的服务类型。
+- en: Table 21-1\. Service types
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表21-1。服务类型
+- en: '| Type | Description |'
+  id: totrans-17
+  prefs: []
+  type: TYPE_TB
+  zh: '| 类型 | 描述 |'
+- en: '| --- | --- |'
+  id: totrans-18
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| [`ClusterIP`](#service_type_clusterip) | Exposes the Service on a cluster-internal
+    IP. Reachable only from within the cluster. Kubernetes uses a round-robin algorithm
+    to distribute traffic evenly among the targeted Pods. |'
+  id: totrans-19
+  prefs: []
+  type: TYPE_TB
+  zh: '| [`ClusterIP`](#service_type_clusterip) | 在集群内部 IP 上公开服务。仅从集群内部可访问。Kubernetes
+    使用循环算法在目标 Pod 之间均匀分布流量。 |'
+- en: '| [`NodePort`](#service_type_nodeport) | Exposes the Service on each node’s
+    IP address at a static port. Accessible from outside of the cluster. The Service
+    type does not provide any load balancing across multiple nodes. |'
+  id: totrans-20
+  prefs: []
+  type: TYPE_TB
+  zh: '| [`NodePort`](#service_type_nodeport) | 在每个节点的 IP 地址上以静态端口公开服务。从集群外部可访问。该服务类型不提供跨多个节点的负载均衡。
+    |'
+- en: '| [`Load` `Balancer`](#service_type_loadbalancer) | Exposes the Service externally
+    using a cloud provider’s load balancer. |'
+  id: totrans-21
+  prefs: []
+  type: TYPE_TB
+  zh: '| [`负载均衡器`](#service_type_loadbalancer) | 使用云提供商的负载均衡器将服务外部化。 |'
+- en: Other Service types, e.g. `ExternalName` or the headless Service, can be defined;
+    however, we’ll not address them in this book as they are not within the scope
+    of the exam. For more information, refer to the [Kubernetes documentation](https://kubernetes.io/docs/concepts/services-networking/service/).
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 其他服务类型，例如 `ExternalName` 或无头服务，可以定义；但由于它们不在考试范围内，本书不会对它们进行详细讨论。有关更多信息，请参阅 [Kubernetes
+    文档](https://kubernetes.io/docs/concepts/services-networking/service/)。
+- en: Service type inheritance
+  id: totrans-23
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 服务类型继承
+- en: The Service types just mentioned, `ClusterIP`, `NodePort`, and `LoadBalancer`,
+    make a Service accessible with different levels of exposure. It’s imperative to
+    understand that those Service types also build on top of each other. [Figure 21-2](#service_type_layers)
+    shows the relationship between different Service types.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 刚才提到的服务类型，`ClusterIP`、`NodePort` 和 `LoadBalancer`，使得服务在不同的暴露级别下可访问。理解这些服务类型也是至关重要的，因为它们是相互构建的。[图
+    21-2](#service_type_layers) 展示了不同服务类型之间的关系。
+- en: '![ckd2 2102](Images/ckd2_2102.png)'
+  id: totrans-25
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckd2 2102](Images/ckd2_2102.png)'
+- en: Figure 21-2\. Network accessibility characteristics for Service types
+  id: totrans-26
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 21-2. 服务类型的网络可访问性特征
+- en: For example, creating a Service of type `NodePort` means that the Service will
+    bear the network accessibility characteristics of a `ClusterIP` Service type as
+    well. In turn, a `NodePort` Service is accessible from within and from outside
+    of the cluster. This chapter demonstrates each Service type by example. You will
+    find references to the inherited exposure behavior in the following sections.
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，创建一个 `NodePort` 类型的服务意味着该服务将具有 `ClusterIP` 服务类型的网络可访问性特征。反过来，`NodePort` 服务可从集群内部和外部访问。本章通过示例演示每种服务类型。在接下来的章节中，您将找到对继承的暴露行为的引用。
+- en: When to use which Service type?
+  id: totrans-28
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 何时使用哪种服务类型？
+- en: When building a microservices architecture, the question arises which Service
+    type to choose to implement certain use cases. We briefly discuss this question
+    here.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在构建微服务架构时，一个问题是选择哪种服务类型来实现特定的使用案例。我们在这里简要讨论这个问题。
+- en: The `ClusterIP` Service type is suitable for use cases that call for exposing
+    a microservice to other Pods within the cluster. Say you have a frontend microservice
+    that needs to connect to one or many backend microservices. To properly implement
+    the scenario, you’d stand up a `ClusterIP` Service that routes traffic to the
+    backend Pods. The frontend Pods would then talk to that Service.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`ClusterIP` 服务类型适用于需要将微服务暴露给集群内其他 Pod 的用例。假设您有一个前端微服务需要连接一个或多个后端微服务。为了正确实现该场景，您将建立一个
+    `ClusterIP` 服务来路由流量到后端 Pod。然后，前端 Pod 将与该服务通信。'
+- en: The `NodePort` Service type is often mentioned as a way to expose an application
+    to consumers external to the cluster. Consumers will have to know the node’s IP
+    address and the statically assigned port to connect to the Service. That’s problematic
+    for multiple reasons. First, the node port is usually allocated dynamically. Therefore,
+    you won’t typically know it in advance. Second, providing the node’s IP address
+    will funnel the network traffic only through a single node so you will not have
+    load balancing at your disposal. Finally, by opening a publicly available node
+    port, you are at risk of increasing the attack surface of your cluster. For all
+    these reasons, a `NodePort` Service is primarily used for development or testing
+    purposes, and less so in production environments.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`NodePort`服务类型经常被提及作为一种向外部消费者暴露应用程序的方式。消费者必须知道节点的 IP 地址和静态分配的端口才能连接到服务。这对多种原因都是有问题的。首先，节点端口通常是动态分配的。因此，您通常无法预先知道它。其次，提供节点的
+    IP 地址将使网络流量只通过单个节点进行，因此您将无法使用负载均衡。最后，通过开放一个公开可用的节点端口，您有增加集群攻击面的风险。因为所有这些原因，`NodePort`服务主要用于开发或测试目的，而在生产环境中使用较少。'
+- en: The `LoadBalancer` Service type makes the application available to outside consumers
+    through an external IP address provided by an external load balancer. Network
+    traffic will be distributed across multiple nodes in the cluster. This solution
+    works great for production environments, but keep in mind that every provisioned
+    load balancer will accrue costs and can lead to an expensive infrastructure bill.
+    A more cost-effective solution is the use of an Ingress, discussed in [Chapter 22](ch22.xhtml#ingresses).
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`LoadBalancer`服务类型通过外部负载均衡器提供的外部 IP 地址，使应用程序对外可用。网络流量将分布在集群中的多个节点上。这种解决方案非常适合生产环境，但请记住，每个配置的负载均衡器都会产生费用，并且可能会导致昂贵的基础设施账单。更经济有效的解决方案是使用
+    Ingress，在[第 22 章](ch22.xhtml#ingresses)中讨论。'
+- en: Port Mapping
+  id: totrans-33
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 端口映射
+- en: A Service uses label selection to determine the set of Pods to forward traffic
+    to. Successful routing of network traffic depends on the port mapping.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 服务使用标签选择来确定转发流量的 Pod 集。成功路由网络流量取决于端口映射。
+- en: '[Figure 21-3](#service_port_mapping) shows a Service that accepts incoming
+    traffic on port 80\. That’s the port defined by the attribute `spec.ports[].port`
+    in the manifest. Any incoming traffic is then routed toward the target port, represented
+    by `spec.ports[].targetPort`.'
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 图 21-3 显示一个服务在端口 80 上接受传入流量。这是清单中`spec.ports[].port`属性定义的端口。任何传入的流量都将路由到目标端口，表示为`spec.ports[].targetPort`。
+- en: '![ckd2 2103](Images/ckd2_2103.png)'
+  id: totrans-36
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckd2 2103](Images/ckd2_2103.png)'
+- en: Figure 21-3\. Service port mapping
+  id: totrans-37
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 21-3\. 服务端口映射
+- en: The target port is the same port as defined by the container with `spec.containers[].ports[].containerPort`
+    running inside the label-selected Pod. In this example, that’s port 8080\. The
+    selected Pod(s) will receive traffic only if the Service’s target port and the
+    container port match.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 目标端口与在标签选择的 Pod 内运行的容器定义的`spec.containers[].ports[].containerPort`端口相同。在这个示例中，这是端口
+    8080。只有当服务的目标端口和容器端口匹配时，所选的 Pod(s) 才会接收到流量。
+- en: Creating Services
+  id: totrans-39
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 创建服务
+- en: You can create Services in a variety of ways, some of which are more appropriate
+    for the exam as they provide a fast turnaround. Let’s discuss the imperative approach
+    first.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以以多种方式创建服务，其中一些适合考试，因为它们提供快速的结果。首先让我们讨论命令式方法。
+- en: 'A Service needs to select a Pod by a matching label. The Pod created by the
+    following `run` command is called `echoserver`, which exposes the application
+    on the container port 8080\. Internally, it automatically assigns the label key-value
+    pair `run=echoserver` to the object:'
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 服务需要通过匹配标签来选择一个 Pod。以下`run`命令创建的 Pod 称为`echoserver`，它将应用暴露在容器端口 8080 上。在内部，它会自动为对象分配标签键值对`run=echoserver`：
+- en: '[PRE0]'
+  id: totrans-42
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'You can create a Service object using the `create service` command. Make sure
+    to provide the Service type as a mandatory argument. Here we are using the type
+    `clusterip`. The command-line option `--tcp` specifies the port mapping. Port
+    80 exposes the Service to incoming network traffic. Port 8080 targets the container
+    port exposed by the Pod:'
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用`create service`命令创建一个服务对象。确保提供服务类型作为强制参数。这里我们使用类型`clusterip`。命令行选项`--tcp`指定端口映射。端口
+    80 将服务暴露给传入的网络流量。端口 8080 指向 Pod 暴露的容器端口：
+- en: '[PRE1]'
+  id: totrans-44
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: 'An even faster workflow of creating a Pod and Service together can be achieved
+    with a `run` command and the `--expose` option. The following command creates
+    both objects in one swoop while establishing the proper label selection. This
+    command-line option is a good choice during the exam to save time if you are asked
+    to create a Pod and a Service:'
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 `run` 命令和 `--expose` 选项可以更快地创建 Pod 和 Service。以下命令一次性创建两个对象，并建立适当的标签选择。在考试中，如果要求同时创建
+    Pod 和 Service，此命令行选项是节省时间的好选择：
+- en: '[PRE2]'
+  id: totrans-46
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'It’s actually more common to use a Deployment and Service that work together.
+    The following set of commands creates a Deployment with five replicas and then
+    uses the `expose deployment` command to instantiate the Service object. The port
+    mapping can be provided with the options `--port` and `--target-port`:'
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 实际上更常见的是使用一起工作的 Deployment 和 Service。以下一系列命令创建了一个具有五个副本的 Deployment，然后使用 `expose
+    deployment` 命令实例化 Service 对象。端口映射可以通过 `--port` 和 `--target-port` 选项提供：
+- en: '[PRE3]'
+  id: totrans-48
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: '[Example 21-1](#service_manifest) shows the representation of a Service in
+    the form of a YAML manifest. The Service declares the key-value `app=echoserver`
+    for label selection and defines the port mapping from 80 to 8080.'
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[示例 21-1](#service_manifest) 展示了一个以 YAML 清单形式表示的 Service。该 Service 声明了用于标签选择的键值对
+    `app=echoserver`，并定义了从端口 80 到 8080 的端口映射。'
+- en: Example 21-1\. A Service defined by a YAML manifest
+  id: totrans-50
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 21-1\. YAML 清单定义的 Service
+- en: '[PRE4]'
+  id: totrans-51
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: '[![1](Images/1.png)](#co_services_CO1-1)'
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](Images/1.png)](#co_services_CO1-1)'
+- en: Selects all Pods with the given label assignment.
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 选择所有带有指定标签分配的 Pods。
+- en: '[![2](Images/2.png)](#co_services_CO1-2)'
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](Images/2.png)](#co_services_CO1-2)'
+- en: Defines incoming and outgoing ports of the Service. The outgoing port needs
+    to match the container port of the selected Pods.
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 定义 Service 的传入和传出端口。传出端口需与所选 Pods 的容器端口匹配。
+- en: The Service YAML manifest shown does not assign an explicit type. A Service
+    object that does not specify a value for the attribute `spec.type` will default
+    to `ClusterIP` upon creation.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所示的 Service YAML 清单未分配显式类型。未为属性 `spec.type` 指定值的 Service 对象在创建时将默认为 `ClusterIP`。
+- en: Listing Services
+  id: totrans-57
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 服务清单
+- en: 'Listing all Services presents a table view that includes the Service type,
+    the cluster IP address, an optional external IP address, and the incoming port(s).
+    Here, you can see the output for the `echoserver` Pod we created earlier:'
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 显示所有服务会呈现一个包含服务类型、集群 IP 地址、可选的外部 IP 地址以及传入端口的表视图。在这里，你可以看到我们之前创建的 `echoserver`
+    Pod 的输出：
+- en: '[PRE5]'
+  id: totrans-59
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: Kubernetes assigns a cluster IP address given that the Service type is `ClusterIP`.
+    An external IP address is not available for this Service type. The Service is
+    accessible on port 80.
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当 Service 类型为 `ClusterIP` 时，Kubernetes 会分配一个集群 IP 地址。此类 Service 没有外部 IP 地址可用。Service
+    可通过端口 80 访问。
+- en: Rendering Service Details
+  id: totrans-61
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 渲染服务详细信息
+- en: You may want to drill into the details of a Service for troubleshooting purposes.
+    That might be the case if the incoming traffic to a Service isn’t routed properly
+    to the set of Pods you expect to handle the request.
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果向一个 Service 的传入流量没有正确路由到你预期处理请求的一组 Pods，可能需要深入了解该 Service 的详细信息以进行故障排除。
+- en: The `describe service` command renders valuable information about the configuration
+    of a Service. The configuration relevant to troubleshooting a Service is the value
+    of the fields Selector, IP, Port, TargetPort, and Endpoints. A common source of
+    misconfiguration is incorrect label selection and port assignment. Make sure that
+    the selected labels are actually available in the Pods intended to route traffic
+    to and that the target port of the Service matches the exposed container port
+    of the Pods.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`describe service` 命令呈现有关 Service 配置的宝贵信息。用于故障排除的配置是字段 Selector、IP、Port、TargetPort
+    和 Endpoints 的值。常见的配置错误来源是选择不正确的标签和端口分配。确保所选标签确实存在于意图将流量路由到的 Pods 中，并且 Service
+    的目标端口与 Pods 暴露的容器端口匹配。'
+- en: 'Take a look at the output of the following `describe` command. It’s the details
+    for a Service created for five Pods controlled by a Deployment. The Endpoints
+    attribute lists a range of endpoints, one for each of the Pods:'
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 查看以下 `describe` 命令的输出。这是为一个由 Deployment 控制的五个 Pods 创建的 Service 的详细信息。Endpoints
+    属性列出了一系列端点，每个端点对应一个 Pod：
+- en: '[PRE6]'
+  id: totrans-65
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: An endpoint is a resolvable network endpoint, which serves as the virtual IP
+    address and container port of a Pod. If a Service does not render any endpoints
+    then you are likely dealing with a misconfiguration.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 端点是一个可解析的网络端点，充当 Pod 的虚拟 IP 地址和容器端口。如果一个 Service 没有显示任何端点，则可能存在配置错误。
+- en: 'Kubernetes represents endpoints by a dedicated primitive that you can query
+    for. The Endpoint object is created at the same time you instantiate the Service
+    object. The following command lists the endpoints for the Service named `echoserver`:'
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 通过一个专用的原始数据来表示端点，您可以对其进行查询。端点对象与实例化服务对象同时创建。以下命令列出了名为 `echoserver`
+    的服务的端点：
+- en: '[PRE7]'
+  id: totrans-68
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: 'The details of the endpoints give away the full list of IP addresses and ports
+    combinations:'
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 端点的详细信息显示了完整的 IP 地址和端口组合列表：
+- en: '[PRE8]'
+  id: totrans-70
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: The ClusterIP Service Type
+  id: totrans-71
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: ClusterIP 服务类型
+- en: '`ClusterIP` is the default Service type. It exposes the Service on a cluster-internal
+    IP address. That means the Service can be accessed only from a Pod running inside
+    of the cluster and not from outside of the cluster (e.g., if you were to make
+    a call to the Service from your local machine). [Figure 21-4](#service_clusterip)
+    illustrates the accessibility of a Service with type `ClusterIP`.'
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`ClusterIP` 是默认的服务类型。它将服务暴露在集群内部 IP 地址上。这意味着只能从运行在集群内部的 Pod 中访问服务，而不能从集群外部（例如，从您的本地机器）进行调用。[图 21-4](#service_clusterip)
+    说明了类型为 `ClusterIP` 的服务的可访问性。'
+- en: '![ckd2 2104](Images/ckd2_2104.png)'
+  id: totrans-73
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckd2 2104](Images/ckd2_2104.png)'
+- en: Figure 21-4\. Accessibility of a Service with the type `ClusterIP`
+  id: totrans-74
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 21-4\. 类型为 `ClusterIP` 的服务的可访问性
+- en: Creating and Inspecting the Service
+  id: totrans-75
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 创建和检查服务
+- en: 'We will create a Pod and a corresponding Service to demonstrate the runtime
+    behavior of the `ClusterIP` Service type. The Pod named `echoserver` exposes the
+    container port 8080 and specifies the label `app=echoserver`. The Service defines
+    port 5005 for incoming traffic, which is forwarded to outgoing port 8080\. The
+    label selection matches the Pod we set up:'
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将创建一个 Pod 和相应的服务，以演示 `ClusterIP` 服务类型的运行时行为。名为 `echoserver` 的 Pod 公开容器端口 8080，并指定标签
+    `app=echoserver`。服务为传入流量定义端口 5005，将其转发到出口端口 8080\. 标签选择与我们设置的 Pod 匹配：
+- en: '[PRE9]'
+  id: totrans-77
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: Inspecting the live object with the command `kubectl get service echoserver
+    -o yaml` will the render the assigned cluster IP address. [Example 21-2](#service_clusterip2)
+    shows a abbreviated version of the Service runtime representation.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用命令 `kubectl get service echoserver -o yaml` 检查实时对象，将呈现分配的集群 IP 地址。[示例 21-2](#service_clusterip2)
+    显示了服务运行时表示的简化版本。
+- en: Example 21-2\. A ClusterIP Service object at runtime
+  id: totrans-79
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 21-2\. 运行时的 ClusterIP 服务对象
+- en: '[PRE10]'
+  id: totrans-80
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: '[![1](Images/1.png)](#co_services_CO2-1)'
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](Images/1.png)](#co_services_CO2-1)'
+- en: The Service type set to `ClusterIP`.
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 设置为 `ClusterIP` 类型的服务。
+- en: '[![2](Images/2.png)](#co_services_CO2-2)'
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](Images/2.png)](#co_services_CO2-2)'
+- en: The cluster IP address assigned to the Service at runtime.
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运行时分配给服务的集群 IP 地址。
+- en: 'The cluster IP address that makes the Service available in this example is
+    `10.96.254.0`. Listing the Service object is an alternative way to render the
+    information we need to make a call to the Service:'
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此示例中使服务可用的集群 IP 地址是 `10.96.254.0`。列出服务对象是呈现所需信息的另一种方式，以便调用服务：
+- en: '[PRE11]'
+  id: totrans-86
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: Next up, we’ll try to make a call to the Service.
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，我们将尝试对服务进行调用。
+- en: Accessing the Service
+  id: totrans-88
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 访问服务
+- en: 'You can access the Service using a combination of the cluster IP address and
+    the incoming port: 10.96.254.0:5005\. Making a request from any other machine
+    residing outside of the cluster will fail, as illustrated by the following `wget`
+    command:'
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用集群 IP 地址和传入端口组合来访问服务：10.96.254.0:5005\. 从集群外的任何其他机器上进行请求将失败，如以下 `wget`
+    命令所示：
+- en: '[PRE12]'
+  id: totrans-90
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: 'Accessing the Service from a Pod from within the cluster properly routes the
+    request to the Pod matching the label selection:'
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从 Pod 内部访问服务会正确地将请求路由到与标签选择匹配的 Pod：
+- en: '[PRE13]'
+  id: totrans-92
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: Apart from using the cluster IP address and the port, you can also discover
+    a Service by DNS name and environment variables available to containers.
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了使用集群 IP 地址和端口外，您还可以通过 DNS 名称和容器可用的环境变量来发现服务。
+- en: Discovering the Service by DNS lookup
+  id: totrans-94
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 通过 DNS 查找发现服务
+- en: Kubernetes registers every Service by its name with the help of its DNS service
+    named CoreDNS. Internally, CoreDNS will store the Service name as a hostname and
+    maps it to the cluster IP address. Accessing a Service by its DNS name instead
+    of an IP address is much more convenient and expressive when building microservice
+    architectures.
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 通过其名字将每个服务注册到其 DNS 服务 CoreDNS 中。在内部，CoreDNS 将服务名称存储为主机名，并将其映射到集群
+    IP 地址。在构建微服务架构时，通过其 DNS 名称而不是 IP 地址访问服务更加方便和表达性。
+- en: 'You can verify the correct service discovery by running a Pod in the same namespace
+    that makes a call to the Service by using its hostname and incoming port:'
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以通过在同一命名空间中运行一个 Pod 来验证正确的服务发现，该 Pod 使用其主机名和传入端口调用 Service：
+- en: '[PRE14]'
+  id: totrans-97
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: 'It’s not uncommon to make a call from a Pod to a Service that lives in a different
+    namespace. Referencing just the hostname of the Service does not work across namespaces.
+    You need to append the namespace as well. The following makes a call from a Pod
+    in the `other` namespace to the Service in the `default` namespace:'
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Pod 与位于不同命名空间中的 Service 进行调用并不罕见。仅仅引用 Service 的主机名在跨命名空间中是不起作用的。你需要追加命名空间。以下是在
+    `other` 命名空间中的 Pod 调用 `default` 命名空间中的 Service 的示例：
+- en: '[PRE15]'
+  id: totrans-99
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: The full hostname for a Service is `echoserver.default.svc.cluster.local`. The
+    string `svc` describes the type of resource we are communicating with. CoreDNS
+    uses the default value `cluster.local` as a domain name (which is configurable
+    if you want to change it). You do not have to spell out the full hostname when
+    communicating with a Service.
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Service 的完整主机名为 `echoserver.default.svc.cluster.local`。字符串 `svc` 描述了我们要通信的资源类型。CoreDNS
+    使用默认值 `cluster.local` 作为域名（如果需要更改，此域名是可配置的）。在与 Service 通信时，不必拼写完整的主机名。
+- en: Discovering the Service by environment variables
+  id: totrans-101
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 通过环境变量发现 Service
+- en: You may find it easier to use the Service connection information directly from
+    the application running in a Pod. The kubelet makes the cluster IP address and
+    port for every active Service available as environment variables. The naming convention
+    for Service-related environments variable are `<SERVICE_NAME>_SERVICE_HOST` and
+    `<SERVICE_NAME>_SERVICE_PORT`.
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于在 Pod 中运行的应用程序，直接使用环境变量中的 Service 连接信息可能更为简单。kubelet 使每个活动 Service 的集群 IP
+    地址和端口作为环境变量可用。与 Service 相关的环境变量的命名约定为 `<SERVICE_NAME>_SERVICE_HOST` 和 `<SERVICE_NAME>_SERVICE_PORT`。
+- en: Availability of Service environment variables
+  id: totrans-103
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Service 环境变量的可用性
+- en: Make sure you create the Service before instantiating the Pod. Otherwise, those
+    environment variables won’t be populated.
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 确保在实例化 Pod 之前创建 Service。否则，这些环境变量将不会被填充。
+- en: 'You can check on the actual key-value pairs by listing the environment variables
+    of the container, as follows:'
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过列出容器的环境变量可以验证实际的键值对：
+- en: '[PRE16]'
+  id: totrans-106
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: The name of the Service, `echoserver`, does not include any special characters.
+    That’s why the conversion to the environment variable key is easy; the Service
+    name was simply upper-cased to conform to environment variable naming conventions.
+    Any special characters (such as dashes) in the Service name will be replaced by
+    underscore characters. You need to make sure that the Service has been created
+    before starting a Pod if you want those environment variables populated.
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Service 的名称 `echoserver` 不包含任何特殊字符。这就是为什么将其转换为环境变量键名是简单的原因；Service 名称只是简单地大写以符合环境变量命名约定。任何
+    Service 名称中的特殊字符（例如连字符）都将被下划线字符替换。如果要填充这些环境变量，确保在启动 Pod 前已创建了 Service。
+- en: The NodePort Service Type
+  id: totrans-108
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: NodePort Service 类型
+- en: Declaring a Service with type `NodePort` exposes access through the node’s IP
+    address and can be resolved from outside of the Kubernetes cluster. The node’s
+    IP address can be reached in combination with a port number in the range of 30000
+    and 32767 (also called the node port), assigned automatically upon the creation
+    of the Service. [Figure 21-5](#service_nodeport) illustrates the routing of traffic
+    to Pods via a `NodePort`-type Service.
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 `NodePort` 类型声明 Service，通过节点 IP 地址公开访问，可以从 Kubernetes 集群外部解析。节点 IP 地址可以与端口号（范围在
+    30000 到 32767，也称为节点端口）结合使用，该端口在创建 Service 时会自动分配。[图 21-5](#service_nodeport) 说明了通过
+    `NodePort` 类型 Service 转发流量至 Pods 的路由。
+- en: '![ckd2 2105](Images/ckd2_2105.png)'
+  id: totrans-110
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckd2 2105](Images/ckd2_2105.png)'
+- en: Figure 21-5\. Accessibility of a Service with the type `NodePort`
+  id: totrans-111
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 21-5\. 使用 `NodePort` 类型的 Service 的可访问性
+- en: The node port is opened on every node in the cluster, and its value is global
+    and unique at the cluster-scope level. To avoid port conflicts, it’s best to not
+    define the exact node port and to let Kubernetes find an available port.
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 节点端口在集群中的每个节点上都是开放的，并且其值在集群范围内是全局且唯一的。为避免端口冲突，最好不定义确切的节点端口，而是让 Kubernetes 找到一个可用端口。
+- en: Creating and Inspecting the Service
+  id: totrans-113
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 创建和检查 Service
+- en: 'The next two commands create a Pod and a Service of type `NodePort`. The only
+    difference here is that `nodeport` is provided instead of `clusterip` as a command-line
+    option:'
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下面两个命令创建了一个 Pod 和一个 `NodePort` 类型的 Service。这里唯一的区别是命令行选项中提供了 `nodeport` 而不是
+    `clusterip`：
+- en: '[PRE17]'
+  id: totrans-115
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: The runtime representation of the Service object is shown in [Example 21-3](#service_nodeport2).
+    It’s important to point out that the node port will be assigned automatically.
+    Keep in mind `NodePort` (capital *N*) is the Service type, whereas `nodePort`
+    (lowercase *n*) is the key for the value.
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 服务对象的运行时表示如[示例 21-3](#service_nodeport2)所示。需要指出的是，节点端口将自动分配。请记住，`NodePort`（大写*N*）是服务类型，而`nodePort`（小写*n*）是其键对应的值。
+- en: Example 21-3\. A NodePort Service object at runtime
+  id: totrans-117
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 21-3\. 运行时的NodePort服务对象
+- en: '[PRE18]'
+  id: totrans-118
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: '[![1](Images/1.png)](#co_services_CO3-1)'
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](Images/1.png)](#co_services_CO3-1)'
+- en: The Service type set to `NodePort`.
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将服务类型设置为`NodePort`。
+- en: '[![2](Images/2.png)](#co_services_CO3-2)'
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](Images/2.png)](#co_services_CO3-2)'
+- en: The statically-assigned node port that makes the Service accessible from outside
+    of the cluster.
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使服务从集群外部可访问的静态分配节点端口。
+- en: 'Once the Service is created, you can list it. You will find that the port representation
+    contains the statically assigned port that makes the Service accessible:'
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建服务后，可以列出它。您会发现端口表示包含使服务可访问的静态分配端口：
+- en: '[PRE19]'
+  id: totrans-124
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: In this output, the node port is 30158 (identifiable by the separating colon).
+    The incoming port 5005 is still available for the purpose of resolving the Service
+    from within the cluster.
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在此输出中，节点端口为30158（通过冒号分隔可识别）。入站端口5005仍然可用于解析来自集群内部的服务目的。
+- en: Accessing the Service
+  id: totrans-126
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 访问服务
+- en: 'From within the cluster, you can still access the Service using the cluster
+    IP address and port number. This Service displays exactly the same behavior as
+    if it were of type `ClusterIP`:'
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在集群内部，您仍然可以使用集群IP地址和端口号访问服务。此服务的行为与`ClusterIP`类型完全相同：
+- en: '[PRE20]'
+  id: totrans-128
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: From outside of the cluster, you need to use the IP address of any worker node
+    in the cluster and the statically assigned port. One way to determine the worker
+    node’s IP address is by rendering the node details. Another option is to use the
+    `status.hostIP` attribute value of a Pod, which is the IP address of the worker
+    node the Pod runs on.
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从集群外部，您需要使用集群中任何工作节点的IP地址和静态分配的端口。确定工作节点IP地址的一种方法是渲染节点详细信息。另一种选择是使用Pod的`status.hostIP`属性值，即Pod运行所在的工作节点的IP地址。
+- en: 'The node IP address here is `192.168.64.15`. It can be used to call the Service
+    from outside of the cluster:'
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此处的节点IP地址为`192.168.64.15`。可用于从集群外部调用服务：
+- en: '[PRE21]'
+  id: totrans-131
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: The LoadBalancer Service Type
+  id: totrans-132
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: LoadBalancer服务类型
+- en: The last Service type to discuss in this book is the `LoadBalancer`. This Service
+    type provisions an external load balancer, primarily available to Kubernetes cloud
+    providers, which exposes a single IP address to distribute incoming requests to
+    the cluster nodes. The implementation of the load balancing strategy (e.g., round
+    robin) is up to the cloud provider.
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本书讨论的最后一种服务类型是`LoadBalancer`。这种服务类型为Kubernetes云提供商提供外部负载均衡器，主要用于向集群节点分发入站请求的单一IP地址。负载平衡策略的实现（例如轮询）由云提供商决定。
+- en: Load balancers for on-premises Kubernetes clusters
+  id: totrans-134
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 本地Kubernetes集群的负载均衡器
+- en: Kubernetes does not offer a native load balancer solution for on-premises clusters.
+    Cloud providers are in charge of providing an appropriate implementation. The
+    [MetalLB project](https://metallb.universe.tf/) aims to fill the gap.
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes未为本地集群提供原生负载均衡器解决方案。云提供商负责提供适当的实现。[MetalLB项目](https://metallb.universe.tf/)旨在填补这一空白。
+- en: '[Figure 21-6](#service_loadbalancer) shows an architectural overview of the
+    `LoadBalancer` Service type.'
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 21-6](#service_loadbalancer)显示了`LoadBalancer`服务类型的架构概述。'
+- en: '![ckd2 2106](Images/ckd2_2106.png)'
+  id: totrans-137
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckd2 2106](Images/ckd2_2106.png)'
+- en: Figure 21-6\. Accessibility of a Service with the type `LoadBalancer`
+  id: totrans-138
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图21-6\. 类型为`LoadBalancer`的服务的可访问性
+- en: As you can see from the illustration, the load balancer routes traffic between
+    different nodes, as long as the targeted Pods fulfill the requested label selection.
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如图所示，负载均衡器在不同节点之间路由流量，只要目标Pod满足请求的标签选择。
+- en: Creating and Inspecting the Service
+  id: totrans-140
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 创建和检查服务
+- en: 'To create a Service as a load balancer, set the type to `LoadBalancer` in the
+    manifest or by using the `create service loadbalancer` command:'
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要将服务创建为负载均衡器，请在清单中将类型设置为`LoadBalancer`，或使用`create service loadbalancer`命令：
+- en: '[PRE22]'
+  id: totrans-142
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: The runtime characteristics of a LoadBalancer Service type look similar to the
+    ones provided by the NodePort Service type. The main difference is that the external
+    IP address column has a value, as shown in [Example 21-4](#service_loadbalancer2).
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: LoadBalancer Service 类型的运行时特性看起来与 NodePort Service 类型提供的类似。主要区别在于外部 IP 地址列具有值，如
+    [Example 21-4](#service_loadbalancer2) 所示。
+- en: Example 21-4\. A LoadBalancer Service object at runtime
+  id: totrans-144
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 21-4. 运行时的 LoadBalancer Service 对象
+- en: '[PRE23]'
+  id: totrans-145
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: '[![1](Images/1.png)](#co_services_CO4-1)'
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](Images/1.png)](#co_services_CO4-1)'
+- en: The Service type set to `LoadBalancer`.
+  id: totrans-147
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Service 类型设置为 `LoadBalancer`。
+- en: '[![2](Images/2.png)](#co_services_CO4-2)'
+  id: totrans-148
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](Images/2.png)](#co_services_CO4-2)'
+- en: The external IP address assigned to the Service at runtime.
+  id: totrans-149
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Service 在运行时分配的外部 IP 地址。
+- en: 'Listing the Service renders the external IP address, which is `10.109.76.157`,
+    as demonstrated by this command:'
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 列出 Service 时会显示外部 IP 地址，示例中为 `10.109.76.157`，如以下命令所示：
+- en: '[PRE24]'
+  id: totrans-151
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: Given that the external load balancer needs to be provisioned by the cloud provider,
+    it may take a little time until the external IP address becomes available.
+  id: totrans-152
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于外部负载均衡器需要由云提供商进行配置，因此直到外部 IP 地址变为可用可能需要一些时间。
+- en: Accessing the Service
+  id: totrans-153
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 访问 Service
+- en: 'To call the Service from outside of the cluster, use the external IP address
+    and its incoming port:'
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要从集群外调用 Service，请使用外部 IP 地址及其入站端口：
+- en: '[PRE25]'
+  id: totrans-155
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE25]'
+- en: As discussed, a `LoadBalancer` Service is also accessible in the same way as
+    you would access a `ClusterIP` or `NodePort` Service.
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如讨论的，`LoadBalancer` Service 也可以像访问 `ClusterIP` 或 `NodePort` Service 一样访问。
+- en: Summary
+  id: totrans-157
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 概述
+- en: Kubernetes assigns a unique IP address for every Pod in the cluster. Pods can
+    communicate with each other using that IP address; however, you cannot rely on
+    the IP address to be stable over time. That’s why Kubernetes provides the Service
+    resource type.
+  id: totrans-158
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 为集群中的每个 Pod 分配唯一的 IP 地址。Pod 可以使用该 IP 地址彼此通信；但是，不能依赖 IP 地址随时间的稳定性。这就是
+    Kubernetes 提供 Service 资源类型的原因。
+- en: A Service forwards network traffic to a set of Pods based on label selection
+    and port mappings. Every Service needs to assign a type that determines how the
+    Service becomes accessible from within or outside of the cluster. The Service
+    types relevant to the exam are `ClusterIP`, `NodePort`, and `LoadBalancer`. CoreDNS,
+    the DNS server for Kubernetes, allows Pods to access the Service by hostname from
+    the same and other namespaces.
+  id: totrans-159
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Service 根据标签选择和端口映射将网络流量转发到一组 Pod。每个 Service 都需要分配一个类型，该类型决定了如何从集群内部或外部访问 Service。考试相关的
+    Service 类型有 `ClusterIP`、`NodePort` 和 `LoadBalancer`。CoreDNS，即 Kubernetes 的 DNS
+    服务器，允许 Pod 从同一命名空间及其他命名空间通过主机名访问 Service。
+- en: Exam Essentials
+  id: totrans-160
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 考试要点
+- en: Understand the purpose of a Service
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 理解 Service 的目的
+- en: Pod-to-Pod communication via their IP addresses doesn’t guarantee a stable network
+    interface over time. A restart of the Pod will lease a new virtual IP address.
+    The purpose of a Service is to provide that stable network interface so that you
+    can operate complex microservice architecture that runs in a Kubernetes cluster.
+    In most cases, Pods call a Service by hostname. The hostname is provided by the
+    DNS server named CoreDNS running as a Pod in the `kube-system` namespace.
+  id: totrans-162
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过它们的 IP 地址进行 Pod 到 Pod 的通信不能保证随时间的稳定网络接口。Pod 的重新启动将会分配一个新的虚拟 IP 地址。Service
+    的目的是提供稳定的网络接口，以便您可以操作在 Kubernetes 集群中运行的复杂微服务架构。在大多数情况下，Pod 通过主机名调用 Service。主机名由运行在
+    `kube-system` 命名空间中的名为 CoreDNS 的 DNS 服务器提供。
+- en: Practice how to access a Service for each type
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 练习如何访问每种类型的 Service
+- en: The exam expects you to understand the differences between the Service types
+    `ClusterIP`, `NodePort`, and `LoadBalancer`. Depending on the assigned type, a
+    Service becomes accessible from inside the cluster or from outside the cluster.
+  id: totrans-164
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 考试期望您理解 `ClusterIP`、`NodePort` 和 `LoadBalancer` 之间的差异。根据分配的类型，Service 可以从集群内部或外部访问。
+- en: Work through Service troubleshooting scenarios
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 解决 Service 故障排除场景
+- en: It’s easy to get the configuration of a Service wrong. Any misconfiguration
+    won’t allow network traffic to reach the set of Pod it was intended for. Common
+    misconfigurations include incorrect label selection and port assignments. The
+    `kubectl get endpoints` command will give you an idea which Pods a Service can
+    route traffic to.
+  id: totrans-166
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 很容易配置 Service 的配置错误。任何配置错误都将导致无法将网络流量传输到预期的 Pod 集合。常见的配置错误包括不正确的标签选择和端口分配。`kubectl
+    get endpoints` 命令将帮助您了解 Service 可以路由流量到哪些 Pod。
+- en: Sample Exercises
+  id: totrans-167
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 示例练习
+- en: Solutions to these exercises are available in [Appendix A](app01_split_017.xhtml#appendix_a_services).
+  id: totrans-168
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些练习的解决方案位于[附录 A](app01_split_017.xhtml#appendix_a_services)中。
+- en: Create a Service named `myapp` of type `ClusterIP` that exposes port 80 and
+    maps to the target port 80.
+  id: totrans-169
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 创建名为`myapp`的 Service，类型为`ClusterIP`，暴露端口 80 并映射到目标端口 80。
+- en: Create a Deployment named `myapp` that creates 1 replica running the image `nginx:1.23.4-alpine`.
+    Expose the container port 80\. Scale the Deployment to 2 replicas.
+  id: totrans-170
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 创建名为`myapp`的 Deployment，创建 1 个副本，运行镜像`nginx:1.23.4-alpine`。暴露容器端口 80。将 Deployment
+    扩展到 2 个副本。
+- en: Create a temporary Pod using the image `busybox:1.36.1` and execute a `wget`
+    command against the IP of the service.
+  id: totrans-171
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 使用镜像`busybox:1.36.1`创建临时 Pod，并执行针对服务 IP 的`wget`命令。
+- en: Change the service type to `NodePort` so that the Pods can be reached from outside
+    of the cluster. Execute a `wget` command against the service from outside of the
+    cluster.
+  id: totrans-172
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 将服务类型更改为`NodePort`，以便从集群外部访问Pod。从集群外部执行`wget`命令来访问该服务。
+- en: Kate is a developer in charge of implementing a web-based application stack.
+    She is not familiar with Kubernetes, and asked if you could help out. The relevant
+    objects have been created; however, connection to the application cannot be established
+    from within the cluster. Help Kate with fixing the configuration of her YAML manifests.
+  id: totrans-173
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: Kate 是负责实现基于 Web 的应用程序堆栈的开发人员。她对 Kubernetes 不熟悉，并请求您的帮助。相关对象已创建；然而，无法从集群内部连接到应用程序。帮助
+    Kate 修复她的 YAML 清单的配置。
+- en: Navigate to the directory *app-a/ch21/troubleshooting* of the checked-out GitHub
+    repository [*bmuschko/ckad-study-guide*](https://github.com/bmuschko/ckad-study-guide).
+    Create the objects from the YAML manifest *setup.yaml*. Inspect the objects in
+    the namespace `y72`.
+  id: totrans-174
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 导航至 GitHub 仓库[*bmuschko/ckad-study-guide*](https://github.com/bmuschko/ckad-study-guide)的已检出分支中的目录*app-a/ch21/troubleshooting*。从
+    YAML 清单*setup.yaml*创建对象。检查命名空间`y72`中的对象。
+- en: Create a temporary Pod using the image `busybox:1.36.1` in the namespace `y72`.
+    The container command should make a `wget` call to the Service `web-app`. The
+    `wget` call will not be able to establish a successful connection to the Service.
+  id: totrans-175
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 在命名空间`y72`中使用镜像`busybox:1.36.1`创建临时 Pod。容器命令应调用 Service `web-app` 进行`wget`调用。`wget`调用无法成功连接到该
+    Service。
+- en: Identify the root cause for the connection issue and fix it. Verify the correct
+    behavior by repeating the previous step. The `wget` call should return a successful
+    response.
+  id: totrans-176
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 确定连接问题的根本原因并加以修复。通过重复前一步骤验证正确行为。`wget`调用应返回成功响应。

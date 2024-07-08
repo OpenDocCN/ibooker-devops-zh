@@ -1,0 +1,1388 @@
+- en: Chapter 3\. Cluster Hardening
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第3章\. 集群加固
+- en: The domain “cluster hardening” touches on topics important to keep a cluster
+    as secure as possible once it has been set up and configured initially. As part
+    of the discussion of this chapter, you may notice that I will reference concepts
+    and practices that usually fall into the hands of Kubernetes administrators. Where
+    appropriate, I will provide links to the topics that have already been covered
+    by the CKA exam.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: “集群加固”领域涉及一些在集群初始化设置和配置后保持尽可能安全的重要主题。作为本章讨论的一部分，您可能会注意到，我将引用通常由Kubernetes管理员负责的概念和实践。在适当的情况下，我将提供链接到已涵盖CKA考试的主题。
+- en: 'At a high level, this chapter covers the following concepts:'
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在高层次上，本章涵盖以下概念：
+- en: Restricting access to the Kubernetes API
+  id: totrans-3
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 限制对Kubernetes API的访问
+- en: Configuring role-based access control (RBAC) to minimize exposure
+  id: totrans-4
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 配置基于角色的访问控制（RBAC）以最小化暴露
+- en: Exercising caution in using service accounts
+  id: totrans-5
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在使用服务账户时要谨慎
+- en: Updating Kubernetes frequently
+  id: totrans-6
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 经常更新Kubernetes
+- en: Interacting with the Kubernetes API
+  id: totrans-7
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 与Kubernetes API交互
+- en: The API server is the gateway to the Kubernetes cluster. Any human user, client
+    (e.g., `kubectl`), cluster component, or service account will access the API server
+    by making a RESTful API call via HTTPS. It is *the* central point for performing
+    operations like creating a Pod, or deleting a Service.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: API服务器是访问Kubernetes集群的网关。任何人类用户、客户端（例如`kubectl`）、集群组件或服务账户都将通过HTTPS进行RESTful
+    API调用访问API服务器。这是执行操作（如创建Pod或删除Service）的*中心点*。
+- en: In this section, we’ll only focus on the security-specific aspects relevant
+    to the API server. For a detailed discussion on the inner workings of the API
+    server and the usage of the Kubernetes API, refer to the book [*Managing Kubernetes*](https://learning.oreilly.com/library/view/managing-kubernetes/9781492033905)
+    by Brendan Burns and Craig Tracey (O’Reilly).
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本节中，我们将专注于与API服务器相关的安全特定方面。关于API服务器的内部工作方式以及Kubernetes API的使用详细讨论，请参考Brendan
+    Burns和Craig Tracey（O'Reilly）的书籍[*管理Kubernetes*](https://learning.oreilly.com/library/view/managing-kubernetes/9781492033905)。
+- en: Processing a Request
+  id: totrans-10
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 处理请求
+- en: '[Figure 3-1](#api-server-request-processing) illustrates the stages a request
+    goes through when a call is made to the API server. For reference, you can find
+    more information in the [Kubernetes documentation](https://oreil.ly/DuLdf).'
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图3-1](#api-server-request-processing)说明了向API服务器发出调用时请求经历的阶段。有关更多信息，请参阅[Kubernetes文档](https://oreil.ly/DuLdf)。'
+- en: '![ckss 0301](assets/ckss_0301.png)'
+  id: totrans-12
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckss 0301](assets/ckss_0301.png)'
+- en: Figure 3-1\. API server request processing
+  id: totrans-13
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图3-1\. API服务器请求处理
+- en: The first stage of request processing is *authentication*. Authentication validates
+    the identity of the caller by inspecting the client certificates or bearer tokens.
+    If the bearer token is associated with a service account, then it will be verified
+    here.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请求处理的第一个阶段是*身份验证*。通过检查客户端证书或令牌验证来验证调用者的身份。如果令牌与服务账户关联，则将在此处验证。
+- en: The second stage determines if the identity provided in the first stage can
+    access the verb and HTTP path request. Therefore, stage two deals with *authorization*
+    of the request, which is implemented with the standard Kubernetes RBAC model.
+    Here, we’d ensure that the service account is allowed to list Pods or create a
+    new Service object if that’s what has been requested.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 第二阶段确定了第一阶段提供的身份是否可以访问动词和HTTP路径请求。因此，第二阶段处理请求的*授权*，使用标准的Kubernetes RBAC模型实现。在这里，我们要确保服务账户被允许列出Pods或者根据请求创建新的Service对象。
+- en: The third stage of request processing deals with *admission control*. Admission
+    control verifies if the request is well-formed and potentially needs to be modified
+    before the request is processed. An admission control policy could, for example,
+    ensure that the request for creating a Pod includes the definition of a specific
+    label. If it doesn’t define the label, then the request is rejected.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请求处理的第三阶段涉及*准入控制*。准入控制验证请求是否格式正确，并在处理请求之前可能需要进行修改。例如，准入控制策略可以确保创建Pod的请求包含特定标签的定义。如果没有定义该标签，则请求将被拒绝。
+- en: The last stage of the process ensures that the resource included in the request
+    is valid. Request *validation* can be implemented as part of admission control
+    but doesn’t have to be. For example, this stage ensures that the name of a Service
+    object sticks to the standard Kubernetes naming rules for provided DNS names.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后一个阶段确保了请求中包含的资源是有效的。请求*验证*可以作为准入控制的一部分来实现，但不是必须的。例如，这个阶段确保了服务对象的名称遵循提供的 DNS
+    名称的标准 Kubernetes 命名规则。
+- en: Connecting to the API Server
+  id: totrans-18
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 连接到 API 服务器
+- en: 'It’s easy to determine the endpoint for the API server by running the following:'
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运行以下命令很容易确定 API 服务器的端点：
+- en: '[PRE0]'
+  id: totrans-20
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: For the given Kubernetes cluster, the API server has been exposed via the URL
+    [*https://172.28.40.5:6443*](https://172.28.40.5:6443). Alternatively, you can
+    also have a look at the command line options `--advertise-address` and `--secure-port`
+    in the configuration file of the API server to determine the endpoint. You can
+    find the API server configuration file at `/etc/kubernetes/manifests/kube-apiserver.yaml`.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于给定的 Kubernetes 集群，API 服务器已通过 URL [*https://172.28.40.5:6443*](https://172.28.40.5:6443)
+    暴露。此外，您还可以查看 API 服务器配置文件中的命令行选项 `--advertise-address` 和 `--secure-port` 来确定端点。您可以在
+    `/etc/kubernetes/manifests/kube-apiserver.yaml` 找到 API 服务器配置文件。
+- en: Configuring an insecure port for the API server
+  id: totrans-22
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 配置 API 服务器的不安全端口
+- en: The ability to configure the API server to use an insecure port (e.g., 80) has
+    been deprecated in Kubernetes 1.10\. With version 1.24, the insecure port flags
+    `--port` and `--insecure-port` have been removed completely and therefore cannot
+    be used to configure the API server anymore. See the [release notes](https://oreil.ly/OTsmV)
+    for more information.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以配置 API 服务器使用不安全端口（例如，80）已在 Kubernetes 1.10 版本中弃用。在版本 1.24 中，不安全端口标志 `--port`
+    和 `--insecure-port` 已完全删除，因此不能再用于配置 API 服务器。有关更多信息，请参阅[发布说明](https://oreil.ly/OTsmV)。
+- en: Using the kubernetes Service
+  id: totrans-24
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 使用 Kubernetes 服务
+- en: 'Kubernetes makes accessing the API server a little bit more convenient for
+    specific use cases. For example, you may want to send a request to the Kubernetes
+    API from a Pod. Instead of using the IP address and port for the API server, you
+    can simply refer to the Service named `kubernetes.default.svc` instead. This special
+    Service lives in the `default` namespace and is stood up by the cluster automatically.
+    Deleting the Service will automatically recreate it. You can easily find the Service
+    with the following command:'
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 使得特定用例更方便访问 API 服务器。例如，您可能希望从 Pod 发送请求到 Kubernetes API。而不是使用 API
+    服务器的 IP 地址和端口，您可以简单地引用名为 `kubernetes.default.svc` 的服务。这个特殊的服务位于 `default` 命名空间中，并由集群自动启动。删除服务将自动重新创建它。您可以通过以下命令轻松找到该服务：
+- en: '[PRE1]'
+  id: totrans-26
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: 'Upon inspection of the endpoints of this Service, you will see that it points
+    to the IP address and port of the API server, as demonstrated by executing the
+    following command:'
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 检查此服务的端点时，您将看到它指向 API 服务器的 IP 地址和端口，如通过执行以下命令所示：
+- en: '[PRE2]'
+  id: totrans-28
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'The IP address and port of the Service is also exposed to the Pod via environment
+    variables. You can read the values of the environment variables from a program
+    running inside of a container. The Service’s IP address is reflected by the environment
+    variable `KUBERNETES_SERVICE_HOST`. The port can be accessed using the environment
+    variable `KUBERNETES_SERVICE_PORT`. To render the environment, simply access the
+    environment variables using the `env` command in a temporary Pod:'
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 服务的 IP 地址和端口也通过环境变量暴露给 Pod。您可以从容器内运行的程序中读取环境变量的值。服务的 IP 地址由环境变量 `KUBERNETES_SERVICE_HOST`
+    反映。端口可以使用环境变量 `KUBERNETES_SERVICE_PORT` 访问。要渲染环境，请简单地使用 `env` 命令在临时 Pod 中访问环境变量：
+- en: '[PRE3]'
+  id: totrans-30
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: We will use the `kubernetes` Service in the section [“Minimizing Permissions
+    for a Service Account”](#minimizing-permissions-service-account).
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将在 [“最小化服务账户权限”](#minimizing-permissions-service-account) 部分中使用 `kubernetes`
+    服务。
+- en: Anonymous access
+  id: totrans-32
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 匿名访问
+- en: 'The following command makes an anonymous call to the API using the `curl` command
+    line tool to list all namespaces. The option `-k` avoids verifying the server’s
+    TLS certificate:'
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下命令使用 `curl` 命令行工具匿名调用 API 列出所有命名空间。选项 `-k` 避免验证服务器的 TLS 证书：
+- en: '[PRE4]'
+  id: totrans-34
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: As you can see from the JSON-formatted HTTP response body, anonymous calls are
+    accepted by the API server but do not have the appropriate permissions for the
+    operation. Internally, Kubernetes maps the call to the [username `system:anonymous`](https://oreil.ly/_HrbF),
+    which effectively isn’t authorized to execute the operation.
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如你从 JSON 格式的 HTTP 响应体中看到的那样，API 服务器接受匿名调用，但没有适当的操作权限。在内部，Kubernetes 将调用映射到[用户名
+    `system:anonymous`](https://oreil.ly/_HrbF)，这实际上没有授权执行该操作。
+- en: Access with a client certificate
+  id: totrans-36
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 使用客户端证书访问
+- en: To make a request as an authorized user, you need to either create a new one
+    or use the existing, default user with administrator permissions named `kubernetes-admin`.
+    We won’t go through the process of creating a new user right now. For more information
+    on creating a user, refer to [“Restricting User Permissions”](#restricting-user-permissions).
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要作为授权用户发出请求，您需要创建一个新用户或使用具有管理员权限的现有默认用户 `kubernetes-admin`。我们现在不会详细介绍创建新用户的过程。有关创建用户的更多信息，请参阅[“限制用户权限”](#restricting-user-permissions)。
+- en: 'The following command lists all available users, including their client certificate
+    and key:'
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下命令列出了所有可用用户，包括其客户端证书和密钥：
+- en: '[PRE5]'
+  id: totrans-39
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: '[![1](assets/1.png)](#co_cluster_hardening_CO1-1)'
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_cluster_hardening_CO1-1)'
+- en: The base64-encoded value of the certificate authority
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 证书颁发机构的 base64 编码值
+- en: '[![2](assets/2.png)](#co_cluster_hardening_CO1-2)'
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_cluster_hardening_CO1-2)'
+- en: The user entry with administrator permissions created by default
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认创建的具有管理员权限的用户条目
+- en: '[![3](assets/3.png)](#co_cluster_hardening_CO1-3)'
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_cluster_hardening_CO1-3)'
+- en: The base64-encoded value of the user’s client certificate
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用户客户端证书的 base64 编码值
+- en: '[![4](assets/4.png)](#co_cluster_hardening_CO1-4)'
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_cluster_hardening_CO1-4)'
+- en: The base64-encoded value of the user’s private key
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用户私钥的 base64 编码值
+- en: 'For making a call using the user `kubernetes-admin`, we’ll need to extract
+    the base64-encoded values for the CA, client certificate, and private key into
+    files as a base64-decoded value. The following command copies the base64-encoded
+    value and uses the tool `base64` to decode it before it is written to a file.
+    The CA value will be stored in the file `ca`, the client certificate value in
+    `kubernetes-admin.crt`, and the private key in `kubernetes-admin.key`:'
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要使用用户 `kubernetes-admin` 进行调用，我们需要将 CA、客户端证书和私钥的 base64 编码值提取到文件中作为 base64 解码值。以下命令将复制
+    base64 编码值，并使用工具 `base64` 对其进行解码，然后写入文件。CA 值将存储在文件 `ca` 中，客户端证书值将存储在 `kubernetes-admin.crt`
+    中，私钥将存储在 `kubernetes-admin.key` 中：
+- en: '[PRE6]'
+  id: totrans-49
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: 'You can now point the `curl` command to those files with the relevant command
+    line option. The request to the API server should properly authenticate and return
+    all existing namespaces, as the `kubernetes-admin` has the appropriated permissions:'
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，您可以使用相关命令行选项将 `curl` 命令指向这些文件。向 API 服务器的请求应正确进行身份验证，并返回所有现有的命名空间，因为 `kubernetes-admin`
+    具有适当的权限：
+- en: '[PRE7]'
+  id: totrans-51
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: Restricting Access to the API Server
+  id: totrans-52
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 限制访问 API 服务器
+- en: If you’re exposing the API server to the internet, ask yourself if it is necessary.
+    Some cloud providers offer the option of creating a private cluster, which will
+    limit or completely disable public access to the API server. For more information,
+    see the documentation pages for [EKS](https://oreil.ly/W4Oma) and [GKE](https://oreil.ly/c7G-g).
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您正在将 API 服务器暴露到互联网，请问您是否有必要这样做。一些云提供商提供创建私有集群的选项，这将限制或完全禁用对 API 服务器的公共访问。有关更多信息，请参阅[EKS](https://oreil.ly/W4Oma)和[GKE](https://oreil.ly/c7G-g)的文档页面。
+- en: If you are operating an on-premises Kubernetes cluster, you will need to instantiate
+    firewall rules that prevent access to the API server. Setting up firewall rules
+    is out of scope for the exam and therefore won’t be discussed in this book.
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您正在运营本地 Kubernetes 集群，您将需要实例化防火墙规则以阻止对 API 服务器的访问。设置防火墙规则超出了考试范围，因此本书不会讨论此内容。
+- en: 'Scenario: An Attacker Can Call the API Server from the Internet'
+  id: totrans-55
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 场景：攻击者可以通过互联网调用 API 服务器
+- en: Cloud providers sometimes expose the API server to the internet to simplify
+    administrative access. An attacker can try to make an anonymous request to the
+    API server endpoint by declining to provide a client certificate or bearer token.
+    If the attacker is lucky enough to capture user credentials, then an authenticated
+    call can be performed. Depending on the permissions assigned to the user, malicious
+    operations can be executed. [Figure 3-2](#api-server-attacker) illustrates an
+    attacker calling the API server from the internet.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 云服务提供商有时会将API服务器暴露在互联网上，以简化管理访问。攻击者可以尝试通过拒绝提供客户端证书或令牌来向API服务器端点发起匿名请求。如果攻击者幸运地捕获到用户凭据，那么可以执行经过身份验证的调用。根据分配给用户的权限，可以执行恶意操作。[图 3-2](#api-server-attacker)说明了一个攻击者从互联网调用API服务器的情况。
+- en: '![ckss 0302](assets/ckss_0302.png)'
+  id: totrans-57
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckss 0302](assets/ckss_0302.png)'
+- en: Figure 3-2\. An attacker calls the API server from the internet
+  id: totrans-58
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-2\. 一个攻击者从互联网调用API服务器
+- en: In this chapter, we will have a look at how to restrict access to the API server
+    and how to implement RBAC with limited permissions by example. [“Understanding
+    Open Policy Agent (OPA) and Gatekeeper”](ch05.xhtml#opa-gatekeeper) will review
+    admission control with the help of OPA Gateway.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们将看一下如何限制对API服务器的访问，并通过示例实现具有有限权限的RBAC。[“理解Open Policy Agent（OPA）和Gatekeeper”](ch05.xhtml#opa-gatekeeper)将通过OPA
+    Gateway帮助审计控制。
+- en: Restricting User Permissions
+  id: totrans-60
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 限制用户权限
+- en: We’ve seen that we can use the credentials of the `kubernetes-admin` user to
+    make calls to the Kubernetes API. This user should be used very sparingly, nor
+    should the credentials be shared with a lot of humans. A lot of damage can be
+    done if the credentials fall into the wrong hands. Reserve this user exclusively
+    for humans in charge of cluster administration.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们已经看到我们可以使用`kubernetes-admin`用户的凭据来调用Kubernetes API。这个用户应该非常节俭地使用，也不应该与很多人共享凭据。如果凭据落入错误的手中，可能会造成很大的损害。将这个用户专门保留给负责集群管理的人员使用。
+- en: 'For other stakeholders of your Kubernetes cluster, you should set up a dedicated
+    user with a limited set of permissions. You may have specific roles in your organization
+    you can map to. For example, you may have a developer role that should be allowed
+    to manage Deployments, Pods, ConfigMaps, Secrets, and Services, but nothing else.
+    To create a new user and assign the relevant RBAC permissions, refer to the [Kubernetes
+    documentation](https://oreil.ly/n8EMD). In a nutshell, there are four steps:'
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于您的Kubernetes集群的其他利益相关者，您应该设置一个具有有限权限集的专用用户。您可能在组织中有特定的角色可以映射到。例如，您可能有一个开发者角色，应该被允许管理部署、Pod、ConfigMaps、Secrets和Services，但不允许其他操作。要创建一个新用户并分配相关的RBAC权限，请参考[Kubernetes文档](https://oreil.ly/n8EMD)。简而言之，有四个步骤：
+- en: Create a private key.
+  id: totrans-63
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 创建一个私钥。
+- en: Create and approve a CertificateSigningRequest.
+  id: totrans-64
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 创建并批准一个CertificateSigningRequest。
+- en: Create a Role and a RoleBinding.
+  id: totrans-65
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 创建一个Role和一个RoleBinding。
+- en: Add the user to the [kubeconfig file](https://oreil.ly/OKs9g).
+  id: totrans-66
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 将用户添加到[kubeconfig文件](https://oreil.ly/OKs9g)中。
+- en: We will cover the process in detail, but will come back to the RBAC concept
+    in more detail for a service account in [“Minimizing Permissions for a Service
+    Account”](#minimizing-permissions-service-account).
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将详细介绍这个过程，但会在[“最小化服务账户权限”](#minimizing-permissions-service-account)中更详细地讨论RBAC概念。
+- en: Creating a private key
+  id: totrans-68
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 创建一个私钥
+- en: 'Create a private key using the `openssl` executable. Provide an expressive
+    file name, such as `<username>.key`:'
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用`openssl`可执行文件创建一个私钥。提供一个有意义的文件名，比如`<username>.key`：
+- en: '[PRE8]'
+  id: totrans-70
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: 'Create a certificate signing request (CSR) in a file with the extension `.csr`.
+    You need to provide the private key from the previous step. The following command
+    uses the username `johndoe` when asked for entering the “Common Name” value. All
+    other input requests are optional and can be filled in as needed:'
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在带有扩展名`.csr`的文件中创建一个证书签名请求（CSR）。您需要提供上一步的私钥。当要求输入“通用名称”值时，以下命令使用用户名`johndoe`。所有其他输入请求都是可选的，可以根据需要填写：
+- en: '[PRE9]'
+  id: totrans-72
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: 'Retrieve the base64-encoded value of the CSR file content with the following
+    command. You will need it when creating the CertificateSigningRequest object in
+    the next step:'
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用以下命令检索CSR文件内容的base64编码值。在下一步创建CertificateSigningRequest对象时会需要它：
+- en: '[PRE10]'
+  id: totrans-74
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: Creating and approving a CertificateSigningRequest
+  id: totrans-75
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 创建和批准一个CertificateSigningRequest
+- en: 'The following script creates a CertificateSigningRequest object. A [CertificateSigningRequest
+    resource](https://oreil.ly/ltFbE) is used to request that a certificate be signed
+    by a denoted signer:'
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下脚本创建一个 CertificateSigningRequest 对象。[CertificateSigningRequest 资源](https://oreil.ly/ltFbE)
+    用于请求由指定签名者签名的证书：
+- en: '[PRE11]'
+  id: totrans-77
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: The value for `kubernetes.io/kube-apiserver-client` for the attribute `spec.signerName`
+    signs certificates that will be honored as client certificates by the API server.
+    Use the base64-encoded value from the previous step and assign it as a value to
+    the attribute `spec.request`. Finally, the optional attribute `spec.expirationSeconds`
+    determines the lifespan of the certificate. The assigned value `86400` makes the
+    certificate valid for a one day. You will want to increase the expiration time
+    depending on how long you want the certificate to last, or simply refrain from
+    adding the attribute.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 属性 `spec.signerName` 的值 `kubernetes.io/kube-apiserver-client` 签署证书，这些证书将被 API
+    服务器作为客户端证书接受。使用上一步的 Base64 编码值并将其分配给属性 `spec.request` 的值。最后，可选属性 `spec.expirationSeconds`
+    确定证书的生存期。分配的值 `86400` 使证书有效期为一天。根据你希望证书持续的时间长短增加或减少到期时间，或者简单地不添加这个属性。
+- en: 'After creating the CertificateSigningRequest object, the condition will be
+    “Pending.” You will need to approve the signing request within 24 hours or the
+    object will be deleted automatically as a means to garbage-collect unnecessary
+    objects in the cluster:'
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建 CertificateSigningRequest 对象后，条件将显示为“待处理”。你需要在 24 小时内批准签名请求，否则对象将被自动删除，作为清理集群中不必要对象的手段。
+- en: '[PRE12]'
+  id: totrans-80
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: 'Use the `certificate approve` command to approve the signing request. As a
+    result, the condition changes to “Approved,Issued”:'
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 `certificate approve` 命令批准签名请求。结果，条件变更为“已批准，已发放”：
+- en: '[PRE13]'
+  id: totrans-82
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: 'Finally, export the issued certificate from the approved CertificateSigningRequest
+    object:'
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，导出从已批准的 CertificateSigningRequest 对象颁发的证书：
+- en: '[PRE14]'
+  id: totrans-84
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: Creating a Role and a RoleBinding
+  id: totrans-85
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 创建一个角色和一个角色绑定
+- en: 'It’s time to assign RBAC permissions. In this step, you will create a Role
+    and a RoleBinding for the user. The Role models an “application developer” role
+    within the organization. A developer should only be allowed to get, list, update,
+    and delete Pods. The following imperative command creates the Role object:'
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 是时候分配 RBAC 权限了。在这一步，你将为用户创建一个角色和一个角色绑定。角色模拟了组织内的“应用开发者”角色。开发者只能允许获取、列出、更新和删除
+    Pod。以下的命令创建了角色对象：
+- en: '[PRE15]'
+  id: totrans-87
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: 'Next, we’ll bind the Role to the user named `johndoe`. Use the imperative command
+    `create rolebinding` to achieve that:'
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，我们将把角色绑定到名为 `johndoe` 的用户上。使用命令 `create rolebinding` 来完成这个操作：
+- en: '[PRE16]'
+  id: totrans-89
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: Adding the user to the kubeconfig file
+  id: totrans-90
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 将用户添加到 kubeconfig 文件中
+- en: 'In this last step, you will need to add the user to the kubeconfig file and
+    create the context for a user. Be aware that the cluster name is `minikube` in
+    the following command, as we are trying this out in a minikube installation:'
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在最后一步，你需要将用户添加到 kubeconfig 文件中，并为其创建一个用户上下文。请注意，在下面的命令中集群名称是 `minikube`，因为我们正在
+    minikube 安装中尝试这个操作：
+- en: '[PRE17]'
+  id: totrans-92
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: Verifying the permissions
+  id: totrans-93
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 验证权限
+- en: 'It’s time to switch to the user context named `johndoe`:'
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 是时候切换到名为`johndoe`的用户上下文了：
+- en: '[PRE18]'
+  id: totrans-95
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: 'Using `kubectl` as the client that makes calls to the API server, we’ll verify
+    that the operation should be allowed. The API call for listing all Pods in the
+    `default` namespace was authenticated and authorized:'
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 `kubectl` 作为客户端向 API 服务器发出调用，我们将验证这个操作是否被允许。用于在 `default` 命名空间中列出所有 Pod 的
+    API 调用已经被验证和授权：
+- en: '[PRE19]'
+  id: totrans-97
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: 'The output of the command indicates that the `default` namespace doesn’t contain
+    any Pod object at this time but the call was successful. Let’s also test the negative
+    case. Listing namespaces is a non-permitted operation for the user. Executing
+    the relevant `kubectl` command will return with an error message:'
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 命令的输出指示当前`default`命名空间在这个时间点上不包含任何 Pod 对象，但是调用是成功的。我们还将测试负面案例。列出命名空间对于用户来说是一个不允许的操作。执行相关的
+    `kubectl` 命令将返回一个错误消息：
+- en: '[PRE20]'
+  id: totrans-99
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: 'Once you are done with verifying permissions, you may want to switch back to
+    the context with admin permissions:'
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当你完成权限验证后，你可能想要切换回拥有管理员权限的上下文：
+- en: '[PRE21]'
+  id: totrans-101
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: 'Scenario: An Attacker Can Call the API Server from a Service Account'
+  id: totrans-102
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 情景：攻击者可以通过服务账号调用 API 服务器
+- en: A user represents a real person who commonly interacts with the Kubernetes cluster
+    using the `kubectl` executable or the UI dashboard. Under rare conditions, applications
+    running inside of a Pod’s container need to interact with the Kubernetes API.
+    A typical example for such a requirement is the package manager [Helm](https://helm.sh).
+    Helm manages Kubernetes resources based on the YAML manifests bundled in a Helm
+    chart. Kubernetes uses a service account to authenticate the Helm service process
+    with the API server through an authentication token. This service account can
+    be assigned to a Pod and mapped to RBAC rules.
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用户代表经常使用 `kubectl` 可执行文件或 UI 仪表板与 Kubernetes 集群进行交互的真实人员。在某些罕见条件下，运行在 Pod 容器内的应用程序需要与
+    Kubernetes API 进行交互。这种需求的典型示例是包管理器[Helm](https://helm.sh)。Helm 根据捆绑在 Helm 图表中的
+    YAML 清单管理 Kubernetes 资源。Kubernetes 使用服务账户通过身份验证令牌将 Helm 服务进程与 API 服务器进行身份验证。可以将此服务账户分配给
+    Pod，并映射到 RBAC 规则。
+- en: An attacker who gains access to the Pod will likely also be able to misuse the
+    service account to make calls to the Kubernetes API, as shown in [Figure 3-3](#service-account-attacker).
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果攻击者能够访问 Pod，很可能也能够滥用服务账户调用 Kubernetes API，如[图 3-3](#service-account-attacker)所示。
+- en: '![ckss 0303](assets/ckss_0303.png)'
+  id: totrans-105
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckss 0303](assets/ckss_0303.png)'
+- en: Figure 3-3\. An attacker uses a service account to call the API server
+  id: totrans-106
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-3\. 攻击者使用服务账户调用 API 服务器。
+- en: Minimizing Permissions for a Service Account
+  id: totrans-107
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 最小化服务账户的权限。
+- en: It’s important to limit the permissions to only those service accounts that
+    are really necessary for the application to function. The next sections will explain
+    how to achieve this to minimize the potential attack surface.
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 重要的是只限制那些对应用程序真正必要的服务账户的权限。接下来的章节将解释如何实现这一点，以最小化潜在的攻击面。
+- en: For this scenario to work, you’ll need to create a ServiceAccount object and
+    assign it to the Pod. Service accounts can be tied in with RBAC and assigned a
+    Role and RoleBinding to define what operations they should be allowed to perform.
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要使这种场景正常工作，您需要创建一个 ServiceAccount 对象，并将其分配给 Pod。服务账户可以与 RBAC 绑定，并分配角色和角色绑定以定义它们应该允许执行的操作。
+- en: Binding the service account to a Pod
+  id: totrans-110
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 将服务账户绑定到 Pod。
+- en: As a starting point, we are going to a set up a Pod that lists all Pods and
+    Deployments in the namespace `k97` by calling the Kubernetes API. The call is
+    made as part of an infinite loop every ten seconds. The response from the API
+    call will be written to standard output accessible via the Pod’s logs.
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为起点，我们将设置一个 Pod，通过调用 Kubernetes API 列出命名空间 `k97` 中所有 Pods 和 Deployments。该调用作为每十秒无限循环的一部分进行。来自
+    API 调用的响应将写入标准输出，可通过 Pod 的日志访问。
+- en: To authenticate against the API server, we’ll send a bearer token associated
+    with the service account used by the Pod. The default behavior of a service account
+    is to auto-mount API credentials on the path `/var/run/secrets/kubernetes.io/serviceaccount/token`.
+    We’ll simply get the contents of the file using the `cat` command line tool and
+    send them along as a header for the HTTP request. [Example 3-1](#service-account-pod-setup)
+    defines the namespace, the service account, and the Pod in a single YAML manifest
+    file `setup.yaml`.
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了对 API 服务器进行身份验证，我们将发送与 Pod 使用的服务账户相关联的令牌。服务账户的默认行为是自动挂载 API 凭据到路径 `/var/run/secrets/kubernetes.io/serviceaccount/token`。我们将使用
+    `cat` 命令行工具简单地获取文件内容，并将其作为 HTTP 请求的标头一并发送。[示例 3-1](#service-account-pod-setup)定义了命名空间、服务账户和
+    Pod，在一个名为 `setup.yaml` 的 YAML 文件中。
+- en: Example 3-1\. YAML manifest for assigning a service account to a Pod
+  id: totrans-113
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 3-1\. 为将服务账户分配给 Pod 的 YAML 文件清单。
+- en: '[PRE22]'
+  id: totrans-114
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: 'Create the objects from the YAML file with the following command:'
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用以下命令从 YAML 文件创建对象：
+- en: '[PRE23]'
+  id: totrans-116
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: Verifying the default permissions
+  id: totrans-117
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 验证默认权限。
+- en: The Pod named `list-objects` makes a call to the API server to retrieve the
+    list of Pods and Deployments in dedicated containers. The container `pods` performs
+    the call to list Pods. The container `deployments` sends a request to the API
+    server to list Deployments.
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 名为 `list-objects` 的 Pod 在专用容器中调用 API 服务器以检索 Pods 和 Deployments 的列表。容器 `pods`
+    执行调用以列出 Pods。容器 `deployments` 向 API 服务器发送请求以列出 Deployments。
+- en: 'As explained in the [Kubernetes documentation](https://oreil.ly/gBp30), the
+    default RBAC policies do not grant any permissions to service accounts outside
+    of the `kube-system` namespace. The logs of the containers `pods` and `deployments`
+    return an error message indicating that the service account `sa-api` is not authorized
+    to list the resources:'
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如 [Kubernetes 文档](https://oreil.ly/gBp30) 所述，默认的 RBAC 策略不会授予 `kube-system` 命名空间之外的服务帐户任何权限。容器
+    `pods` 和 `deployments` 的日志返回错误消息，指示服务帐户 `sa-api` 未被授权列出资源：
+- en: '[PRE24]'
+  id: totrans-120
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: Next up, we’ll stand up a ClusterRole and RoleBinding object with the required
+    API permissions to perform the necessary calls.
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，我们将创建一个 ClusterRole 和 RoleBinding 对象，并赋予执行所需 API 调用的权限。
+- en: Creating the ClusterRole
+  id: totrans-122
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 创建 ClusterRole
+- en: Start by defining the ClusterRole named `list-pods-clusterrole` shown in [Example 3-2](#list-pods-clusterrole)
+    in the file `clusterrole.yaml`. The set of the rules only adds the Pod resource
+    and the verb `list`.
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，定义名为 `list-pods-clusterrole` 的 ClusterRole，如 [示例 3-2](#list-pods-clusterrole)
+    中所示，在文件 `clusterrole.yaml` 中。规则集仅添加 Pod 资源和动词 `list`。
+- en: Example 3-2\. YAML manifest for a ClusterRole that allows listing Pods
+  id: totrans-124
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 3-2\. 允许列出 Pods 的 ClusterRole 的 YAML 清单
+- en: '[PRE25]'
+  id: totrans-125
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE25]'
+- en: 'Create the object by pointing to its corresponding YAML manifest file:'
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过指向相应的 YAML 清单文件来创建对象：
+- en: '[PRE26]'
+  id: totrans-127
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE26]'
+- en: Creating the RoleBinding
+  id: totrans-128
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 创建 RoleBinding
+- en: '[Example 3-3](#rolebinding-service-account) defines the YAML manifest for the
+    RoleBinding in the file `rolebinding.yaml`. The RoleBinding maps the ClusterRole
+    `list-pods-clusterrole` to the service account named `sa-pod-api` and only applies
+    to the namespace `k97`.'
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[示例 3-3](#rolebinding-service-account) 在 `rolebinding.yaml` 文件中定义了 RoleBinding
+    的 YAML 清单。RoleBinding 将 ClusterRole `list-pods-clusterrole` 映射到名为 `sa-pod-api`
+    的服务帐户，并且仅适用于命名空间 `k97`。'
+- en: Example 3-3\. YAML manifest for a RoleBinding attached to a service account
+  id: totrans-130
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 3-3\. 附加到服务帐户的 RoleBinding 的 YAML 清单
+- en: '[PRE27]'
+  id: totrans-131
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE27]'
+- en: 'Create both the RoleBinding object using the `apply` command:'
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 `apply` 命令创建 RoleBinding 对象：
+- en: '[PRE28]'
+  id: totrans-133
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE28]'
+- en: Verifying the granted permissions
+  id: totrans-134
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 验证授予的权限
+- en: 'With the granted `list` permissions, the service account can now properly retrieve
+    all the Pods in the `k97` namespace. The `curl` command in the `pods` container
+    succeeds, as shown in the following output:'
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过授予 `list` 权限，服务帐户现在可以正确检索 `k97` 命名空间中的所有 Pods。`pods` 容器中的 `curl` 命令成功执行，如下所示：
+- en: '[PRE29]'
+  id: totrans-136
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE29]'
+- en: 'We did not grant any permissions to the service account for other resources.
+    Listing the Deployments in the `k97` namespace still fails. The following output
+    shows the response from the `curl` command in the `deployments` namespace:'
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们没有授予服务帐户其他资源的任何权限。在 `k97` 命名空间中列出 Deployments 仍然失败。以下输出显示了在 `deployments`
+    命名空间中使用 `curl` 命令的响应：
+- en: '[PRE30]'
+  id: totrans-138
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE30]'
+- en: Feel free to modify the ClusterRole object to allow listing Deployment objects
+    as well.
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 随意修改 ClusterRole 对象，以允许列出 Deployment 对象。
+- en: Disabling automounting of a service account token
+  id: totrans-140
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 禁用服务帐户令牌的自动装载
+- en: The Pod described in the previous section used the service account’s token as
+    a means to authenticate against the API server. Mounting the token file at `/var/run/secrets/kubernetes.io/serviceaccount/token`
+    is the standard behavior of every service account. You will really only need the
+    contents of the file if the Pod actually interacts with the Kubernetes API. In
+    all other cases, this behavior poses a potential security risk as access to the
+    Pod will directly lead an attacker to the token.
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 前一节中描述的 Pod 使用服务帐户的令牌作为针对 API 服务器进行身份验证的手段。将令牌文件挂载到 `/var/run/secrets/kubernetes.io/serviceaccount/token`
+    是每个服务帐户的标准行为。只有当 Pod 实际与 Kubernetes API 交互时，您才真正需要文件的内容。在所有其他情况下，此行为可能构成潜在的安全风险，因为访问
+    Pod 将直接将攻击者引导至令牌。
+- en: You can disable the automount behavior for a service account object by assigning
+    the value `false` to the attribute `automountServiceAccountToken`, as shown in
+    [Example 3-4](#service-account-disable-automount).
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以通过将属性 `automountServiceAccountToken` 的值设置为 `false` 来禁用服务帐户对象的自动装载行为，如 [示例 3-4](#service-account-disable-automount)
+    所示。
+- en: Example 3-4\. Opting out of a service account’s token automount behavior
+  id: totrans-143
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 3-4\. 选择退出服务帐户的令牌自动装载行为
+- en: '[PRE31]'
+  id: totrans-144
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE31]'
+- en: If you want to disable the automount behavior for individual Pods, use the attribute
+    `spec.automountServiceAccountToken` in the Pod definition. [Example 3-5](#pod-serviceaccount-disable-automount)
+    shows a YAML manifest for a Pod.
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果要为单个 Pod 禁用自动装载行为，请在 Pod 定义中使用 `spec.automountServiceAccountToken` 属性。[示例 3-5](#pod-serviceaccount-disable-automount)
+    展示了一个 Pod 的 YAML 清单。
+- en: Example 3-5\. Disabling token automounting for a service account in a Pod
+  id: totrans-146
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 3-5\. 在 Pod 中禁用服务帐户的令牌自动装载
+- en: '[PRE32]'
+  id: totrans-147
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE32]'
+- en: Generating a service account token
+  id: totrans-148
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 生成服务账户令牌
+- en: There are a variety of use cases that speak for wanting to create a service
+    account that *disables* token automounting. For example, you may need access to
+    the Kubernetes API from an external tool or a continuous delivery pipeline to
+    query for information about existing objects. Authenticating against the API server
+    in those scenarios still requires a token. The scenarios listed do not necessarily
+    run a Pod with an assigned service account, but simply perform a RESTful API call
+    from a tool like `curl`.
+  id: totrans-149
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有多种用例表明希望创建一个禁用令牌自动挂载的服务账户。例如，您可能需要从外部工具或连续交付流水线访问 Kubernetes API，以查询现有对象的信息。在这些场景中，仍需要使用令牌对
+    API 服务器进行身份验证。所列场景不一定运行分配了服务账户的 Pod，而只是从诸如`curl`之类的工具执行 RESTful API 调用。
+- en: 'To create a token manually, execute the `create token` command and provide
+    the name of the service account as an argument. The output of the command renders
+    the token:'
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要手动创建令牌，请执行`create token`命令，并将服务账户的名称作为参数提供。该命令的输出呈现令牌：
+- en: '[PRE33]'
+  id: totrans-151
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE33]'
+- en: You’ll need to store the token in a safe place, e.g., a password manager. You
+    cannot retrieve the token again if you lose it. You can only recreate it with
+    the same command, which will automatically invalidate the previous token. All
+    references that use the token will have to be changed.
+  id: totrans-152
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您需要将令牌存储在安全的位置，例如密码管理器中。如果丢失令牌，将无法重新获取。您只能使用相同的命令重新创建令牌，这将自动使先前的令牌失效。所有使用该令牌的引用都必须更改。
+- en: 'For automated processes, it might be helpful to generate a token with a limited
+    lifespan. The `--duration` will automatically invalidate the token after the “time-to-life”
+    runs out:'
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于自动化流程，使用有限生命周期生成令牌可能很有帮助。`--duration`将在“生命周期”结束后自动使令牌失效：
+- en: '[PRE34]'
+  id: totrans-154
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE34]'
+- en: Creating a Secret for a service account
+  id: totrans-155
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 创建服务账户的密钥
+- en: 'With Kubernetes 1.24, a ServiceAccount object does not automatically create
+    a corresponding Secret object containing the token anymore. See the [release notes](https://oreil.ly/MSPuX)
+    for more information. Listing the ServiceAccount object renders 0 for the number
+    of Secrets. The object also doesn’t contain the `secrets` attribute anymore in
+    the YAML representation:'
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 1.24 中，ServiceAccount 对象不再自动创建包含令牌的对应 Secret 对象。有关更多信息，请参阅 [发行说明](https://oreil.ly/MSPuX)。列出
+    ServiceAccount 对象会呈现 0 个密钥的数量。该对象在 YAML 表示中也不再包含`secrets`属性：
+- en: '[PRE35]'
+  id: totrans-157
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE35]'
+- en: You can either generate the token using the `create token` command, as described
+    in [“Generating a service account token”](#generating-serviceaccount-token), or
+    manually create a corresponding Secret. [Example 3-6](#serviceaccount-secret)
+    shows a YAML manifest for such a Secret.
+  id: totrans-158
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用`create token`命令生成令牌，如 [“生成服务账户令牌”](#generating-serviceaccount-token)中所述，或手动创建相应的密钥。[示例 3-6](#serviceaccount-secret)显示了这种密钥的
+    YAML 清单。
+- en: Example 3-6\. Creating a Secret for a service account manually
+  id: totrans-159
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 3-6\. 手动创建服务账户的密钥
+- en: '[PRE36]'
+  id: totrans-160
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE36]'
+- en: 'To assign the service account to the Secret, add the annotation with the key
+    `kubernetes.io/service-account.name`. The following command creates the Secret
+    object:'
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要为服务账户分配密钥，需添加带有键`kubernetes.io/service-account.name`的注释。以下命令创建密钥对象：
+- en: '[PRE37]'
+  id: totrans-162
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE37]'
+- en: 'You can find the token in the “Data” section when describing the Secret object:'
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 描述 Secret 对象时，您可以在“数据”部分找到令牌：
+- en: '[PRE38]'
+  id: totrans-164
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE38]'
+- en: Updating Kubernetes Frequently
+  id: totrans-165
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 频繁更新 Kubernetes
+- en: Installing a Kubernetes cluster with a specific version is not a one-time fire-and-forget
+    operation. Even if you used the latest Long-Term Support (LTS) Release at the
+    time of installation, it does not guarantee that your cluster is without security
+    vulnerabilities.
+  id: totrans-166
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安装具有特定版本的 Kubernetes 集群并非一劳永逸的操作。即使在安装时使用了最新的长期支持 (LTS) 版本，也不能保证您的集群没有安全漏洞。
+- en: As time goes by, security-related bugs and weaknesses will be discovered. This
+    statement includes the underlying operating system and the dependencies the cluster
+    nodes run on. An attacker can easily look up security vulnerabilities in the publicly
+    disclosed [Common Vulnerabilities and Exposures (CVE) database](https://oreil.ly/FHhXD)
+    and exploit them.
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 随着时间的推移，将发现与安全相关的漏洞和弱点。此声明包括底层操作系统以及集群节点运行的依赖项。攻击者可以轻易在公开披露的 [通用漏洞和暴露 (CVE)
+    数据库](https://oreil.ly/FHhXD) 中查找安全漏洞并利用它们。
+- en: Versioning Scheme
+  id: totrans-168
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 版本控制方案
+- en: It’s up to the cluster administrator to update the Kubernetes version across
+    all nodes on a regular basis. Kubernetes follows the [semantic versioning scheme](https://semver.org).
+    A Semantic Version consists of a major version, minor version, and patch version.
+    For example, for the Kubernetes version 1.24.3, the major version is 1, the minor
+    version is 24, and the patch version is 3.
+  id: totrans-169
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将 Kubernetes 版本定期更新到所有节点上，这由集群管理员负责。Kubernetes 遵循[语义化版本控制方案](https://semver.org)。语义化版本包括主版本号、次版本号和补丁版本号。例如，对于
+    Kubernetes 版本 1.24.3，主版本号是 1，次版本号是 24，补丁版本号是 3。
+- en: Each portion of the version carries a specific meaning. A change to the major
+    version portion indicates a breaking change. Incrementing the minor version portion
+    means that new functionality has been added in a backward-compatible manner. The
+    patch version portion simply fixes a bug.
+  id: totrans-170
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个版本号的部分都有特定的含义。主版本号的变更表示有不兼容的改动。递增次版本号表示以向后兼容的方式新增了功能。补丁版本号仅修复了一个 bug。
+- en: Breaking changes in Kubernetes with minor version updates
+  id: totrans-171
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Kubernetes 中通过次版本更新引入的不兼容变更
+- en: It’s important to mention that Kubernetes doesn’t always stick to the strict
+    interpretation of semantic versioning. For example, the PodSecurityPolicy (PSP)
+    admission controller has been replaced by the Pod Security Admission concept in
+    [version 1.25.0](https://oreil.ly/JE-i8). Conventionally, those changes should
+    only happen with a major version update. Reference the [Kubernetes deprecation
+    policy](https://oreil.ly/on9lu) for a better understanding on how an API, a flag,
+    or a feature is phased out.
+  id: totrans-172
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 需要指出的是，Kubernetes 并不总是严格遵循语义化版本控制的解释。例如，PodSecurityPolicy（PSP）准入控制器已经在[版本 1.25.0](https://oreil.ly/JE-i8)中被
+    Pod Security Admission 概念取代。按照传统，这些更改只应该发生在主版本更新时。参考[Kubernetes 废弃政策](https://oreil.ly/on9lu)以更好地理解
+    API、标志或功能如何逐步淘汰。
+- en: Release Cadence
+  id: totrans-173
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 发布节奏
+- en: You can expect [a new minor version release](https://oreil.ly/LGIn5) of Kubernetes
+    every three months. The release may include new features and additional bug fixes.
+    Security fixes may be implemented as needed for the latest release of Kubernetes
+    and will be backported to the two minor releases before that. Always staying on
+    top of updating to the latest releases for your own cluster(s) takes quite a bit
+    of people-power. You will need to reserve time for those activities accordingly.
+  id: totrans-174
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以预期每三个月发布[一个新的次版本](https://oreil.ly/LGIn5)的 Kubernetes。新发布版本可能包含新功能和额外的 bug
+    修复。必要时，安全修复也会被实施到最新版本的 Kubernetes，并将回溯到之前的两个次版本。始终保持更新到您的集群的最新版本需要相当多的人力投入。因此，您需要相应地预留时间来执行这些活动。
+- en: Performing the Upgrade Process
+  id: totrans-175
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 执行升级过程
+- en: It is recommended to upgrade from a minor version to the next higher one (e.g.,
+    from 1.23 to 1.24), or from a patch version to a more recent one (e.g., from 1.24.1
+    to 1.24.3). Abstain from jumping up multiple minor versions to avoid unexpected
+    side effects.
+  id: totrans-176
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 建议从一个次版本升级到更高的次版本（例如，从 1.23 到 1.24），或者从一个补丁版本升级到更近期的一个（例如，从 1.24.1 到 1.24.3）。避免跨越多个次版本进行升级，以避免意外的副作用。
+- en: You can find a full description of the [upgrade steps](https://oreil.ly/RxC9j)
+    in the official Kubernetes documentation. [Figure 3-4](#cluster_version_upgrade_process)
+    illustrates the upgrade process on a high level.
+  id: totrans-177
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在官方 Kubernetes 文档中找到关于[升级步骤](https://oreil.ly/RxC9j)的完整描述。[图 3-4](#cluster_version_upgrade_process)概述了高层次的升级过程。
+- en: The cluster version upgrade process is already part of the CKA exam. Given that
+    you have to pass the CKA as a prerequisite, I would assume that you already know
+    how to perform the process. For a detailed description, refer to [*Certified Kubernetes
+    Administrator (CKA) Study Guide*](https://oreil.ly/cka-study-guide).
+  id: totrans-178
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 集群版本升级过程已经是CKA考试的一部分。考虑到您必须通过CKA作为先决条件，我假设您已经知道如何执行这个过程。有关详细描述，请参考[*Certified
+    Kubernetes Administrator (CKA) Study Guide*](https://oreil.ly/cka-study-guide)。
+- en: '![ckss 0304](assets/ckss_0304.png)'
+  id: totrans-179
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckss 0304](assets/ckss_0304.png)'
+- en: Figure 3-4\. Process for a cluster version upgrade
+  id: totrans-180
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-4\. 集群版本升级流程
+- en: Summary
+  id: totrans-181
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 概述
+- en: Users, clients applications (such as `kubectl` or `curl`), Pods using service
+    accounts, and cluster components all communicate with the API server to manage
+    objects. It’s paramount to secure the API server to prevent access with malicious
+    intent.
+  id: totrans-182
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用户、客户端应用程序（例如`kubectl`或`curl`）、使用服务账户的 Pod，以及集群组件都通过 API 服务器与其通信，以管理对象。确保安全地保护
+    API 服务器，以防止恶意访问，这至关重要。
+- en: To minimize the attack surface area, avoid exposing the API server to the internet
+    using firewall rules. For every user or service account, restrict the permissions
+    to execute operations against the Kubernetes API to the bare minimum using RBAC
+    rules. With minimized permissions, attackers can cause far less damage in case
+    they can gain access to credentials.
+  id: totrans-183
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了最小化攻击面积，避免使用防火墙规则将API服务器暴露给互联网。对于每个用户或服务账户，使用RBAC规则将权限限制到最低限度，以执行对Kubernetes
+    API的操作。权限最小化可以在攻击者获得凭据访问时造成更少的损害。
+- en: Make sure to upgrade the version of your Kubernetes cluster. Incorporating bug
+    and security fixes will decrease the risk of exposing unnecessary vulnerabilities
+    attackers can use to their advantage.
+  id: totrans-184
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 确保升级您的Kubernetes集群版本。集成错误和安全修复将减少暴露给攻击者利用的不必要漏洞的风险。
+- en: Exam Essentials
+  id: totrans-185
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 考试要点
+- en: Practice interacting with the Kubernetes API.
+  id: totrans-186
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 练习与Kubernetes API交互。
+- en: This chapter demonstrated the different ways to communicate with the Kubernetes
+    API. We performed API requests by switching to a user context, and with the help
+    of a RESTful API call using `curl`. You will need to understand how to determine
+    the endpoint of the API server and how to use different authentication methods,
+    e.g., client credentials and bearer tokens. Explore the Kubernetes API and its
+    endpoints on your own for broader exposure.
+  id: totrans-187
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本章演示了与Kubernetes API交互的不同方式。我们通过切换到用户上下文执行API请求，并借助使用`curl`进行RESTful API调用。您需要了解如何确定API服务器的端点以及如何使用不同的身份验证方法，例如客户端凭据和Bearer令牌。探索Kubernetes
+    API及其端点，以便获得更广泛的暴露。
+- en: Understand the implications of defining RBAC rules for users and service accounts.
+  id: totrans-188
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 理解为用户和服务账户定义RBAC规则的影响。
+- en: Anonymous user requests to the Kubernetes API will not allow any substantial
+    operations. For requests coming from a user or a service account, you will need
+    to carefully analyze permissions granted to the subject. Learn the ins and outs
+    of defining RBAC rules by creating the relevant objects to control permissions.
+    Service accounts automount a token when used in a Pod. Only expose the token as
+    a Volume if you are intending to make API calls from the Pod.
+  id: totrans-189
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 匿名用户对Kubernetes API的请求不会允许任何实质性操作。对于来自用户或服务账户的请求，您需要仔细分析授予主体的权限。通过创建相关对象来控制权限，了解定义RBAC规则的方方面面。服务账户在Pod中使用时会自动挂载令牌。如果打算从Pod中进行API调用，则仅暴露令牌作为卷。
+- en: Be aware of Kubernetes release cadence and the need for upgrading the cluster.
+  id: totrans-190
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注意Kubernetes的发布节奏和升级集群的必要性。
+- en: A Kubernetes cluster needs to be cared for over time for security reasons. Attackers
+    may try to take advantage of known vulnerabilities in outdated Kubernetes versions.
+    The version upgrade process is part of every administrator’s job and shouldn’t
+    be ignored.
+  id: totrans-191
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 出于安全原因，Kubernetes集群需要随着时间的推移进行维护。攻击者可能会利用已知的过时Kubernetes版本中的漏洞。版本升级过程是每个管理员的职责的一部分，不应忽视。
+- en: Sample Exercises
+  id: totrans-192
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 示例练习
+- en: Solutions to these exercises are available in the [Appendix](app01.xhtml#appendix-a).
+  id: totrans-193
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些练习的解答在[附录](app01.xhtml#appendix-a)中提供。
+- en: Create a client certificate and key for the user named `jill` in the group `observer`.
+    With the admin context, create the context for the user `jill`.
+  id: totrans-194
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 为名为`jill`的用户在`observer`组中创建客户端证书和密钥。使用管理员上下文为用户`jill`创建上下文。
+- en: For the group (not the user!), define a Role and RoleBinding in the `default`
+    namespace that allow the verbs `get`, `list`, and `watch` for the resources Pods,
+    ConfigMaps, and Secrets. Create the objects.
+  id: totrans-195
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 对于组（而不是用户！），在`default`名称空间中定义一个允许资源Pods、ConfigMaps和Secrets的动词`get`、`list`和`watch`的角色和角色绑定。创建这些对象。
+- en: Switch to the user context and execute a `kubectl` command that allows one of
+    the granted operations, and one `kubectl` command that should not be permitted.
+    Switch back to the `admin` context.
+  id: totrans-196
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 切换到用户上下文，并执行允许已授权操作的`kubectl`命令，以及一个不应允许的`kubectl`命令。切换回`admin`上下文。
+- en: Create a Pod named `service-list` in the namespace `t23`. The container uses
+    the image `alpine/curl:3.14` and makes a `curl` call to the Kubernetes API that
+    lists Service objects in the `default` namespace in an infinite loop. Create and
+    attach the service account `api-call`. Inspect the container logs after the Pod
+    has been started. What response do you expect to see from the `curl` command?
+  id: totrans-197
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 在名称空间`t23`中创建一个名为`service-list`的Pod。该容器使用`alpine/curl:3.14`镜像，并在无限循环中向Kubernetes
+    API发出一个列出`default`名称空间中Service对象的`curl`调用。创建并附加服务账户`api-call`。在Pod启动后检查容器日志。您期望从`curl`命令中看到什么响应？
+- en: Assign a ClusterRole and RoleBinding to the service account that only allows
+    the operation needed by the Pod. Have a look at the response from the `curl` command.
+  id: totrans-198
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 为服务账号分配 ClusterRole 和 RoleBinding，仅允许 Pod 所需的操作。查看 `curl` 命令的响应。
+- en: Configure the Pod so that automounting of the service account token is disabled.
+    Retrieve the token value and use it directly with the `curl` command. Make sure
+    that the `curl` command can still authorize the operation.
+  id: totrans-199
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 配置 Pod 以禁用自动挂载服务账号令牌。检索令牌值并直接在 `curl` 命令中使用。确保 `curl` 命令仍然能够授权操作。
+- en: Navigate to the directory *app-a/ch03/upgrade-version* of the checked-out GitHub
+    repository [*bmuschko/cks-study-guide*](https://oreil.ly/sImXZ). Start up the
+    VMs running the cluster using the command `vagrant up`. Upgrade all nodes of the
+    cluster from Kubernetes 1.25.6 to 1.26.1\. The cluster consists of a single control
+    plane node named `kube-control-plane`, and one worker node named `kube-worker-1`.
+    Once done, shut down the cluster using `vagrant destroy -f`.
+  id: totrans-200
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 导航到 GitHub 仓库 [*bmuschko/cks-study-guide*](https://oreil.ly/sImXZ) 的 *app-a/ch03/upgrade-version*
+    目录。使用命令 `vagrant up` 启动运行集群的虚拟机。将集群中所有节点从 Kubernetes 1.25.6 升级到 1.26.1\. 集群包括名为
+    `kube-control-plane` 的单一控制平面节点和名为 `kube-worker-1` 的工作节点。完成后，使用 `vagrant destroy
+    -f` 关闭集群。
+- en: '*Prerequisite:* This exercise requires the installation of the tools [Vagrant](https://oreil.ly/FiyeH)
+    and [VirtualBox](https://oreil.ly/WW8IK).'
+  id: totrans-201
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: '*先决条件：* 这个练习需要安装工具 [Vagrant](https://oreil.ly/FiyeH) 和 [VirtualBox](https://oreil.ly/WW8IK)。'

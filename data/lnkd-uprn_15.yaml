@@ -1,0 +1,707 @@
+- en: Chapter 15\. Debugging Linkerd
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第15章 调试Linkerd
+- en: If you’ve come this far, you understand how valuable a tool Linkerd can be for
+    a platform to provide. It secures your apps, provides powerful insights into those
+    applications, and can account for underlying application and network issues by
+    making your connections more reliable. In this chapter, we’re going to look at
+    what to do when you need to troubleshoot Linkerd itself.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您已经走到这一步，您就了解了Linkerd作为一个平台提供的有价值工具。它保护您的应用程序，为这些应用程序提供强大的洞察力，并通过使您的连接更可靠来解决基础应用程序和网络问题。在本章中，我们将探讨在需要排除Linkerd自身问题时应该做什么。
+- en: In all cases, the first step when diagnosing an issue with Linkerd is to use
+    the Linkerd CLI’s built-in health checking tool by running `linkerd check`, as
+    we discussed in more detail in [Chapter 6](ch06.html#LUAR_cli). `linkerd check`
+    is a very quick way to pinpoint many of the most common issues with Linkerd installations;
+    for example, it can immediately diagnose expired certificates, which is the most
+    common issue that causes Linkerd outages in practice.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在所有情况下，诊断Linkerd问题的第一步是使用Linkerd CLI的内置健康检查工具运行`linkerd check`，正如我们在[第6章](ch06.html#LUAR_cli)中详细讨论的那样。
+    `linkerd check`是一种快速定位Linkerd安装中许多常见问题的方法；例如，它可以立即诊断到期的证书，这是实际中导致Linkerd停机最常见的问题。
+- en: Diagnosing Data Plane Issues
+  id: totrans-3
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 诊断数据平面问题
+- en: Linkerd is somewhat famous for not requiring a ton of hands-on work with the
+    data plane; however, it’s still useful to be able to do some basic troubleshooting.
+    Many proxy issues end up involving fairly similar sets of solutions.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linkerd因不需要大量手动处理数据平面而颇有名气；然而，掌握一些基本的故障排除仍然很有用。许多代理问题最终涉及到相似的解决方案集。
+- en: “Common” Linkerd Data Plane Failures
+  id: totrans-5
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: “常见”的Linkerd数据平面故障
+- en: While Linkerd is generally a fault-tolerant service mesh, there are a few conditions
+    that we see arise more than others. Knowing how to tackle these can be extremely
+    helpful.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然Linkerd通常是一个容错性强的服务网格，但我们看到有几种情况比其他情况更常见。知道如何应对这些情况可能非常有帮助。
+- en: Pods failing to start
+  id: totrans-7
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: Pod启动失败
+- en: If you run into a situation where injected Pods are failing to start, the first
+    step will be to identify exactly where the failure is occurring. This is where
+    the `kubectl describe pod` and `kubectl logs` commands can provide a lot of useful
+    information.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果遇到注入Pod无法启动的情况，第一步将是确定故障发生的确切位置。这就是`kubectl describe pod`和`kubectl logs`命令能提供大量有用信息的地方。
+- en: It’s often most useful to start by describing a failing Pod, to get a sense
+    of what Kubernetes believes has happened. For example, did the Linkerd init container
+    fail? Did the Pod get killed because its probes never reported ready? This information
+    can help you decide which containers to pull logs from, if you need the logs.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常最有用的方法是从描述失败的Pod开始，了解Kubernetes认为发生了什么。例如，Linkerd初始化容器失败了吗？Pod是否因其探针未能报告为准备好而被杀死？这些信息可以帮助您决定需要从哪些容器中获取日志，如果需要的话。
+- en: 'If the failing containers belong to the application rather than to Linkerd,
+    you’ll likely be best off looking at non-Linkerd-specific potential causes, like
+    a failing common dependency, or perhaps Nodes running out of resources. If it’s
+    Linkerd containers failing, though, the second step is to understand whether the
+    failure is affecting all new Pods or only some new Pods:'
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果失败的容器属于应用程序而不是Linkerd，则最好查看非Linkerd特定的潜在原因，如共同依赖项失败，或者节点资源不足。不过，如果是Linkerd容器失败，第二步就是了解故障是否影响所有新的Pod或仅影响某些新的Pod：
+- en: Single Pod failure
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 单个Pod失败
+- en: If a single Pod is failing, you’ll want to look at the characteristics of that
+    Pod. Which containers are failing to start? Is it the proxy, an init container,
+    or the application itself? If other Pods are starting normally, it isn’t a systemic
+    issue and you’ll need to dive into the particulars of the specific Pod.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果单个Pod失败，您需要查看该Pod的特征。哪些容器无法启动？是代理、初始化容器还是应用本身？如果其他Pod正常启动，则这不是一个系统性问题，您需要深入研究特定Pod的细节。
+- en: All Pods are failing to start
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有Pod都无法启动
+- en: If the failure is happening on all new Pods, you likely have a more serious
+    systemic issue. As noted before, the most common reason that all Pods fail to
+    start is a certificate issue. The `linkerd check` command will reveal this kind
+    of issue immediately, which is why we recommend running it first.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果所有新的Pod都无法启动，那么您可能遇到了更严重的系统性问题。正如前面提到的，导致所有Pod无法启动的最常见原因是证书问题。`linkerd check`命令将立即显示这类问题，因此我们建议首先运行它。
+- en: Another possible—though uncommon—issue is that the Linkerd proxy injector isn’t
+    running or is unhealthy. Note that when running Linkerd in HA mode, which (as
+    discussed in [Chapter 14](ch14.html#LUAR_production_ready)) we recommend for production
+    use, Kubernetes will refuse to start any new application Pods until the injector
+    is healthy.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个可能的——尽管不常见的——问题是Linkerd代理注入器未运行或不健康。请注意，在高可用模式下运行Linkerd时，我们推荐用于生产环境（如[第十四章](ch14.html#LUAR_production_ready)所讨论的），Kubernetes将拒绝启动任何新的应用程序Pod，直到注入器健康为止。
+- en: A subset of Pods is failing to start
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一部分Pod未能启动
+- en: 'If only some new Pods are failing to start, it’s time to begin isolating what
+    common factors exist across those Pods:'
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果只有一些新的Pod未能启动，那么现在是开始隔离那些Pod上存在的共同因素的时候了：
+- en: Look at the output of `kubectl get pods -o wide` to see if they’ve been scheduled
+    on the same Node or Nodes.
+  id: totrans-18
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 查看 `kubectl get pods -o wide` 的输出，看它们是否已安排在同一节点或多个节点上。
+- en: 'Look at the `kubectl describe pod` output: are the init containers failing
+    to complete successfully?'
+  id: totrans-19
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 查看 `kubectl describe pod` 的输出：初始化容器是否未能成功完成？
+- en: If you’re using the Linkerd CNI plugin, you’ll want to check the state of the
+    network validator, and you may need to restart the CNI container for that Node.
+  id: totrans-20
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如果您正在使用Linkerd CNI插件，您需要检查网络验证器的状态，并可能需要重新启动该节点上的CNI容器。
+- en: If you’re not using the Linkerd CNI plugin, take a look at the output of `kubectl
+    logs` for the Linkerd init container. If it failed to complete successfully, try
+    to see what is unique about the Node it’s running on.
+  id: totrans-21
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如果您没有使用Linkerd CNI插件，请查看Linkerd初始化容器的 `kubectl logs` 输出。如果未能成功完成，请尝试查看其运行所在节点的唯一之处。
+- en: Intermittent proxy errors
+  id: totrans-22
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 间歇性代理错误
+- en: 'Intermittent proxy errors can be one of the hardest issues to solve. Any intermittent
+    problem with the proxy is necessarily difficult to catch and address. When running
+    Linkerd in production, it’s important to build in monitoring to catch errors including:'
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 间歇性代理错误可能是最难解决的问题之一。代理的任何间歇性问题都必须难以捕捉和解决。在生产环境中运行Linkerd时，建议构建监控以捕获包括以下错误：
+- en: Permission denied events
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 权限被拒绝的事件
+- en: These represent either a dangerous misconfiguration in your platform or a genuine
+    threat to your environment. You’ll need to collect and analyze the logs from the
+    Linkerd proxies in order to detect these events.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些可能代表您平台中的危险配置错误或对环境的真正威胁。您需要收集并分析Linkerd代理的日志以便检测这些事件。
+- en: Protocol detection timeouts
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 协议检测超时
+- en: Protocol detection, discussed in [Chapter 4](ch04.html#LUAR_meshing_workloads),
+    is the process of Linkerd automatically identifying traffic between two Pods.
+    It’s an important step that occurs before the proxy can begin sending and receiving
+    traffic. On occasion, protocol detection can time out and then fall back to treating
+    a connection as a standard TCP connection. That means the proxy will introduce
+    an unnecessary 10-second delay, and then the connection will not benefit from
+    Linkerd’s ability to do things like request-level routing.
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 讨论了协议检测，见[第四章](ch04.html#LUAR_meshing_workloads)，这是Linkerd在自动识别两个Pod之间的流量之前执行的过程。这是一个重要的步骤，在代理可以开始发送和接收流量之前发生。偶尔情况下，协议检测可能会超时，然后回退到将连接视为标准的TCP连接。这意味着代理将引入不必要的10秒延迟，然后连接将无法从Linkerd的请求级路由等功能中受益。
+- en: Protocol detection timeout events usually indicate a port that should be marked
+    as skipped or opaque (again, this is discussed in [Chapter 4](ch04.html#LUAR_meshing_workloads)).
+    In particular, the proxy will never be able to correctly perform protocol detection
+    for server-speaks-first protocols. If you’re using Linkerd’s policy resources,
+    you have the ability to declare the protocol on a given port. This allows you
+    to skip protocol detection entirely and will improve the overall availability,
+    as well as security, of your applications.
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 协议检测超时事件通常表明应将某个端口标记为跳过或不透明（再次见[第四章](ch04.html#LUAR_meshing_workloads)）。特别是，代理永远无法正确执行服务器优先协议的协议检测。如果您使用Linkerd的策略资源，您可以在给定端口上声明协议。这使您可以完全跳过协议检测，并将提高应用程序的总体可用性和安全性。
+- en: A proxy may also be unable to handle protocol detection if it is overloaded.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 代理也可能因过载而无法处理协议检测。
+- en: Out of memory events
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 内存不足事件
+- en: An out of memory event for the proxy represents a resource allocation issue.
+    It’s important to monitor, test, and manage the resource limits for the Linkerd
+    proxy. It intercepts and manages the traffic going into and out of your applications,
+    and managing its resources is a core responsibility of the platform team.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于代理的内存不足事件代表着资源分配问题。重要的是要监控、测试和管理 Linkerd 代理的资源限制。它拦截和管理流入和流出应用程序的流量，管理其资源是平台团队的核心职责。
+- en: Ensure you’re providing the proxy with the resources it needs to handle the
+    traffic flowing through it, or you’re going to have a bad day.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 确保为代理提供处理流经其的流量所需的资源，否则你将会度过一个糟糕的一天。
+- en: HTTP errors
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: HTTP 错误
+- en: In general, Linkerd will reuse persistent TCP connections between your Pods
+    and will surface any application-level errors that occur, so if your applications
+    have any kind of underlying configuration issues, you should see the errors that
+    your application is actually generating.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一般来说，Linkerd 会重用 Pod 之间的持久 TCP 连接，并显示发生的任何应用程序级错误，因此如果您的应用程序有任何底层配置问题，应该能看到应用程序实际生成的错误。
+- en: 'However, there are times that the Linkerd proxy will itself respond to a request
+    with an immediate 502, 503, or 504, and it’s important to understand what can
+    cause these:'
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 但是，有时候 Linkerd 代理会直接对请求作出 502、503 或 504 响应，了解导致这些响应的原因非常重要：
+- en: 502s
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 502 错误
+- en: It’s not uncommon for new service mesh users to see an uptick in the occurrence
+    of 502 errors when they begin adding applications to the service mesh. This is
+    because whenever Linkerd sees a connection error between proxies, it will show
+    up as a 502\. If you’re seeing a large number of 502 errors in your environment,
+    consult the [Linkerd docs](https://oreil.ly/77p8P) for more troubleshooting steps
+    you can take.
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当新的服务网格用户开始将应用程序添加到服务网格时，看到 502 错误的频率上升并不罕见。这是因为每当 Linkerd 发现代理之间的连接错误时，它将显示为
+    502 错误。如果您在环境中看到大量的 502 错误，请参考[Linkerd 文档](https://oreil.ly/77p8P)，了解更多可以采取的故障排除步骤。
+- en: 503s and 504s
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 503 和 504
+- en: 503s and 504s show up when a Linkerd proxy finds that requests are overwhelming
+    a workload’s ability to respond.
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当 Linkerd 代理发现请求超出工作负载的能力时，会显示 503 和 504 错误。
+- en: 'Internally, a Linkerd proxy maintains a queue of requests to dispatch. In normal
+    operation, an incoming request spends almost no time in the queue: it is queued,
+    and the proxy chooses an available endpoint for the request and then immediately
+    dispatches it.'
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在正常操作中，Linkerd 代理会维护一个请求调度队列。传入的请求几乎不会在队列中停留：它被排队，代理选择一个可用的端点来处理请求，然后立即调度它。
+- en: However, suppose there’s a massive flood of incoming requests, far too many
+    for the workload to handle. When the queue gets too long, Linkerd begins *load
+    shedding*, where any new request that arrives gets an immediate 503 directly from
+    the proxy. To stop load shedding, the incoming request rate needs to slow enough
+    for the requests in the queue to get dispatched, allowing the queue to shrink.
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，假设有大量的传入请求涌入，超过工作负载的处理能力。当队列变得过长时，Linkerd 开始*负载剪裁*，任何新到达的请求会直接从代理服务器收到一个
+    503 错误。要停止负载剪裁，传入请求的速率需要足够慢，以便队列中的请求得以调度，从而允许队列收缩。
+- en: 'Also, the pool of endpoints is dynamic: a given endpoint can be removed from
+    the pool by circuit breaking, for example. If the pool ever becomes completely
+    empty—i.e., there are *no* available endpoints—then the queue enters a state called
+    *failfast*. In failfast, all requests in the queue immediately get a 504 response,
+    and then Linkerd shifts to load shedding, so new requests again get a 503.'
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此外，端点池是动态的：例如，断路器可以将给定的端点从池中移除。如果池变为空（即没有可用的端点），则队列进入一种称为*快速失败*的状态。在快速失败中，队列中的所有请求立即收到
+    504 响应，然后 Linkerd 转而进行负载剪裁，因此新的请求再次收到 503 响应。
+- en: To get out of failfast, some backend has to become available again. If you got
+    into failfast due to circuit breaking marking all your backends unavailable, the
+    most likely way you’ll get out is that circuit breaking will allow a probe request
+    to go through, it’ll succeed, and then the backend will be marked available again.
+    At that point Linkerd can bring the workload out of failfast and things will start
+    being handled normally again.
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要摆脱快速失败，某个后端必须再次变得可用。如果由于断路器将所有后端标记为不可用而导致快速失败，那么您最有可能的方式是断路器将允许探测请求通过，它将成功，然后后端将再次标记为可用。在那时，Linkerd
+    可以将工作负载从快速失败状态中恢复，并且事情将重新开始正常处理。
+- en: 503 Is Not the Same as 504!
+  id: totrans-44
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 503 不等同于 504！
+- en: Note the different responses there! 504s happen *only* at the point where the
+    load balancer enters failfast, while 503s indicate load shedding—which could be
+    due to failfast, or could be due to too much traffic.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意那里的不同响应！ 504s仅在负载均衡器进入快速失败时发生，而503s指示负载过重——这可能是由于快速失败，也可能是由于流量过大。
+- en: Setting Proxy Log Levels
+  id: totrans-46
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 设置代理日志级别
+- en: In normal operation, the Linkerd proxy does not log debugging information. If
+    needed, you can change the Linkerd proxy’s log level without needing to restart
+    the proxy.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在正常操作中，Linkerd代理不会记录调试信息。如果需要，您可以更改Linkerd代理的日志级别，而无需重新启动代理。
+- en: Debug Logging Can Be Expensive
+  id: totrans-48
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 调试日志可能代价高昂
+- en: If you set too verbose a log level, the proxy will consume dramatically more
+    resources, and its performance will degrade. Do not modify the proxy’s log level
+    unless you need to, and be sure to reset the log level when you’re not actively
+    debugging.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果设置过于详细的日志级别，代理将消耗更多资源，性能会降低。除非必要，否则不要修改代理的日志级别，并确保在不进行活动调试时重置日志级别。
+- en: When you need to start debugging, you can turn on debug-level logging as shown
+    in [Example 15-1](#EX-troubleshooting-loglevel-debug).
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您需要开始调试时，可以按照[示例 15-1](#EX-troubleshooting-loglevel-debug)所示打开调试级别的日志记录。
+- en: Example 15-1\. Turning on debug logging
+  id: totrans-51
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例15-1。打开调试日志
+- en: '[PRE0]'
+  id: totrans-52
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'Once you’ve finished debugging, be sure to turn *off* debug-level logging,
+    as shown in [Example 15-2](#EX-troubleshooting-loglevel-normal). *Don’t leave
+    the proxy running debug-level logging for longer than you need to*: it *will*
+    impact performance.'
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 调试结束后，请务必关闭调试级别的日志记录，如[示例 15-2](#EX-troubleshooting-loglevel-normal)所示。*不要让代理长时间运行调试级别的日志记录*：这*将*影响性能。
+- en: Example 15-2\. Turning off debug logging
+  id: totrans-54
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例15-2。关闭调试日志
+- en: '[PRE1]'
+  id: totrans-55
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: Log levels were discussed in [“Accessing Linkerd Logs”](ch14.html#accessing_linkerd_logs_ch14);
+    you can find more information about configuring the Linkerd proxy’s log level
+    in the [official Linkerd docs](https://oreil.ly/GNv9I).
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 日志级别在[“访问Linkerd日志”](ch14.html#accessing_linkerd_logs_ch14)中有讨论；您可以在[官方Linkerd文档](https://oreil.ly/GNv9I)中找到有关配置Linkerd代理日志级别的更多信息。
+- en: Debugging the Linkerd Control Plane
+  id: totrans-57
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 调试Linkerd控制平面
+- en: Linkerd’s control plane is broken down into the core control plane and its extensions
+    (such as Linkerd Viz and Linkerd Multicluster). Since every component of the control
+    plane uses a Linkerd proxy to communicate, you can take advantage of Linkerd’s
+    observability for debugging.
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linkerd的控制平面分为核心控制平面及其扩展（如Linkerd Viz和Linkerd Multicluster）。由于控制平面的每个组件都使用Linkerd代理进行通信，您可以利用Linkerd的可观察性来进行调试。
+- en: Linkerd Control Plane and Availability
+  id: totrans-59
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Linkerd控制平面和可用性
+- en: The control plane is a part of all mesh operations, so its health is critical.
+    As we mentioned at the start of this chapter, the fastest way to get a good overview
+    of the health of the control plane—outside of paying for a managed service—is
+    to run `linkerd check`.
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 控制平面是所有网格操作的一部分，因此其健康状况至关重要。正如本章开头提到的那样，获取控制平面健康状况的最快方式——除了支付托管服务之外——是运行`linkerd
+    check`。
+- en: '`linkerd check` will go through a series of detailed tests and will validate
+    that there are no known misconfigurations. If there are issues, `linkerd check`
+    will point you to documentation about how to fix the problem.'
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`linkerd check`将执行一系列详细测试，并验证是否存在已知的配置错误。如果存在问题，`linkerd check`将指导您查看有关如何解决问题的文档。'
+- en: Always Start with linkerd check
+  id: totrans-62
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 总是从linkerd check开始
+- en: It’s hard to overstate how useful `linkerd check` is. Whenever you see anything
+    that looks unusual about your mesh, *always* start with `linkerd check`.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 很难过分强调`linkerd check`的实用性。每当您发现您的网格出现异常情况时，*始终*从`linkerd check`开始。
+- en: 'It’s also good to realize that `linkerd check` is deliberate about the order
+    in which it runs its tests: it starts by running all the tests for the core control
+    plane, then moves on to each extension in sequence. Within each section, `linkerd
+    check` generally performs its tests in sequence, with each one needing to pass
+    before the next is able to run. If a test fails, the section it’s in and its position
+    within the section can itself give you a lot of information about where to start
+    debugging.'
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 也要注意`linkerd check`在运行其测试时的顺序是经过深思熟虑的：它首先运行核心控制平面的所有测试，然后按顺序进行每个扩展。在每个部分内部，`linkerd
+    check`通常会按顺序执行其测试，每个测试在能够运行之前都必须通过。如果测试失败，其所在的部分及其位置本身就可以为您提供关于从哪里开始调试的大量信息。
+- en: The Core Control Plane
+  id: totrans-65
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 核心控制平面
+- en: 'The core control plane controls Pod creation, certificate management, and traffic
+    routing between Pods. As discussed in [Chapter 2](ch02.html#LUAR_intro_to_linkerd),
+    the core control plane consists of three main components: the proxy injector,
+    the destination controller, and the identity controller. We’ll dive into failure
+    modes for those components now and what to do about them.'
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 核心控制平面控制Pod创建、证书管理以及Pod之间的流量路由。正如在[第2章](ch02.html#LUAR_intro_to_linkerd)中讨论的那样，核心控制平面由三个主要组件组成：代理注入器、目的地控制器和身份控制器。现在我们将深入讨论这些组件的故障模式及其应对方法。
+- en: Use HA Mode in Production
+  id: totrans-67
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 在生产中使用HA模式
+- en: Any instance of Linkerd that is running in production must use high availability
+    mode—no exceptions! Without HA mode, a single failure in the control plane can
+    put the whole mesh at risk, which is not acceptable in production. You can read
+    more about HA mode in [Chapter 14](ch14.html#LUAR_production_ready).
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在生产中运行的任何Linkerd实例都必须使用高可用性模式，绝不能例外！没有HA模式，控制平面中的单个故障可能会使整个mesh处于风险之中，这在生产中是不可接受的。您可以在[第14章](ch14.html#LUAR_production_ready)中详细了解HA模式。
+- en: The identity controller
+  id: totrans-69
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 身份控制器
+- en: Any failure in the identity controller will impact the issuing and renewing
+    of workload certificates. If a Pod can’t get a certificate at start time, the
+    proxy will fail to start and it will log a message to that effect. On the other
+    side, if a proxy’s certificate expires, it will begin emitting log messages that
+    it failed to renew and will be unable to connect to any new Pods.
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 身份控制器的任何故障都将影响工作负载证书的发放和更新。如果Pod在启动时无法获取证书，代理将无法启动，并会记录相关消息。另一方面，如果代理的证书过期，它将开始记录未能更新的日志消息，并且将无法连接到任何新的Pod。
+- en: 'As of this writing we’re familiar with only two known failure modes for the
+    identity controller:'
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 截至目前，我们只熟悉身份控制器的两种已知故障模式：
+- en: Expired certificates
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 过期证书
+- en: When you install Linkerd, you provide the control plane with a trust anchor
+    certificate and an identity issuer certificate, as discussed at length in [Chapter 7](ch07.html#LUAR_mtls_and_certs).
+    If the identity issuer certificate expires, the identity controller will no longer
+    be able to issue new certificates, which will cause a mesh-wide outage as individual
+    proxies become unable to establish secure connections with one another.
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安装Linkerd时，您需要为控制平面提供信任锚证书和身份发行者证书，如[第7章](ch07.html#LUAR_mtls_and_certs)中详细讨论的那样。如果身份发行者证书过期，身份控制器将无法继续发出新证书，这将导致整个mesh停机，因为各个代理无法再建立安全连接。
+- en: Never Let Your Certificates Expire
+  id: totrans-74
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 永远不要让您的证书过期
+- en: Expired certificates will cause your entire mesh to grind to a halt, and they
+    are *the* most common cause of production Linkerd outages. You *must* regularly
+    monitor the health of your certificates.
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 过期证书将导致整个mesh停滞不前，并且它们是导致Linkerd生产中断的最常见原因。您*必须*定期监控证书的健康状态。
+- en: Identity controller overload
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 身份控制器超载
+- en: Linkerd’s identity controller is accessed every time a new meshed Pod is created.
+    As such, it’s possible—though difficult—to overwhelm the identity controller by
+    creating a very large number of Pods. This will manifest as long delays in Pod
+    creation and a large number of messages about certificate creation in the identity
+    controller’s logs.
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每次创建新的meshed Pod时都会访问Linkerd的身份控制器。因此，通过创建大量Pod可能（虽然困难）会使身份控制器不堪重负。这将表现为Pod创建的长时间延迟，以及身份控制器日志中关于证书创建的大量消息。
+- en: 'The simplest way to deal with an overloaded identity controller is horizontal
+    scaling: add more replicas to the `linkerd-identity` deployment in the `linkerd`
+    namespace. You might also want to consider allowing it to request more CPU.'
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 处理超载身份控制器的最简单方法是进行水平扩展：向`linkerd`命名空间中的`linkerd-identity`部署添加更多副本。您可能还希望考虑允许其请求更多CPU资源。
+- en: The destination controller
+  id: totrans-79
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 目的地控制器
+- en: 'Linkerd’s destination controller is responsible for providing the individual
+    proxies with their routing information as well as providing details about the
+    effective policy for your environment. It is critical to the normal operations
+    of the mesh, and any degradation should be considered a critical issue to be addressed
+    immediately. There are two main areas to be aware of here:'
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linkerd的目的地控制器负责为各个代理提供其路由信息，并提供环境有效策略的详细信息。它对mesh的正常运行至关重要，任何退化都应立即视为需要紧急处理的关键问题。这里有两个主要注意事项：
+- en: Memory
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 内存
+- en: The destination controller’s memory usage scales linearly with the number of
+    endpoints in your cluster. For most clusters, this results in the destination
+    controller consuming a fairly consistent amount of memory over time. In turn,
+    this means that if the destination controller gets OOMKilled by Kubernetes, it
+    is very likely to reach its memory limit and get OOMKilled again every time it
+    restarts. Therefore, it’s important to actively monitor and manage the memory
+    limits on the destination controller.
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 目标控制器的内存使用量随着集群中端点数量的线性增长而增加。对于大多数集群而言，这导致目标控制器随时间消耗的内存量相对稳定。这意味着如果目标控制器被 Kubernetes
+    的 OOMKilled，它非常可能会达到其内存限制，并在每次重新启动时再次被 OOMKilled。因此，积极监视和管理目标控制器上的内存限制非常重要。
+- en: Proxy cache
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 代理缓存
+- en: The Linkerd proxy maintains a cache of endpoints that can be reused by the proxy
+    in the event that the destination controller is unavailable. By default, the proxy
+    will cache its endpoint list for 5 seconds and maintain that cache as long as
+    it gets reused in any given 5-second interval. You can configure that timeout
+    with the `outboundDiscoveryCacheUnusedTimeout` property of the `linkerd-control-plane`
+    Helm chart. Increasing the timeout will increase your overall resiliency in the
+    face of a destination controller outage, particularly for services that see less
+    traffic.
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linkerd 代理会维护一个端点的缓存，以便在目标控制器不可用时由代理重复使用。默认情况下，代理将缓存其端点列表 5 秒，并在任何给定的 5 秒间隔内重复使用该缓存。您可以通过
+    `linkerd-control-plane` Helm 图表的 `outboundDiscoveryCacheUnusedTimeout` 属性来配置该超时时间。增加超时时间将增加您在目标控制器故障时的整体弹性，特别是对于流量较少的服务而言。
+- en: The proxy injector
+  id: totrans-85
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 代理注入器
+- en: 'Linkerd’s proxy injector is a mutating webhook that acts in response to Pod
+    creation events. Of all the elements in the core control plane, the proxy injector
+    is the one least likely to see issues, but it’s important to actively monitor
+    its health:'
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linkerd 的代理注入器是对 Pod 创建事件做出响应的突变 Webhook。在核心控制平面的所有元素中，代理注入器最不可能出现问题，但是积极监视其健康状态是非常重要的：
+- en: In HA mode, if the proxy injector crashes, new Pods will not be allowed to start
+    until the proxy injector is back online.
+  id: totrans-87
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在 HA 模式下，如果代理注入器崩溃，则新的 Pod 将不被允许启动，直到代理注入器恢复在线状态。
+- en: In non-HA mode, if the proxy injector crashes, new Pods won’t be injected into
+    the mesh until it’s back online.
+  id: totrans-88
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在非 HA 模式下，如果代理注入器崩溃，则新的 Pod 不会被注入到网格中，直到其恢复在线状态。
+- en: Use HA Mode in Production
+  id: totrans-89
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 在生产环境中使用 HA 模式
+- en: It should be clear from the above description why it’s so important to use high
+    availability mode in production. You can read more about HA mode in [Chapter 14](ch14.html#LUAR_production_ready).
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从上述描述中很明显，为什么在生产环境中使用高可用模式是如此重要。您可以在 [第 14 章](ch14.html#LUAR_production_ready)
+    中了解更多关于 HA 模式的信息。
+- en: Linkerd Extensions
+  id: totrans-91
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Linkerd 扩展
+- en: No Linkerd extensions are in the critical path to mesh operations, but many
+    users of Linkerd use the Linkerd Viz extension, in particular, to gather additional
+    details about the operation of their services. In the event that you’re seeing
+    aberrant behavior from Linkerd Viz, `linkerd check` will almost always show you
+    what the failure is, and generally the best remediation is to upgrade or reinstall
+    the extension.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 没有 Linkerd 扩展程序位于网格操作的关键路径上，但许多 Linkerd 用户特别使用 Linkerd Viz 扩展程序来收集有关其服务操作的额外细节。如果您发现从
+    Linkerd Viz 看到异常行为，`linkerd check` 几乎总是能显示出故障是什么，通常最佳的修复方法是升级或重新安装扩展程序。
+- en: The one exception to this “turn it off and on again” approach to troubleshooting
+    Linkerd Viz is if you’re using its built-in Prometheus instance. As we discussed
+    in [Chapter 14](ch14.html#LUAR_production_ready) and elsewhere, the built-in Prometheus
+    instance stores metrics only in memory. This means that as you add more metrics
+    data, it *will* periodically get OOMKilled by Kubernetes, and you will lose whatever
+    data it had stored. This is a known limitation of the built-in Prometheus.
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种解决 Linkerd Viz 故障的“重启”方法的一个例外是，如果您正在使用其内置的 Prometheus 实例。正如我们在 [第 14 章](ch14.html#LUAR_production_ready)
+    和其他地方讨论的那样，内置的 Prometheus 实例只在内存中存储指标数据。这意味着随着您添加更多指标数据，它*将*周期性地被 Kubernetes 的
+    OOMKilled，您将丢失它存储的任何数据。这是内置 Prometheus 的已知限制。
+- en: Do Not Use the Built-in Prometheus in Production
+  id: totrans-94
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 在生产环境中不要使用内置的 Prometheus
+- en: It should be clear from the previous description that you *must not use the
+    built-in Prometheus instance in production*. You can read more about this in [Chapter 14](ch14.html#LUAR_production_ready).
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从前面的描述中清楚地可以看出，在生产环境中*绝不能使用内置的 Prometheus 实例*。您可以在 [第 14 章](ch14.html#LUAR_production_ready)
+    中了解更多相关信息。
+- en: Summary
+  id: totrans-96
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 摘要
+- en: In general, Linkerd is a well-behaved, fault-tolerant mesh—especially in HA
+    mode. However, as with all software, things can go wrong. After reading this chapter,
+    you should have an idea of where to start looking when they do.
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一般来说，**Linkerd** 是一个表现良好、容错性强的网格（mesh）——特别是在高可用模式下。然而，像所有软件一样，出现问题时需要注意。阅读本章后，你应该知道在出现问题时从何处开始查找。

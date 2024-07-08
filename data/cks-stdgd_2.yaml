@@ -1,0 +1,1968 @@
+- en: Chapter 2\. Cluster Setup
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第二章 聚集设置
+- en: The first domain of the exam deals with concerns related to Kubernetes cluster
+    setup and configuration. In this chapter, we’ll only drill into the security-specific
+    aspects and not the standard responsibilities of a Kubernetes administrator.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 考试的第一个领域涉及与 Kubernetes 集群设置和配置相关的问题。在本章中，我们将仅深入探讨与安全相关的方面，而不是 Kubernetes 管理员的标准责任。
+- en: 'At a high level, this chapter covers the following concepts:'
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在高层次上，本章涵盖以下概念：
+- en: Using network policies to restrict Pod-to-Pod communication
+  id: totrans-3
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用网络策略来限制 Pod 到 Pod 的通信
+- en: Running CIS benchmark tooling to identify security risks for cluster components
+  id: totrans-4
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 运行 CIS 基准工具以识别集群组件的安全风险
+- en: Setting up an Ingress object with TLS support
+  id: totrans-5
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 设置带有 TLS 支持的入口对象
+- en: Protecting node ports, API endpoints, and GUI access
+  id: totrans-6
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 保护节点端口、API 端点和 GUI 访问
+- en: Verifying platform binaries against their checksums
+  id: totrans-7
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 验证平台二进制文件与它们的校验和
+- en: Using Network Policies to Restrict Pod-to-Pod Communication
+  id: totrans-8
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用网络策略来限制 Pod 到 Pod 的通信
+- en: For a microservice architecture to function in Kubernetes, a Pod needs to be
+    able to reach another Pod running on the same or on a different node without Network
+    Address Translation (NAT). Kubernetes assigns a unique IP address to every Pod
+    upon creation from the Pod CIDR range of its node. The IP address is ephemeral
+    and therefore cannot be considered stable over time. Every restart of a Pod leases
+    a new IP address. It’s recommended to use Pod-to-Service communication over Pod-to-Pod
+    communication so that you can rely on a consistent network interface.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 中，为了使微服务架构正常运行，Pod 需要能够在同一节点上或不同节点上运行的另一个 Pod 进行通信，而不需要网络地址转换（NAT）。Kubernetes
+    在每个 Pod 创建时从其节点的 Pod CIDR 范围内为其分配唯一的 IP 地址。该 IP 地址是临时的，因此不能长期稳定。每次 Pod 重新启动时，都会租用一个新的
+    IP 地址。建议使用 Pod 到服务的通信而不是 Pod 到 Pod 的通信，以便依赖于一致的网络接口。
+- en: The IP address assigned to a Pod is unique across all nodes and namespaces.
+    This is achieved by assigning a dedicated subnet to each node when registering
+    it. When creating a new Pod on a node, the IP address is leased from the assigned
+    subnet. This is handled by the Container Network Interface (CNI) plugin. As a
+    result, Pods on a node can communicate with all other Pods running on any other
+    node of the cluster.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 分配给 Pod 的 IP 地址在所有节点和命名空间中是唯一的。这是通过在注册节点时为每个节点分配专用子网来实现的。在节点上创建新的 Pod 时，IP 地址是从分配的子网中租赁的。这由容器网络接口（CNI）插件处理。因此，节点上的
+    Pod 可以与集群中任何其他节点上运行的所有其他 Pod 进行通信。
+- en: Network policies act similarly to firewall rules, but for Pod-to-Pod communication.
+    Rules can include the direction of network traffic (ingress and/or egress) for
+    one or many Pods within a namespace or across different namespaces, as well as
+    their targeted ports. For a deep-dive coverage on the basics of network policies,
+    refer to the book [*Certified Kubernetes Application Developer (CKAD) Study Guide*](https://learning.oreilly.com/library/view/certified-kubernetes-application/9781492083726)
+    (O’Reilly) or the [Kubernetes documentation](https://oreil.ly/WChde). The CKS
+    exam primarily focuses on restricting cluster-level access with network policies.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 网络策略类似于防火墙规则，但用于 Pod 到 Pod 的通信。规则可以包括网络流量的方向（入站和/或出站），一个或多个命名空间内或跨不同命名空间的多个
+    Pod 的目标端口。关于网络策略基础的深入覆盖，请参阅书籍 [*Certified Kubernetes Application Developer (CKAD)
+    Study Guide*](https://learning.oreilly.com/library/view/certified-kubernetes-application/9781492083726)（O’Reilly）或
+    [Kubernetes 文档](https://oreil.ly/WChde)。CKS 考试主要侧重于使用网络策略限制集群级访问。
+- en: Defining the rules of network policies correctly can be challenging. The page
+    [networkpolicy.io](https://networkpolicy.io) provides a visual editor for network
+    policies that renders a graphical representation in the browser.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正确定义网络策略的规则可能具有挑战性。网站 [networkpolicy.io](https://networkpolicy.io) 提供了一个网络策略的可视化编辑器，在浏览器中呈现图形表示。
+- en: 'Scenario: Attacker Gains Access to a Pod'
+  id: totrans-13
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 场景：攻击者获得对 Pod 的访问权限
+- en: Say you are working for a company that operates a Kubernetes cluster with three
+    worker nodes. Worker node 1 currently runs two Pods as part of a microservices
+    architecture. Given Kubernetes default behavior for Pod-to-Pod network communication,
+    Pod 1 can talk to Pod 2 unrestrictedly and vice versa.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设你在为一家运营 Kubernetes 集群的公司工作，该集群有三个工作节点。工作节点 1 当前作为微服务架构的一部分运行两个 Pod。考虑到 Kubernetes
+    对 Pod 到 Pod 网络通信的默认行为，Pod 1 可以无限制地与 Pod 2 进行通信，反之亦然。
+- en: As you can see in [Figure 2-1](#pod-to-pod-communication-attacker), an attacker
+    gained access to Pod 1\. Without defining network policies, the attacker can simply
+    talk to Pod 2 and cause additional damage. This vulnerability isn’t restricted
+    to a single namespace. Pods 3 and 4 can be reached and compromised as well.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如您在[图 2-1](#pod-to-pod-communication-attacker)中所见，攻击者已经访问了 Pod 1\. 如果没有定义网络策略，攻击者可以简单地与
+    Pod 2 进行通信，并造成额外的损害。这种漏洞不限于单个命名空间。Pod 3 和 Pod 4 也可以被访问和受到威胁。
+- en: '![ckss 0201](assets/ckss_0201.png)'
+  id: totrans-16
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckss 0201](assets/ckss_0201.png)'
+- en: Figure 2-1\. An attacker who gained access to Pod 1 has network access to other
+    Pods
+  id: totrans-17
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-1\. 已经访问 Pod 1 的攻击者可以访问其他 Pod 的网络
+- en: Observing the Default Behavior
+  id: totrans-18
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 观察默认行为
+- en: We’ll set up three Pods to demonstrate the unrestricted Pod-to-Pod network communication
+    in practice. As you can see in [Example 2-1](#setup-network-policy), the YAML
+    manifest defines the Pods named `backend` and `frontend` in the namespace `g04`.
+    The `other` Pod lives in the `default` namespace. Observe the label assignment
+    for the namespace and Pods. We will reference them a little bit later in this
+    chapter when defining network policies.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将设置三个 Pod 来演示实践中无限制的 Pod-to-Pod 网络通信。如您在[示例 2-1](#setup-network-policy)中所见，YAML
+    清单定义了命名空间 `g04` 中名为 `backend` 和 `frontend` 的 Pods。`other` Pod 位于 `default` 命名空间中。观察命名空间和
+    Pods 的标签分配。稍后在本章节中定义网络策略时我们会引用它们。
+- en: Example 2-1\. YAML manifest for three Pods in different namespaces
+  id: totrans-20
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 2-1\. 位于不同命名空间中的三个 Pods 的 YAML 清单
+- en: '[PRE0]'
+  id: totrans-21
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'Start by creating the objects from the existing YAML manifest using the declarative
+    `kubectl apply` command:'
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，使用声明性的 `kubectl apply` 命令从现有的 YAML 清单创建对象：
+- en: '[PRE1]'
+  id: totrans-23
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: 'Let’s verify that the namespace `g04` runs the correct Pods. Use the `-o wide`
+    CLI option to determine the virtual IP addresses assigned to the Pods. The `backend`
+    Pod uses the IP address 10.0.0.43, and the `frontend` Pod uses the IP address
+    10.0.0.193:'
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们验证命名空间 `g04` 运行正确的 Pods。使用 `-o wide` CLI 选项来确定分配给 Pods 的虚拟 IP 地址。`backend`
+    Pod 使用 IP 地址 10.0.0.43，而 `frontend` Pod 使用 IP 地址 10.0.0.193：
+- en: '[PRE2]'
+  id: totrans-25
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'The `default` namespace handles a single Pod:'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`default` 命名空间处理单个 Pod：'
+- en: '[PRE3]'
+  id: totrans-27
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'The `frontend` Pod can talk to the `backend` Pod as no communication restrictions
+    have been put in place:'
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`frontend` Pod 可以与 `backend` Pod 进行通信，因为没有设置通信限制：'
+- en: '[PRE4]'
+  id: totrans-29
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: 'The `other` Pod residing in the `default` namespace can communicate with the
+    `backend` Pod without problems:'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 位于 `default` 命名空间中的 `other` Pod 可以与 `backend` Pod 进行通信而没有问题：
+- en: '[PRE5]'
+  id: totrans-31
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: In the next section, we’ll talk about restricting Pod-to-Pod network communication
+    to a maximum level with the help of deny-all network policy rules. We’ll then
+    open up ingress and/or egress communication only for the kind of network communication
+    required for the microservices architecture to function properly.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在接下来的章节中，我们将讨论如何通过拒绝所有网络策略规则来限制 Pod-to-Pod 网络通信的最大程度。然后，我们将仅针对微服务架构正常运行所需的网络通信打开入口和/或出口通信。
+- en: Denying Directional Network Traffic
+  id: totrans-33
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 拒绝定向网络流量
+- en: The best way to restrict Pod-to-Pod network traffic is with the principle of
+    least privilege. Least privilege means that Pods should communicate with the lowest
+    privilege for network communication. You’d usually start by disallowing traffic
+    in any direction and then opening up the traffic needed by the application architecture.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 限制 Pod-to-Pod 网络流量的最佳方法是使用最小权限原则。最小权限意味着 Pods 应该以最低特权进行网络通信。通常情况下，您会从禁止任何方向的流量开始，然后开放应用架构所需的流量。
+- en: The [Kubernetes documentation](https://oreil.ly/PZOGf) provides a couple of
+    helpful YAML manifest examples. [Example 2-2](#deny-ingress-network-policy) shows
+    a network policy that denies ingress traffic to all Pods in the namespace `g04`.
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Kubernetes 文档](https://oreil.ly/PZOGf)提供了几个有用的 YAML 清单示例。[示例 2-2](#deny-ingress-network-policy)展示了一个拒绝命名空间
+    `g04` 中所有 Pods 入口流量的网络策略。'
+- en: Example 2-2\. A default deny-all ingress network policy
+  id: totrans-36
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 2-2\. 默认拒绝所有入口网络策略
+- en: '[PRE6]'
+  id: totrans-37
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: Selecting all Pods is denoted by the value `{}` assigned to the `spec.podSelector`
+    attribute. The value attribute `spec.policyTypes` defines the denied direction
+    of traffic. For incoming traffic, you can add `Ingress` to the array. Outgoing
+    traffic can be specified by the value `Egress`. In this particular example, we
+    disallow all ingress traffic. Egress traffic is still permitted.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 选择所有 Pods 由赋值给 `spec.podSelector` 属性的值 `{}` 表示。`spec.policyTypes` 属性的值定义了流量的拒绝方向。对于入站流量，您可以将
+    `Ingress` 添加到数组中。出站流量可以通过 `Egress` 指定。在这个特定的例子中，我们禁止所有入站流量。出站流量仍然允许。
+- en: 'The contents of the “deny-all” network policy have been saved in the file `deny-all-ingress-network-policy.yaml`.
+    The following command creates the object from the file:'
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: “拒绝所有”网络策略的内容已保存在文件`deny-all-ingress-network-policy.yaml`中。以下命令从文件创建对象：
+- en: '[PRE7]'
+  id: totrans-40
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: 'Let’s see how this changed the runtime behavior for Pod-to-Pod network communication.
+    The `frontend` Pod cannot talk to the `backend` Pod anymore, as observed by running
+    the same `wget` command we used earlier. The network call times out after one
+    second, as defined by the CLI option `--timeout`:'
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们看看这如何改变Pod到Pod网络通信的运行时行为。`frontend` Pod无法再与`backend` Pod通信，通过运行与之前相同的`wget`命令观察到这一点。网络调用在一秒后超时，由CLI选项`--timeout`定义：
+- en: '[PRE8]'
+  id: totrans-42
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: 'Furthermore, Pods running in a different namespace cannot connect to the `backend`
+    Pod anymore either. The following `wget` command makes a call from the `other`
+    Pod running in the `default` namespace to the IP address of the `backend` Pod:'
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此外，运行在不同命名空间中的Pod也无法再连接到`backend` Pod。以下`wget`命令从运行在`default`命名空间中的`other` Pod到`backend`
+    Pod的IP地址的调用：
+- en: '[PRE9]'
+  id: totrans-44
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: This call times out as well.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此调用也超时。
+- en: Allowing Fine-Grained Incoming Traffic
+  id: totrans-46
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 允许细粒度入站流量
+- en: Network policies are additive. To grant more permissions for network communication,
+    simply create another network policy with more fine-grained rules. Say we wanted
+    to allow ingress traffic to the `backend` Pod only from the `frontend` Pod that
+    lives in the same namespace. Ingress traffic from all other Pods should be denied
+    independently of the namespace they are running in.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 网络策略是可加的。要为网络通信授予更多权限，只需创建另一个具有更精细规则的网络策略。例如，我们想要仅允许来自同一命名空间中的`frontend` Pod的入口流量访问`backend`
+    Pod。独立于它们运行的命名空间，应拒绝所有其他Pod的入口流量。
+- en: 'Network policies heavily work with label selection to define rules. Identify
+    the labels of the `g04` namespace and the Pod objects running in the same namespace
+    so we can use them in the network policy:'
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 网络策略大量使用标签选择来定义规则。识别`g04`命名空间中的标签及其运行在同一命名空间中的Pod对象，以便在网络策略中使用它们：
+- en: '[PRE10]'
+  id: totrans-49
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: The label assignment for the namespace `g04` includes the key-value pair `app=orion`.
+    The Pod `backend` label set includes the key-value pair `tier=backend`, and the
+    `frontend` Pod the key-value pair `tier=frontend`.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`g04`命名空间的标签分配包括键值对`app=orion`。`backend` Pod的标签集包括键值对`tier=backend`，而`frontend`
+    Pod则包括键值对`tier=frontend`。'
+- en: Create a new network policy that allows the `frontend` Pod to talk to the `backend`
+    Pod only on port 3000\. No other communication should be allowed. The YAML manifest
+    representation in [Example 2-3](#ingress-network-policy) shows the full network
+    policy definition.
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建一个新的网络策略，允许`frontend` Pod只在端口3000上与`backend` Pod通信。不允许其他任何通信。在[示例 2-3](#ingress-network-policy)中，YAML清单显示了完整的网络策略定义。
+- en: Example 2-3\. Network policy that allows ingress traffic
+  id: totrans-52
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 2-3\. 允许入口流量的网络策略
+- en: '[PRE11]'
+  id: totrans-53
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: 'The definition of the network policy has been stored in the file `backend-ingress-network-policy.yaml`.
+    Create the object from the file:'
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 网络策略的定义已存储在文件`backend-ingress-network-policy.yaml`中。从文件创建对象：
+- en: '[PRE12]'
+  id: totrans-55
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: 'The `frontend` Pod can now talk to the `backend` Pod:'
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`frontend` Pod现在可以与`backend` Pod通信：'
+- en: '[PRE13]'
+  id: totrans-57
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: 'Pods running outside of the `g04` namespace still can’t connect to the `backend`
+    Pod. The `wget` command times out:'
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 仍在`g04`命名空间之外运行的Pod无法连接到`backend` Pod。`wget`命令超时：
+- en: '[PRE14]'
+  id: totrans-59
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: Applying Kubernetes Component Security Best Practices
+  id: totrans-60
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 应用Kubernetes组件安全最佳实践
+- en: Managing an on-premises Kubernetes cluster gives you full control over the configuration
+    options applied to cluster components, such as the API server, etcd, the kubelet,
+    and others. It’s not uncommon to simply go with the default configuration settings
+    used by `kubeadm` when creating the cluster nodes. Some of those default settings
+    may expose cluster components to unnecessary attack opportunities.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 管理本地Kubernetes集群可以完全控制应用于集群组件（如API服务器、etcd、kubelet等）的配置选项。当创建集群节点时，使用`kubeadm`的默认配置设置通常并不罕见。其中一些默认设置可能会暴露集群组件，使其面临不必要的攻击机会。
+- en: Hardening the security measures of a cluster is a crucial activity for any Kubernetes
+    administrator seeking to minimize attack vectors. You can either perform this
+    activity manually if you are aware of the best practices, or use an automated
+    process.
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 加固集群安全措施是任何寻求最小化攻击向量的Kubernetes管理员的关键活动。如果你了解最佳实践，可以手动执行此活动，或者使用自动化过程。
+- en: The [Center for Internet Security (CIS)](https://www.cisecurity.org) is a not-for-profit
+    organization that publishes cybersecurity best practices. Part of their best practices
+    portfolio is the [Kubernetes CIS Benchmark](https://oreil.ly/CUe_D), a catalog
+    of best practices for Kubernetes environments. You will find a detailed list of
+    recommended security settings for cluster components on their web page.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[互联网安全中心（CIS）](https://www.cisecurity.org)是一个非营利性组织，发布网络安全最佳实践。其中包括他们的最佳实践之一是
+    [Kubernetes CIS Benchmark](https://oreil.ly/CUe_D)，这是针对 Kubernetes 环境的最佳实践目录。您将在他们的网页上找到针对集群组件推荐的详细安全设置列表。'
+- en: CIS benchmarking for cloud provider Kubernetes environments
+  id: totrans-64
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 云提供商 Kubernetes 环境的 CIS 基准测试
+- en: The Kubernetes CIS Benchmark is geared toward a self-managed installation of
+    Kubernetes. Cloud provider Kubernetes environments, such as Amazon Elastic Kubernetes
+    Service (EKS) and Google Kubernetes Engine (GKE), provide a managed control plane
+    accompanied by their own command line tools. Therefore, the security recommendations
+    made by the Kubernetes CIS Benchmark may be less fitting. Some tools, like kube-bench,
+    discussed next, provide verification checks specifically for cloud providers.
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes CIS Benchmark 针对自管理的 Kubernetes 安装。云提供商的 Kubernetes 环境（例如 Amazon
+    Elastic Kubernetes Service (EKS) 和 Google Kubernetes Engine (GKE)）提供了由其自己的命令行工具支持的托管控制平面。因此，Kubernetes
+    CIS Benchmark 提出的安全建议可能不太适用。一些工具，如下讨论的 kube-bench，专门为云提供商提供验证检查。
+- en: Using kube-bench
+  id: totrans-66
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用 kube-bench
+- en: You can use the tool [kube-bench](https://oreil.ly/y3mbO) to check Kubernetes
+    cluster components against the CIS Benchmark best practices in an automated fashion.
+    Kube-bench can be executed in a variety of ways. For example, you can install
+    it as a platform-specific binary in the form of an RPM or Debian file. The most
+    convenient and direct way to run the verification process is by running kube-bench
+    in a Pod directly on the Kubernetes cluster. For that purpose, create a Job object
+    with the help of a YAML manifest checked into the GitHub repository of the tool.
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用工具[kube-bench](https://oreil.ly/y3mbO)可以自动化地检查 Kubernetes 集群组件是否符合 CIS 基准最佳实践。kube-bench
+    可以通过多种方式执行。例如，您可以将其安装为平台特定的二进制文件，如 RPM 或 Debian 文件。直接在 Kubernetes 集群上的 Pod 中运行
+    kube-bench 是最方便和直接的验证过程。为此，使用工具的 GitHub 仓库中提供的 YAML 文件创建一个 Job 对象。
+- en: 'Start by creating the Job from the file `job-master.yaml`, or `job-node.yaml`
+    depending on whether you want to inspect a control plane node or a worker node.
+    The following command runs the verification checks against the control plane node:'
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，根据需求从文件 `job-master.yaml` 或 `job-node.yaml` 创建 Job，以检查控制平面节点或工作节点。以下命令对控制平面节点执行验证检查：
+- en: '[PRE15]'
+  id: totrans-69
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: 'Upon Job execution, the corresponding Pod running the verification process
+    can be identified by its name in the `default` namespace. The Pod’s name starts
+    with the prefix `kube-bench`, then appended with the type of the node plus a hash
+    at the end. The following output uses the Pod named `kube-bench-master-8f6qh`:'
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Job 执行期间，可以通过其名称在 `default` 命名空间中标识运行验证过程的 Pod。Pod 的名称以 `kube-bench` 前缀开始，然后附加节点类型及末尾的哈希。以下输出使用名为
+    `kube-bench-master-8f6qh` 的 Pod：
+- en: '[PRE16]'
+  id: totrans-71
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: 'Wait until the Pod transitions into the “Completed” status to ensure that all
+    verification checks have finished. You can have a look at the benchmark result
+    by dumping the logs of the Pod:'
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 等待 Pod 转换为“已完成”状态，以确保所有验证检查已完成。您可以通过转储 Pod 的日志查看基准结果：
+- en: '[PRE17]'
+  id: totrans-73
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: Sometimes, it may be more convenient to write the verification results to a
+    file. You can redirect the output of the `kubectl logs` command to a file, e.g.,
+    with the command `kubectl logs kube-bench-master-8f6qh > control-plane-kube-bench-results.txt`.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有时，将验证结果写入文件可能更为方便。您可以将 `kubectl logs` 命令的输出重定向到文件，例如使用命令 `kubectl logs kube-bench-master-8f6qh
+    > control-plane-kube-bench-results.txt`。
+- en: The kube-bench Verification Result
+  id: totrans-75
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: kube-bench 验证结果
+- en: 'The produced verification result can be lengthy and detailed, but it consists
+    of these key elements: the type of the inspected node, the inspected components,
+    a list of passed checks, a list of failed checks, a list of warnings, and a high-level
+    summary:'
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 生成的验证结果可能会很长，但包括以下关键元素：被检查节点的类型，被检查的组件，通过检查的列表，未通过检查的列表，警告列表和高级别摘要：
+- en: '[PRE18]'
+  id: totrans-77
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: '[![1](assets/1.png)](#co_cluster_setup_CO1-1)'
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_cluster_setup_CO1-1)'
+- en: The inspected node, in this case the control plane node.
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本例中，被检查的节点是控制平面节点。
+- en: '[![2](assets/2.png)](#co_cluster_setup_CO1-2)'
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_cluster_setup_CO1-2)'
+- en: A passed check. Here, the file permissions of the API server configuration file.
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个通过的检查。这里是API服务器配置文件的文件权限。
+- en: '[![3](assets/3.png)](#co_cluster_setup_CO1-3)'
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_cluster_setup_CO1-3)'
+- en: A warning message that prompts you to manually check the value of an argument
+    provided to the API server executable.
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 提示消息，提示您手动检查提供给API服务器可执行文件的参数值。
+- en: '[![4](assets/4.png)](#co_cluster_setup_CO1-4)'
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_cluster_setup_CO1-4)'
+- en: A failed check. For example, the flag `--kubelet-certificate-authority` should
+    be set for the API server executable.
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个失败的检查。例如，应为API服务器可执行文件设置标志`--kubelet-certificate-authority`。
+- en: '[![5](assets/5.png)](#co_cluster_setup_CO1-5)'
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#co_cluster_setup_CO1-5)'
+- en: The remediation action to take to fix a problem. The number, e.g., 1.2.1, of
+    the failure or warning corresponds to the number assigned to the remediation action.
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 修复问题所需的纠正操作。失败或警告的编号，例如1.2.1，对应于纠正操作分配的编号。
+- en: '[![6](assets/6.png)](#co_cluster_setup_CO1-11)'
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![6](assets/6.png)](#co_cluster_setup_CO1-11)'
+- en: The summary of all passed and failed checks plus warning and informational messages.
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有通过和失败检查的摘要，以及警告和信息消息。
+- en: Fixing Detected Security Issues
+  id: totrans-90
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 修复检测到的安全问题
+- en: The list of reported warnings and failures can be a bit overwhelming at first.
+    Keep in mind that you do not have to fix them all at once. Some checks are merely
+    guidelines or prompts to verify an assigned value for a configuration. The following
+    steps walk you through the process of eliminating a warning message.
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最初，报告的警告和失败检查列表可能会让人有些不知所措。请记住，您不必一次性修复所有问题。一些检查只是指南或提示，用于验证配置的分配值。以下步骤将引导您完成消除警告消息的过程。
+- en: 'The configuration files of the control plane components can be found in the
+    directory `/etc/kubernetes/manifests` on the host system of the control plane
+    node. Say you wanted to fix the warning 1.2.12 reported by kube-bench:'
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 控制平面组件的配置文件可以在控制平面节点的主机系统上的目录`/etc/kubernetes/manifests`中找到。假设您想修复由kube-bench报告的警告
+    1.2.12：
+- en: '[PRE19]'
+  id: totrans-93
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: 'As proposed by the remediation action, you are supposed to edit the configuration
+    file for the API server and add the value `AlwaysPullImages` to the list of admission
+    plugins. Go ahead and edit the file `kube-apiserver.yaml`:'
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如纠正操作所建议的，您应编辑API服务器的配置文件并将值`AlwaysPullImages`添加到准入插件列表中。继续编辑文件`kube-apiserver.yaml`：
+- en: '[PRE20]'
+  id: totrans-95
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: 'After appending the value `AlwaysPullImages` to the argument `--enable-admission-plugins`,
+    the result could look as follows:'
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在参数`--enable-admission-plugins`中添加值`AlwaysPullImages`后，结果可能如下所示：
+- en: '[PRE21]'
+  id: totrans-97
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: 'Save the changes to the file. The Pod running the API server in the `kube-system`
+    namespace will be restarted automatically. The startup process can take a couple
+    of seconds. Therefore, executing the following command may take a while to succeed:'
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将更改保存到文件。在`kube-system`命名空间中运行API服务器的Pod将自动重启。启动过程可能需要几秒钟。因此，执行以下命令可能需要一段时间才能成功：
+- en: '[PRE22]'
+  id: totrans-99
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: 'You will need to delete the existing Job object before you can verify the changed
+    result:'
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在验证更改结果之前，您需要删除现有的作业对象：
+- en: '[PRE23]'
+  id: totrans-101
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: 'The verification check 1.2.12 now reports a passed result:'
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 验证检查 1.2.12 现在报告通过的结果：
+- en: '[PRE24]'
+  id: totrans-103
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: Creating an Ingress with TLS Termination
+  id: totrans-104
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 创建带有TLS终止的Ingress
+- en: An Ingress routes HTTP and/or HTTPS traffic from outside of the cluster to one
+    or many Services based on a matching URL context path. You can see its functionality
+    in action in [Figure 2-2](#ingress_traffic_routing).
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Ingress会根据匹配的URL上下文路径，将来自集群外部的HTTP和/或HTTPS流量路由到一个或多个服务。您可以在[图 2-2](#ingress_traffic_routing)中看到其功能。
+- en: '![ckss 0202](assets/ckss_0202.png)'
+  id: totrans-106
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckss 0202](assets/ckss_0202.png)'
+- en: Figure 2-2\. Managing external access to the Services via HTTP(S)
+  id: totrans-107
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-2\. 通过HTTP(S)管理对服务的外部访问
+- en: The Ingress has been configured to accept HTTP and HTTPS traffic from outside
+    of the cluster. If the caller provides the context path `/app`, then the traffic
+    is routed to Service 1\. If the caller provides the context path `/api`, then
+    the traffic is routed to Service 2\. It’s important to point out that the communication
+    typically uses unencrypted HTTP network communication as soon as it passes the
+    Ingress.
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Ingress已配置为接受来自集群外部的HTTP和HTTPS流量。如果调用方提供上下文路径`/app`，则流量路由到服务 1。如果调用方提供上下文路径`/api`，则流量路由到服务
+    2。重要的是指出，一旦流过Ingress，通信通常使用未加密的HTTP网络通信。
+- en: Given that the Ingress API resource is a part of the CKAD and CKA exam, we are
+    not going to discuss the basics anymore here. For a detailed discussion, refer
+    to the information in the [*Certified Kubernetes Administrator (CKA) Study Guide*](https://oreil.ly/cka-study-guide)
+    or the [Kubernetes documentation](https://oreil.ly/wmk2s).
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 考虑到 Ingress API 资源是 CKAD 和 CKA 考试的一部分，我们不再在这里讨论基础知识。有关详细讨论，请参阅[*Certified Kubernetes
+    Administrator (CKA) Study Guide*](https://oreil.ly/cka-study-guide)或[Kubernetes
+    文档](https://oreil.ly/wmk2s)中的信息。
+- en: The role of an Ingress controller
+  id: totrans-110
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Ingress 控制器的角色
+- en: Remember that an Ingress cannot work without an Ingress controller. The Ingress
+    controller evaluates the collection of rules defined by an Ingress that determine
+    traffic routing. One example of a production-grade Ingress controller is the [F5
+    NGINX Ingress Controller](https://oreil.ly/jOo6P) or [AKS Application Gateway
+    Ingress Controller](https://oreil.ly/ckuqf). You can find other options listed
+    in the [Kubernetes documentation](https://oreil.ly/BXx8e). If you are using minikube,
+    make sure to [enable the Ingress add-on](https://oreil.ly/11QAA).
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请记住，没有 Ingress 控制器，Ingress 无法工作。Ingress 控制器评估由 Ingress 定义的规则集，确定流量路由。一个生产级别的
+    Ingress 控制器示例是[F5 NGINX Ingress Controller](https://oreil.ly/jOo6P)或[AKS Application
+    Gateway Ingress Controller](https://oreil.ly/ckuqf)。您可以在[Kubernetes 文档](https://oreil.ly/BXx8e)中找到其他选项。如果您使用
+    minikube，请确保[启用 Ingress 插件](https://oreil.ly/11QAA)。
+- en: The primary focus of the CKS lies on setting up Ingress objects with TLS termination.
+    Configuring the Ingress for HTTPS communication relieves you from having to deal
+    with securing the network communication on the Service level. In this section
+    of the book, you will learn how to create a TLS certificate and key, how to feed
+    the certificate and key to a TLS-typed Secret object, and how to configure an
+    Ingress object so that it supports HTTPS communication.
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CKS 的主要焦点是设置带有 TLS 终止的 Ingress 对象。配置 Ingress 以进行 HTTPS 通信可以免去在服务级别上处理网络通信安全性的麻烦。在本书的本节中，您将学习如何创建
+    TLS 证书和密钥，如何将证书和密钥提供给 TLS 类型的 Secret 对象，以及如何配置 Ingress 对象以支持 HTTPS 通信。
+- en: Setting Up the Ingress Backend
+  id: totrans-113
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 设置 Ingress 后端
+- en: In the context of an Ingress, a *backend* is the combination of Service name
+    and port. Before creating the Ingress, we’ll take care of the Service, a Deployment,
+    and the Pods running nginx so we can later on demonstrate the routing of HTTPS
+    traffic to an actual application. All of those objects are supposed to exist in
+    the namespace `t75`. [Example 2-4](#ingress-setup) defines all of those resources
+    in a single YAML manifest file `setup.yaml` as a means to quickly create the Ingress
+    backend.
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Ingress 的上下文中，*后端*是服务名称和端口的组合。在创建 Ingress 之前，我们将处理服务、部署和运行 nginx 的 Pod，以便稍后演示将
+    HTTPS 流量路由到实际应用程序。所有这些对象都应存在于命名空间 `t75` 中。[示例 2-4](#ingress-setup) 将所有这些资源定义为单个
+    YAML 清单文件 `setup.yaml`，以便快速创建 Ingress 后端。
+- en: Example 2-4\. YAML manifest for exposing nginx through a Service
+  id: totrans-115
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 2-4\. 通过服务暴露 nginx 的 YAML 清单
+- en: '[PRE25]'
+  id: totrans-116
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE25]'
+- en: 'Create the objects from the YAML file with the following command:'
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用以下命令从 YAML 文件创建对象：
+- en: '[PRE26]'
+  id: totrans-118
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE26]'
+- en: 'Let’s quickly verify that the objects have been created properly, and the Pods
+    have transitioned into the “Running” status. Upon executing the `get all` command,
+    you should see a Deployment named `nginx-deployment` that controls three replicas,
+    and a Service named `accounting-service` of type `ClusterIP`:'
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们快速验证对象已正确创建，并且 Pod 已转换为“Running”状态。执行`get all`命令时，您应该看到一个名为 `nginx-deployment`
+    的控制三个副本的部署，以及一个类型为 `ClusterIP` 的名为 `accounting-service` 的服务：
+- en: '[PRE27]'
+  id: totrans-120
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE27]'
+- en: 'Calling the Service endpoint from another Pod running on the same node should
+    result in a successful response from the nginx Pod. Here, we are using the `wget`
+    command to verify the behavior:'
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当在同一节点上的另一个 Pod 中调用服务端点时，应该从 nginx Pod 获得成功响应。这里我们使用`wget`命令来验证这种行为：
+- en: '[PRE28]'
+  id: totrans-122
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE28]'
+- en: '****With those objects in place and functioning as expected, we can now concentrate
+    on creating an Ingress with TLS termination.****  ****## Creating the TLS Certificate
+    and Key'
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '****有了这些对象并按预期运行，我们现在可以集中精力创建带有 TLS 终止的 Ingress。****  ****## 创建 TLS 证书和密钥'
+- en: 'We will need to generate a TLS certificate and key before we can create a TLS
+    Secret. To do this, we will use the OpenSSL command. The resulting files are named
+    `accounting.crt` and `accounting.key`:'
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在创建 TLS Secret 之前，我们需要生成 TLS 证书和密钥。为此，我们将使用 OpenSSL 命令。生成的文件名为 `accounting.crt`
+    和 `accounting.key`：
+- en: '[PRE29]'
+  id: totrans-125
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE29]'
+- en: For use in production environments, you’d generate a key file and use it to
+    obtain a TLS certificate from a certificate authority (CA). For more information
+    on creating a TLS certification and key, see the [OpenSSL documentation](https://oreil.ly/sETSb).
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用于生产环境，您需要生成一个密钥文件，并使用它从证书颁发机构（CA）获取 TLS 证书。有关创建 TLS 证书和密钥的更多信息，请参阅 [OpenSSL
+    文档](https://oreil.ly/sETSb)。
+- en: Creating the TLS-Typed Secret
+  id: totrans-127
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 创建 TLS 类型的 Secret
+- en: 'The easiest way to create a Secret is with the help of an imperative command.
+    This method of creation doesn’t require you to manually base64-encode the certificate
+    and key values. The encoding happens automatically upon object creation. The following
+    command uses the Secret option `tls` and assigns the certificate and key file
+    name with the options `--cert` and `--key`:'
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建 Secret 最简单的方法是使用命令式命令的帮助。此创建方法不需要您手动对证书和密钥值进行 base64 编码。编码在对象创建时会自动发生。以下命令使用
+    Secret 选项 `tls` 并使用选项 `--cert` 和 `--key` 分配证书和密钥文件名：
+- en: '[PRE30]'
+  id: totrans-129
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE30]'
+- en: '[Example 2-5](#tls-secret) shows the YAML representation of a TLS Secret if
+    you want to create the object declaratively.'
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[示例 2-5](#tls-secret) 显示了如果要声明性地创建对象，则 TLS Secret 的 YAML 表示。'
+- en: Example 2-5\. A Secret using the type `kubernetes.io/tls`
+  id: totrans-131
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 2-5\. 使用类型 `kubernetes.io/tls` 的 Secret
+- en: '[PRE31]'
+  id: totrans-132
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE31]'
+- en: 'Make sure to assign the values for the attributes `tls.crt` and `tls.key` as
+    single-line, base64-encoded values. To produce the base64-encoded value, simply
+    point the `base64` command to the file name you want to convert the contents for.
+    The following example base64-encoded the contents of the file `accounting.crt`:'
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 确保将 `tls.crt` 和 `tls.key` 属性的值分配为单行的 base64 编码值。要生成 base64 编码的值，只需将 `base64`
+    命令指向要转换内容的文件名即可。以下示例将文件 `accounting.crt` 的内容进行了 base64 编码：
+- en: '[PRE32]'
+  id: totrans-134
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE32]'
+- en: Creating the Ingress
+  id: totrans-135
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 创建 Ingress
+- en: 'You can use the imperative method to create the Ingress with the help of a
+    one-liner command shown in the following snippet. Crafting the value of the `--rule`
+    argument is hard to get right. You will likely have to refer to the `--help` option
+    for the `create ingress` command as it requires a specific expression. The information
+    relevant to creating the connection between Ingress object and the TLS Secret
+    is the appended argument `tls=accounting-secret`:'
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用一行命令的命令式方法创建 Ingress，如以下片段所示。制定 `--rule` 参数的值是件难事。您可能需要参考 `create ingress`
+    命令的 `--help` 选项，因为它需要特定的表达式。创建 Ingress 对象与 TLS Secret 之间连接的相关信息是附加的参数 `tls=accounting-secret`：
+- en: '[PRE33]'
+  id: totrans-137
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE33]'
+- en: '[Example 2-6](#ingress-tls-termination) shows a YAML representation of an Ingress.
+    The attribute for defining the TLS information is `spec.tls[]`.'
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[示例 2-6](#ingress-tls-termination) 显示了 Ingress 的 YAML 表示。定义 TLS 信息的属性是 `spec.tls[]`。'
+- en: Example 2-6\. A YAML manifest for defining a TLS-terminated Ingress
+  id: totrans-139
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 2-6\. 定义 TLS 终止 Ingress 的 YAML 清单
+- en: '[PRE34]'
+  id: totrans-140
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE34]'
+- en: 'After creating the Ingress object with the imperative or declarative approach,
+    you should be able to find it in the namespace `t75`. As you can see in the following
+    output, the port 443 is listed in the “PORT” column, indicating that TLS termination
+    has been enabled:'
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用命令式或声明式方法创建 Ingress 对象后，您应该能够在命名空间 `t75` 中找到它。正如您在以下输出中看到的那样，端口 443 列在 “PORT”
+    列中，表示已启用 TLS 终止：
+- en: '[PRE35]'
+  id: totrans-142
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE35]'
+- en: 'Describing the Ingress object shows that the backend could be mapped to the
+    path `/` and will route traffic to the Pod via the Service named `accounting-service`:'
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 描述 Ingress 对象显示，后端可以映射到路径 `/` 并通过名为 `accounting-service` 的 Service 将流量路由到 Pod：
+- en: '[PRE36]'
+  id: totrans-144
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE36]'
+- en: Calling the Ingress
+  id: totrans-145
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 调用 Ingress
+- en: 'To test the behavior on a local Kubernetes cluster on your machine, you need
+    to first find out the IP address of a node. The following command reveals the
+    IP address in a minikube environment:'
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要在您的本地 Kubernetes 集群上测试行为，您需要首先找出节点的 IP 地址。以下命令在 minikube 环境中显示 IP 地址：
+- en: '[PRE37]'
+  id: totrans-147
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE37]'
+- en: 'Next, you’ll need to add the IP address to the hostname mapping to your `/etc/hosts`
+    file:'
+  id: totrans-148
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，您需要将 IP 地址添加到主机名映射到您的 `/etc/hosts` 文件中：
+- en: '[PRE38]'
+  id: totrans-149
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE38]'
+- en: 'You can now send HTTPS requests to the Ingress using the assigned domain name
+    and receive an HTTP response code 200 in return:'
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您现在可以使用分配的域名发送 HTTPS 请求到 Ingress，并收到 HTTP 响应码 200：
+- en: '[PRE39]****  ****# Protecting Node Metadata and Endpoints'
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[PRE39]****  ****# 保护节点元数据和端点'
+- en: Kubernetes clusters expose ports used to communicate with cluster components.
+    For example, the API server uses the port 6443 by default to enable clients like
+    `kubectl` to talk to it when executing commands.
+  id: totrans-152
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 集群公开用于与集群组件通信的端口。例如，API 服务器默认使用端口 6443，以便客户端（如 `kubectl`）在执行命令时可以与其通信。
+- en: The Kubernetes documentation lists those ports in [“Ports and Protocols”](https://oreil.ly/iN993).
+    The following two tables show the default port assignments per node.
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 文档列出了这些端口在 [“端口和协议”](https://oreil.ly/iN993) 中。以下两个表格显示了每个节点的默认端口分配。
+- en: '[Table 2-1](#control-plane-node-ports) shows the default inbound ports on the
+    cluster node.'
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[表 2-1](#control-plane-node-ports) 显示了集群节点上的默认入站端口。'
+- en: Table 2-1\. Inbound control plane node ports
+  id: totrans-155
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 2-1\. 入站控制平面节点端口
+- en: '| Port range | Purpose |'
+  id: totrans-156
+  prefs: []
+  type: TYPE_TB
+  zh: '| 端口范围 | 用途 |'
+- en: '| --- | --- |'
+  id: totrans-157
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| 6643 | Kubernetes API server |'
+  id: totrans-158
+  prefs: []
+  type: TYPE_TB
+  zh: '| 6643 | Kubernetes API 服务器 |'
+- en: '| 2379–2380 | etcd server client API |'
+  id: totrans-159
+  prefs: []
+  type: TYPE_TB
+  zh: '| 2379–2380 | etcd 服务器客户端 API |'
+- en: '| 10250 | Kubelet API |'
+  id: totrans-160
+  prefs: []
+  type: TYPE_TB
+  zh: '| 10250 | Kubelet API |'
+- en: '| 10259 | kube-scheduler |'
+  id: totrans-161
+  prefs: []
+  type: TYPE_TB
+  zh: '| 10259 | kube-scheduler |'
+- en: '| 10257 | kube-controller-manager |'
+  id: totrans-162
+  prefs: []
+  type: TYPE_TB
+  zh: '| 10257 | kube-controller-manager |'
+- en: Many of those ports are configurable. For example, you can modify the API server
+    port by providing a different value with the flag `--secure-port` in the configuration
+    file `/etc/kubernetes/manifests/kube-apiserver.yaml`, as [documented](https://oreil.ly/TTzAz)
+    for the cluster component. For all other cluster components, please refer to their
+    corresponding documentation.
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 许多这些端口是可配置的。例如，您可以通过在配置文件 `/etc/kubernetes/manifests/kube-apiserver.yaml` 中使用
+    `--secure-port` 标志提供不同的值来修改 API 服务器端口，如在集群组件的 [文档](https://oreil.ly/TTzAz) 中所述。有关所有其他集群组件，请参阅它们各自的文档。
+- en: '[Table 2-2](#worker-node-ports) lists the default inbound ports on a worker
+    node.'
+  id: totrans-164
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[表 2-2](#worker-node-ports) 列出了工作节点上的默认入站端口。'
+- en: Table 2-2\. Inbound worker node ports
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 2-2\. 入站工作节点端口
+- en: '| Port range | Purpose |'
+  id: totrans-166
+  prefs: []
+  type: TYPE_TB
+  zh: '| 端口范围 | 用途 |'
+- en: '| --- | --- |'
+  id: totrans-167
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| 10250 | Kubelet API |'
+  id: totrans-168
+  prefs: []
+  type: TYPE_TB
+  zh: '| 10250 | Kubelet API |'
+- en: '| 30000–32767 | NodePort Services |'
+  id: totrans-169
+  prefs: []
+  type: TYPE_TB
+  zh: '| 30000–32767 | NodePort 服务 |'
+- en: To secure the ports used by cluster components, set up firewall rules to minimize
+    the attack surface area. For example, you could decide not to expose the API server
+    to anyone outside of the intranet. Clients using `kubectl` would only be able
+    to run commands against the Kubernetes cluster if logged into the VPN, making
+    the cluster less vulnerable to attacks.
+  id: totrans-170
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要保护集群组件使用的端口，设置防火墙规则以减少攻击面。例如，您可以决定不将 API 服务器暴露给企业内部以外的任何人。只有在 VPN 登录时，使用 `kubectl`
+    的客户端才能对 Kubernetes 集群运行命令，从而使集群更不容易受到攻击。
+- en: Cloud provider Kubernetes clusters (e.g., on AWS, Azure, or Google Cloud) expose
+    so-called metadata services. Metadata services are APIs that can provide sensitive
+    data like an authentication token for consumption from VMs or Pods without any
+    additional authorization. For the CKS exam, you need to be aware of those node
+    endpoints and cloud provider metadata services. Furthermore, you should have a
+    high-level understanding of how to protect them from unauthorized access.
+  id: totrans-171
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 云提供商 Kubernetes 集群（例如 AWS、Azure 或 Google Cloud）公开了所谓的元数据服务。元数据服务是可以提供敏感数据（如认证令牌）的
+    API，供 VM 或 Pod 在不需要额外授权的情况下消费。在 CKS 考试中，您需要了解这些节点端点和云提供商元数据服务。此外，您应该对如何防止未经授权访问它们有高层次的理解。
+- en: 'Scenario: A Compromised Pod Can Access the Metadata Server'
+  id: totrans-172
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 场景：被攻击的 Pod 可以访问元数据服务器
+- en: '[Figure 2-3](#metadata-server-attacker) shows an attacker who gained access
+    to a Pod running on a node within a cloud provider Kubernetes cluster.'
+  id: totrans-173
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 2-3](#metadata-server-attacker) 显示了在云提供商 Kubernetes 集群中一个节点上运行的 Pod 的攻击者。'
+- en: '![ckss 0203](assets/ckss_0203.png)'
+  id: totrans-174
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckss 0203](assets/ckss_0203.png)'
+- en: Figure 2-3\. An attacker who gained access to the Pod has access to metadata
+    server
+  id: totrans-175
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-3\. 攻击者已经获得对 Pod 的访问权限，因此可以访问元数据服务器。
+- en: Access to the metadata server has not been restricted in any form. The attacker
+    can retrieve sensitive information, which could open other possibilities of intrusion.
+  id: totrans-176
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对元数据服务器的访问未受到任何限制。攻击者可以检索敏感信息，这可能会打开其他入侵可能性。
+- en: Protecting Metadata Server Access with Network Policies
+  id: totrans-177
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用网络策略保护元数据服务器访问
+- en: Let’s pick one of the cloud providers that exposes a metadata endpoint. In AWS,
+    the metadata server can be reached with the IP address 169.254.169.254, as described
+    in the [AWS documentation](https://oreil.ly/6DsIx). The endpoints exposed can
+    provide access to EC2 instance metadata. For example, you can retrieve the local
+    IP address of an instance to manage a connection to an external application or
+    to contact the instance with the help of a script. See the corresponding [documentation
+    page](https://oreil.ly/Bwdej) for calls to those endpoints made with the curl
+    command line tool.
+  id: totrans-178
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们选择一个暴露元数据端点的云提供商。在 AWS 中，可以使用 IP 地址 169.254.169.254 访问元数据服务器，详见 [AWS 文档](https://oreil.ly/6DsIx)。所暴露的端点可以提供访问
+    EC2 实例元数据的权限。例如，您可以获取实例的本地 IP 地址以便通过脚本管理外部应用程序的连接或与实例联系。参见相应的 [文档页面](https://oreil.ly/Bwdej)，了解使用
+    curl 命令行工具调用这些端点的详细信息。
+- en: To prevent any Pod in a namespace from reaching the IP address of the metadata
+    server, set up a network policy that allows egress traffic to all IP addresses
+    except 169.254.169.254\. [Example 2-7](#deny-egress-metadata-server) demonstrates
+    a YAML manifest with such a rule set.
+  id: totrans-179
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要防止命名空间中的任何 Pod 访问元数据服务器的 IP 地址，需设置一个网络策略，允许所有 IP 地址的出站流量，除了 169.254.169.254\.
+    [示例 2-7](#deny-egress-metadata-server) 展示了带有此规则集的 YAML 清单。
+- en: Example 2-7\. A default deny-all egress to IP address 169.254.169.254 network
+    policy
+  id: totrans-180
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 2-7\. 默认拒绝向IP地址169.254.169.254的出站网络策略
+- en: '[PRE40]'
+  id: totrans-181
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE40]'
+- en: Once the network policy has been created, Pods in the namespace `a12` should
+    not be able to reach the metadata endpoints anymore. For detailed examples that
+    use the endpoints via `curl`, see the relevant [AWS documentation](https://oreil.ly/fQ07b).
+  id: totrans-182
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建网络策略后，命名空间 `a12` 中的 Pod 不应再能访问元数据端点。有关使用 curl 访问端点的详细示例，请参阅相关的 [AWS 文档](https://oreil.ly/fQ07b)。
+- en: Protecting GUI Elements
+  id: totrans-183
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 保护 GUI 元素
+- en: The `kubectl` tool isn’t the only user interface (UI) for managing a cluster.
+    While `kubectl` allows for fine-grained operations, most organizations prefer
+    a more convenient graphical user interface (GUI) for managing the objects of a
+    cluster. You can choose from a variety of options. The [Kubernetes Dashboard](https://oreil.ly/ABDQo)
+    is a free, web-based application. Other GUI dashboards for Kubernetes like [Portainer](https://oreil.ly/i_FJv)
+    go beyond the basic functionality by adding tracing of events or visualizations
+    of hardware resource consumption. In this section, we’ll focus on the Kubernetes
+    Dashboard as it is easy to install and configure.
+  id: totrans-184
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kubectl` 工具并非管理集群的唯一用户界面（UI）。尽管 `kubectl` 允许进行精细操作，但大多数组织更喜欢使用更便捷的图形用户界面（GUI）来管理集群中的对象。您可以从多种选择中进行选择。[Kubernetes
+    仪表板](https://oreil.ly/ABDQo) 是一个免费的基于 Web 的应用程序。其他用于 Kubernetes 的 GUI 仪表板如 [Portainer](https://oreil.ly/i_FJv)
+    则通过添加事件追踪或硬件资源消耗可视化等功能，扩展了基本功能。在本节中，我们将重点介绍 Kubernetes 仪表板，因为它易于安装和配置。'
+- en: 'Scenario: An Attacker Gains Access to the Dashboard Functionality'
+  id: totrans-185
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 情景：攻击者获得了对仪表板功能的访问权限。
+- en: The Kubernetes Dashboard runs as a Pod inside of the cluster. Installing the
+    Dashboard also creates a Service of type `ClusterIP` that only allows access to
+    the endpoint from within the cluster. To make the Dashboard accessible to end
+    users, you’d have to expose the Service outside of the cluster. For example, you
+    could switch to a `NodePort` Service type or stand up an Ingress. [Figure 2-4](#dashboard-attacker)
+    illustrates the high-level architecture of deploying and accessing the Dashboard.
+  id: totrans-186
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 仪表板作为集群内的一个 Pod 运行。安装仪表板还会创建一个 `ClusterIP` 类型的 Service，只允许从集群内部访问该端点。要使仪表板对最终用户可访问，必须将该
+    Service 暴露到集群外部。例如，可以切换到 `NodePort` Service 类型或者部署一个 Ingress。[图 2-4](#dashboard-attacker)
+    展示了部署和访问仪表板的高级架构。
+- en: '![ckss 0204](assets/ckss_0204.png)'
+  id: totrans-187
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckss 0204](assets/ckss_0204.png)'
+- en: Figure 2-4\. An attacker who gained access to the Dashboard
+  id: totrans-188
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-4\. 成功访问仪表板的攻击者
+- en: As soon as you expose the Dashboard to the outside world, attackers can potentially
+    gain access to it. Without the right security settings, objects can be deleted,
+    modified, or used for malicious purposes. The most prominent victim of such an
+    attack was Tesla, which in 2018 fell prey to hackers who gained access to its
+    unprotected Dashboard to mine cryptocurrencies. Since then, newer versions of
+    the Dashboard changed default settings to make it more secure from the get-go.
+  id: totrans-189
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦将仪表板暴露给外部世界，攻击者可能会获取访问权限。如果没有正确的安全设置，对象可以被删除、修改或用于恶意目的。这种攻击的最著名受害者是特斯拉，在2018年成为黑客攻击的牺牲品，黑客们成功访问了其未受保护的仪表板以进行加密货币挖掘。从那时起，仪表板的新版本更改了默认设置，以使其从一开始就更安全。
+- en: Installing the Kubernetes Dashboard
+  id: totrans-190
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 安装Kubernetes仪表板
+- en: 'Installing the Kubernetes Dashboard is straightforward. You can create the
+    relevant objects with the help of the YAML manifest available in the project’s
+    GitHub repository. The following command installs all necessary objects:'
+  id: totrans-191
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安装Kubernetes仪表板非常简单。您可以使用项目GitHub存储库中提供的YAML清单创建相关对象。以下命令安装所有必要的对象：
+- en: '[PRE41]'
+  id: totrans-192
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE41]'
+- en: Rendering metrics in Dashboard
+  id: totrans-193
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 渲染仪表板中的度量数据
+- en: You may also want to install the [metrics server](https://oreil.ly/3Rtkl) if
+    you are interested in inspecting resource consumption metrics as part of the Dashboard
+    functionality.
+  id: totrans-194
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您有兴趣检查仪表板功能中的资源消耗度量标准，您可能还希望安装[度量服务器](https://oreil.ly/3Rtkl)。
+- en: 'You can find the objects created by the manifest in the `kubernetes-dashboard`
+    namespace. Among them are Deployments, Pods, and Services. The following command
+    lists all of them:'
+  id: totrans-195
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在`kubernetes-dashboard`命名空间中找到清单创建的对象。其中包括Deployments、Pods和Services。以下命令列出所有这些对象：
+- en: '[PRE42]'
+  id: totrans-196
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE42]'
+- en: Accessing the Kubernetes Dashboard
+  id: totrans-197
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 访问Kubernetes仪表板
+- en: 'The `kubectl proxy` command can help with temporarily creating a proxy that
+    allows you to open the Dashboard in a browser. This functionality is only meant
+    for troubleshooting purposes and is not geared toward production environments.
+    You can find information about the `proxy` command in the [documentation](https://oreil.ly/gGsqX):'
+  id: totrans-198
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kubectl proxy`命令可帮助临时创建代理，允许您在浏览器中打开仪表板。此功能仅用于故障排除目的，不适用于生产环境。您可以在[文档](https://oreil.ly/gGsqX)中找到有关`proxy`命令的信息：'
+- en: '[PRE43]'
+  id: totrans-199
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE43]'
+- en: Open the browser with the URL [*http://localhost:8001/api/v1/namespaces/kubernetes-dashboard/services/https:kubernetes-dashboard:/proxy*](http://localhost:8001/api/v1/namespaces/kubernetes-dashboard/services/https:kubernetes-dashboard:/proxy).
+    The Dashboard will ask you to provide an authentication method and credentials.
+    The recommended way to configure the Dashboard is through bearer tokens.
+  id: totrans-200
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用[*http://localhost:8001/api/v1/namespaces/kubernetes-dashboard/services/https:kubernetes-dashboard:/proxy*](http://localhost:8001/api/v1/namespaces/kubernetes-dashboard/services/https:kubernetes-dashboard:/proxy)网址在浏览器中打开。仪表板将要求您提供身份验证方法和凭据。配置仪表板的推荐方式是通过承载令牌。
+- en: Creating a User with Administration Privileges
+  id: totrans-201
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 创建具有管理权限的用户
+- en: Before you can authenticate in the login screen, you need to create a ServiceAccount
+    and ClusterRoleBinding object that grant admin permissions. Start by creating
+    the file `admin-user-serviceaccount.yaml` and populate it with the contents shown
+    in [Example 2-8](#admin-user-serviceaccount).
+  id: totrans-202
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在登录屏幕中进行身份验证之前，您需要创建一个ServiceAccount和ClusterRoleBinding对象，授予管理员权限。首先创建名为`admin-user-serviceaccount.yaml`的文件，并填充其中显示的内容，该内容如[示例 2-8](#admin-user-serviceaccount)所示。
+- en: Example 2-8\. Service account for admin permissions
+  id: totrans-203
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 2-8\. 管理权限的服务账户
+- en: '[PRE44]'
+  id: totrans-204
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE44]'
+- en: Next, store the contents of [Example 2-9](#admin-user-clusterrolebinding) in
+    the file `admin-user-⁠clusterrole​bind⁠ing.yaml` to map the ClusterRole named
+    `cluster-admin` to the ServiceAccount.
+  id: totrans-205
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后，将[示例 2-9](#admin-user-clusterrolebinding)的内容存储到名为`admin-user-⁠clusterrole​bind⁠ing.yaml`的文件中，以将ClusterRole命名为`cluster-admin`映射到ServiceAccount。
+- en: Example 2-9\. ClusterRoleBinding for admin permissions
+  id: totrans-206
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 2-9\. 用于管理员权限的ClusterRoleBinding
+- en: '[PRE45]'
+  id: totrans-207
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE45]'
+- en: 'Create both objects with the following declarative command:'
+  id: totrans-208
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用以下声明性命令创建这两个对象：
+- en: '[PRE46]'
+  id: totrans-209
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE46]'
+- en: 'You can now create the bearer token of the admin user with the following command.
+    The command will generate a token for the provided ServiceAccount object and render
+    it on the console:'
+  id: totrans-210
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您现在可以使用以下命令为管理员用户创建承载令牌。该命令将为提供的ServiceAccount对象生成一个令牌，并在控制台上呈现它：
+- en: '[PRE47]'
+  id: totrans-211
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE47]'
+- en: Expiration of a service account token
+  id: totrans-212
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 服务账户令牌的过期时间
+- en: By default, this token will expire after 24 hours. That means that the token
+    object will be deleted automatically once the “time to live” (TTL) has passed.
+    You can change the TTL of a token by providing the command line option `--ttl`.
+    For example, a value of `40h` will expire the token after 40 hours. A value of
+    `0` indicates that the token should never expire.
+  id: totrans-213
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，此令牌将在 24 小时后过期。这意味着一旦“生存时间”（TTL）过去，令牌对象将自动删除。您可以通过提供命令行选项 `--ttl` 来更改令牌的
+    TTL。例如，`40h` 的值将在 40 小时后使令牌过期。值 `0` 表示令牌永不过期。
+- en: Copy the output of the command and paste it into the “Enter token” field of
+    the login screen, as shown in [Figure 2-5](#dashboard-login-screen-token).
+  id: totrans-214
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将命令的输出复制并粘贴到登录屏幕的“输入令牌”字段中，如 [Figure 2-5](#dashboard-login-screen-token) 所示。
+- en: '![ckss 0205](assets/ckss_0205.png)'
+  id: totrans-215
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckss 0205](assets/ckss_0205.png)'
+- en: Figure 2-5\. The usage of the token in the Dashboard login screen
+  id: totrans-216
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-5\. 仪表板登录界面中令牌的使用
+- en: Pressing the “Sign in” button will bring you to the Dashboard shown in [Figure 2-6](#dashboard-overview).
+  id: totrans-217
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 单击“登录”按钮将带您进入 [Figure 2-6](#dashboard-overview) 中显示的仪表板。
+- en: '![ckss 0206](assets/ckss_0206.png)'
+  id: totrans-218
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckss 0206](assets/ckss_0206.png)'
+- en: Figure 2-6\. The Dashboard view of Pods in a specific namespace
+  id: totrans-219
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-6\. 特定命名空间中 Pods 的仪表板视图
+- en: You can now manage end user and cluster objects without any restrictions.
+  id: totrans-220
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您现在可以管理端用户和集群对象而无需任何限制。
+- en: Creating a User with Restricted Privileges
+  id: totrans-221
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 创建具有受限权限的用户
+- en: 'In the previous section, you learned how to create a user with cluster-wide
+    administrative permissions. Most users of the Dashboard only need a restricted
+    set of permissions, though. For example, developers implementing and operating
+    cloud-native applications will likely only need a subset of administrative permissions
+    to perform their tasks on a Kubernetes cluster. Creating a user for the Dashboard
+    with restricted privileges consists of a three-step approach:'
+  id: totrans-222
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在上一节中，您学习了如何创建具有全局集群管理权限的用户。但是，仪表板的大多数用户可能只需要一组受限权限。例如，实施和操作云原生应用程序的开发人员可能只需要在
+    Kubernetes 集群上执行其任务所需的部分管理权限。为仪表板创建具有受限权限的用户包括以下三个步骤：
+- en: Create a ServiceAccount object.
+  id: totrans-223
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 创建一个 ServiceAccount 对象。
+- en: Create a ClusterRole object that defines the permissions.
+  id: totrans-224
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 创建定义权限的 ClusterRole 对象。
+- en: Create a ClusterRoleBinding that maps the ClusterRole to the ServiceAccount.
+  id: totrans-225
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 创建将 ClusterRole 映射到 ServiceAccount 的 ClusterRoleBinding。
+- en: As you can see, the process is very similar to the one we went through for the
+    admin user. Step 2 is new, as we need to be specific about which permissions we
+    want to grant. The YAML manifests that follow will model a user working as a developer
+    that should only be allowed read-only permissions (e.g., getting, listing, and
+    watching resources).
+  id: totrans-226
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如您所见，该流程与我们为管理员用户所经历的流程非常相似。第 2 步是新的，因为我们需要明确我们要授予哪些权限。接下来的 YAML 清单将模拟作为开发人员工作的用户，该用户仅允许只读权限（例如获取、列出和观察资源）。
+- en: Start by creating the file `restricted-user-serviceaccount.yaml` and populate
+    it with the contents shown in [Example 2-10](#restricted-user-serviceaccount).
+  id: totrans-227
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先创建文件 `restricted-user-serviceaccount.yaml`，并填入示例 [Example 2-10](#restricted-user-serviceaccount)
+    中显示的内容。
+- en: Example 2-10\. Service account for restricted permissions
+  id: totrans-228
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 2-10\. 用于受限权限的 ServiceAccount
+- en: '[PRE48]'
+  id: totrans-229
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE48]'
+- en: The ClusterRole in [Example 2-11](#restricted-user-clusterrole) only allows
+    getting, listing, and watching resources. All other operations are not permitted.
+    Store the contents in the file `restricted-user-clusterrole.yaml`.
+  id: totrans-230
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Example 2-11](#restricted-user-clusterrole) 中的 ClusterRole 仅允许获取、列出和观察资源。不允许执行其他任何操作。将内容存储在文件
+    `restricted-user-clusterrole.yaml` 中。'
+- en: Example 2-11\. ClusterRole for restricted permissions
+  id: totrans-231
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 2-11\. 用于受限权限的 ClusterRole
+- en: '[PRE49]'
+  id: totrans-232
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE49]'
+- en: Last, map the ServiceAccount to the ClusterRole in the file `restricted-user-clusterrolebinding.yaml`,
+    as shown in [Example 2-12](#restricted-user-clusterrolebinding).
+  id: totrans-233
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，将 ServiceAccount 映射到文件 `restricted-user-clusterrolebinding.yaml` 中的 ClusterRole，如
+    [Example 2-12](#restricted-user-clusterrolebinding) 所示。
+- en: Example 2-12\. ClusterRoleBinding for restricted permissions
+  id: totrans-234
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 2-12\. 用于受限权限的 ClusterRoleBinding
+- en: '[PRE50]'
+  id: totrans-235
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE50]'
+- en: 'Create all objects with the following declarative command:'
+  id: totrans-236
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用以下声明性命令创建所有对象：
+- en: '[PRE51]'
+  id: totrans-237
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE51]'
+- en: 'Generate the bearer token of the restricted user with the following command:'
+  id: totrans-238
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用以下命令生成具有受限用户的 Bearer 令牌：
+- en: '[PRE52]'
+  id: totrans-239
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE52]'
+- en: Operations that are not allowed for the logged-in user will not be rendered
+    as disabled options in the GUI. You can still select the option; however, an error
+    message is rendered. [Figure 2-7](#dashboard-forbidden-operation) illustrates
+    the behavior of the Dashboard if you try to delete a Pod via the user that doesn’t
+    have the permissions to perform the operation.
+  id: totrans-240
+  prefs: []
+  type: TYPE_NORMAL
+  zh: GUI 中，对于当前登录用户不允许的操作将不会显示为禁用选项。你仍然可以选择该选项，但会显示错误消息。图[2-7](#dashboard-forbidden-operation)展示了如果尝试通过没有权限执行操作的用户删除
+    Pod 时，Dashboard 的行为。
+- en: '![ckss 0207](assets/ckss_0207.png)'
+  id: totrans-241
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckss 0207](assets/ckss_0207.png)'
+- en: Figure 2-7\. An error message rendered when trying to invoke a permitted operation
+  id: totrans-242
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-7\. 尝试调用允许操作时显示的错误消息
+- en: Avoiding Insecure Configuration Arguments
+  id: totrans-243
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 避免不安全的配置参数
+- en: Securing the Dashboard in production environments involves the usage of [execution
+    arguments](https://oreil.ly/gS1hE) necessary for properly configuring authentication
+    and authorization. By default, login functionality is enabled and the HTTPS endpoint
+    will be exposed on port 8443\. You can provide TLS certificates with the `--tls-cert-file`
+    and `--tls-cert-key` command line options if you don’t want them to be auto-generated.
+  id: totrans-244
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在生产环境中保护 Dashboard 包括使用[执行参数](https://oreil.ly/gS1hE)，用于正确配置身份验证和授权。默认情况下，启用登录功能，并且
+    HTTPS 端点将在 8443 端口上公开。如果不希望自动生成 TLS 证书，可以使用`--tls-cert-file`和`--tls-cert-key`命令行选项提供
+    TLS 证书。
+- en: Avoid setting the command line arguments `--insecure-port` to expose an HTTP
+    endpoint and `--enable-insecure-login` to enable serving the login page over HTTP
+    instead of HTTPS. Furthermore, make sure you *don’t* use the option `--enable-skip-login`
+    as it would allow circumventing an authentication method by simply clicking a
+    Skip button in the login screen.
+  id: totrans-245
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 避免设置命令行参数`--insecure-port`来公开 HTTP 端点和`--enable-insecure-login`来启用以 HTTP 而非
+    HTTPS 提供登录页面。此外，请确保*不要*使用`--enable-skip-login`选项，因为这将允许通过在登录屏幕上单击跳过按钮来规避认证方法。
+- en: Verifying Kubernetes Platform Binaries
+  id: totrans-246
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 验证 Kubernetes 平台的二进制文件
+- en: The Kubernetes project publishes client and server binaries with every release.
+    The client binary refers to the executable `kubectl`. Server binaries include
+    `kubeadm`, as well as the executable for the API server, the scheduler, and the
+    kubelet. You can find those files under the “tags” sections of the [Kubernetes
+    GitHub repository](https://oreil.ly/vHpAV) or on the release page at [*https://dl.k8s.io*](https://dl.k8s.io).
+  id: totrans-247
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 项目会在每个发布中发布客户端和服务器二进制文件。客户端二进制文件指的是可执行的`kubectl`。服务器二进制文件包括`kubeadm`，以及
+    API 服务器、调度器和 kubelet 的可执行文件。你可以在[Kubernetes GitHub 仓库的“tags”部分](https://oreil.ly/vHpAV)或发布页面[*https://dl.k8s.io*](https://dl.k8s.io)找到这些文件。
+- en: 'Scenario: An Attacker Injected Malicious Code into Binary'
+  id: totrans-248
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 场景：攻击者向二进制文件注入恶意代码
+- en: The executables `kubectl` and `kubeadm` are essential for interacting with Kubernetes.
+    `kubectl` lets you run commands against the API server, e.g., for managing objects.
+    `kubeadm` is necessary for upgrading cluster nodes from one version to another.
+    Say you are in the [process of upgrading the cluster version](https://oreil.ly/hTJ57)
+    from 1.23 to 1.24\. As part of the process, you will need to upgrade the `kubeadm`
+    binary as well. The official upgrade documentation is very specific about what
+    commands to use for upgrading the binary.
+  id: totrans-249
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可执行文件`kubectl`和`kubeadm`对于与 Kubernetes 交互至关重要。`kubectl`允许你针对 API 服务器运行命令，例如管理对象。`kubeadm`在将集群节点从一个版本升级到另一个版本时是必需的。假设你正在[升级集群版本的过程中](https://oreil.ly/hTJ57)，从
+    1.23 版本升级到 1.24 版本。作为过程的一部分，你将需要升级`kubeadm`二进制文件。官方升级文档详细说明了升级二进制文件所需的命令。
+- en: Say an attacker managed to modify the `kubeadm` executable for version 1.24
+    and coaxed you into thinking that you need to download that very binary from a
+    location where the malicious binary was placed. As shown in [Figure 2-8](#binary-attacker),
+    you’d expose yourself to running malicious code every time you invoke the modified
+    `kubeadm` executable. For example, you may be sending credentials to a server
+    outside of your cluster, which would open new ways to infiltrate your Kubernetes
+    environment.
+  id: totrans-250
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设攻击者成功修改了版本为 1.24 的`kubeadm`可执行文件，并诱使你以为需要从放置恶意二进制文件的位置下载该二进制文件。正如图[2-8](#binary-attacker)所示，每次调用修改后的`kubeadm`可执行文件都会暴露你于运行恶意代码的风险。例如，你可能会向集群外的服务器发送凭据，这会为入侵你的
+    Kubernetes 环境打开新的途径。
+- en: '![ckss 0208](assets/ckss_0208.png)'
+  id: totrans-251
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckss 0208](assets/ckss_0208.png)'
+- en: Figure 2-8\. An attacker who injected malicious code into a binary
+  id: totrans-252
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 2-8\. 一个将恶意代码注入二进制文件的攻击者
+- en: Verifying a Binary Against Hash
+  id: totrans-253
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 验证二进制文件与哈希值匹配
+- en: You can verify the validity of a binary with the help of a hash code like MD5
+    or SHA. Kubernetes publishes SHA256 hash codes for each binary. You should run
+    through a hash validation for individual binaries before using them for the first
+    time. Should the generated hash code not match with the one you downloaded, then
+    there’s something off with the binary. The binary may have been modified by a
+    third party or you didn’t use the hash code for the correct binary type or version.
+  id: totrans-254
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以借助MD5或SHA等哈希码验证二进制文件的有效性。Kubernetes为每个二进制文件发布SHA256哈希码。在首次使用之前，应对各个二进制文件进行哈希验证。如果生成的哈希码与您下载的哈希码不匹配，则表示二进制文件存在问题。可能是第三方修改了二进制文件，或者您未正确使用特定类型或版本的哈希码。
+- en: 'You can download the corresponding hash code for a binary from [*https://dl.k8s.io*](https://dl.k8s.io).
+    The full URL for a hash code reflects the version, operating system, and architecture
+    of the binary. The following list shows example URLs for platform binaries compatible
+    with Linux AMD64:'
+  id: totrans-255
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以从[*https://dl.k8s.io*](https://dl.k8s.io)下载与二进制文件对应的哈希码。哈希码的完整URL反映了二进制文件的版本、操作系统和架构信息。以下列表展示了适用于Linux
+    AMD64平台二进制文件的示例URL：
+- en: '`kubectl`: [*https://dl.k8s.io/v1.26.1/bin/linux/amd64/kubectl.sha256*](https://dl.k8s.io/v1.26.1/bin/linux/amd64/kubectl.sha256)'
+  id: totrans-256
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`kubectl`: [*https://dl.k8s.io/v1.26.1/bin/linux/amd64/kubectl.sha256*](https://dl.k8s.io/v1.26.1/bin/linux/amd64/kubectl.sha256)'
+- en: '`kubeadm`: [*https://dl.k8s.io/v1.26.1/bin/linux/amd64/kubeadm.sha256*](https://dl.k8s.io/v1.26.1/bin/linux/amd64/kubeadm.sha256)'
+  id: totrans-257
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`kubeadm`: [*https://dl.k8s.io/v1.26.1/bin/linux/amd64/kubeadm.sha256*](https://dl.k8s.io/v1.26.1/bin/linux/amd64/kubeadm.sha256)'
+- en: '`kubelet`: [*https://dl.k8s.io/v1.26.1/bin/linux/amd64/kubelet.sha256*](https://dl.k8s.io/v1.26.1/bin/linux/amd64/kubelet.sha256)'
+  id: totrans-258
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`kubelet`: [*https://dl.k8s.io/v1.26.1/bin/linux/amd64/kubelet.sha256*](https://dl.k8s.io/v1.26.1/bin/linux/amd64/kubelet.sha256)'
+- en: '`kube-apiserver`: [*https://dl.k8s.io/v1.26.1/bin/linux/amd64/kube-apiserver.sha256*](https://dl.k8s.io/v1.26.1/bin/linux/amd64/kube-apiserver.sha256)'
+  id: totrans-259
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`kube-apiserver`: [*https://dl.k8s.io/v1.26.1/bin/linux/amd64/kube-apiserver.sha256*](https://dl.k8s.io/v1.26.1/bin/linux/amd64/kube-apiserver.sha256)'
+- en: 'You’ll have to use an operating system-specific hash code validation tool to
+    check the validity of a binary. You may have to install the tool if you do not
+    have it available on your machine yet. The following commands show the usage of
+    the tool for different operating systems, as explained in the [Kubernetes documentation](https://oreil.ly/2FmVm):'
+  id: totrans-260
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您需要使用特定于操作系统的哈希码验证工具来检查二进制文件的有效性。如果您的机器上还没有该工具，可能需要先安装它。下面的命令展示了在不同操作系统上使用工具的示例，详细说明请参考[Kubernetes文档](https://oreil.ly/2FmVm)：
+- en: 'Linux: `echo "$(cat kubectl.sha256) kubectl" | sha256sum --check`'
+  id: totrans-261
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 'Linux: `echo "$(cat kubectl.sha256) kubectl" | sha256sum --check`'
+- en: 'MacOSX: `echo "$(cat kubectl.sha256) kubectl" | shasum -a 256 --check`'
+  id: totrans-262
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 'MacOSX: `echo "$(cat kubectl.sha256) kubectl" | shasum -a 256 --check`'
+- en: 'Windows with Powershell: `$($(CertUtil -hashfile .\kubectl.exe SHA256)[1] -replace
+    " ", "") -eq $(type .\kubectl.exe.sha256)`'
+  id: totrans-263
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 'Windows with Powershell: `$($(CertUtil -hashfile .\kubectl.exe SHA256)[1] -replace
+    " ", "") -eq $(type .\kubectl.exe.sha256)`'
+- en: 'The following commands demonstrate downloading the `kubeadm` binary for version
+    1.26.1 and its corresponding SHA256 hash file:'
+  id: totrans-264
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下命令演示如何下载版本为1.26.1的`kubeadm`二进制文件及其对应的SHA256哈希文件：
+- en: '[PRE53]'
+  id: totrans-265
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE53]'
+- en: 'The validation tool `shasum` can verify if the checksum matches:'
+  id: totrans-266
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 验证工具`shasum`可用于确认校验和是否匹配：
+- en: '[PRE54]'
+  id: totrans-267
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE54]'
+- en: The previous command returned with an “OK” message. The binary file wasn’t tampered
+    with. Any other message indicates a potential security risk when executing the
+    binary.
+  id: totrans-268
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 前一个命令返回“OK”消息。二进制文件未被篡改。任何其他消息都可能表示在执行二进制文件时存在潜在的安全风险。
+- en: Summary
+  id: totrans-269
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 总结
+- en: The domain “cluster setup” dials in on security aspects relevant to setting
+    up a Kubernetes cluster. Even though you might be creating a cluster from scratch
+    with `kubeadm`, that doesn’t mean you are necessarily following best practices.
+    Using kube-bench to detect potential security risks is a good start. Fix the issues
+    reported on by the tool one by one. You may also want to check client and server
+    binaries against their checksums to ensure that they haven’t been modified by
+    an attacker. Some organizations use a Dashboard to manage the cluster and its
+    objects. Ensure that authentication and authorization for the Dashboard restrict
+    access to a small subset of stakeholders.
+  id: totrans-270
+  prefs: []
+  type: TYPE_NORMAL
+  zh: “集群设置” 领域关注于设置 Kubernetes 集群相关的安全方面。即使您可能正在使用 `kubeadm` 从头开始创建集群，这并不意味着您一定在遵循最佳实践。使用
+    kube-bench 检测潜在的安全风险是一个很好的起点。逐个修复工具报告的问题。您还可以检查客户端和服务器二进制文件的校验和，以确保它们未被攻击者修改。一些组织使用仪表板来管理集群及其对象。确保仪表板的身份验证和授权限制访问的小部分利益相关者。
+- en: An important security aspect is network communication. Pod-to-Pod communication
+    is unrestricted by default. Have a close look at your application architecture
+    running inside of Kubernetes. Only allow directional network traffic from and
+    to Pods to fulfill the requirements of your architecture. Deny all other network
+    traffic. When exposing the application outside of the cluster, make sure that
+    Ingress objects have been configured with TLS termination. This will ensure that
+    the data is encrypted both ways so that attackers cannot observe sensitive information
+    like passwords sent between a client and the Kubernetes cluster.
+  id: totrans-271
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 网络通信是一个重要的安全方面。默认情况下，Pod 之间的通信是不受限制的。仔细查看运行在 Kubernetes 内的应用架构。只允许符合架构要求的 Pod
+    之间的单向网络流量。拒绝所有其他网络流量。在将应用程序暴露到集群外部时，请确保已配置带有 TLS 终止的 Ingress 对象。这将确保数据双向加密，使攻击者无法观察客户端和
+    Kubernetes 集群之间发送的密码等敏感信息。
+- en: Exam Essentials
+  id: totrans-272
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 考试要点
+- en: Understand the purpose and effects of network policies
+  id: totrans-273
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 理解网络策略的目的和影响
+- en: By default, Pod-to-Pod communication is unrestricted. Instantiate a default
+    deny rule to restrict Pod-to-Pod network traffic with the principle of least privilege.
+    The attribute `spec.podSelector` of a network policy selects the target Pod the
+    rules apply to based on label selection. The ingress and egress rules define Pods,
+    namespaces, IP addresses, and ports for allowing incoming and outgoing traffic.
+    Network policies can be aggregated. A default deny rule may disallow ingress and/or
+    egress traffic. An additional network policy can open up those rules with a more
+    fine-grained definition.
+  id: totrans-274
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，Pod 之间的通信是无限制的。使用最小特权原则实例化默认拒绝规则以限制 Pod 之间的网络流量。网络策略的 `spec.podSelector`
+    属性根据标签选择选择目标 Pod 应用规则。入站和出站规则定义了允许进出流量的 Pod、命名空间、IP 地址和端口。网络策略可以进行聚合。默认拒绝规则可能禁止入站和/或出站流量。可以使用更精细的定义打开这些规则的其他网络策略。
+- en: Practice the use of kube-bench to detect cluster component vulnerabilities
+  id: totrans-275
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 练习使用 kube-bench 检测集群组件的漏洞
+- en: The Kubernetes CIS Benchmark is a set of best practices for recommended security
+    settings in a production Kubernetes environment. You can automate the process
+    of detecting security risks with the help of the tool kube-bench. The generated
+    report from running kube-bench describes detailed remediation actions to fix a
+    detected issue. Learn how to interpret the results and how to mitigate the issue.
+  id: totrans-276
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes CIS 基准是在生产 Kubernetes 环境中推荐的安全设置的最佳实践集合。您可以利用工具 kube-bench 自动化检测安全风险的过程。运行
+    kube-bench 生成的报告描述了修复检测到问题所需的详细补救措施。学习如何解释结果以及如何缓解问题。
+- en: Know how to configure Ingress with TLS termination
+  id: totrans-277
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 知道如何配置具有 TLS 终止的 Ingress
+- en: An Ingress can be configured to send and receive encrypted data by exposing
+    an HTTPS endpoint. For this to work, you need to create a TLS Secret object and
+    assign it a TLS certificate and key. The Secret can then be consumed by the Ingress
+    using the attribute `spec.tls[]`.
+  id: totrans-278
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以通过暴露 HTTPS 端点来配置 Ingress 发送和接收加密数据。为此，您需要创建一个 TLS Secret 对象，并为其分配一个 TLS 证书和密钥。然后，可以通过
+    Ingress 使用属性 `spec.tls[]` 消费这个 Secret。
+- en: Know how to configure GUI elements for secure access
+  id: totrans-279
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 知道如何为安全访问配置 GUI 元素
+- en: GUI elements, such as the Kubernetes Dashboard, provide a convenient way to
+    manage objects. Attackers can cause harm to your cluster if the application isn’t
+    protected from unauthorized access. For the exam, you need to know how to properly
+    set up RBAC for specific stakeholders. Moreover, you are expected to have a rough
+    understanding of security-related command line arguments. Practice the installation
+    process for the Dashboard, learn how to tweak its command line arguments, and
+    understand the effects of setting permissions for different users.
+  id: totrans-280
+  prefs: []
+  type: TYPE_NORMAL
+  zh: GUI 元素，例如 Kubernetes 仪表盘，提供了管理对象的便捷方式。如果应用程序没有受到未经授权访问的保护，攻击者可能会对您的集群造成危害。在考试中，您需要知道如何为特定利益相关者正确设置
+    RBAC。此外，您还应该大致了解与安全相关的命令行参数。练习安装仪表盘的过程，学习如何调整其命令行参数，并了解为不同用户设置权限的影响。
+- en: Know how to detect modified platform binaries
+  id: totrans-281
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 知道如何检测修改过的平台二进制文件
+- en: Platform binaries like `kubectl` and `kubeadm` can be verified against their
+    corresponding hash code. Know where to find the hash file and how to use a validation
+    tool to identify if the binary has been tempered with.
+  id: totrans-282
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以根据其相应的哈希码验证平台二进制文件，如 `kubectl` 和 `kubeadm`。了解如何查找哈希文件以及如何使用验证工具来识别二进制文件是否已被篡改。
+- en: Sample Exercises
+  id: totrans-283
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 示例练习
+- en: Solutions to these exercises are available in the [Appendix](app01.xhtml#appendix-a).
+  id: totrans-284
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些练习的解决方案可以在 [附录](app01.xhtml#appendix-a) 中找到。
+- en: Create a network policy that denies egress traffic to any domain outside of
+    the cluster. The network policy applies to Pods with the label `app=backend` and
+    also allows egress traffic for port 53 for UDP and TCP to Pods in any other namespace.
+  id: totrans-285
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 创建一个网络策略，禁止出口流量到集群外的任何域。网络策略适用于具有标签 `app=backend` 的 Pod，并且还允许 UDP 和 TCP 的端口
+    53 的出口流量到任何其他命名空间中的 Pod。
+- en: Create a Pod named `allowed` that runs the `busybox:1.36.0` image on port 80
+    and assign it the label `app=frontend`. Make a `curl` call to `http://google.com`.
+    The network call should be allowed, as the network policy doesn’t apply to the
+    Pod.
+  id: totrans-286
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 创建一个名为 `allowed` 的 Pod，在端口 80 上运行 `busybox:1.36.0` 镜像，并为其分配标签 `app=frontend`。对
+    `http://google.com` 进行 `curl` 调用。网络调用应该被允许，因为网络策略不适用于该 Pod。
+- en: Create another Pod named `denied` that runs the `busybox:1.36.0` image on port
+    80 and assign it the label `app=backend`. Make a `curl` call to `http://google.com`.
+    The network call should be blocked.
+  id: totrans-287
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 创建另一个名为 `denied` 的 Pod，在端口 80 上运行 `busybox:1.36.0` 镜像，并为其分配标签 `app=backend`。对
+    `http://google.com` 进行 `curl` 调用。网络调用应该被阻止。
+- en: 'Install the Kubernetes Dashboard or make sure that it is already installed.
+    In the namespace `kubernetes-dashboard`, create a ServiceAccount named `observer-user`.
+    Moreover, create the corresponding ClusterRole and ClusterRoleBinding. The ServiceAccount
+    should only be allowed to view Deployments. All other operations should be denied.
+    As an example, create the Deployment named `deploy` in the `default` namespace
+    with the following command: `kubectl create deployment deploy --image=nginx --replicas=3`.'
+  id: totrans-288
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 安装 Kubernetes 仪表盘或确保已经安装。在命名空间 `kubernetes-dashboard` 中，创建一个名为 `observer-user`
+    的 ServiceAccount。此外，创建相应的 ClusterRole 和 ClusterRoleBinding。ServiceAccount 应只被允许查看部署（Deployments）。所有其他操作应被拒绝。例如，使用以下命令在
+    `default` 命名空间中创建名为 `deploy` 的部署：`kubectl create deployment deploy --image=nginx
+    --replicas=3`。
+- en: Create a token for the ServiceAccount named `observer-user` that will never
+    expire. Log into the Dashboard using the token. Ensure that only Deployments can
+    be viewed and not any other type of resource.
+  id: totrans-289
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 为名为 `observer-user` 的 ServiceAccount 创建一个永不过期的令牌。使用该令牌登录仪表盘。确保仅可以查看部署（Deployments），而不能查看任何其他类型的资源。
+- en: Download the binary file of the API server with version 1.26.1 on Linux AMD64\.
+    Download the SH256 checksum file for the API-server executable of version 1.23.1\.
+    Run the OS-specific verification tool and observe the result.****
+  id: totrans-290
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 在 Linux AMD64 上下载 API 服务器版本 1.26.1 的二进制文件。下载 API 服务器可执行文件版本 1.23.1 的 SH256 校验和文件。运行特定于操作系统的验证工具，并观察结果。

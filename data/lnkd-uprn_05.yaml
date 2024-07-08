@@ -1,0 +1,715 @@
+- en: Chapter 5\. Ingress and Linkerd
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第5章。入口和Linkerd
+- en: 'Whenever you work with Kubernetes, you always have to find a way for your users
+    *outside* your cluster to be able to make requests of (some of) the services running
+    *inside* your cluster. This is the *ingress problem* (see [Figure 5-1](#ingress-problem)):
+    the cluster wants to protect everything inside from the big scary Internet, but
+    that’s where your legitimate users are.'
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每当您使用Kubernetes时，您总是需要找到一种方式，使得您集群外部的用户能够向运行在您集群内部的某些服务发出请求。这就是*入口问题*（参见[图5-1](#ingress-problem)）：集群希望保护内部的所有内容免受大可怕的互联网的侵害，但这却是您的合法用户所在之处。
+- en: '![luar 0501](assets/luar_0501.png)'
+  id: totrans-2
+  prefs: []
+  type: TYPE_IMG
+  zh: '![luar 0501](assets/luar_0501.png)'
+- en: Figure 5-1\. The ingress problem
+  id: totrans-3
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图5-1。入口问题
+- en: There’s an entire class of applications out there, unsurprisingly called *ingress
+    controllers*, whose sole purpose is solving the ingress problem. Linkerd does
+    not include an ingress controller; instead, it allows you to mesh whatever ingress
+    controller you like, as long as certain rules are followed. In this chapter, you’ll
+    learn how to make Linkerd and the ingress controller of your choice play nicely
+    with each other.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 显然有一整类应用程序称为*入口控制器*，其唯一目的是解决入口问题。Linkerd不包括入口控制器；相反，它允许您网状化任何喜欢的入口控制器，只要遵循某些规则。在本章中，您将学习如何使Linkerd与您选择的入口控制器相互配合。
+- en: There are a lot of different ingress controllers, which approach the ingress
+    problem in fascinatingly different ways. However, there are some common threads
+    across all of them, shown in [Figure 5-2](#ingress-controller-architecture).
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有许多不同的入口控制器，它们以迷人的不同方式解决入口问题。然而，所有这些控制器都有一些共同的主题，如[图5-2](#ingress-controller-architecture)所示。
+- en: '![luar 0502](assets/luar_0502.png)'
+  id: totrans-6
+  prefs: []
+  type: TYPE_IMG
+  zh: '![luar 0502](assets/luar_0502.png)'
+- en: Figure 5-2\. Ingress controller high-level architecture
+  id: totrans-7
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图5-2。入口控制器高级架构
+- en: 'These common threads include:'
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些共同的主题包括：
+- en: They are all designed to live right at the edge of a cluster (usually behind
+    a Kubernetes Service of type `LoadBalancer`), exposed directly to the Internet
+    so that their clients can reach them. Security is always a major concern for an
+    ingress controller.
+  id: totrans-9
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 它们都设计为位于集群边缘（通常是在`LoadBalancer`类型的Kubernetes服务之后），直接暴露在互联网上，以便其客户端可以访问它们。安全性始终是入口控制器的主要关注点。
+- en: 'They always have a way to control which requests from outside get routed to
+    which services inside. This is another critical security issue: installing an
+    ingress controller cannot mean that all the services in your cluster are open
+    to the Internet.'
+  id: totrans-10
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 他们总是有一种方法来控制外部的哪些请求被路由到内部的哪些服务。这是另一个关键的安全问题：安装入口控制器不能意味着集群中的所有服务都向互联网开放。
+- en: 'All the popular ingress controllers support sophisticated routing controls
+    at [OSI layer 7](https://oreil.ly/S-sjB), typically focusing on HTTP and gRPC.
+    Many also support more limited control for routing OSI layer 4 connections:'
+  id: totrans-11
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 所有流行的入口控制器在[OSI层7](https://oreil.ly/S-sjB)支持复杂的路由控制，通常专注于HTTP和gRPC。许多还支持对OSI层4连接进行更有限的路由控制：
+- en: At OSI layer 7 (the application layer), the ingress controller might have capabilities
+    like “route an HTTP request where the hostname is `foo.example.com` and the `path`
+    starts with `/bar/` to the Service named `bar-service`.”
+  id: totrans-12
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在OSI层7（应用层），入口控制器可能具有诸如“将主机名为`foo.example.com`且`路径`以`/bar/`开头的HTTP请求路由到名为`bar-service`的服务”的能力。
+- en: At OSI layer 4 (the transport layer), its capabilities are more likely to be
+    along the lines of “route TCP connections arriving on port 1234 to the Service
+    named `bar-service`.”
+  id: totrans-13
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在OSI层4（传输层），其功能更可能是“将到达端口1234的TCP连接路由到名为`bar-service`的服务”。
+- en: Depending on which ingress controller is in use, the actual way the user configures
+    routing can vary significantly.
+  id: totrans-14
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 根据使用的入口控制器的不同，用户配置路由的实际方式可能会有很大差异。
+- en: Ingress controllers can always terminate and originate TLS connections (again,
+    mostly focusing on HTTPS) to handle security at the edge of the cluster. This
+    doesn’t extend Linkerd’s mTLS out to the ingress controller’s clients; rather,
+    it creates two separate domains in which TLS is operating and requires the ingress
+    controller to translate between them, as shown in [Figure 5-3](#ingress-controller-tls).
+  id: totrans-15
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 入口控制器始终可以终止和发起TLS连接（主要是HTTPS），以处理集群边缘的安全性。这并不扩展Linkerd的mTLS到入口控制器的客户端；相反，它创建了两个TLS操作的分离领域，并要求入口控制器在它们之间进行转换，如[图5-3](#ingress-controller-tls)所示。
+- en: '![luar 0503](assets/luar_0503.png)'
+  id: totrans-16
+  prefs:
+  - PREF_IND
+  type: TYPE_IMG
+  zh: '![luar 0503](assets/luar_0503.png)'
+- en: Figure 5-3\. Ingress controllers and TLS
+  id: totrans-17
+  prefs:
+  - PREF_IND
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图5-3。入口控制器和TLS
+- en: Keeping the two TLS worlds separate usually ends up making sense because the
+    ingress controller needs to be presenting users with certificates that match what
+    the user is expecting, but when its proxy interacts with Linkerd, it needs to
+    present a properly crafted workload identity. These are not the same thing and
+    shouldn’t be conflated. Allowing the ingress controller to manage TLS with its
+    client while allowing Linkerd to manage mTLS within the cluster is a powerful
+    combination.
+  id: totrans-18
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 通常将两个 TLS 世界分开是有道理的，因为 Ingress 控制器需要向用户呈现与用户期望的证书匹配的证书，但当其代理与 Linkerd 交互时，需要提供一个正确配置的工作负载身份。这两者并不相同，不应混淆。允许
+    Ingress 控制器与其客户端管理 TLS，同时允许 Linkerd 在集群内部管理 mTLS，这是一个强大的组合。
+- en: Finally, many ingress controllers offer capabilities like end user authentication,
+    circuit breaking, rate limiting, etc. These ingress controllers may also be called
+    *API gateways*. An example of how one might handle end user authentication is
+    shown in [Figure 5-4](#api-gateway-extauth).
+  id: totrans-19
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 最后，许多 Ingress 控制器提供诸如最终用户认证、断路器、速率限制等功能。这些 Ingress 控制器也可能被称为*API 网关*。如何处理最终用户认证的示例在
+    [图 5-4](#api-gateway-extauth) 中展示。
+- en: '![luar 0504](assets/luar_0504.png)'
+  id: totrans-20
+  prefs:
+  - PREF_IND
+  type: TYPE_IMG
+  zh: '![luar 0504](assets/luar_0504.png)'
+- en: Figure 5-4\. An API gateway providing end user authentication
+  id: totrans-21
+  prefs:
+  - PREF_IND
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-4\. 提供最终用户认证的 API 网关
+- en: API gateways have enormous latitude over what exactly happens to a user request,
+    allowing very sophisticated capabilities indeed—though this is obviously out of
+    scope for this book.
+  id: totrans-22
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: API 网关可以对用户请求发生的具体情况有很大的灵活性，确实可以实现非常复杂的功能——尽管这显然超出了本书的范围。
+- en: Ingress Controllers with Linkerd
+  id: totrans-23
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用 Linkerd 的 Ingress 控制器
+- en: Linkerd doesn’t have a lot of constraints in terms of which ingress controller
+    you use; almost any of them will work, usually without much trouble. From Linkerd’s
+    point of view, the ingress is just another meshed workload, and from the ingress
+    controller’s point of view, Linkerd is mostly invisible.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linkerd 在使用哪种 Ingress 控制器方面没有太多限制；几乎任何一个都能正常工作，通常不会出现太多问题。从 Linkerd 的角度来看，Ingress
+    只是另一个网格工作负载，而从 Ingress 控制器的角度来看，Linkerd 大部分时候是不可见的。
+- en: Ingress Controllers in Other Meshes
+  id: totrans-25
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 其他网格中的 Ingress 控制器
+- en: 'Some meshes take a very different approach here: they ship with an ingress
+    controller that is tightly integrated with the mesh. Linkerd takes a very ingress-agnostic
+    approach because it tends to increase flexibility, lessen operational complexity,
+    and make it easier to adopt the ingress controller and the service mesh at different
+    times.'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这里，一些网格采取了非常不同的方法：它们配备了一个与网格紧密集成的 Ingress 控制器。Linkerd 采用了非常与 Ingress 无关的方法，因为这往往增加了灵活性，减少了操作复杂性，并使得在不同时间采用
+    Ingress 控制器和服务网格更加容易。
+- en: The Ingress Controller Is Just Another Meshed Workload
+  id: totrans-27
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Ingress 控制器只是另一个网格工作负载
+- en: 'From Linkerd’s point of view, the ingress controller is mostly just a workload
+    in the mesh, as shown in [Figure 5-5](#ingress-is-just-a-workload). The fact that
+    clients outside the cluster can talk to the ingress controller is really not something
+    that Linkerd worries about: you still need to inject a sidecar into the ingress
+    controller, and all the usual Linkerd features like mTLS and metrics just work.'
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从 Linkerd 的角度来看，Ingress 控制器大部分时间只是网格中的一个工作负载，如 [图 5-5](#ingress-is-just-a-workload)
+    所示。Linkerd 并不担心客户端在集群外部与 Ingress 控制器通信的事情：你仍然需要将一个 Sidecar 注入 Ingress 控制器，所有常规的
+    Linkerd 功能如 mTLS 和度量都能正常工作。
+- en: '![luar 0505](assets/luar_0505.png)'
+  id: totrans-29
+  prefs: []
+  type: TYPE_IMG
+  zh: '![luar 0505](assets/luar_0505.png)'
+- en: Figure 5-5\. The ingress controller is just another workload
+  id: totrans-30
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-5\. Ingress 控制器只是另一个工作负载
+- en: The single way that the ingress controller will almost always need special handling
+    is that you’ll almost always want to tell Linkerd to skip the ingress controller’s
+    incoming ports. This is because the ingress controller may need access to the
+    client’s IP address for routing or authorization purposes, but if Linkerd is handling
+    the connection, then the only IP address the ingress controller will ever see
+    is that of the Linkerd proxy. See [Figure 5-6](#ingress-skip-incoming).
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Ingress 控制器几乎总是需要特殊处理的一种方式是，你几乎总是希望告诉 Linkerd 跳过 Ingress 控制器的入站端口。这是因为 Ingress
+    控制器可能需要访问客户端的 IP 地址进行路由或授权，但如果 Linkerd 处理连接，那么 Ingress 控制器将看到的唯一 IP 地址是 Linkerd
+    代理的 IP 地址。参见 [图 5-6](#ingress-skip-incoming)。
+- en: '![luar 0506](assets/luar_0506.png)'
+  id: totrans-32
+  prefs: []
+  type: TYPE_IMG
+  zh: '![luar 0506](assets/luar_0506.png)'
+- en: Figure 5-6\. Skipping incoming traffic for the ingress controller
+  id: totrans-33
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-6\. 跳过 Ingress 控制器的入站流量
+- en: Ingress Controllers Are Designed for the Edge
+  id: totrans-34
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Ingress 控制器专为边缘设计
+- en: Remember that part of the job of an ingress controller is to sit at the edge
+    of the cluster, so it already has to be designed to safely handle connections
+    directly from the Internet. Telling Linkerd not to handle the incoming connections
+    for the ingress controller shouldn’t be any problem from a security point of view.
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 记住，入口控制器的工作之一是位于集群边缘，因此它已经被设计为安全处理直接来自互联网的连接。告诉 Linkerd 不处理入口控制器的传入连接在安全性上不应该存在任何问题。
+- en: 'You’ll use the `config.linkerd.io/skip-inbound-ports` annotation that we covered
+    in [Chapter 4](ch04.html#LUAR_meshing_workloads) to skip the incoming ports. Pay
+    attention to the port numbers—you need to skip the port(s) on which the ingress
+    controller Pod is actually listening, which will often *not* be the port that
+    the client uses! For example, if you associate your ingress controller with a
+    Service like this one:'
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您将使用我们在 [第 4 章](ch04.html#LUAR_meshing_workloads) 中介绍的 `config.linkerd.io/skip-inbound-ports`
+    注释来跳过传入端口。请注意端口号 - 您需要跳过实际上入口控制器 Pod 在其上监听的端口（通常不是客户端使用的端口！）。例如，如果您将您的入口控制器与此类服务关联：
+- en: '[PRE0]'
+  id: totrans-37
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'You’ll need to skip inbound port 8080; trying to skip inbound port 80 would
+    have no effect whatsoever. So, the correct annotation would be:'
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您需要跳过入站端口 8080；尝试跳过入站端口 80 将毫无效果。因此，正确的注释应该是：
+- en: '[PRE1]'
+  id: totrans-39
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: Linkerd Is (Mostly) Invisible
+  id: totrans-40
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Linkerd 几乎是不可见的
+- en: 'From the point of view of the ingress controller, Linkerd is basically invisible.
+    This is by design: adding Linkerd to a running application is meant to just work,
+    after all! But there are two things to be aware of to make sure that everything
+    is working as smoothly as possible: the ingress controller should use cleartext
+    within the cluster, and it should route to Services rather than endpoints.'
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从入口控制器的角度来看，Linkerd 基本上是不可见的。这是设计上的：将 Linkerd 添加到运行中的应用程序意味着一切都能正常工作！但是为了确保一切尽可能顺利地工作，有两件事需要注意：入口控制器应在集群内使用明文，并且应路由到服务而不是端点。
+- en: Use Cleartext Within the Cluster
+  id: totrans-42
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 在集群内使用明文
+- en: 'We know: this is probably the only time in years you’ve seen anyone recommend
+    using cleartext instead of TLS. To be clear, we’re *not* talking about the connection
+    from the client to the ingress controller! (Definitely use HTTPS for that.) Here,
+    we’re talking about the connections made from the ingress controller to meshed
+    workloads in the cluster, as shown in [Figure 5-7](#use-cleartext-inside-the-cluster).'
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们知道：这可能是多年来您第一次看到有人建议使用明文而不是 TLS。明确一下，我们 *不* 是在讨论从客户端到入口控制器的连接！（那绝对要使用 HTTPS。）这里，我们谈论的是从入口控制器到集群中的网格工作负载建立的连接，如
+    [图 5-7](#use-cleartext-inside-the-cluster) 所示。
+- en: '![luar 0507](assets/luar_0507.png)'
+  id: totrans-44
+  prefs: []
+  type: TYPE_IMG
+  zh: '![luar 0507](assets/luar_0507.png)'
+- en: Figure 5-7\. Let Linkerd handle mTLS inside the cluster
+  id: totrans-45
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-7\. 让 Linkerd 在集群内处理 mTLS
+- en: For those connections, you should use cleartext. If the ingress controller originates
+    TLS to the workload, Linkerd can’t do anything more than per-connection proxying;
+    you miss out on per-request load balancing, proper request metrics, and a lot
+    of other really useful things that Linkerd brings to the table. Using cleartext
+    connections allows all the advanced functionality and is still safe because Linkerd’s
+    mTLS will protect the connection.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于这些连接，应使用明文。如果入口控制器向工作负载发起 TLS 连接，Linkerd 将无法执行更多操作，只能进行每连接代理；您将错过每请求负载均衡、正确的请求指标以及
+    Linkerd 提供的许多其他非常有用的功能。使用明文连接可以享受所有高级功能，并且仍然安全，因为 Linkerd 的 mTLS 将保护连接。
+- en: Route to Services, Not Endpoints
+  id: totrans-47
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 路由到服务，而不是端点
+- en: 'This is an area where Kubernetes nomenclature and concepts are particularly
+    challenging. A Kubernetes Service actually has three entirely distinct parts,
+    and all three are relevant for this point:'
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是 Kubernetes 术语和概念特别具有挑战性的一个领域。Kubernetes 服务实际上有三个完全不同的部分，这三个部分对于这一点都是相关的：
+- en: The Service causes a name to appear in the cluster’s DNS service.
+  id: totrans-49
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 服务会导致集群的 DNS 服务中出现一个名称。
+- en: That DNS name is associated with a single IP address for the Service itself.
+  id: totrans-50
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 该 DNS 名称与服务本身的单个 IP 地址相关联。
+- en: The Service is also associated with a set of Pods, and each Pod has an IP address
+    that is different from every other Pod’s *and* from the Service’s IP address.
+  id: totrans-51
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 该服务还与一组 Pod 相关联，每个 Pod 的 IP 地址与其他任何 Pod 的 IP 地址以及服务的 IP 地址都不同。
+- en: Collectively, the IP addresses of the Pods are called the *endpoints* of the
+    Service. (Kubernetes also has resources called Endpoints and EndpointSlices, but
+    we’re just talking about the set of Pod IP addresses for the moment.)
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod 的 IP 地址的集合称为服务的 *终端节点*（Endpoints）。（Kubernetes 也有称为 Endpoints 和 EndpointSlices
+    的资源，但我们目前只讨论 Pod IP 地址的集合。）
+- en: These parts are shown in [Figure 5-8](#k8s-service-architecture-2). Again, all
+    three are relevant when considering service mesh routing.
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些部分在 [图 5-8](#k8s-service-architecture-2) 中显示。再次强调，在考虑服务网格路由时，这三个部分都是相关的。
+- en: '![luar 0508](assets/luar_0508.png)'
+  id: totrans-54
+  prefs: []
+  type: TYPE_IMG
+  zh: '![luar 0508](assets/luar_0508.png)'
+- en: Figure 5-8\. The three distinct parts of a Kubernetes Service
+  id: totrans-55
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-8\. Kubernetes 服务的三个独立部分
+- en: It matters which IP address the ingress controller uses for its connections
+    because normally Linkerd will only load balance connections made to the Service’s
+    IP address, *not* connections made directly to an endpoint’s IP address, as shown
+    in [Figure 5-9](#linkerd-mesh-routing).
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 入口控制器使用哪个 IP 地址进行连接是很重要的，因为通常 Linkerd 只会对连接到服务 IP 地址的连接进行负载均衡，*而不是* 直接连接到端点
+    IP 地址的连接，如图 [5-9](#linkerd-mesh-routing) 所示。
+- en: '![luar 0509](assets/luar_0509.png)'
+  id: totrans-57
+  prefs: []
+  type: TYPE_IMG
+  zh: '![luar 0509](assets/luar_0509.png)'
+- en: Figure 5-9\. How Linkerd chooses where to route
+  id: totrans-58
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-9\. Linkerd 如何选择路由的方式
+- en: 'Linkerd handles routing this way to maximize choice for the application designer:
+    it’s easy to have the ingress controller simply hand off all load balancing decisions
+    to Linkerd (by routing to the Service IP), and it’s still possible to have the
+    ingress controller do its own load balancing (by routing directly to endpoint
+    IPs).'
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linkerd 以这种方式处理路由，以最大化应用设计者的选择：通过将路由到服务 IP 的方式，让入口控制器简单地将所有负载均衡决策交给 Linkerd
+    是很容易的，同时仍然可以让入口控制器自行进行负载均衡（通过直接路由到端点 IP）。
+- en: In most common cases, having the ingress controller route to the Service IP
+    is the simplest way to take full advantage of Linkerd.
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在大多数常见情况下，让入口控制器路由到服务 IP 是充分利用 Linkerd 的最简单方式。
+- en: Gateway API and Service Routing
+  id: totrans-61
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 网关 API 和服务路由
+- en: 'Gateway API introduces a wrinkle into this recommendation: it will need to
+    support cloud gateway controllers that aren’t really running in the cluster and
+    therefore can’t have a Linkerd proxy running next to them. At the same time, these
+    cloud gateway controllers can be extremely latency-sensitive, so they’re less
+    likely to support Service routing.'
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Gateway API 对此建议引入了一个变数：它需要支持云网关控制器，这些控制器实际上并未在集群中运行，因此无法在其旁边运行 Linkerd 代理。与此同时，这些云网关控制器可能极度敏感于延迟，因此它们不太可能支持服务路由。
+- en: This is an area of active work within the GAMMA initiative and Gateway API as
+    a whole.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是 GAMMA 计划和 Gateway API 整体中的一个活跃工作领域。
+- en: Depending on which ingress controller you’re using, you might need to specifically
+    configure the ingress controller to do this—or you might find that it is not possible
+    to configure your ingress controller to route to the Service IP. For these ingress
+    controllers, you’ll need to use Linkerd’s *ingress mode*.
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 根据使用的入口控制器不同，您可能需要特别配置入口控制器来执行此操作——或者您可能会发现无法配置您的入口控制器将路由到服务 IP。对于这些入口控制器，您将需要使用
+    Linkerd 的 *入口模式*。
+- en: Ingress Mode
+  id: totrans-65
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 入口模式
+- en: When ingress mode is active and Linkerd receives a request to an endpoint IP
+    with the `l5d-dst-override` header set to a fully qualified Service DNS name,
+    Linkerd will route the request as if it had gone to the Service IP address for
+    the service named by the `l5d-dst-override` header, as shown in [Figure 5-10](#ingress-mode-routing).
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当入口模式激活并且 Linkerd 收到一个带有 `l5d-dst-override` 头部设置为完全限定的服务 DNS 名称的端点 IP 的请求时，Linkerd
+    将会将该请求路由到由 `l5d-dst-override` 头部指定的服务 IP 地址，如图 [5-10](#ingress-mode-routing) 所示。
+- en: 'For example, given a Service `my-service` in namespace `my-ns`, if you send
+    a request directly to one of the endpoint IPs for `my-service` but set its `l5d-dst-override`
+    header as shown here, then Linkerd will treat the connection as if it had been
+    made to the Service IP for `my-service`:'
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，给定命名空间 `my-ns` 中的服务 `my-service`，如果您直接向 `my-service` 的其中一个端点 IP 发送请求，但设置其如下所示的
+    `l5d-dst-override` 头部，那么 Linkerd 将会将此连接视为已连接到 `my-service` 的服务 IP：
+- en: '[PRE2]'
+  id: totrans-68
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: '![luar 0510](assets/luar_0510.png)'
+  id: totrans-69
+  prefs: []
+  type: TYPE_IMG
+  zh: '![luar 0510](assets/luar_0510.png)'
+- en: Figure 5-10\. Linkerd ingress mode routing
+  id: totrans-70
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-10\. Linkerd 入口模式路由
+- en: The Ingress Controller Must Inject l5d-dst-override
+  id: totrans-71
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 入口控制器必须注入 l5d-dst-override
+- en: To effectively use ingress mode, the ingress controller must inject the `l5d-dst-override`
+    header into every request. An ingress controller that cannot inject this header
+    is not compatible with Linkerd ingress mode. Linkerd cannot create the `l5d-dst-override`
+    header itself, because in general, it’s not possible to determine the name of
+    a Service from one of its endpoint IP addresses. This is because a given Pod can
+    be part of multiple Services.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要有效使用入口模式，入口控制器必须将 `l5d-dst-override` 头部注入每个请求中。不能注入此头部的入口控制器与 Linkerd 入口模式不兼容。Linkerd
+    无法自行创建 `l5d-dst-override` 头部，因为通常情况下，无法从其端点 IP 地址确定服务的名称。这是因为给定的 Pod 可能属于多个服务。
+- en: If possible, it’s usually better to configure the ingress controller to route
+    to Services than to use ingress mode.
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果可能的话，通常最好配置入口控制器来路由到 Services，而不是使用入口模式。
+- en: 'To use ingress mode, inject the proxy with:'
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要使用入口模式，请注入代理：
+- en: '[PRE3]'
+  id: totrans-75
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'rather than:'
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 而不是：
+- en: '[PRE4]'
+  id: totrans-77
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: Specific Ingress Controller Examples
+  id: totrans-78
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 具体的入口控制器示例
+- en: Here are some specific examples of configuring different ingress controllers
+    for use with Linkerd. This is *not* an exhaustive list by any means—it’s just
+    a convenient set to show a fairly wide range of possibilities. The [Linkerd ingress
+    documentation](https://oreil.ly/Nl7MR) has more on this topic.
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里有一些具体的示例，展示了不同入口控制器与 Linkerd 配合使用的配置。这并不是一个详尽的列表，仅仅是一个方便的集合，展示了一些可能性。更多关于此主题的信息，请参阅[Linkerd
+    入口文档](https://oreil.ly/Nl7MR)。
+- en: For our examples here, we’ll take a look at Emissary-ingress, NGINX, and Envoy
+    Gateway.
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于我们这里的示例，我们将看看 Emissary-ingress、NGINX 和 Envoy Gateway。
+- en: Emissary-ingress
+  id: totrans-81
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Emissary-ingress
+- en: '[Emissary-ingress](https://oreil.ly/vHmjZ) is an open source, Kubernetes-native
+    API gateway that’s been around since 2017\. It’s built on the Envoy proxy, focuses
+    on operational simplicity and self-service configuration, and has been a CNCF
+    incubating project since 2021\. It defines its own native configuration CRDs but
+    can also use Ingress resources or Gateway API. (Full disclosure: Flynn is the
+    original author of Emissary.)'
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[使者入口](https://oreil.ly/vHmjZ) 是一个自 2017 年以来存在的开源、Kubernetes 原生的 API 网关。它构建在
+    Envoy 代理之上，专注于操作简易性和自助配置，并且自 2021 年以来一直是 CNCF 的孵化项目。它定义了自己的本地配置 CRD，但也可以使用 Ingress
+    资源或 Gateway API。(完整披露：Flynn 是 Emissary 的原始作者。)'
+- en: There’s really not too much to dig into as far as setting up Emissary with Linkerd;
+    it basically just works. Emissary defaults to routing to Services, so really the
+    only thing to consider when adding Emissary to the Linkerd mesh is to skip Emissary’s
+    incoming ports if you need Emissary to know client IP addresses. And you’ll want
+    to make sure that Emissary isn’t originating TLS to the workloads.
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 就设置 Emissary 与 Linkerd 一起使用而言，实际上没有太多需要深入挖掘的地方；它基本上只是工作而已。Emissary 默认路由到 Services，因此在将
+    Emissary 添加到 Linkerd 网格时唯一需要考虑的是，如果需要 Emissary 知道客户端 IP 地址，则跳过 Emissary 的传入端口。并且您需要确保
+    Emissary 不会向工作负载发起 TLS。
+- en: NGINX
+  id: totrans-84
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: NGINX
+- en: NGINX is an open source API gateway and web server that was around long before
+    Kubernetes came along. Though it’s not a CNCF project itself, it served as the
+    core of the [`ingress-nginx` Kubernetes ingress controller](https://oreil.ly/m-O2N),
+    which was one of the first ingress controllers using the Ingress resource, and
+    it has been sufficiently popular for long enough that people generally mean `ingress-nginx`
+    when they talk about running NGINX for Kubernetes.
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: NGINX 是一个开源的 API 网关和 Web 服务器，早在 Kubernetes 出现之前就已存在。虽然它本身不是 CNCF 项目，但它作为 [`ingress-nginx`
+    Kubernetes 入口控制器](https://oreil.ly/m-O2N) 的核心服务，是最早使用 Ingress 资源的入口控制器之一，并且已经足够流行，以至于当人们谈论在
+    Kubernetes 中运行 NGINX 时，通常指的是 `ingress-nginx`。
+- en: 'By default, `ingress-nginx` will route to endpoint IPs, not Service IPs. To
+    tell it to route to Service IPs instead, you’ll need to include an `ingress-nginx`
+    annotation on your Ingress resources:'
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，`ingress-nginx` 将路由到端点 IP，而不是服务 IP。要告诉它改为路由到服务 IP，您需要在您的 Ingress 资源上包含一个
+    `ingress-nginx` 注解：
+- en: '[PRE5]'
+  id: totrans-87
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: Installing and meshing `ingress-nginx` after that should be painless. Remember
+    to look at skipping incoming ports, too!
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安装和网格化 `ingress-nginx` 之后，应该是无痛的。记得查看跳过传入端口的设置！
+- en: Envoy Gateway
+  id: totrans-89
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Envoy Gateway
+- en: As of this writing, Envoy Gateway has recently reached version 1.0\. It provides
+    an interesting opportunity to explore using Gateway API to manage both the ingress
+    and the mesh in a Linkerd cluster.
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 截至目前，Envoy Gateway 最近已达到版本 1.0。它提供了一个有趣的机会，可以探索使用 Gateway API 来管理 Linkerd 集群中的入口和网格。
+- en: Gateway API has the interesting characteristic that, by design, the user doesn’t
+    directly install the Pods that handle data (the data plane). Instead, the user
+    installs a Gateway API control plane that understands how to watch Gateway resources.
+    Then, when the user creates the Gateway, the Gateway API control plane creates
+    the data plane Pods.
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Gateway API 具有一个有趣的特性，即用户不直接安装处理数据的 Pod（数据平面），而是安装了一个理解如何监视 Gateway 资源的 Gateway
+    API 控制平面。因此，当用户创建 Gateway 时，Gateway API 控制平面会创建数据平面的 Pods。
+- en: Envoy Gateway, as a Gateway API control plane, interprets this design characteristic
+    to mean that whenever it sees a change to its Gateway resource, it actually deletes
+    and re-creates the data plane Pods. This makes it a touch challenging to manage
+    injecting the Envoy Gateway data plane into the mesh! The most effective way to
+    handle this is to apply the `linkerd.io/inject` annotation to the `envoy-gateway-system`
+    namespace, which is where the data plane Deployment will be created.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Envoy Gateway 作为 Gateway API 控制平面，解释了这种设计特性意味着每当它看到对其 Gateway 资源的更改时，实际上会删除并重新创建数据平面的
+    Pods。这使得管理将 Envoy Gateway 数据平面注入到网格中变得有些具有挑战性！处理这个问题的最有效方式是在 `envoy-gateway-system`
+    命名空间中应用 `linkerd.io/inject` 注释，这是数据平面部署将被创建的地方。
+- en: Also, Envoy Gateway always routes to endpoint IP addresses in version 1.0\.
+    Until this is resolved in a future release of Envoy Gateway, it limits Linkerd’s
+    ability to do advanced routing when using Envoy Gateway. (It’s possible to mesh
+    Envoy Gateway in ingress mode and then configure HTTPRoutes to inject the `l5d-dst-override`
+    header, but it’s a bit manual at present.)
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此外，Envoy Gateway 总是路由到版本 1.0 中的端点 IP 地址。在未来版本的 Envoy Gateway 中解决此问题之前，这限制了 Linkerd
+    在使用 Envoy Gateway 时进行高级路由的能力。（目前可以在入口模式中混入 Envoy Gateway，然后配置 HTTPRoutes 来注入 `l5d-dst-override`
+    头，但目前还有些手动操作。）
+- en: Since Linkerd always gets to manage security though (including encryption and
+    policy), Envoy Gateway with Linkerd is still a practical and interesting combination.
+    Just pay attention to the incoming ports, as with the other ingress controllers!
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于 Linkerd 总是负责管理安全性（包括加密和策略），Envoy Gateway 与 Linkerd 的结合仍然是一种实用且有趣的组合。只需注意入站端口，就像处理其他入口控制器一样！
+- en: Summary
+  id: totrans-95
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 总结
+- en: One of Linkerd’s strengths is its ability to work with a wide variety of ingress
+    controllers. As long as a given ingress controller can accept the Linkerd sidecar
+    and route to Services, it should work seamlessly with Linkerd. This leaves you
+    free to choose whatever ingress controller works well for your team and your application
+    and be confident that it’ll get along with Linkerd.
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linkerd 的一个优点是其能够与各种入口控制器协同工作。只要特定的入口控制器可以接受 Linkerd sidecar 并路由到 Services，它应该可以与
+    Linkerd 无缝配合。这让你可以自由选择适合团队和应用的任何入口控制器，并确信它能与 Linkerd 兼容。

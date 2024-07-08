@@ -1,0 +1,714 @@
+- en: Chapter 4\. Adding Workloads to the Mesh
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第四章\. 向网格添加工作负载
+- en: 'Getting Linkerd running in your cluster is a great first step. But it’s pointless
+    to run Linkerd with nothing else: to get actual value out of your Linkerd cluster,
+    you’ll need to get workloads running in your service mesh. In this chapter, we’ll
+    show you how to do exactly that.'
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在你的集群中运行 Linkerd 是一个很好的第一步。但是单独运行 Linkerd 是没有意义的：要从你的 Linkerd 集群中获得实际价值，你需要让工作负载在服务网格中运行。在本章中，我们将向你展示如何实现这一点。
+- en: Workloads Versus Services
+  id: totrans-2
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 工作负载与服务的区别
+- en: 'We’ll talk about “workloads” a lot in this chapter—but sometimes we’ll also
+    talk about “services,” and sometimes “Services.” Unfortunately, these three things
+    all have slightly different meanings:'
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们将经常讨论“工作负载”——但有时我们也会讨论“服务”，以及“Services”。不幸的是，这三个概念在某些情况下有些微的不同含义：
+- en: Service
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 服务
+- en: A Kubernetes resource that is widely used to control how Kubernetes allocates
+    DNS names and IP addresses for services (see [Figure 4-1](#workloads-vs-services)).
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个广泛用于控制 Kubernetes 为服务分配 DNS 名称和 IP 地址的 Kubernetes 资源（参见 [图 4-1](#workloads-vs-services)）。
+- en: Workload
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 工作负载
+- en: A thing that actually does work on your behalf. A workload receives requests
+    over the network and executes code to take actions. In Kubernetes, it’s usually
+    one or more Pods (to provide the computation), often managed by a Deployment or
+    DaemonSet resource, plus one or more Services (to manage the names and IP addresses),
+    as illustrated in [Figure 4-1](#workloads-vs-services).
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个实际代表你执行工作的东西。工作负载通过网络接收请求并执行代码以执行操作。在 Kubernetes 中，它通常是一个或多个 Pod（提供计算），通常由
+    Deployment 或 DaemonSet 资源管理，再加上一个或多个服务（管理名称和 IP 地址），如 [图 4-1](#workloads-vs-services)
+    所示。
+- en: service
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 服务
+- en: A less formal term that could refer to either a Service or a workload, depending
+    on context. This lack of precision shows just one of many cases where Kubernetes
+    terminology is very much more confusing than we would like it to be.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个不太正式的术语，根据上下文可能指代服务或工作负载。这种不精确性正是 Kubernetes 术语比我们希望的更加混乱的一个例子。
+- en: '![luar 0401](assets/luar_0401.png)'
+  id: totrans-10
+  prefs: []
+  type: TYPE_IMG
+  zh: '![luar 0401](assets/luar_0401.png)'
+- en: Figure 4-1\. The workload as distinct from the Service
+  id: totrans-11
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 4-1\. 工作负载与服务的区别
+- en: As an application developer, you can usually just say “service” and trust that
+    people will be fine with the ambiguity. Unfortunately, we often need to be more
+    precise when talking about service meshes—hence the discussion of *workloads*
+    here rather than *services*.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为应用开发者，你通常可以只说“服务”，并相信人们能够接受这种含糊。不幸的是，在谈论服务网格时，我们经常需要更加精确，因此这里讨论的是 *工作负载* 而不是
+    *服务*。
+- en: What Does It Mean to Add a Workload to the Mesh?
+  id: totrans-13
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 向网格添加工作负载意味着什么？
+- en: “Adding a workload to the mesh” really means “adding the Linkerd sidecar to
+    each of your workload’s Pods,” as shown in [Figure 4-2](#meshing-a-workload).
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: “向网格添加工作负载”实际上意味着“向每个工作负载的 Pod 添加 Linkerd sidecar”，如 [图 4-2](#meshing-a-workload)
+    所示。
+- en: Ultimately, this means changing the Pod’s definition to include the sidecar
+    container. While you *could* do this by manually editing the YAML that defines
+    the Pod, it’s much easier and safer to let Linkerd do the heavy lifting instead.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最终，这意味着更改 Pod 的定义以包含 sidecar 容器。虽然你*可以*通过手动编辑定义 Pod 的 YAML 来实现这一点，但让 Linkerd
+    来完成这些繁重的工作会更容易、更安全。
+- en: Linkerd includes a Kubernetes admission controller called the `linkerd-proxy-injector`.
+    Its job, unsurprisingly, is to inject Linkerd proxies into workload Pods. Of course,
+    it doesn’t do this blindly; instead, it looks for Kubernetes annotations that
+    tell it which Pods need to be injected, as shown in [Figure 4-3](#proxy-injector).
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linkerd 包含一个名为 `linkerd-proxy-injector` 的 Kubernetes 准入控制器。它的工作，不出所料，就是向工作负载的
+    Pod 注入 Linkerd 代理。当然，它不是盲目地执行此操作；相反，它会查找告诉它哪些 Pod 需要注入的 Kubernetes 注解，如 [图 4-3](#proxy-injector)
+    所示。
+- en: '![luar 0402](assets/luar_0402.png)'
+  id: totrans-17
+  prefs: []
+  type: TYPE_IMG
+  zh: '![luar 0402](assets/luar_0402.png)'
+- en: Figure 4-2\. Adding a workload to the mesh
+  id: totrans-18
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 4-2\. 向网格添加工作负载
+- en: '![luar 0403](assets/luar_0403.png)'
+  id: totrans-19
+  prefs: []
+  type: TYPE_IMG
+  zh: '![luar 0403](assets/luar_0403.png)'
+- en: Figure 4-3\. The proxy injector
+  id: totrans-20
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 4-3\. 代理注入器
+- en: Injecting Individual Workloads
+  id: totrans-21
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 注入单个工作负载
+- en: 'The most common way to handle injection is to add the `linkerd.io/inject: enabled`
+    annotation directly to the Pod itself, typically by adding the annotation to the
+    Pod template in a Deployment, DaemonSet, etc. Whenever `linkerd-proxy-injector`
+    sees a new Pod with this annotation, it will inject the proxy sidecar into the
+    Pod for you.'
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '处理注入的最常见方式是直接将 `linkerd.io/inject: enabled` 注解添加到 Pod 本身，通常通过向 Deployment、DaemonSet
+    等的 Pod 模板添加此注解来实现。每当 `linkerd-proxy-injector` 看到具有此注解的新 Pod 时，它将为你注入代理 sidecar
+    到该 Pod 中。'
+- en: 'It’s worth pointing out that the value of the annotation is important: `enabled`
+    means to do a normal sidecar injection. We’ll look at other values shortly.'
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 值得指出的是注解的值很重要：`enabled` 表示进行正常的边车注入。我们很快会看到其他值。
+- en: All Pods Are Created Equal
+  id: totrans-24
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 所有 Pod 都是平等的
+- en: It doesn’t matter what kind of resource is being used to create the Pod. Deployments,
+    DaemonSets, hand-tooled ReplicaSets, Argo Rollouts resources—all of them create
+    their Pods exactly the same way. What the Linkerd injector notices is that a new
+    Pod exists, not what caused it to be created.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不管使用何种资源创建 Pod，都无关紧要。部署、守护进程集、手工制作的复制集、Argo Rollouts 资源——它们都以完全相同的方式创建它们的 Pod。Linkerd
+    注入器注意到的是存在新 Pod，而不是造成其创建的原因。
+- en: Injecting All Workloads in a Namespace
+  id: totrans-26
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 在命名空间中注入所有工作负载
+- en: You can add the `linkerd.io/inject` annotation to a Namespace, rather than to
+    a Pod. Once that’s done, every new Pod created in that namespace will be injected
+    (and, again, it *does not matter* what causes the new Pod to be created).
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以将 `linkerd.io/inject` 注解添加到命名空间，而不是 Pod。一旦完成这个操作，该命名空间中创建的每个新 Pod 都将被注入（而且再次强调，导致新
+    Pod 创建的原因是无关紧要）。
+- en: This can be very useful for situations where automation is creating Pods, but
+    it’s difficult or error-prone to modify the annotations on the Pods themselves.
+    For example, some ingress controllers will re-create Deployments every time you
+    change a resource; rather than mess about with laboriously modifying the Pod template
+    used by the ingress controller (if it’s even possible), you can just annotate
+    the Namespace in which the Deployments will be created.
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这在自动化创建 Pod 的情况下非常有用，但在修改 Pod 自身的注解时可能会很困难或容易出错。例如，某些入口控制器每次更改资源时都会重新创建部署；与其费力地修改入口控制器使用的
+    Pod 模板（如果可能的话），不如只是注释将要创建部署的命名空间。
+- en: linkerd.io/inject Values
+  id: totrans-29
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: linkerd.io/inject 值
+- en: 'The value of the `linkerd.io/inject` annotation does matter—it’s not just a
+    matter of having a non-empty string there. There are three specific values that
+    are meaningful:'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`linkerd.io/inject` 注解的值确实很重要——这不仅仅是有一个非空字符串的问题。有三个具体的值是有意义的：'
+- en: '`linkerd.io/inject: enabled`'
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`linkerd.io/inject: enabled`'
+- en: 'The most common case: `linkerd-proxy-injector` will add a proxy container to
+    the Pod and tell the proxy to run in its “normal” mode.'
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最常见的情况：`linkerd-proxy-injector` 将在 Pod 中添加一个代理容器，并告知代理以“正常”模式运行。
+- en: '`linkerd.io/inject: ingress`'
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`linkerd.io/inject: ingress`'
+- en: '`linkerd-proxy-injector` will add a proxy container to the Pod, but the proxy
+    will run in “ingress” mode (which we’ll discuss in [Chapter 5](ch05.html#LUAR_ingress_and_linkerd)).'
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`linkerd-proxy-injector` 将在 Pod 中添加一个代理容器，但代理将以“ingress”模式运行（我们将在[第5章](ch05.html#LUAR_ingress_and_linkerd)讨论）。'
+- en: '`linkerd.io/inject: disabled`'
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`linkerd.io/inject: disabled`'
+- en: This explicitly tells `linkerd-proxy-injector` to *not* add the proxy sidecar,
+    even if there’s a Namespace annotation that would otherwise say to add the sidecar.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这明确告诉 `linkerd-proxy-injector` 即使有一个命名空间注解要求添加边车，也*不*添加代理边车。
+- en: 'We’ll discuss ingress mode more in [Chapter 5](ch05.html#LUAR_ingress_and_linkerd):
+    it’s a workaround for ingress controllers that only know how to route requests
+    directly to workload endpoints. In most cases, you should use `linkerd.io/inject:
+    enabled` to get “normal” mode.'
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '我们将在[第5章](ch05.html#LUAR_ingress_and_linkerd)更详细地讨论入口模式：这是为只知道如何直接路由到工作负载端点的入口控制器而设置的一种解决方案。在大多数情况下，您应该使用
+    `linkerd.io/inject: enabled` 以获得“正常”模式。'
+- en: Why Might You Decide Not to Add a Workload to the Mesh?
+  id: totrans-38
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 为什么可能决定不将工作负载添加到网格中？
+- en: 'In general:'
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一般来说：
+- en: You always want to add your application workloads to the mesh.
+  id: totrans-40
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 您总是希望将应用工作负载添加到网格中。
+- en: You never want to add cluster infrastructure to the mesh.
+  id: totrans-41
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 您永远不希望将集群基础设施添加到网格中。
+- en: So, for example, things in the `kube-system` namespace are never injected. All
+    of these Pods are designed to protect themselves no matter what else is going
+    on, and some of them need to be sure that nothing is between them and the network
+    layer, so you shouldn’t inject them.
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，例如，`kube-system` 命名空间中的内容永远不会被注入。所有这些 Pod 都被设计为无论发生什么，都能保护自己，并且其中一些需要确保没有任何东西位于它们和网络层之间，因此不应该对它们进行注入。
+- en: 'Likewise, a Kubernetes conversion webhook (as shown in the `application-code`
+    namespace in [Figure 4-3](#proxy-injector)) generally shouldn’t be in the mesh.
+    The webhook mechanism itself already makes specific demands around TLS, and the
+    mesh won’t help with that. (It probably won’t hurt, but there’s really no point.)
+    Another good example here is CNI implementations: these need direct access to
+    the network layer and shouldn’t be injected.'
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 同样，Kubernetes转换webhook（如在[图 4-3](#proxy-injector)中的`application-code`命名空间中显示的）通常不应该位于网格中。webhook机制本身已经对TLS提出了具体要求，而网格对此无济于事。这可能不会有害，但实际上没有意义。这里的另一个很好的例子是CNI实现：这些需要直接访问网络层，不应该被注入。
+- en: On the other hand, the workloads that are part of your application running in
+    the cluster should always be injected into the mesh. All of these guidelines are
+    shown in [Figure 4-4](#inject-app-not-infrastructure).
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一方面，运行在集群中的应用程序的工作负载应始终被注入到网格中。所有这些准则都显示在[图 4-4](#inject-app-not-infrastructure)中。
+- en: '![luar 0404](assets/luar_0404.png)'
+  id: totrans-45
+  prefs: []
+  type: TYPE_IMG
+  zh: '![luar 0404](assets/luar_0404.png)'
+- en: Figure 4-4\. Inject the application, not the infrastructure
+  id: totrans-46
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 4-4\. 注入应用程序，而不是基础设施
+- en: Other Proxy Configuration Options
+  id: totrans-47
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 其他代理配置选项
+- en: Although the basic `linkerd.io/inject` annotation is the only proxy configuration
+    option you *must* provide, there are actually quite a few other things you can
+    configure about the proxy. The full list can be found in the [Linkerd Proxy Configuration
+    documentation](https://oreil.ly/9FiJF), but two areas very much worth learning
+    about from the start are *protocol detection* and *Kubernetes resource limits*.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管基本的`linkerd.io/inject`注释是您*必须*提供的唯一代理配置选项，但实际上还有许多其他可以配置代理的内容。完整列表可在[Linkerd代理配置文档](https://oreil.ly/9FiJF)中找到，但从一开始就非常值得学习的两个领域是*协议检测*和*Kubernetes资源限制*。
+- en: Protocol Detection
+  id: totrans-49
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 协议检测
+- en: As we discussed in [Chapter 1](ch01.html#LUAR_service_mesh_101), Linkerd puts
+    a lot of effort into operational simplicity; whenever possible, Linkerd tries
+    to make sure things just work when you bring your application into the mesh. Protocol
+    detection is a critical part of this, because Linkerd has to know the protocol
+    being used over a connection to correctly manage the connection, as shown in [Figure 4-5](#protocol-detection-overview).
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如我们在[第1章](ch01.html#LUAR_service_mesh_101)中讨论的那样，Linkerd非常注重操作简易性；在可能的情况下，Linkerd尽量确保当您将应用程序引入网格时事情能够顺利进行。协议检测是这一点的关键部分，因为Linkerd必须了解连接上使用的协议，以正确管理连接，如[图 4-5](#protocol-detection-overview)所示。
+- en: '![luar 0405](assets/luar_0405.png)'
+  id: totrans-51
+  prefs: []
+  type: TYPE_IMG
+  zh: '![luar 0405](assets/luar_0405.png)'
+- en: Figure 4-5\. Protocol detection
+  id: totrans-52
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 4-5\. 协议检测
+- en: 'There are several reasons that Linkerd (or any other mesh) needs to know the
+    protocol in use over the wire. We’ll touch on just a few of them:'
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linkerd（或任何其他网格）需要了解在传输过程中使用的协议的几个原因。我们将仅触及其中的一些：
+- en: Observability
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可观测性
+- en: Linkerd can’t provide proper metrics without understanding the flow of the protocol.
+    Identifying the beginning and end of a request is crucial to measuring request
+    rate and latency. Reading the status of a request is critical to measuring the
+    success rate.
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果Linkerd不理解协议流，就无法提供适当的指标。识别请求的开始和结束对于测量请求率和延迟至关重要。读取请求状态对于测量成功率至关重要。
+- en: Reliability
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可靠性
+- en: 'Any reliability feature beyond the most basic requires understanding the protocol
+    in flight. Consider load balancing, for example: if Linkerd doesn’t know the protocol,
+    it can only do connection-based load balancing, where an incoming TCP connection
+    is assigned to a specific workload Pod.'
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 任何超出基本功能的可靠性特性都要求理解飞行中的协议。例如，考虑负载平衡：如果Linkerd不知道协议，它只能进行基于连接的负载平衡，其中传入的TCP连接分配给特定的工作负载Pod。
+- en: However, connection-based load balancing doesn’t work very well for protocols
+    like HTTP/2 and gRPC. In these protocols, a single long-lived connection can carry
+    many requests, with multiple requests active at the same time. Linkerd can dramatically
+    improve reliability and performance by assigning individual requests to workload
+    Pods, rather than fixing an entire connection to a Pod. (It’s a fun Linkerd fact
+    that it does this automatically, with zero configuration; just install Linkerd,
+    and you get this for free.)
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，对于诸如HTTP/2和gRPC之类的协议，基于连接的负载平衡效果并不好。在这些协议中，单个长连接可以携带多个请求，并且多个请求可以同时活动。通过将单独的请求分配给工作负载Pod，而不是将整个连接固定到一个Pod，Linkerd可以显著提高可靠性和性能。（有趣的是，Linkerd会自动执行此操作，无需任何配置；只需安装Linkerd，即可免费获取此功能。）
+- en: Security
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安全性
+- en: 'If a workload makes a TLS connection to another workload, Linkerd shouldn’t
+    try to reencrypt it. It also shouldn’t try to do anything fancy with load balancing,
+    since it won’t be able to see anything inside the connection. (This implies that
+    you’ll get the best results with Linkerd by having your workloads *not* use TLS
+    when connecting to each other: let Linkerd do mTLS for you!)'
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果一个工作负载向另一个工作负载发起了 TLS 连接，Linkerd 不应尝试重新加密它。它也不应尝试在负载均衡中做任何复杂的事情，因为它无法看到连接内部的任何内容。（这意味着当工作负载之间连接时，最好让
+    Linkerd 为你执行 mTLS，而不是让它尝试处理 TLS 连接！）
+- en: When Protocol Detection Goes Wrong
+  id: totrans-61
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 当协议检测出现问题时
+- en: 'Automatic protocol detection has one major limitation: it can only work for
+    protocols where the entity that makes the connection is also the first one to
+    send data (*client-speaks-first* protocols). It will fail for protocols where
+    the entity that *receives* the connection is the first to send data (*server-speaks-first*
+    protocols).'
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 自动协议检测有一个主要限制：它只能用于那些连接建立和数据发送者是同一方的协议（*客户端先发起*协议）。对于数据接收者先发送数据的协议（*服务器先发起*协议），它将失败。
+- en: The reason for this limitation is that until Linkerd knows the protocol, it
+    can’t make reasonable decisions about how to do load balancing, so it can’t decide
+    what server to connect to, so it can’t find out what the server will say! Every
+    proxy has this frustratingly circular issue.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种限制的原因是在 Linkerd 知道协议之前，它无法合理地决定如何进行负载均衡，因此无法确定连接哪个服务器，也无法知道服务器将会返回什么！每个代理都面临这种令人沮丧的循环问题。
+- en: 'In the cloud native world, many—perhaps most?—common protocols are, happily,
+    client-speaks-first protocols; for example, HTTP, gRPC, and TLS itself are all
+    client-speaks-first. Unfortunately, there are some important server-speaks-first
+    protocols out there: SMTP, MySQL, and Redis are all examples.'
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在云原生世界中，许多——也许是大多数？——常见协议都是客户端先发起的协议；例如，HTTP、gRPC 和 TLS 本身都是客户端先发起的。不幸的是，还存在一些重要的服务器先发起的协议：SMTP、MySQL
+    和 Redis 就是例子。
+- en: If Linkerd cannot detect the protocol, it will assume it’s a raw TCP connection,
+    simply because that’s the least common denominator that will always function.
+    The problem is that for server-speaks-first protocols, Linkerd will wait 10 seconds
+    before assuming that it won’t be able to detect the protocol, and that 10-second
+    delay is obviously not what you want. To prevent that, you need to tell Linkerd
+    that it should either skip the connection entirely or treat it as opaque.
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果 Linkerd 无法检测到协议，它将假定这是一个原始的 TCP 连接，因为这是始终可用的最低公共分母。问题在于对于服务器先发起通信的协议，Linkerd
+    将等待 10 秒钟，然后才假定无法检测到协议，而这显然不是你想要的。为了避免这种情况，你需要告诉 Linkerd 要么跳过这个连接，要么将其视为不透明。
+- en: Opaque Ports Versus Skip Ports
+  id: totrans-66
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 不透明端口与跳过端口
+- en: 'When you tell Linkerd to *skip* a connection, you’re telling it to have absolutely
+    nothing to do with that connection. In fact, the Linkerd proxies don’t touch the
+    connection at all: the packets flow straight from workload to workload.'
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当你告诉 Linkerd *跳过*一个连接时，你实际上是告诉它完全不涉及该连接。事实上，Linkerd 代理根本不会触碰该连接：数据包直接从工作负载流向另一个工作负载。
+- en: This means that Linkerd can’t do mTLS, load balancing, metrics collection, or
+    *anything*. The connection effectively happens outside the mesh entirely.
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这意味着 Linkerd 不能进行 mTLS、负载均衡、指标收集或者*任何其他操作*。连接实际上完全发生在网格之外。
+- en: An *opaque* connection, on the other hand, does pass through the Linkerd proxies,
+    which means that it is carried over mTLS. It’s still encrypted and Linkerd still
+    enforces any policy that has been configured, but you’ll only get per-connection
+    metrics and load balancing (because Linkerd knows that it can’t see into the stream
+    to look at individual requests).
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一方面，*不透明*连接会经过 Linkerd 代理，这意味着它会通过 mTLS 进行传输。它仍然被加密，并且 Linkerd 仍会执行已配置的任何策略，但你只会得到每个连接的指标和负载均衡（因为
+    Linkerd 知道它无法查看单个请求的内容）。
+- en: This distinction is shown in [Figure 4-6](#opaque-vs-skip).
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这一区别显示在[图 4-6](#opaque-vs-skip)中。
+- en: '![luar 0406](assets/luar_0406.png)'
+  id: totrans-71
+  prefs: []
+  type: TYPE_IMG
+  zh: '![luar 0406](assets/luar_0406.png)'
+- en: Figure 4-6\. Opaque ports versus skip ports
+  id: totrans-72
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 4-6\. 不透明端口与跳过端口
+- en: This all implies that if you need to use server-speaks-first protocols, it’s
+    better to mark them as opaque, rather than skipping them entirely. Skipping should
+    only be necessary when the destination of the traffic isn’t part of your mesh.
+    Since opaque connections still rely on a Linkerd proxy to do mTLS, they can’t
+    work if there’s no proxy there to receive the connection!
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这一切都意味着，如果您需要使用服务器先说话的协议，最好将它们标记为不透明，而不是完全跳过它们。仅在流量的目的地不是您的网格的一部分时才需要跳过。由于不透明连接仍然依赖于Linkerd代理执行mTLS，如果没有代理接收连接，它们将无法工作！
+- en: Configuring Protocol Detection
+  id: totrans-74
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 配置协议检测
+- en: 'There are two ways to tell Linkerd about protocols. You can use a Server resource,
+    which we’ll cover when we talk policy in [Chapter 8](ch08.html#LUAR_server_policy),
+    or you can use the following annotations to mark specific ports as opaque or skipped:'
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有两种方法可以告诉Linkerd有关协议的信息。您可以使用服务器资源，在我们讨论策略时会介绍（参见[第8章](ch08.html#LUAR_server_policy)），或者您可以使用以下注释来标记特定端口为不透明或跳过：
+- en: '`config.linkerd.io/opaque-ports`'
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`config.linkerd.io/opaque-ports`'
+- en: Connections to or from these ports will always be treated as opaque.
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些端口的连接始终将被视为不透明。
+- en: '`config.linkerd.io/skip-inbound-ports`'
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`config.linkerd.io/skip-inbound-ports`'
+- en: Connections coming into this workload on these ports will always be skipped.
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这些端口进入此工作负载的连接将始终被跳过。
+- en: '`config.linkerd.io/skip-outbound-ports`'
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`config.linkerd.io/skip-outbound-ports`'
+- en: Connections leaving this workload on these ports will always be skipped.
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 离开这个工作负载的连接在这些端口上将始终被跳过。
+- en: 'All of these take comma-separated lists of port numbers or port ranges, so
+    all of the following are legal:'
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有这些都接受逗号分隔的端口号或端口范围列表，因此以下所有内容都是合法的：
+- en: '`config.linkerd.io/opaque-ports: 25`'
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`config.linkerd.io/opaque-ports: 25`'
+- en: This will treat only port 25 as opaque.
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这将只将端口25视为不透明。
+- en: '`config.linkerd.io/skip-inbound-ports: 3300,9900`'
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`config.linkerd.io/skip-inbound-ports: 3300,9900`'
+- en: This will skip connections coming in on port 3300 or 9900.
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这将跳过在端口3300或9900上进入的连接。
+- en: '`config.linkerd.io/skip-inbound-ports: 8000-9000`'
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`config.linkerd.io/skip-inbound-ports: 8000-9000`'
+- en: This will skip connections coming in on any port between 8000 and 9000, inclusive.
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这将跳过任何端口在8000到9000之间（包括端口8000和9000）收到的连接。
+- en: '`config.linkerd.io/skip-outbound-ports: 25,587,8000-9000`'
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`config.linkerd.io/skip-outbound-ports: 25,587,8000-9000`'
+- en: This will skip connections going out on port 25, port 587, or any port between
+    8000 and 9000, inclusive.
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这将跳过在端口25、端口587或8000到9000之间的任何端口上的连接。
+- en: 'There’s also a `config.linkerd.io/skip-subnets` option, which skips any connection
+    to or from any listed subnets. Its argument is a comma-separated list of [Classless
+    Inter-Domain Routing (CIDR)](https://oreil.ly/soiAU) ranges—for example, `config.linkerd.io/skip-subnets:
+    10.0.0.0/8,192.168.1.0/24`.'
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '还有一个`config.linkerd.io/skip-subnets`选项，它会跳过与任何列出的子网之间的任何连接。其参数是一个逗号分隔的[无类别域间路由（CIDR）](https://oreil.ly/soiAU)范围列表，例如`config.linkerd.io/skip-subnets:
+    10.0.0.0/8,192.168.1.0/24`。'
+- en: Default Opaque Ports
+  id: totrans-92
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 默认不透明端口
+- en: As of Linkerd 2.12, several ports are marked as opaque by default (see the list
+    in [“Default Opaque Ports”](ch03.html#default-opaque-ports) for details).
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从Linkerd 2.12开始，默认情况下，几个端口被标记为默认不透明（详见[“默认不透明端口”](ch03.html#default-opaque-ports)）。
+- en: The default ports are meant to allow various server-speaks-first protocols,
+    such as MySQL and SMTP, to work seamlessly with Linkerd. If you’re using these
+    ports for client-speaks-first protocols, you’ll need to use a Server resource
+    to override the port default (or—better—just choose a different port for your
+    client-speaks-first protocol!).
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认端口旨在允许各种服务器先说话的协议（如MySQL和SMTP）与Linkerd无缝工作。如果您将这些端口用于客户端先说话的协议，您需要使用服务器资源来覆盖端口默认设置（或者更好的选择是为您的客户端先说话的协议选择一个不同的端口！）。
+- en: Kubernetes Resource Limits
+  id: totrans-95
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Kubernetes资源限制
+- en: Compared to protocol detection, Kubernetes resource limits are much more straightforward.
+    There’s a simple set of annotations to set that will allow you to specify resource
+    requests and limits, as shown in [Table 4-1](#linkerd_annotations_table_ch04).
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与协议检测相比，Kubernetes资源限制要简单得多。有一组简单的注释设置，允许您指定资源请求和限制，如[表4-1](#linkerd_annotations_table_ch04)所示。
+- en: Table 4-1\. Linkerd annotations for resource requests and limits
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表4-1. 资源请求和限制的Linkerd注释
+- en: '| Annotation | Effect |'
+  id: totrans-98
+  prefs: []
+  type: TYPE_TB
+  zh: '| 注释 | 效果 |'
+- en: '| --- | --- |'
+  id: totrans-99
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| `config.linkerd.io/proxy-cpu-limit` | Maximum amount of CPU units that the
+    proxy sidecar can use |'
+  id: totrans-100
+  prefs: []
+  type: TYPE_TB
+  zh: '| `config.linkerd.io/proxy-cpu-limit` | 代理边车可以使用的最大CPU单位数量 |'
+- en: '| `config.linkerd.io/proxy-cpu-request` | Amount of CPU units that the proxy
+    sidecar requests |'
+  id: totrans-101
+  prefs: []
+  type: TYPE_TB
+  zh: '| `config.linkerd.io/proxy-cpu-request` | 代理边车请求的CPU单位数量 |'
+- en: '| `config.linkerd.io/proxy-ephemeral-storage-limit` | Used to override the
+    `limitEphemeralStorage` config |'
+  id: totrans-102
+  prefs: []
+  type: TYPE_TB
+  zh: '| `config.linkerd.io/proxy-ephemeral-storage-limit` | 用于覆盖 `limitEphemeralStorage`
+    配置 |'
+- en: '| `config.linkerd.io/proxy-ephemeral-storage-request` | Used to override the
+    `requestEphemeralStorage` config |'
+  id: totrans-103
+  prefs: []
+  type: TYPE_TB
+  zh: '| `config.linkerd.io/proxy-ephemeral-storage-request` | 用于覆盖 `requestEphemeralStorage`
+    配置 |'
+- en: '| `config.linkerd.io/proxy-memory-limit` | Maximum amount of memory that the
+    proxy sidecar can use |'
+  id: totrans-104
+  prefs: []
+  type: TYPE_TB
+  zh: '| `config.linkerd.io/proxy-memory-limit` | 代理侧车可以使用的最大内存量 |'
+- en: '| `config.linkerd.io/proxy-memory-request` | Amount of memory that the proxy
+    sidecar requests |'
+  id: totrans-105
+  prefs: []
+  type: TYPE_TB
+  zh: '| `config.linkerd.io/proxy-memory-request` | 代理侧车请求的内存量 |'
+- en: Summary
+  id: totrans-106
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 总结
+- en: 'So there you have it: the start-to-finish guide for getting your workloads
+    to be an effective part of the Linkerd mesh. Hopefully you now have a good understanding
+    of how to make everything work, and of the gotchas along the way (like server-speaks-first
+    protocols). Next up is getting Linkerd and ingress controllers to play nicely
+    together.'
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所以，这就是：从头到尾指南，让您的工作负载成为 Linkerd 网格的有效组成部分。希望现在您已经很好地理解了如何使一切正常运作，以及沿途的要点（例如服务器优先协议）。接下来是让
+    Linkerd 和入口控制器良好协同工作。

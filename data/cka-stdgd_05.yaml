@@ -1,0 +1,1618 @@
+- en: Chapter 5\. Services and Networking
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第五章。服务和网络
+- en: Applications running in a Kubernetes cluster rarely work in isolation. In the
+    constellation of a microservices architecture, a set of applications running in
+    their corresponding Pods need to work together. Kubernetes enables intracluster
+    Pod-to-Service communication and communication with select Services from outside
+    of the cluster with the help of various networking concepts. This domain of the
+    CKA focuses on Services and networking aspects. You will need to understand the
+    concept of a Service and an Ingress, as well as the cluster configuration that
+    enables network communication.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 集群中运行的应用很少是孤立的。在微服务架构的星座中，运行在相应 Pod 中的一组应用需要共同工作。Kubernetes 实现了集群内部
+    Pod 到 Service 的通信，并借助各种网络概念与集群外的选定服务进行通信。CKA 的这个领域专注于服务和网络方面。您需要理解服务和入口的概念，以及启用网络通信的集群配置。
+- en: 'At a high level, this chapter covers the following concepts:'
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在高层次上，本章涵盖以下概念：
+- en: Kubernetes networking basics
+  id: totrans-3
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Kubernetes 网络基础知识
+- en: Connectivity between Pods
+  id: totrans-4
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Pod 之间的连通性
+- en: Services, service types and their endpoints
+  id: totrans-5
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 服务、服务类型及其端点
+- en: Ingress controller and Ingress
+  id: totrans-6
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Ingress 控制器和 Ingress
+- en: Using and configuring CoreDNS
+  id: totrans-7
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用和配置 CoreDNS
+- en: Choosing a container network interface (CNI) plugin
+  id: totrans-8
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 选择容器网络接口（CNI）插件
+- en: Kubernetes Networking Basics
+  id: totrans-9
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Kubernetes 网络基础知识
+- en: 'Kubernetes is designed as an operating system for managing the complexities
+    of distributed data and computing. Workloads can be scheduled on a set of nodes
+    to distribute the load. The Kubernetes network model enables networking communication
+    and needs to fulfill the following requirements:'
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 设计为管理分布式数据和计算复杂性的操作系统。工作负载可以被调度到一组节点上以分发负载。Kubernetes 网络模型实现了网络通信，并需满足以下要求：
+- en: '[Container-to-container communication](#connectivity_between_containers): Containers
+    running in a Pod often need to communicate with each other. Containers within
+    the same Pods can send Inter Process Communication (IPC) messages, share files,
+    and most often communicate directly through the loopback interface using the `localhost`
+    hostname. Because each Pod is assigned a unique virtual IP address, each container
+    in the same Pod is given that context and shares the same port space.'
+  id: totrans-11
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: '[容器到容器的通信](#connectivity_between_containers)：运行在同一 Pod 中的容器通常需要彼此通信。同一 Pod
+    中的容器可以通过 IPC 消息发送、共享文件，并且通常直接通过环回接口使用 `localhost` 主机名进行通信。由于每个 Pod 分配了一个唯一的虚拟
+    IP 地址，因此同一 Pod 中的每个容器都共享该上下文和相同的端口空间。'
+- en: '[Pod-to-Pod communication](#connectivity_between_containers): A Pod needs to
+    be able to reach another Pod running on the same or on a different node without
+    Network Address Translation (NAT). Kubernetes assigns a unique IP address to every
+    Pod upon creation from the Pod CIDR range of its node. The IP address is ephemeral
+    and therefore cannot be considered stable over time. Every restart of a Pod leases
+    a new IP address. It’s recommended to use Pod-to-Service communication over Pod-to-Pod
+    communication.'
+  id: totrans-12
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: '[Pod 到 Pod 的通信](#connectivity_between_containers)：一个 Pod 需要能够在同一节点或不同节点上的另一个
+    Pod 上进行通信，而不需要进行网络地址转换（NAT）。Kubernetes 在每个 Pod 创建时从其节点的 Pod CIDR 范围内分配一个唯一的 IP
+    地址。该 IP 地址是临时的，因此不能长期稳定。每次 Pod 重新启动时，都会分配一个新的 IP 地址。建议使用 Pod 到 Service 的通信，而不是
+    Pod 到 Pod 的通信。'
+- en: '[Pod-to-Service communication](#understanding_services): Services expose a
+    single, stable DNS name for a set of Pods with the capability of load balancing
+    the requests across the Pods. Traffic to a Service can be received from within
+    the cluster or from the outside.'
+  id: totrans-13
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: '[Pod 到 Service 的通信](#understanding_services)：服务为一组 Pod 公开单一且稳定的 DNS 名称，并具有跨
+    Pod 的请求负载均衡能力。可以从集群内部或外部接收到对服务的流量。'
+- en: 'Node-to-node communication: Nodes registered with a cluster can talk to each
+    other. Every node is assigned a node IP address.'
+  id: totrans-14
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 节点之间的通信：注册到集群的节点可以相互通信。每个节点分配一个节点 IP 地址。
+- en: The specification for the Kubernetes networking model is called [Container Network
+    Interface (CNI)](#cni_spec_implementation). Network plugins that implement the
+    CNI specification are widely available and can be configured in a Kubernetes cluster
+    by the administrator.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 网络模型的规范称为[容器网络接口 (CNI)](#cni_spec_implementation)。实现 CNI 规范的网络插件广泛可用，并可由管理员在
+    Kubernetes 集群中配置。
+- en: Connectivity Between Containers
+  id: totrans-16
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 容器之间的连通性
+- en: Containers created by a single Pod share the same IP address and port space.
+    Containers can communicate among each other using `localhost`. That’s especially
+    useful when creating cloud-native applications that require implementing a multi-container
+    pattern, as shown in [Figure 5-1](#container_to_container_communication). Refer
+    to the book [*Kubernetes Patterns*](https://oreil.ly/RsTJw) (O’Reilly) for more
+    information on common multi-container design patterns.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 单个 Pod 创建的容器共享相同的 IP 地址和端口空间。容器可以使用 `localhost` 相互通信。在创建需要实现多容器模式的云原生应用程序时尤其有用，如
+    [图 5-1](#container_to_container_communication) 所示。有关常见多容器设计模式的更多信息，请参阅《*Kubernetes
+    Patterns*》（O’Reilly）的书籍链接 [*Kubernetes Patterns*](https://oreil.ly/RsTJw)。
+- en: '![ckas 0501](Images/ckas_0501.png)'
+  id: totrans-18
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckas 0501](Images/ckas_0501.png)'
+- en: Figure 5-1\. Container-to-container communication in a Pod
+  id: totrans-19
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-1\. Pod 中的容器间通信
+- en: 'The YAML manifest in [Example 5-1](#multi_container_pod) creates a sidecar
+    container that calls the main application container via `localhost` on port 80:'
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: YAML 清单中的 [示例 5-1](#multi_container_pod) 创建一个 sidecar 容器，通过 `localhost` 的 80
+    端口调用主应用容器：
+- en: Example 5-1\. A multi-container Pod
+  id: totrans-21
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 5-1\. 多容器 Pod
+- en: '[PRE0]'
+  id: totrans-22
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'Checking the logs of the sidecar container shows that the communication to
+    the main application container was successful:'
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 检查 sidecar 容器的日志显示，与主应用程序容器的通信成功：
+- en: '[PRE1]'
+  id: totrans-24
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: Connectivity Between Pods
+  id: totrans-25
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Pod 间的连接
+- en: 'Every Pod is assigned an IP address upon creation. You can inspect a Pod’s
+    IP address by using the `-o wide` command-line option for the `get pods` command
+    or by describing the Pod. The IP address of the Pod in the following console output
+    is `172.17.0.4`:'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个 Pod 在创建时分配一个 IP 地址。您可以使用 `get pods` 命令的 `-o wide` 选项或描述 Pod 来检查 Pod 的 IP
+    地址。以下控制台输出中的 Pod 的 IP 地址为 `172.17.0.4`：
+- en: '[PRE2]'
+  id: totrans-27
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'The IP address assigned to a Pod is unique across all nodes and namespaces.
+    This is achieved by assigning a dedicated subnet to each node when registering
+    it. When creating a new Pod on a node, the IP address is leased from the assigned
+    subnet. This is handled by the networking lifecycle manager kube-proxy along with
+    the DNS service and the CNI. The following command queries the assigned subnet
+    via the attribute `spec.podCIDR` from the node named `minikube`:'
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 分配给 Pod 的 IP 地址在所有节点和命名空间中是唯一的。这通过在注册节点时为每个节点分配专用子网来实现。在节点上创建新的 Pod 时，IP 地址是从分配的子网中租借的。这由网络生命周期管理器
+    kube-proxy 与 DNS 服务和 CNI 共同处理。以下命令通过节点名为 `minikube` 的属性 `spec.podCIDR` 查询分配的子网：
+- en: '[PRE3]'
+  id: totrans-29
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: Pods on a node can communicate with all other Pods running on any other node
+    of the cluster. [Figure 5-2](#pod_to_pod_communication) illustrates the use case.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 节点上的 Pod 可以与集群中任何其他节点上运行的所有其他 Pod 通信。[图 5-2](#pod_to_pod_communication) 展示了使用案例。
+- en: '![ckas 0502](Images/ckas_0502.png)'
+  id: totrans-31
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckas 0502](Images/ckas_0502.png)'
+- en: Figure 5-2\. Pod-to-Pod communication
+  id: totrans-32
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-2\. Pod 间通信
+- en: 'You can easily verify the behavior by creating a temporary Pod that calls the
+    IP address of another Pod using the command-line tool `curl` or `wget`:'
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以通过创建一个临时 Pod，使用命令行工具 `curl` 或 `wget` 调用另一个 Pod 的 IP 地址来轻松验证此行为：
+- en: '[PRE4]'
+  id: totrans-34
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: It’s important to understand that the IP address is not considered stable over
+    time. A Pod restart leases a new IP address. Building a microservices architecture,
+    where each of the applications runs in its own Pod with the need to communicate
+    between each other with a stable network interface, requires a different concept,
+    the Service.
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 需要理解的是，IP 地址随时间不稳定。Pod 重新启动会租用新的 IP 地址。构建微服务架构时，每个应用程序在自己的 Pod 中运行，需要使用稳定的网络接口进行通信，这就需要另一个概念，即
+    Service。
+- en: Understanding Services
+  id: totrans-36
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 理解 Services
+- en: In a nutshell, Services provide discoverable names and load balancing to a set
+    of Pods. The Services and Pods remain agnostic from IP addresses with the help
+    of the Kubernetes DNS control-plane component. Similar to a Deployment, the Service
+    determines the Pods it works on with the help of label selection.
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 简而言之，Services 为一组 Pods 提供可发现的名称和负载均衡。借助 Kubernetes DNS 控制平面组件，Services 和 Pods
+    无需关注 IP 地址。与 Deployment 类似，Service 使用标签选择确定其操作的 Pods。
+- en: '[Figure 5-3](#service_traffic_routing) illustrates the functionality. Pod 1
+    receives traffic as its assigned labels match with the label selection defined
+    in the Service. Pod 2 does not receive traffic as it defines nonmatching labels.
+    Note that it is possible to create a Service without a label selector for less-common
+    scenarios. Refer to the relevant [Kubernetes documentation](https://oreil.ly/lCzAa)
+    for more information.'
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 5-3](#service_traffic_routing)说明了该功能。Pod 1接收流量，因为其分配的标签与服务中定义的标签选择匹配。Pod
+    2由于定义了不匹配的标签而不接收流量。请注意，可以在不常见的场景中创建没有标签选择器的服务。有关更多信息，请参阅相关的[Kubernetes文档](https://oreil.ly/lCzAa)。'
+- en: '![ckas 0503](Images/ckas_0503.png)'
+  id: totrans-39
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckas 0503](Images/ckas_0503.png)'
+- en: Figure 5-3\. Service traffic routing based on label selection
+  id: totrans-40
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-3。基于标签选择的服务流量路由
+- en: Services are a complementary concept to Deployments. Services route network
+    traffic to a set of Pods, and Deployments manage a set of Pods, the replicas.
+    While you can use both concepts in isolation, it is recommended to use Deployments
+    and Services together. The primary reason is the ability to scale the number of
+    replicas and at the same time expose an endpoint to control network traffic.
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 服务是部署的补充概念。服务将网络流量路由到一组Pod，而部署管理一组Pod副本。尽管您可以单独使用这两个概念，但建议同时使用部署和服务。主要原因是能够扩展副本数，并同时暴露端点以控制网络流量。
+- en: Service Types
+  id: totrans-42
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 服务类型
+- en: Every Service needs to define a type. [Table 5-1](#service_types) lists the
+    Service types relevant to the CKA exam.
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个服务都需要定义一个类型。[表 5-1](#service_types) 列出了与CKA考试相关的服务类型。
+- en: Table 5-1\. Service types
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 5-1。服务类型
+- en: '| Type | Description |'
+  id: totrans-45
+  prefs: []
+  type: TYPE_TB
+  zh: '| 类型 | 描述 |'
+- en: '| --- | --- |'
+  id: totrans-46
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| `ClusterIP` | Exposes the Service on a cluster-internal IP. Only reachable
+    from within the cluster. |'
+  id: totrans-47
+  prefs: []
+  type: TYPE_TB
+  zh: '| `ClusterIP` | 在集群内部IP上暴露服务。只能从集群内部访问。 |'
+- en: '| `NodePort` | Exposes the Service on each node’s IP address at a static port.
+    Accessible from outside of the cluster. |'
+  id: totrans-48
+  prefs: []
+  type: TYPE_TB
+  zh: '| `NodePort` | 在每个节点的IP地址上以静态端口暴露服务。可从集群外部访问。 |'
+- en: '| `LoadBalancer` | Exposes the Service externally using a cloud provider’s
+    load balancer. |'
+  id: totrans-49
+  prefs: []
+  type: TYPE_TB
+  zh: '| `LoadBalancer` | 使用云提供商的负载均衡器外部暴露服务。 |'
+- en: Other Service types can be defined; however, we’ll not address them in this
+    book as they are out of scope for the exam. For more information, refer to the
+    [Kubernetes documentation](https://oreil.ly/3jzod).
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 其他服务类型可以定义；然而，在本书中我们不会涉及它们，因为它们超出了考试范围。有关更多信息，请参阅[Kubernetes文档](https://oreil.ly/3jzod)。
+- en: Creating Services
+  id: totrans-51
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 创建服务
+- en: You can create Services in a variety of ways, some of which are more conducive
+    to the CKA exam as they provide a fast turnaround. Let’s discuss the imperative
+    approach first.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以通过多种方式创建服务，其中一些方式更有利于CKA考试，因为它们提供了快速的反馈。让我们首先讨论命令式方法。
+- en: 'A Service needs to select a Pod by a matching label. The Pod created by the
+    following `run` command is called `echoserver`, which exposes the application
+    on the container port 8080\. Internally, it automatically assigns the label key-value
+    pair `run: echoserver` to the object:'
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '服务需要通过匹配标签选择一个Pod。以下`run`命令创建的Pod称为`echoserver`，它将应用程序暴露在容器端口8080上。在内部，它会自动为对象分配标签键值对`run:
+    echoserver`：'
+- en: '[PRE5]'
+  id: totrans-54
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'The `create service` command creates the corresponding Service object. You
+    need to provide the Service type as a mandatory argument. Here we are using the
+    type `clusterip`. The command-line option `--tcp` specifies the port mapping,
+    port 80 exposed by the Service for incoming network traffic and port 8080, which
+    targets the container port exposed by the Pod:'
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`create service`命令创建相应的服务对象。您需要将服务类型作为必需的参数提供。这里我们使用了类型`clusterip`。命令行选项`--tcp`指定了端口映射，服务使用端口80来接收传入的网络流量，端口8080用于指向Pod暴露的容器端口：'
+- en: '[PRE6]'
+  id: totrans-56
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: 'An even faster workflow of creating a Pod and Service together can be achieved
+    with the option `--expose` for the `run` command. The following command creates
+    both objects in one swoop while creating the proper label selection. This command-line
+    option is a good choice during the CKA to save time if you were asked to create
+    a Pod and a Service:'
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用`run`命令的`--expose`选项可以更快地创建Pod和服务。以下命令在创建正确的标签选择同时创建两个对象。如果要求您创建Pod和服务，这个命令行选项在CKA考试中节省时间是一个不错的选择：
+- en: '[PRE7]'
+  id: totrans-58
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: 'It’s actually more common to use a Deployment and Service that work together.
+    The following set of commands creates a Deployment with five replicas and then
+    uses the `expose deployment` command to create the Service. The port mapping can
+    be provided with the options `--port` and `--target-port`:'
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 实际上更常见的是使用一起工作的部署（Deployment）和服务（Service）。以下一组命令创建了一个带有五个副本的部署，并使用`expose deployment`命令创建了服务。端口映射可以通过`--port`和`--target-port`选项进行设置：
+- en: '[PRE8]'
+  id: totrans-60
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: '[Example 5-2](#service_manifest) shows the representation of a Service in the
+    form of a YAML manifest. The Service declares the key-value `app: echoserver`
+    for label selection and defines the port mapping 80 to 8080.'
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[示例 5-2](#service_manifest)展示了一个以YAML清单形式表示的服务的表示形式。该服务声明了键值`app: echoserver`以进行标签选择，并定义了将端口80映射到8080的设置。'
+- en: Example 5-2\. A Service defined by a YAML manifest
+  id: totrans-62
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 5-2\. 由YAML清单定义的服务
+- en: '[PRE9]'
+  id: totrans-63
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: Listing Services
+  id: totrans-64
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 列出服务
+- en: 'Listing all Services presents a table view that includes the Service type,
+    the cluster IP address, and the incoming port. Here, you can see the output for
+    the `echoserver` Pod we created earlier:'
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 列出所有服务呈现了一个包含服务类型、集群IP地址和入口端口的表格视图。在这里，您可以看到我们早些时候创建的`echoserver` Pod的输出：
+- en: '[PRE10]'
+  id: totrans-66
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: Rendering Service Details
+  id: totrans-67
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 渲染服务详情
+- en: You may want to drill into the details of a Service for troubleshooting purposes.
+    That might be the case if the incoming traffic to a Service isn’t routed properly
+    to the set of Pods you expect to handle the workload.
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可能希望钻取服务的详细信息以进行故障排除。如果服务的入站流量未正确路由到您期望处理工作负载的一组Pod，则可能是这种情况。
+- en: The `describe` command renders valuable information about the configuration
+    of a Service. The configuration relevant to troubleshooting a Service is the value
+    of the fields Selector, IP, Port, TargetPort, and Endpoints.
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`describe`命令提供有关服务配置的宝贵信息。与排除服务故障相关的配置包括选择器（Selector）、IP、端口（Port）、目标端口（TargetPort）和端点（Endpoints）的值。'
+- en: 'Take a look at the output of the following `describe` command. It’s the details
+    for a Service created for five Pods controlled by a Deployment. The Endpoints
+    attribute lists a range of endpoints, one for each of the Pods:'
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 查看以下`describe`命令的输出。这是为由部署（Deployment）控制的五个Pod创建的服务的详细信息。端点（Endpoints）属性列出了一系列的端点，每个对应一个Pod：
+- en: '[PRE11]'
+  id: totrans-71
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: 'Kubernetes represents endpoints by a dedicated resource that you can query
+    for. The endpoint object is created at the same time you create the Service object.
+    The following command lists the endpoint for the Service named `echoserver`:'
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes通过一个专门的资源来表示端点，您可以查询该资源。端点对象与创建服务对象同时创建。以下命令列出了名为`echoserver`的服务的端点：
+- en: '[PRE12]'
+  id: totrans-73
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: 'The details of the endpoint give away the full list of IP address and port
+    combinations:'
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 端点的详细信息公布了IP地址和端口组合的完整列表：
+- en: '[PRE13]'
+  id: totrans-75
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: Port Mapping
+  id: totrans-76
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 端口映射
+- en: A Service selects the set of Pods to forward traffic to by the assigned labels.
+    Successful routing of network traffic also depends on the proper port mapping.
+    In the previous sections, we created different Services and assigned ports to
+    them. Here, we’ll want to revisit the port mapping by making its moving parts
+    more transparent.
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 服务通过分配的标签选择一组Pod来转发流量。成功的网络流量路由还取决于正确的端口映射。在前面的部分中，我们创建了不同的服务并为它们分配了端口。在这里，我们将希望通过使其各个部分更加透明来重新访问端口映射。
+- en: '[Figure 5-4](#service_port_mapping) shows a Service that accepts incoming traffic
+    on port 80\. That’s the port defined by the attribute `spec.ports[].port` in the
+    manifest. Any incoming traffic is then routed toward the target port, represented
+    by `spec.ports[].targetPort`. The target port is the same port as defined by the
+    container running inside the label-selected Pod. In this case, that’s port 8080.'
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 5-4](#service_port_mapping)显示了一个接受端口80入站流量的服务。这是清单中`spec.ports[].port`属性定义的端口。任何入站流量都将路由到目标端口，该端口由`spec.ports[].targetPort`表示。目标端口与标签选择的Pod内运行的容器定义的端口相同。在这种情况下，即端口8080。'
+- en: '![ckas 0504](Images/ckas_0504.png)'
+  id: totrans-79
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckas 0504](Images/ckas_0504.png)'
+- en: Figure 5-4\. Service port mapping
+  id: totrans-80
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-4\. 服务端口映射
+- en: Accessing a Service with Type ClusterIP
+  id: totrans-81
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用类型为ClusterIP的服务访问
+- en: '`ClusterIP` is the default type of Service. It exposes the Service on a cluster-internal
+    IP address. That means the Service can be accessed only from a Pod running inside
+    of the cluster but not from outside of the cluster (e.g., if you were to make
+    call to the Service from your local machine). [Figure 5-5](#service_clusterip)
+    illustrates the accessibility of a Service with type `ClusterIP`.'
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`ClusterIP` 是 Service 的默认类型。它在集群内部 IP 地址上公开 Service。这意味着只能从集群内部运行的 Pod 访问 Service，而不能从集群外部访问（例如，如果您从本地计算机调用
+    Service）。[图 5-5](#service_clusterip) 说明了具有类型 `ClusterIP` 的 Service 的可访问性。'
+- en: '![ckas 0505](Images/ckas_0505.png)'
+  id: totrans-83
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckas 0505](Images/ckas_0505.png)'
+- en: Figure 5-5\. Accessibility of a Service with the type `ClusterIP`
+  id: totrans-84
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-5\. 具有类型 `ClusterIP` 的 Service 的可访问性
+- en: 'We will create a Pod and a corresponding Service to demonstrate the runtime
+    behavior of `ClusterIP`. The Pod named `echoserver` exposes the container port
+    8080 and specifies the label `app: echoserver`. The Service defines port 5005
+    for incoming traffic, which is forwarded to port 8080 for the Pod selected. The
+    label selection matches the Pod we set up:'
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '我们将创建一个 Pod 和一个相应的 Service 来演示 `ClusterIP` 的运行时行为。名为 `echoserver` 的 Pod 公开容器端口
+    8080，并指定标签 `app: echoserver`。Service 为传入流量定义了端口 5005，该流量被转发到所选 Pod 的端口 8080。标签选择与我们设置的
+    Pod 匹配：'
+- en: '[PRE14]'
+  id: totrans-86
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: 'The cluster IP that makes the Service available is `10.96.254.0`. Listing the
+    Service also renders the port for incoming traffic to the Service:'
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使 Service 可用的集群 IP 是 `10.96.254.0`。列出 Service 还会呈现用于传入流量到 Service 的端口：
+- en: '[PRE15]'
+  id: totrans-88
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: 'You cannot access the Service using the cluster IP and the port from your local
+    machine, illustrated by the following `wget` command:'
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您无法使用集群 IP 和端口从本地计算机访问 Service，如下所示的 `wget` 命令：
+- en: '[PRE16]'
+  id: totrans-90
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: 'Accessing the Service from a temporary Pod from within the cluster properly
+    routes the request to the Pod matching the label selection:'
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从集群内的临时 Pod 访问 Service 可正确将请求路由到匹配标签选择的 Pod：
+- en: '[PRE17]'
+  id: totrans-92
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: Accessing a Service with Type NodePort
+  id: totrans-93
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用类型为 NodePort 的 Service 访问 Service
+- en: Declaring a Service with type `NodePort` exposes access through the node’s IP
+    address and can be resolved from outside of the Kubernetes cluster. The node’s
+    IP address can be reached in combination with a port number in the range of 30000
+    and 32767, assigned automatically upon the creation of the Service. This port
+    is opened on every node in the cluster, and its value is global and unique at
+    the cluster-scope level. To avoid port conflicts, it’s best to not define the
+    exact node port and let Kubernetes find an available port. Keep in mind `NodePort`
+    (capital *N*) is the Service type, whereas `nodePort` (lowercase *n*) is the key
+    for the value. [Figure 5-6](#service_nodeport) illustrates the routing of traffic
+    to Pods via a `NodePort`-typed Service.
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用类型为 `NodePort` 的 Service 声明可通过节点 IP 地址访问，并且可以从 Kubernetes 集群外部解析。节点 IP 地址可以与范围在
+    30000 到 32767 之间的端口号结合使用，该端口在创建 Service 时自动分配。该端口在集群中的每个节点上打开，并且其值在集群范围内是全局且唯一的。为避免端口冲突，最好不定义确切的节点端口，而是让
+    Kubernetes 找到一个可用端口。请记住，`NodePort`（大写 *N*）是 Service 类型，而 `nodePort`（小写 *n*）是值的键。[图 5-6](#service_nodeport)
+    说明了通过类型为 `NodePort` 的 Service 将流量路由到 Pod 的情况。
+- en: '![ckas 0506](Images/ckas_0506.png)'
+  id: totrans-95
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckas 0506](Images/ckas_0506.png)'
+- en: Figure 5-6\. Accessibility of a Service with the type NodePort
+  id: totrans-96
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-6\. 具有类型 NodePort 的 Service 的可访问性
+- en: 'The next two commands create a Pod and a Service of type `NodePort`. The only
+    difference here is to provide `nodeport` instead of `clusterip` as a command-line
+    option:'
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来的两个命令创建一个类型为 `NodePort` 的 Pod 和一个 Service。这里唯一的区别是在命令行选项中提供 `nodeport` 而不是
+    `clusterip`：
+- en: '[PRE18]'
+  id: totrans-98
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: 'Once they’re created, you can list the Pods and Services. You will find that
+    the port representation contains the statically assigned port that makes the Service
+    accessible. In our case, that’s port 30158:'
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建后，您可以列出 Pod 和 Service。您会发现端口表示包含使 Service 可访问的静态分配端口。在我们的情况下，那就是端口 30158：
+- en: '[PRE19]'
+  id: totrans-100
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: 'From within the cluster, you can still access the Service using the cluster
+    IP address and port number. This Services exposes exactly the same behavior as
+    if it were of type `ClusterIP`:'
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从集群内部，您仍然可以使用集群 IP 地址和端口号访问 Service。这些 Service 公开的行为与其类型为 `ClusterIP` 时完全相同：
+- en: '[PRE20]'
+  id: totrans-102
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: From outside of the cluster, you need to use the IP address of the node running
+    the Pod and the statically assigned port. One way to determine the node’s IP address
+    is via `kubectl cluster-info` or by querying the Pod.
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从集群外部，您需要使用运行 Pod 的节点的 IP 地址和静态分配的端口。确定节点 IP 地址的一种方法是通过 `kubectl cluster-info`
+    或查询 Pod。
+- en: Determining the Service URL in Minikube
+  id: totrans-104
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 在 Minikube 中确定 Service URL
+- en: Minikube offers a shortcut for determining the Service endpoint via the command
+    `minikube service --url <service-name>`. For more information, see the [Minikube
+    documentation](https://oreil.ly/HGYRp).
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Minikube 提供了一个快捷方式，可以通过命令 `minikube service --url <service-name>` 确定服务的端点。更多信息，请参阅
+    [Minikube 文档](https://oreil.ly/HGYRp)。
+- en: 'The node IP address here is `192.168.64.15`. It can be used to call the Service
+    from outside of the cluster:'
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里的节点 IP 地址是 `192.168.64.15`。可以使用它从集群外部调用服务：
+- en: '[PRE21]'
+  id: totrans-107
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: Accessing a Service with Type LoadBalancer
+  id: totrans-108
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用 LoadBalancer 类型访问服务
+- en: Kubernetes cloud providers offer support for configuration from a preexisting
+    external load balancer to a Service with the help of the type `LoadBalancer`.
+    This Service type exposes a single IP address that distributes incoming requests
+    to the cluster nodes. The implementation of the load balancing strategy (e.g.,
+    round robin) is up to the cloud provider. [Figure 5-7](#service_loadbalancer)
+    shows an architectural overview.
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 云提供商支持通过类型 `LoadBalancer` 从预先存在的外部负载均衡器配置到服务的配置。此服务类型暴露一个单一 IP 地址，将传入请求分发到集群节点。负载均衡策略的实现（例如轮询）由云提供商决定。[图 5-7](#service_loadbalancer)
+    展示了架构概览。
+- en: '![ckas 0507](Images/ckas_0507.png)'
+  id: totrans-110
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckas 0507](Images/ckas_0507.png)'
+- en: Figure 5-7\. Accessibility of a Service with the type LoadBalancer
+  id: totrans-111
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-7\. 使用 LoadBalancer 类型访问服务的可访问性
+- en: Setting up a network route in Minikube
+  id: totrans-112
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 在 Minikube 中设置网络路由
+- en: Minikube is not a cloud provider implementation of Kubernetes; however, you
+    can configure a network route to the Service to try out load balancer functionality.
+    All you need to do is to run the command `minikube tunnel` in a separate shell.
+    For more information, see the [Minikube documentation](https://oreil.ly/O37FF).
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Minikube 不是 Kubernetes 的云提供商实现；然而，你可以配置网络路由到服务以尝试负载均衡器功能。你只需要在单独的 shell 中运行命令
+    `minikube tunnel`。更多信息，请参阅 [Minikube 文档](https://oreil.ly/O37FF)。
+- en: 'To create a Service as a load balancer, set the type to `LoadBalancer` in the
+    manifest or by using the `create service loadbalancer` command:'
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要创建一个作为负载均衡器的服务，请在清单中将类型设置为 `LoadBalancer` 或使用 `create service loadbalancer`
+    命令：
+- en: '[PRE22]'
+  id: totrans-115
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: 'You will find that a Service of type `LoadBalancer` exposes an external IP
+    address. List the Service to render the external IP address, which is `10.109.76.157`
+    in the following output:'
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你会发现，类型为 `LoadBalancer` 的服务暴露一个外部 IP 地址。列出服务以显示外部 IP 地址，在下面的输出中是 `10.109.76.157`：
+- en: '[PRE23]'
+  id: totrans-117
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: 'To call the Service from outside of the cluster, use the external IP address
+    and its incoming port:'
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要从集群外部调用服务，请使用外部 IP 地址及其入站端口：
+- en: '[PRE24]'
+  id: totrans-119
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: Understanding Ingress
+  id: totrans-120
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 理解 Ingress
+- en: Standard Kubernetes Ingress solutions provide load balancing only at layer 7
+    (HTTP or HTTPS traffic) and route transactions from outside of the cluster to
+    Services within the cluster, as illustrated in [Figure 5-8](#ingress_traffic_routing).
+    It’s not a specific Service type, nor should it be confused with the Service type
+    `LoadBalancer`.
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 标准的 Kubernetes Ingress 解决方案仅在第 7 层（HTTP 或 HTTPS 流量）提供负载均衡，并将事务从集群外部路由到集群内的服务，如
+    [图 5-8](#ingress_traffic_routing) 所示。这不是一个特定的服务类型，也不应与服务类型 `LoadBalancer` 混淆。
+- en: '![ckas 0508](Images/ckas_0508.png)'
+  id: totrans-122
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckas 0508](Images/ckas_0508.png)'
+- en: Figure 5-8\. Managing external access to the Services via HTTP(S)
+  id: totrans-123
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-8\. 通过 HTTP(S) 管理对服务的外部访问
+- en: An Ingress cannot work without an Ingress controller. The Ingress controller
+    evaluates the collection of rules defined by an Ingress that determine traffic
+    routing. One example of a production-grade Ingress controller is the [F5 NGINX
+    Ingress Controller](https://oreil.ly/owWZN) or [AKS Application Gateway Ingress
+    Controller](https://oreil.ly/8hupA). You can find other options listed in the
+    [Kubernetes documentation](https://oreil.ly/wGHWl).
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 没有 Ingress 控制器，Ingress 无法工作。Ingress 控制器评估由 Ingress 定义的规则集，确定流量路由。一个生产级别的 Ingress
+    控制器示例是 [F5 NGINX Ingress Controller](https://oreil.ly/owWZN) 或 [AKS Application
+    Gateway Ingress Controller](https://oreil.ly/8hupA)。你可以在 [Kubernetes 文档](https://oreil.ly/wGHWl)
+    中找到其他选项。
+- en: 'Ingress functionality has to be enabled explicitly if you are using Minikube.
+    The Ingress controller runs as a Pod in the namespace `ingress-nginx`:'
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你正在使用 Minikube，必须显式启用 Ingress 功能。Ingress 控制器作为 `ingress-nginx` 命名空间中的一个 Pod
+    运行：
+- en: '[PRE25]'
+  id: totrans-126
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE25]'
+- en: Ingress Rules
+  id: totrans-127
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 网络规则
+- en: Rules defined by an Ingress object follow the three criteria listed in [Table 5-2](#ingress_rules).
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Ingress 对象定义的规则遵循 [表 5-2](#ingress_rules) 中列出的三个标准。
+- en: Table 5-2\. Ingress rules
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 5-2\. Ingress 规则
+- en: '| Type | Example | Description |'
+  id: totrans-130
+  prefs: []
+  type: TYPE_TB
+  zh: '| 类型 | 示例 | 描述 |'
+- en: '| --- | --- | --- |'
+  id: totrans-131
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- |'
+- en: '| An optional host | `mycompany.abc.com` | If a host is provided, then the
+    rules apply to that host. If no host is defined, then all inbound HTTP(S) traffic
+    is handled. |'
+  id: totrans-132
+  prefs: []
+  type: TYPE_TB
+  zh: '| 可选主机 | `mycompany.abc.com` | 如果提供了主机，则规则适用于该主机。如果未定义主机，则处理所有入站HTTP(S)流量。
+    |'
+- en: '| A list of paths | `/corellian/api` | Incoming traffic must match the host
+    and path to correctly forward the traffic to a Service. |'
+  id: totrans-133
+  prefs: []
+  type: TYPE_TB
+  zh: '| 路径列表 | `/corellian/api` | 入站流量必须匹配主机和路径，以正确转发流量到Service。 |'
+- en: '| The backend | `corellian:8080` | A combination of Service name and port.
+    |'
+  id: totrans-134
+  prefs: []
+  type: TYPE_TB
+  zh: '| 后端 | `corellian:8080` | Service名称和端口的组合。 |'
+- en: Creating Ingresses
+  id: totrans-135
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 创建Ingress
+- en: 'You can create an Ingress with the imperative `create ingress` command. The
+    main command-line option you will need to provide is `--rule`, which defines the
+    rules in a comma-separated fashion. The notation for each key-value pair is `<host>/<path>=<service>:<port>`.
+    If you look at the output of the `create ingress --help` command, more fine-grained
+    rules can be specified:'
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用`create ingress`命令创建Ingress。您需要提供的主要命令行选项是`--rule`，它以逗号分隔的方式定义规则。每个键值对的表示法是`<host>/<path>=<service>:<port>`。如果查看`create
+    ingress --help`命令的输出，可以指定更详细的规则：
+- en: '[PRE26]'
+  id: totrans-137
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE26]'
+- en: Tip
+  id: totrans-138
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: Port 80 for HTTP traffic is implied as we didn’t specify a reference to a TLS
+    Secret object. If you would have specified `tls=mysecret` in the rule definition,
+    then the port 443 would be listed here as well. For more information on enabling
+    HTTPS traffic, see the [Kubernetes documentation](https://oreil.ly/d2sbY).
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于HTTP流量，端口80是隐含的，因为我们没有指定TLS Secret对象的引用。如果您在规则定义中指定了`tls=mysecret`，那么端口443也将在此处列出。有关启用HTTPS流量的更多信息，请参阅[Kubernetes文档](https://oreil.ly/d2sbY)。
+- en: The same Ingress defined as a YAML manifest is shown in [Example 5-3](#ingress_manifest).
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为YAML清单定义的相同Ingress在[示例 5-3](#ingress_manifest)中显示。
+- en: Example 5-3\. An Ingress defined by a YAML manifest
+  id: totrans-141
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 5-3\. 由YAML清单定义的Ingress
+- en: '[PRE27]'
+  id: totrans-142
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE27]'
+- en: Defining Path Types
+  id: totrans-143
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 定义路径类型
+- en: The previous YAML manifest demonstrates one of the options for specifying a
+    path type via the attribute `spec.rules[].host[].http.paths[].pathType`. The path
+    type defines how an incoming request is evaluated against the declared path. [Table 5-3](#ingress_path_types)
+    should give you an indication on the evaluation for incoming requests and their
+    paths. See the [Kubernetes documentation](https://oreil.ly/4plCE) for a more comprehensive
+    list.
+  id: totrans-144
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 前面的YAML清单演示了通过属性`spec.rules[].host[].http.paths[].pathType`指定路径类型的选项之一。路径类型定义了如何评估传入请求与声明的路径的匹配。[表 5-3](#ingress_path_types)应该为您提供了关于传入请求及其路径评估的指示。有关更全面的列表，请参阅[Kubernetes文档](https://oreil.ly/4plCE)。
+- en: Table 5-3\. Ingress path types
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 5-3\. Ingress路径类型
+- en: '| Path Type | Rule | Incoming Request |'
+  id: totrans-146
+  prefs: []
+  type: TYPE_TB
+  zh: '| 路径类型 | 规则 | 入站请求 |'
+- en: '| --- | --- | --- |'
+  id: totrans-147
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- |'
+- en: '| `Exact` | `/corellian/api` | Matches `/corellian/api` but does not match
+    `/corellian/test` or `/corellian/api/` |'
+  id: totrans-148
+  prefs: []
+  type: TYPE_TB
+  zh: '| `Exact` | `/corellian/api` | 匹配`/corellian/api`但不匹配`/corellian/test`或`/corellian/api/`
+    |'
+- en: '| `Prefix` | `/corellian/api` | Matches `/corellian/api` and `/corellian/api/`
+    but does not match `/corellian/test` |'
+  id: totrans-149
+  prefs: []
+  type: TYPE_TB
+  zh: '| `Prefix` | `/corellian/api` | 匹配`/corellian/api`和`/corellian/api/`但不匹配`/corellian/test`
+    |'
+- en: Listing Ingresses
+  id: totrans-150
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 列出Ingress
+- en: 'Listing Ingresses can be achieved with the `get ingress` command. You will
+    see some of the information you specified when creating the Ingress (e.g., the
+    hosts):'
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过执行`get ingress`命令可以列出Ingress。您将看到创建Ingress时指定的一些信息（例如，主机）：
+- en: '[PRE28]'
+  id: totrans-152
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE28]'
+- en: Rendering Ingress Details
+  id: totrans-153
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 呈现Ingress详细信息
+- en: 'The details of an Ingress can be rendered using the `describe ingress` command.
+    Each of the rules is listed in a table. For troubleshooting purposes, look out
+    for additional messages. In the following output, you can see that the Service
+    named `corellian` we mapped here does not exist. Furthermore, the event log shows
+    syncing activity of the rules by the Ingress controller:'
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用`describe ingress`命令可以呈现Ingress的详细信息。每个规则都在表中列出。为了故障排除，请注意额外的消息。在以下输出中，您可以看到我们在这里映射的名为`corellian`的Service不存在。此外，事件日志显示Ingress控制器通过同步活动调整规则：
+- en: '[PRE29]'
+  id: totrans-155
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE29]'
+- en: 'With the Service and Pod serving up a request, here are the Ingress details:'
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用服务和Pod提供请求时，这里是Ingress的详细信息：
+- en: '[PRE30]'
+  id: totrans-157
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE30]'
+- en: Accessing an Ingress
+  id: totrans-158
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 访问Ingress
+- en: 'The combination of backend and path routes incoming HTTP(S) traffic through
+    the Ingress, which in turn propagates the call to the configured Service. To test
+    the behavior on a local Kubernetes cluster on your machine, you need to first
+    find out the IP address of the load balancer used by the Ingress. Next, you’ll
+    need to add the IP address to hostname mapping to your `/etc/hosts` file:'
+  id: totrans-159
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 后端与路径路由组合，通过 Ingress 将传入的 HTTP(S) 流量传播到配置的服务。要在本地 Kubernetes 集群上测试行为，首先需要找出
+    Ingress 使用的负载均衡器的 IP 地址。接下来，您需要将 IP 地址添加到您的 `/etc/hosts` 文件中：
+- en: '[PRE31]'
+  id: totrans-160
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE31]'
+- en: 'You can now send HTTP requests to the backend. The first call matches the `Exact`
+    path rule. The second call doesn’t go through as the path rule does not match:'
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您现在可以向后端发送 HTTP 请求。第一个调用匹配 `Exact` 路径规则。第二个调用因路径规则不匹配而未通过：
+- en: '[PRE32]'
+  id: totrans-162
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE32]'
+- en: Using and Configuring CoreDNS
+  id: totrans-163
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用和配置 CoreDNS
+- en: Kubernetes is geared toward operating a microservices architecture. Individual
+    microservices offer distinct, self-contained functionality and communicate with
+    one another to complement each other. Earlier in this chapter, we talked about
+    the usage of a Service to provide a stable network interface. Many of the examples
+    used an IP address and port to talk to a Service.
+  id: totrans-164
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 专注于操作微服务架构。各个微服务提供独特的、自包含的功能，并相互通信以相互补充。本章前面讨论了使用服务提供稳定网络接口的用法。许多示例使用
+    IP 地址和端口与服务进行通信。
+- en: Kubernetes runs a DNS server implementation called [CoreDNS](https://coredns.io)
+    that maps the name of the Service to its IP address. In turn, microservices can
+    easily reference the Service name to communicate with each other. For a deep dive
+    on CoreDNS, check out the excellent book [*Learning CoreDNS*](https://oreil.ly/06kPW)
+    (O’Reilly).
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 运行名为 [CoreDNS](https://coredns.io) 的 DNS 服务器实现，将服务的名称映射到其 IP 地址。反过来，微服务可以轻松地通过服务名称相互引用。要深入了解
+    CoreDNS，请查阅优秀的书籍 [*Learning CoreDNS*](https://oreil.ly/06kPW)（O’Reilly）。
+- en: Inspecting the CoreDNS Pod
+  id: totrans-166
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 检查 CoreDNS Pod
+- en: 'The CoreDNS server is running in a Pod in the namespace `kube-system`. The
+    following command renders the CoreDNS Pod for a Minikube cluster installation:'
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CoreDNS 服务器在命名空间 `kube-system` 中的 Pod 中运行。以下命令为 Minikube 集群安装渲染 CoreDNS Pod：
+- en: '[PRE33]'
+  id: totrans-168
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE33]'
+- en: CoreDNS uses a so-called `Corefile` to configure the runtime behavior of the
+    DNS server. The ConfigMap named `coredns` set up in the same namespace defines
+    the contents of the configuration file. The CoreDNS Pod mounts the ConfigMap,
+    as shown in [Example 5-4](#coredns_pod).
+  id: totrans-169
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CoreDNS 使用所谓的 `Corefile` 配置 DNS 服务器的运行时行为。在同一命名空间设置的名为 `coredns` 的 ConfigMap
+    定义配置文件的内容。CoreDNS Pod 挂载 ConfigMap，如 [示例 5-4](#coredns_pod) 所示。
+- en: Example 5-4\. YAML manifest of CoreDNS Pod
+  id: totrans-170
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 5-4\. CoreDNS Pod 的 YAML 清单
+- en: '[PRE34]'
+  id: totrans-171
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE34]'
+- en: Inspecting the CoreDNS Configuration
+  id: totrans-172
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 检查 CoreDNS 配置
+- en: You can inspect the ConfigMap with the command `kubectl get configmaps coredns
+    -n kube-system -o yaml`. [Example 5-5](#coredns_default_configmap) shows the content
+    of the `Corefile`. See the [CoreDNS manual](https://oreil.ly/7AeWG) for more information
+    on the syntax and instructions of a `Corefile`.
+  id: totrans-173
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用命令 `kubectl get configmaps coredns -n kube-system -o yaml` 检查 ConfigMap。[示例 5-5](#coredns_default_configmap)
+    显示了 `Corefile` 的内容。请查看 [CoreDNS 手册](https://oreil.ly/7AeWG) 获取有关 `Corefile` 语法和指令的更多信息。
+- en: Example 5-5\. Default Corefile defined by a ConfigMap
+  id: totrans-174
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 5-5\. 由 ConfigMap 定义的默认 Corefile
+- en: '[PRE35]'
+  id: totrans-175
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE35]'
+- en: Customizing the CoreDNS Configuration
+  id: totrans-176
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 定制 CoreDNS 配置
+- en: The default configuration of a `Corefile` can be further customized. To do so,
+    create a new ConfigMap in the namespace `kube-system` in the format shown in [Example 5-6](#coredns_custom_configmap).
+  id: totrans-177
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`Corefile` 的默认配置可以进一步定制。为此，在命名空间 `kube-system` 中创建一个新的 ConfigMap，格式如 [示例 5-6](#coredns_custom_configmap)
+    所示。'
+- en: Example 5-6\. Custom Corefile defined by a ConfigMap
+  id: totrans-178
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 5-6\. 由 ConfigMap 定义的自定义 Corefile
+- en: '[PRE36]'
+  id: totrans-179
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE36]'
+- en: 'Create the new ConfigMap specified by the file `coredsns-custom.yaml` and force
+    a reload of the CoreDNS Pod configuration by deleting it. The CoreDNS will start
+    up again automatically because the CoreDNS Pod was deployed and managed by the
+    state of the Deployment. The Pod’s restart policy defaults to `Always`; deleting
+    the Pod is a quick way to force it to restart, and the new Pod instance will be
+    mapped to the updated information in the ConfigMap:'
+  id: totrans-180
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建由文件 `coredsns-custom.yaml` 指定的新 ConfigMap，并通过删除它强制重新加载 CoreDNS Pod 配置。CoreDNS
+    将会重新启动，因为 CoreDNS Pod 是通过 Deployment 的状态部署和管理的。Pod 的重启策略默认为 `Always`；删除 Pod 是强制其重新启动的快速方法，新的
+    Pod 实例将映射到 ConfigMap 中更新的信息：
+- en: '[PRE37]'
+  id: totrans-181
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE37]'
+- en: DNS for Services
+  id: totrans-182
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: DNS 服务
+- en: Services tie into the DNS service provided by CoreDNS. In this section, we will
+    talk about various scenarios that illustrate how to talk to a Service from another
+    Pod that lives in the same or a different namespace.
+  id: totrans-183
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 服务与CoreDNS提供的DNS服务紧密相关。在本节中，我们将讨论几种场景，说明如何从同一或不同命名空间中的另一个Pod访问服务的情况。
+- en: Resolving a Service by Hostname from the Same Namespace
+  id: totrans-184
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 从同一命名空间通过主机名解析服务的示例
+- en: A Pod can resolve the Service by hostname if both objects live in the same namespace.
+    [Figure 5-9](#dns_service_same_namespace) illustrates a Pod implementing UI frontend
+    functionality that makes a call to a backend microservice through a Service.
+  id: totrans-185
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果两个对象位于同一个命名空间，一个Pod可以通过主机名解析服务。[图 5-9](#dns_service_same_namespace)展示了一个实现UI前端功能的Pod如何通过服务调用后端微服务的示例。
+- en: '![ckas 0509](Images/ckas_0509.png)'
+  id: totrans-186
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckas 0509](Images/ckas_0509.png)'
+- en: Figure 5-9\. Resolving a Service from the same namespace
+  id: totrans-187
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-9\. 从同一命名空间解析服务
+- en: 'You can easily verify the behavior with the following commands. Here, we’ll
+    create a Service and a Pod in the namespace `dns` with the name `echoserver`:'
+  id: totrans-188
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用以下命令可以轻松验证其行为。在此，我们将在名为`dns`的命名空间中创建一个服务和一个名为`echoserver`的Pod：
+- en: '[PRE38]'
+  id: totrans-189
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE38]'
+- en: 'You can verify the correct service discovery by running a Pod in the same namespace
+    that makes a call to the Service by using its hostname and incoming port:'
+  id: totrans-190
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可以通过在同一命名空间中运行一个Pod，并通过其主机名和入口端口对服务发起调用来验证正确的服务发现：
+- en: '[PRE39]'
+  id: totrans-191
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE39]'
+- en: Resolving a Service by Hostname from a Different Namespace
+  id: totrans-192
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 从不同命名空间通过主机名解析服务
+- en: It’s not uncommon to make a call from a Pod to a Service that lives in a different
+    namespace. Referencing just the hostname of the Service does not work across namespaces.
+    You need to append the namespace as well.
+  id: totrans-193
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在Pod向不同命名空间中的服务发起调用并不罕见。仅引用服务的主机名无法跨命名空间工作。你需要同时附加命名空间。
+- en: '[Figure 5-10](#dns_service_different_namespace) illustrates a backend Pod in
+    the namespace `business` that calls a Service in the namespace `other`. To communicate
+    with the `weather-api` Service from the namespace `business`, you will need to
+    reference it via `weather-api.other`. Services that reside in the `default` namespace
+    will have to referenced accordingly (e.g., `lottery.default`).'
+  id: totrans-194
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 5-10](#dns_service_different_namespace)展示了在名为`business`的命名空间中的后端Pod调用了在命名空间`other`中的服务的示例。为了从`business`命名空间访问`weather-api`服务，你需要通过`weather-api.other`进行引用。位于`default`命名空间的服务需要相应地进行引用（例如，`lottery.default`）。'
+- en: '![ckas 0510](Images/ckas_0510.png)'
+  id: totrans-195
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckas 0510](Images/ckas_0510.png)'
+- en: Figure 5-10\. Resolving a Service from a different namespace
+  id: totrans-196
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-10\. 从不同命名空间解析服务
+- en: '[PRE40]'
+  id: totrans-197
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE40]'
+- en: 'From a different namespace, in this case called `business`, make a call from
+    a temporary Pod to the Service in the namespace `other`. Attempting to call the
+    Service without the namespace results in a failure to connect. You can see in
+    the following code that the namespace of the Service needs to be spelled out explicitly:
+    `echoserver.other`:'
+  id: totrans-198
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在不同命名空间，例如称为`business`的情况下，从临时Pod向命名空间`other`中的服务发起调用。如果不指定命名空间，尝试调用服务将失败连接。在下面的代码中可以看到，服务的命名空间需要明确指定为`echoserver.other`：
+- en: '[PRE41]'
+  id: totrans-199
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE41]'
+- en: 'The `Corefile` defines a cluster domain. By default, the value of the cluster
+    domain is `cluster.local`. You can append the cluster domain to the hostname when
+    referencing a Service. In addition, you’ll need to use the type of object you’re
+    communicating with. The string `svc` describes the type Service. The full hostname
+    for a Service is `echoserver.other.svc.cluster.local`. You can see the calls in
+    the following commands:'
+  id: totrans-200
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`Corefile`定义了一个集群域。默认情况下，集群域的值是`cluster.local`。在引用服务时，你可以在主机名后附加集群域。此外，你需要使用你要通信的对象类型。字符串`svc`描述了服务类型。一个服务的完整主机名为`echoserver.other.svc.cluster.local`。你可以在以下命令中看到这些调用：'
+- en: '[PRE42]'
+  id: totrans-201
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE42]'
+- en: DNS for Pods
+  id: totrans-202
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Pods的DNS
+- en: Pods can talk to each by IP address across namespaces. CoreDNS provides the
+    configuration option `pods insecure` in the `Corefile` file to create DNS records
+    for Pods. To reference a Pod, use the IP address, but replace the dots with dashes.
+    For example, a Pod with the IP address `10.0.0.85` has a corresponding DNS record
+    with `10-0-0-85`. [Figure 5-11](#dns_pod) shows Pods that reference each other
+    by their DNS records.
+  id: totrans-203
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pods可以通过IP地址跨命名空间进行通信。CoreDNS在`Corefile`文件中提供了`pods insecure`的配置选项，用于为Pods创建DNS记录。要引用一个Pod，请使用IP地址，但将点替换为破折号。例如，具有IP地址`10.0.0.85`的Pod具有相应的DNS记录`10-0-0-85`。图 5-11](#dns_pod)展示了通过它们的DNS记录相互引用的Pods。
+- en: '![ckas 0511](Images/ckas_0511.png)'
+  id: totrans-204
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckas 0511](Images/ckas_0511.png)'
+- en: Figure 5-11\. Resolving a Pod via DNS records
+  id: totrans-205
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-11\. 通过DNS记录解析Pod
+- en: Resolving a Pod by Hostname
+  id: totrans-206
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 通过主机名解析Pod
+- en: 'We’ll create two Pods to demonstrate the runtime behavior of CoreDNS for Pods.
+    Pod 1, named `echoserver1`, runs in the namespace `ns1` with the IP address `172.17.0.8`.
+    Pod 2, named `echoserver2`, runs in the namespace `ns2` with the IP address `172.17.0.9`:'
+  id: totrans-207
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将创建两个Pod来演示CoreDNS在Pod中的运行时行为。Pod 1名为`echoserver1`，运行在命名空间`ns1`中，IP地址为`172.17.0.8`。Pod
+    2名为`echoserver2`，运行在命名空间`ns2`中，IP地址为`172.17.0.9`：
+- en: '[PRE43]'
+  id: totrans-208
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE43]'
+- en: 'For resolving a Pod via DNS, you are required to spell out the namespace and
+    object type as part of the hostname independent of where the Pod lives. The following
+    two commands use a temporary Pod to make a call to another Pod in the same and
+    a different namespace. Adding `cluster.local` is optional:'
+  id: totrans-209
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要通过DNS解析Pod，您需要在主机名中明确指定命名空间和对象类型，无论Pod位于何处。以下两个命令使用临时Pod来调用同一命名空间内和不同命名空间内的另一个Pod。添加`cluster.local`是可选的：
+- en: '[PRE44]'
+  id: totrans-210
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE44]'
+- en: This option `pods insecure` exists only for backward compatibility reasons with
+    `kube-dns`, the original implementation of Kubernetes’ DNS server. You can disable
+    the creation of DNS records for Pods by configuring CoreDNS with `pods disabled`
+    instead. It is not recommended to rely on the DNS record for a Pod.
+  id: totrans-211
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个选项`pods insecure`仅出于与`kube-dns`的向后兼容性原因而存在，kube-dns是Kubernetes DNS服务器的原始实现。您可以通过使用`pods
+    disabled`配置CoreDNS来禁用为Pod创建DNS记录。不建议依赖Pod的DNS记录。
+- en: Choosing an Appropriate Container Network Interface Plugin
+  id: totrans-212
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 选择合适的容器网络接口插件
+- en: In [Chapter 2](ch02.xhtml#cluster_architecture_installation_configuration),
+    we talked about the mechanics of installing a Container Network Interface plugin.
+    The CNI, a Cloud Native Computing Foundation project, consists of a specification
+    and libraries for writing plugins to configure network interfaces in Linux containers,
+    along with a number of plugins. CNI concerns itself only with network connectivity
+    of containers and removing allocated resources when the container is deleted.
+    Kubernetes uses CNI as an interface between network providers and Kubernetes Pod
+    networking.
+  id: totrans-213
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[第2章](ch02.xhtml#cluster_architecture_installation_configuration)中，我们讨论了安装容器网络接口插件的机制。CNI是一个Cloud
+    Native Computing Foundation项目，包括一个用于在Linux容器中配置网络接口的规范和库，以及多个插件。CNI只关注容器的网络连接性，并在删除容器时删除分配的资源。Kubernetes使用CNI作为网络提供程序与Kubernetes
+    Pod网络之间的接口。
+- en: The CNI specification defines the Pod networking interface and capabilities.
+    Plugins implement the specification and allow a Kubernetes administrator to pick
+    and choose a product-specific feature set. [Figure 5-12](#cni_spec_implementation)
+    shows a couple of exemplary plugins you can choose from. For a list of plugins,
+    see the [Kubernetes documentation](https://oreil.ly/mgnMT).
+  id: totrans-214
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CNI规范定义了Pod网络接口和能力。插件实现规范，并允许Kubernetes管理员选择和使用产品特定的功能集。[图5-12](#cni_spec_implementation)展示了您可以选择的一些示例插件。有关插件列表，请参见[Kubernetes文档](https://oreil.ly/mgnMT)。
+- en: '![ckas 0512](Images/ckas_0512.png)'
+  id: totrans-215
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckas 0512](Images/ckas_0512.png)'
+- en: Figure 5-12\. CNI specification and implementation
+  id: totrans-216
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图5-12\. CNI规范和实现
+- en: Choosing an appropriate CNI plugin depends on your needs. Refer to this [blog
+    post](https://oreil.ly/8lCIq) for a decision matrix that can help you make the
+    right choice for your Kubernetes cluster. During the CKA exam, you might be asked
+    to install a CNI plugin. Many of the plugins mentioned in the Kubernetes documentation
+    link to web pages outside of the Kubernetes domain. Remember that you are not
+    allowed to navigate to pages outside of the official Kubernetes documentation
+    during the exam. Take a look at the link in the browser before opening it by hovering
+    over it with the mouse pointer. For example, this [Kubernetes documentation section](https://oreil.ly/ncYMk)
+    describes the installation instructions for Weave Net.
+  id: totrans-217
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 选择适合的CNI插件取决于您的需求。参考这篇[博客文章](https://oreil.ly/8lCIq)的决策矩阵，可以帮助您为您的Kubernetes集群做出正确的选择。在CKA考试期间，您可能会被要求安装CNI插件。Kubernetes文档中提到的许多插件链接到Kubernetes域外的网页。请记住，在考试期间不允许访问官方Kubernetes文档之外的页面。在打开链接之前，请将鼠标指针悬停在链接上查看浏览器中的链接。例如，这个[Kubernetes文档部分](https://oreil.ly/ncYMk)描述了Weave
+    Net的安装说明。
+- en: Summary
+  id: totrans-218
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 总结
+- en: Kubernetes assigns a unique IP address for every Pod in the cluster. Pods can
+    communicate with each other using that IP address; however, you cannot rely on
+    the IP address to be stable over time. That’s why Kubernetes provides the Service
+    resource type.
+  id: totrans-219
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes为集群中的每个Pod分配唯一的IP地址。Pod可以使用该IP地址相互通信；但是，您不能依赖IP地址随时间稳定不变。这就是为什么Kubernetes提供了Service资源类型的原因。
+- en: A Service forwards network traffic to a set of Pods based on label selection
+    and port mappings. Every Service needs to assign a type that determines how the
+    Service becomes accessible from within or outside of the cluster. The Service
+    types relevant to the CKA exam are `ClusterIP`, `NodePort`, and `LoadBalancer`.
+    CoreDNS, the DNS server for Kubernetes, allows Pods to access the Service by hostname
+    from the same and other namespaces.
+  id: totrans-220
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 服务基于标签选择和端口映射将网络流量转发到一组 Pod。每个服务都需要分配一个类型，以确定服务如何在集群内部或外部可访问。在CKA考试中相关的服务类型有`ClusterIP`、`NodePort`和`LoadBalancer`。CoreDNS是Kubernetes的DNS服务器，允许Pod通过主机名从同一及其他命名空间访问服务。
+- en: The resource type Ingress defines rules for routing incoming, cluster-external
+    HTTP(S) traffic to a Service. An Ingress controller periodically evaluates those
+    rules and ensures that they apply to the cluster.
+  id: totrans-221
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 资源类型入口（Ingress）定义了将传入的、集群外的HTTP(S)流量路由到服务的规则。入口控制器定期评估这些规则，并确保它们适用于集群。
+- en: Exam Essentials
+  id: totrans-222
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 考试要点
+- en: Understand the purpose of a Service
+  id: totrans-223
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 理解服务的目的
+- en: Pod-to-Pod communication via their IP address does’nt guarantee a stable network
+    interface over time. The purpose of a Service is to provide that stable network
+    interface so that you can operate complex microservice architecture that run in
+    a Kubernetes cluster. In most cases, Pods call a Service by hostname. The hostname
+    is provided by CoreDNS.
+  id: totrans-224
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过它们的IP地址进行Pod对Pod通信不能保证稳定的网络接口。服务的目的是提供稳定的网络接口，以便您可以操作在Kubernetes集群中运行的复杂微服务架构。在大多数情况下，Pod通过CoreDNS提供的主机名调用服务。
+- en: Practice how to access a Service for each type
+  id: totrans-225
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 练习如何访问每种类型的服务
+- en: The CKA exam expects you to understand the differences between the Service types
+    `ClusterIP`, `NodePort`, and `LoadBalancer`. Depending on the assigned type, a
+    Service becomes accessible from inside the cluster or from outside the cluster.
+  id: totrans-226
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CKA考试要求您理解服务类型`ClusterIP`、`NodePort`和`LoadBalancer`之间的区别。根据分配的类型，服务可以从集群内部或外部访问。
+- en: Understand the difference between a Service and an Ingress
+  id: totrans-227
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 理解服务和入口之间的区别
+- en: An Ingress is not to be confused with a Service. The Ingress is meant for routing
+    cluster-external HTTP(S) traffic to one or many Services based on an optional
+    hostname and mandatory path. A Service routes traffic to a set of Pods.
+  id: totrans-228
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 入口（Ingress）不应与服务混淆。入口用于基于可选主机名和必需路径将集群外HTTP(S)流量路由到一个或多个服务。服务则将流量路由到一组Pod。
+- en: Sample Exercises
+  id: totrans-229
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 示例练习
+- en: Solutions to these exercises are available in the [Appendix](app01.xhtml#appendix-a).
+  id: totrans-230
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些练习的解决方案可以在附录中找到（[Appendix](app01.xhtml#appendix-a)）。
+- en: In the namespace `external`, create a Deployment named `nginx` with the image
+    `nginx` for three replicas. The container should expose the port 80\. Within the
+    same namespace, create a Service of type `LoadBalancer`. The Service should route
+    traffic to the Pods managed by the Deployment.
+  id: totrans-231
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 在命名空间`external`中，创建一个名为`nginx`的部署，使用`nginx`镜像，并配置三个副本。容器应该暴露端口80。在同一命名空间内，创建一个类型为`LoadBalancer`的服务。该服务应将流量路由到部署管理的Pod。
+- en: From your local machine (outside the cluster), make a call to the LoadBalancer
+    using `wget` or `curl`. Identify which Pods received the traffic by looking at
+    the logs.
+  id: totrans-232
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 从本地机器（集群外）使用`wget`或`curl`调用负载均衡器。通过查看日志，确认哪些Pod接收到了流量。
+- en: Change the Service type to `ClusterIP`. Make a call to the Service using `wget`
+    or `curl` so that the Pods receive the traffic.
+  id: totrans-233
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 将服务类型更改为`ClusterIP`。使用`wget`或`curl`调用服务，以便Pod接收流量。
+- en: Create an Ingress named `incoming` in the namespace `external`. Define the path
+    type `Prefix` to the path `/` to the Service from the previous step. The Ingress
+    should be able to handle any incoming HTTP traffic.
+  id: totrans-234
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 在命名空间`external`中创建一个名为`incoming`的入口（Ingress）。定义路径类型`Prefix`，将路径`/`映射到前面步骤的服务。该入口应能够处理任何传入的HTTP流量。
+- en: Make a call to the Ingress using `wget` or `curl` from your local machine. Verify
+    that the Pods receive traffic.
+  id: totrans-235
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 从本地机器使用`wget`或`curl`调用该入口。验证Pod是否收到流量。
+- en: Create a new Service of type `ClusterIP` named `echoserver` in the namespace
+    `external`. The selected and to-be-created Pod should use the image `k8s.gcr.io/echoserver:1.10`
+    on port 8080\. Add a new rule to the existing Ingress to route traffic to the
+    `echoserver` Service with the path `/echo` and type `Exact`.
+  id: totrans-236
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 在命名空间`external`中创建一个名为`echoserver`的新服务，类型为`ClusterIP`。选定和将要创建的Pod应使用`k8s.gcr.io/echoserver:1.10`镜像，端口8080。向现有的入口添加一个新规则，将流量路由到`echoserver`服务，路径为`/echo`，类型为`Exact`。
+- en: Make a call to the Service using `wget` or `curl` from your local machine so
+    that the `echoserver` can be reached.
+  id: totrans-237
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 使用本地机器上的`wget`或`curl`来调用服务，以便可以访问`echoserver`。
+- en: Create a [rewrite rule](https://oreil.ly/ZVYkK) for the CoreDNS configuration
+    that allows referencing a Service using the cluster domain `cka.example.com`.
+    Ensure that the custom CoreDNS configuration takes effect.
+  id: totrans-238
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 为CoreDNS配置创建一个[重写规则](https://oreil.ly/ZVYkK)，允许使用集群域名`cka.example.com`引用一个服务。确保自定义的CoreDNS配置生效。
+- en: Make a call to the `nginx` Service using `wget` or `curl` from a temporary Pod
+    in a new namespace called `hello` with the appropriate hostname.
+  id: totrans-239
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 在名为`hello`的新命名空间中，从临时 Pod 使用`wget`或`curl`来调用`nginx`服务，并确保使用适当的主机名。

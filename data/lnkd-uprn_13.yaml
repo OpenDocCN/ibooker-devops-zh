@@ -1,0 +1,728 @@
+- en: Chapter 13\. Linkerd CNI Versus Init Containers
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第 13 章\. Linkerd CNI 与初始化容器对比
+- en: In [Chapter 2](ch02.html#LUAR_intro_to_linkerd), we mentioned the init container
+    a couple of times without ever talking about it in detail. The init container
+    is one of the two mechanisms Linkerd provides for handling mesh networking in
+    Kubernetes, with the other being the Linkerd CNI plugin. To understand what these
+    do and why you’d choose one over the other, you need to understand what happens
+    when a meshed Pod starts running.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 [第二章](ch02.html#LUAR_intro_to_linkerd) 中，我们多次提到了初始化容器，但从未详细讨论过它。初始化容器是 Linkerd
+    在 Kubernetes 中处理网格网络的两种机制之一，另一种是 Linkerd CNI 插件。要理解它们的作用以及为什么选择其中之一，您需要了解网格化 Pod
+    启动时发生的情况。
+- en: As it happens, that’s a much bigger, thornier issue than you might expect. We’ll
+    start by looking at vanilla Kubernetes, *without* Linkerd.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 恰巧，这比你预期的要复杂得多。我们将首先看看原生 Kubernetes，*没有* Linkerd。
+- en: Kubernetes sans Linkerd
+  id: totrans-3
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Kubernetes 无 Linkerd
+- en: 'At its core, Kubernetes has a straightforward goal: manage user workloads so
+    that developers can concentrate on Pods and Services without needing to worry
+    too much about the underlying hardware. This is one of those things that’s easy
+    to describe, and fairly easy to use, but *extremely* complex to implement. Kubernetes
+    relies on several different open source technologies to get it all done. Remember
+    that we’re talking about Kubernetes *without* Linkerd at this point—this is essentially
+    your standard Kubernetes functionality.'
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 的核心目标是管理用户工作负载，以便开发人员可以集中精力于 Pod 和服务，而无需过多关注底层硬件。这是一件容易描述，使用起来相对容易，但在实施上极其复杂的事情。Kubernetes
+    依赖于多种不同的开源技术来完成所有这些任务。请记住，此时我们谈论的是 *没有* Linkerd 的 Kubernetes 标准功能。
+- en: Nodes, Pods, and More
+  id: totrans-5
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 节点、Pod 和更多内容
+- en: 'The first area that Kubernetes has to manage is orchestrating the actual execution
+    of workloads within a cluster. It relies extensively on OS-level isolation mechanisms
+    for this task. Here are some key points to keep in mind:'
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 首先需要管理的是在集群内部执行工作负载的编排。它对此依赖于操作系统级别的隔离机制。以下是需要记住的一些关键点：
+- en: Clusters comprise one or more *Nodes*, which are physical or virtual machines
+    running Kubernetes itself. We’ll discuss Linux Nodes here.
+  id: totrans-7
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 集群由一个或多个 *节点* 组成，这些节点是物理或虚拟机器，运行着 Kubernetes 本身。我们在这里讨论 Linux 节点。
+- en: Since Nodes are entirely distinct from one another, everything on one Node is
+    isolated from others.
+  id: totrans-8
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 由于节点彼此完全不同，一个节点上的所有内容都与其他节点隔离开来。
+- en: Pods consist of one or more *containers*, and they’re isolated within the same
+    Node using Linux [`cgroup`s](https://oreil.ly/K1z3T) and `namespace`s.
+  id: totrans-9
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Pod 由一个或多个 *容器* 组成，并且它们在同一个节点上通过 Linux [`cgroup`s](https://oreil.ly/K1z3T) 和
+    `namespace`s 进行隔离。
+- en: Containers within the same Pod are allowed to communicate using *loopback* networking.
+    Containers in different Pods need to use non-loopback addresses because Pods are
+    isolated from each other. Pod-to-Pod communication is the same whether the Pods
+    are on the same Node or not.
+  id: totrans-10
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 同一 Pod 中的容器可以使用 *loopback* 网络进行通信。不同 Pod 中的容器需要使用非 loopback 地址，因为 Pod 之间是相互隔离的。无论
+    Pod 是否在同一节点上，Pod 与 Pod 之间的通信方式都是相同的。
+- en: 'An important point is that Linux itself operates at the Node level: Pods and
+    containers don’t have to run separate instances of the OS. This is the reason
+    that isolation between them is so critical.'
+  id: totrans-11
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一个重要的观点是 Linux 本身是在节点级别运行的：Pod 和容器不必运行单独的操作系统实例。这就是它们之间隔离如此重要的原因。
+- en: 'This layered approach, shown in [Figure 13-1](#clusters-nodes-etc-diagram),
+    lets Kubernetes orchestrate the distribution of workloads within the cluster,
+    while keeping an eye on resource availability and usage: workload containers map
+    to Pods, Pods are scheduled onto Nodes, and all Nodes connect to a single flat
+    network.'
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种分层方法如 [图 13-1](#clusters-nodes-etc-diagram) 所示，允许 Kubernetes 在集群内部编排工作负载的分布，同时关注资源的可用性和使用情况：工作负载容器映射到
+    Pod，Pod 被调度到节点上，而所有节点连接到单一平面网络。
+- en: '![luar 1301](assets/luar_1301.png)'
+  id: totrans-13
+  prefs: []
+  type: TYPE_IMG
+  zh: '![luar 1301](assets/luar_1301.png)'
+- en: Figure 13-1\. Clusters, Nodes, Pods, and containers
+  id: totrans-14
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 13-1\. 集群、节点、Pod 和容器
+- en: (What about Deployments, ReplicaSets, DaemonSets, and such? They’re all about
+    hinting to Kubernetes where the Pods they create should be scheduled; the actual
+    scheduling mechanism underneath is the same.)
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: （那么部署、副本集、守护集等呢？它们都是在提示 Kubernetes 创建的 Pod 应该被调度到哪里；底层的调度机制是相同的。）
+- en: Networking in Kubernetes
+  id: totrans-16
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Kubernetes 中的网络
+- en: The other major area that Kubernetes manages is the network, starting with the
+    fundamental tenet that every Pod must see a flat and transparent network. Every
+    Pod should be able to communicate with all others, on any Node. This means that
+    every Pod must have its own IP address (the *Pod IP*).
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 管理的另一个主要领域是网络，从基本原则开始，即每个 Pod 必须看到一个平坦透明的网络。每个 Pod 应能够与任何节点上的所有其他
+    Pod 通信。这意味着每个 Pod 必须有自己的 IP 地址（Pod IP）。
+- en: Containers or Pods?
+  id: totrans-18
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 容器还是 Pod？
+- en: The requirement is actually that *any two containers* must be able to talk to
+    each other, but IP addresses are allocated at the Pod level—multiple containers
+    within one Pod share the same IP address.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 实际要求是*任何两个容器*必须能够互相通信，但 IP 地址是在 Pod 级别分配的——一个 Pod 内的多个容器共享同一个 IP 地址。
+- en: 'While it’s possible to have a workload use Pod IPs directly to communicate
+    with other workloads, it’s not a good idea due to the dynamic nature of Pod IPs:
+    they change as Pods cycle. It’s a better idea to use Kubernetes Services in most
+    cases.'
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然可能让工作负载直接使用 Pod IP 与其他工作负载通信，但由于 Pod IP 的动态性，这不是个好主意：随着 Pod 的循环，它们会变化。在大多数情况下，使用
+    Kubernetes 服务是一个更好的选择。
+- en: 'Services are rather complex, as we discussed briefly in [Chapter 5](ch05.html#LUAR_ingress_and_linkerd):'
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 服务相当复杂，正如我们在[第 5 章](ch05.html#LUAR_ingress_and_linkerd)中简要讨论的：
+- en: Creating a Service triggers the allocation of a DNS entry, so workloads can
+    refer to the Service by name.
+  id: totrans-22
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 创建服务会触发 DNS 条目的分配，因此工作负载可以通过名称引用服务。
+- en: Creating a Service also triggers allocation of a unique IP address for the Service,
+    distinct from any other IP address in the cluster. We call this the Service IP.
+  id: totrans-23
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 创建服务还会触发为服务分配独特的 IP 地址，与集群中的任何其他 IP 地址都不同。我们称之为服务 IP。
+- en: The Service includes a *selector*, which defines which Pods will be associated
+    with the Service.
+  id: totrans-24
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 服务包括一个*选择器*，定义了哪些 Pod 将与该服务关联。
+- en: Lastly, the Service gathers the Pod IP addresses of all its matching Pods and
+    maintains them as its endpoints.
+  id: totrans-25
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 最后，服务收集其所有匹配 Pod 的 Pod IP 地址，并将它们维护为其端点。
+- en: This is all shown in [Figure 13-2](#k8s-service-diagram-1)—which, sadly, is
+    still a *simplified* view of Services.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这一切都显示在[图 13-2](#k8s-service-diagram-1)中——不幸的是，这仍然是对服务的一个*简化*视图。
+- en: '![luar 1302](assets/luar_1302.png)'
+  id: totrans-27
+  prefs: []
+  type: TYPE_IMG
+  zh: '![luar 1302](assets/luar_1302.png)'
+- en: Figure 13-2\. Kubernetes Services and addressing
+  id: totrans-28
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 13-2\. Kubernetes 服务与寻址
+- en: 'When a workload attempts to connect to a Service, Kubernetes will, by default,
+    select one of the Service’s endpoints and route the connection there. This allows
+    Kubernetes to perform basic load balancing of connections, as shown in [Figure 13-3](#k8s-routing-diagram):'
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当工作负载尝试连接到服务时，默认情况下 Kubernetes 将选择服务的其中一个端点并将连接路由到那里。这使 Kubernetes 能够执行连接的基本负载平衡，如[图
+    13-3](#k8s-routing-diagram)所示：
+- en: Connections within Pods happen over localhost so that they stay within the Pod.
+  id: totrans-30
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Pod 内部的连接发生在本地主机上，因此它们保持在 Pod 内部。
+- en: Connections to other workloads hosted on the same Node stay internal to the
+    Node.
+  id: totrans-31
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 到同一节点上托管的其他工作负载的连接保持在节点内部。
+- en: Connections to workloads hosted on other Nodes are the only ones that transit
+    the network.
+  id: totrans-32
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 到托管在其他节点上的工作负载的连接是唯一经过网络的连接。
+- en: '![luar 1303](assets/luar_1303.png)'
+  id: totrans-33
+  prefs: []
+  type: TYPE_IMG
+  zh: '![luar 1303](assets/luar_1303.png)'
+- en: Figure 13-3\. Kubernetes basic network routing
+  id: totrans-34
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 13-3\. Kubernetes 基本网络路由
+- en: To make this all work, Kubernetes relies on the networking mechanisms built
+    into the core of the Linux kernel.
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要使所有这些工作正常运行，Kubernetes 依赖于内置在 Linux 内核核心中的网络机制。
+- en: The Role of the Packet Filter
+  id: totrans-36
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 包过滤器的角色
+- en: The Linux kernel has long included a powerful *packet filter* mechanism to inspect
+    network packets and make decisions about what to do with each one. Possible actions
+    the packet filter system can take include letting the packet continue as is, modifying
+    the packet, rerouting the packet, or even discarding it entirely.
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linux 内核长期以来一直包含一个强大的*数据包过滤器*机制，用于检查网络数据包并决定如何处理每个数据包。数据包过滤系统可以采取的可能操作包括让数据包继续原样传输、修改数据包、重新路由数据包，甚至完全丢弃数据包。
+- en: Kubernetes takes extensive advantage of the packet filter to handle the complexities
+    of routing traffic among an ever-changing set of Pods within a cluster. For instance,
+    the filter can intercept a packet sent to a Service and rewrite it to go to a
+    specific Pod IP instead. It can also distinguish between a Pod IP on the same
+    Node as the sender and one on a different Node, and manage routing appropriately.
+    If we zoom in a bit on [Figure 13-3](#k8s-routing-diagram), we get the more detailed
+    view in [Figure 13-4](#k8s-routing-pf-diagram).
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes充分利用包过滤器来处理集群中不断变化的一组Pods之间流量路由的复杂性。例如，过滤器可以拦截发送到Service的包，并重写为发送到特定Pod
+    IP。它还可以区分与发送方在同一节点上的Pod IP和不同节点上的Pod IP，并适当管理路由。如果我们稍微放大一下[图13-3](#k8s-routing-diagram)，我们可以得到更详细的视图在[图13-4](#k8s-routing-pf-diagram)中。
+- en: '![luar 1304](assets/luar_1304.png)'
+  id: totrans-39
+  prefs: []
+  type: TYPE_IMG
+  zh: '![lu   ![luar 1304](assets/luar_1304.png)'
+- en: Figure 13-4\. Kubernetes and the packet filter
+  id: totrans-40
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图13-4。Kubernetes和包过滤器
+- en: 'Let’s follow the dotted-line connection shown in [Figure 13-4](#k8s-routing-pf-diagram),
+    from Pod B-1 all the way to Pod C-2:'
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们跟随[图13-4](#k8s-routing-pf-diagram)中显示的虚线连接，从Pod B-1一路到Pod C-2：
+- en: The application container in Pod B-1 makes a connection to the Service IP address
+    for Service C.
+  id: totrans-42
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Pod B-1中的应用容器连接到Service C的服务IP地址。
+- en: The packet filter sees a connection from a local container to the Service IP,
+    so it redirects that connection to the Pod IP of either Pod C-1 or Pod C-2\. By
+    default, the choice is random for each new connection (though the exact configuration
+    of the cluster’s networking layer can change this).
+  id: totrans-43
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 包过滤器看到从本地容器到服务IP的连接，因此它将该连接重定向到Pod C-1或Pod C-2的Pod IP。默认情况下，每个新连接的选择是随机的（尽管集群网络层的确切配置可以改变这一点）。
+- en: In this case, the Pod IP is on a different Node, so the network hardware gets
+    involved to communicate over the network to the second Node.
+  id: totrans-44
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在这种情况下，Pod IP在不同的节点上，因此网络硬件参与进来，与第二个节点的网络通信。
+- en: On the second Node, the packet filter sees the connection coming over the network
+    to a Pod IP address, so it hands the connection directly to the Pod, choosing
+    a container based on the port number.
+  id: totrans-45
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在第二个节点上，包过滤器看到来自网络的连接到达Pod IP地址，因此它直接将连接交给Pod，选择一个基于端口号的容器。
+- en: For the dashed-line connection shown between Pod B-1 and Pod A-1, the process
+    is the same, except that the network hardware has no role to play since the connection
+    is entirely contained within one Node. In all cases, the containers see a simple,
+    flat network, with all containers living in the same IP address range—which, of
+    course, requires Kubernetes to continuously update the packet filter rules as
+    Pods are created and removed.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于图中Pod B-1和Pod A-1之间的虚线连接，过程是相同的，只是网络硬件没有角色，因为连接完全在一个节点内。在所有情况下，容器看到的是一个简单的平面网络，所有容器都在相同的IP地址范围内——这当然需要Kubernetes在Pod创建和删除时持续更新包过滤器规则。
+- en: 'Alphabet Soup: iptables, nftables, and eBPF'
+  id: totrans-47
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 字母汤：iptables、nftables和eBPF
+- en: There have been several implementations of the packet filter over time, and
+    you may hear people use the name of a specific implementation when talking about
+    this topic. The most common as of this writing is `iptables`, but a newer `nftables`
+    implementation is becoming more popular.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 随着时间的推移，包过滤器已经有了几种实现方式，当人们谈论这个话题时，你可能会听到他们使用特定实现的名称。就目前而言，最常见的是`iptables`，但一个更新的`nftables`实现正变得越来越流行。
+- en: You might also find this whole bit reminding you of the filtering technology
+    known as eBPF, which makes a lot of sense since eBPF is particularly good at this
+    kind of packet wizardry. However, many implementations predate eBPF and don’t
+    rely on it.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你也许会发现这一切让你想起了被称为eBPF的过滤技术，这也很合理，因为eBPF特别擅长这类包的神奇操作。然而，许多实现早于eBPF，并不依赖于它。
+- en: The Container Networking Interface
+  id: totrans-50
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 容器网络接口
+- en: Since networking configuration is a rather low-level aspect of Kubernetes, the
+    details tend to depend on which Kubernetes implementation is in use. The Container
+    Network Interface (CNI) is a standard designed to offer a consistent interface
+    for managing dynamic network configurations; for example, the CNI provides mechanisms
+    for allocating and releasing IP addresses within specific ranges, which Kubernetes
+    uses in turn to manage the IP addresses associated with Services and Pods.
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于网络配置是 Kubernetes 的一个比较低级的方面，具体细节往往取决于使用的 Kubernetes 实现方式。容器网络接口（CNI）是一个标准，旨在提供管理动态网络配置的一致接口；例如，CNI
+    提供了在特定范围内分配和释放 IP 地址的机制，Kubernetes 利用这些机制来管理与服务和 Pod 关联的 IP 地址。
+- en: The CNI doesn’t directly provide mechanisms for managing packet filtering functionality,
+    but it does allow for *CNI plugins*. Service meshes—including Linkerd—can use
+    these plugins to implement the packet filtering configuration they need to function.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CNI 并不直接提供管理数据包过滤功能的机制，但它确实允许使用 *CNI 插件*。包括 Linkerd 在内的服务网格可以使用这些插件来实现它们需要的数据包过滤配置。
+- en: CNI Versus CNI
+  id: totrans-53
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: CNI 与 CNI
+- en: There are many implementations of the CNI, and a given Kubernetes solution often
+    allows a choice between several different CNI implementations (for example, k3d
+    uses [Flannel](https://oreil.ly/GIVvg) by default as its networking layer, but
+    it can be easily switched to [Calico](https://oreil.ly/YSSts)).
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CNI 有许多实现方式，对于给定的 Kubernetes 解决方案，通常可以在几种不同的 CNI 实现中进行选择（例如，k3d 默认使用 [Flannel](https://oreil.ly/GIVvg)
+    作为其网络层，但可以轻松切换到 [Calico](https://oreil.ly/YSSts)）。
+- en: The Kubernetes Pod Startup Process
+  id: totrans-55
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Kubernetes Pod 启动过程
+- en: 'When all is said and done, here’s what Kubernetes needs to do to start a Pod:'
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最终，Kubernetes 需要做以下操作来启动一个 Pod：
+- en: Locate a Node to host the new Pod.
+  id: totrans-57
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 找到一个节点来托管新的 Pod。
+- en: Run any CNI plugins defined by the Node within the new Pod’s context. The process
+    fails if any plugin doesn’t work.
+  id: totrans-58
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 运行由节点定义的任何 CNI 插件，插件必须在新 Pod 的上下文中工作。如果任何插件无法工作，则该进程失败。
+- en: Execute any init containers defined for the new Pod, in the order they’re defined.
+    Again, the startup process fails if any don’t work.
+  id: totrans-59
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 执行为新 Pod 定义的任何 init 容器，按照它们定义的顺序进行。同样地，如果任何一个 init 容器无法工作，则启动过程失败。
+- en: Launch all the containers defined by the Pod.
+  id: totrans-60
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 启动由 Pod 定义的所有容器。
+- en: During the initiation of the Pod’s containers, it’s important to note that the
+    containers will start in the order outlined by the Pod’s `spec`. However, Kubernetes
+    will *not* wait for one container to start before moving on to the next, unless
+    a container has a `postStartHook` defined. In that case, Kubernetes will start
+    that container, run the `postStartHook` to completion, and only then proceed to
+    start the next container. We’ll talk more about this in [“Container ordering”](#container_ordering_ch13).
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Pod 容器初始化过程中，重要的是要注意容器会按照 Pod 的 `spec` 中规定的顺序启动。然而，Kubernetes 不会等待一个容器启动完成再启动下一个容器，除非一个容器定义了
+    `postStartHook`。在这种情况下，Kubernetes 将启动该容器，运行 `postStartHook` 直到完成，然后才会继续启动下一个容器。我们将在
+    [“容器顺序”](#container_ordering_ch13) 中详细讨论这一点。
+- en: Kubernetes and Linkerd
+  id: totrans-62
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Kubernetes 和 Linkerd
+- en: 'Any service mesh introduces complexities into startup, and Linkerd is no exception.
+    The first concern is that Linkerd has to inject its proxy into application Pods,
+    and the proxy has to intercept network traffic going into and out of the Pod.
+    Injection is managed using a mutating admission controller. Interception is more
+    complex, and Linkerd has two ways to manage it: you can use either an init container
+    or a CNI plugin.'
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 任何服务网格在启动过程中都会引入复杂性，Linkerd 也不例外。首要问题是 Linkerd 必须将其代理注入到应用 Pod 中，并且代理必须拦截进出
+    Pod 的网络流量。注入由一个 mutating admission 控制器管理。拦截更为复杂，Linkerd 有两种管理方式：可以使用 init 容器或
+    CNI 插件。
+- en: The Init Container Approach
+  id: totrans-64
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: init 容器方法
+- en: The most straightforward way for Linkerd to configure networking is via an init
+    container, as shown in [Figure 13-5](#init-container-diagram). Kubernetes ensures
+    all init containers are run to completion, in the order they’re mentioned in the
+    Pod’s `spec`, before any other containers start. This makes the init container
+    an ideal way to configure the packet filter.
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linkerd 配置网络的最直接方式是通过一个 init 容器，如 [图 13-5](#init-container-diagram) 所示。Kubernetes
+    确保所有 init 容器按照 Pod 的 `spec` 中指定的顺序完成运行，然后再启动其他容器。这使得 init 容器成为配置数据包过滤器的理想方式。
+- en: '![luar 1305](assets/luar_1305.png)'
+  id: totrans-66
+  prefs: []
+  type: TYPE_IMG
+  zh: '![luar 1305](assets/luar_1305.png)'
+- en: Figure 13-5\. Startup with the init container
+  id: totrans-67
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 13-5\. 使用 init 容器进行启动
+- en: The downside here is that the init container requires the `NET_ADMIN` capability
+    to perform the required configuration. In many Kubernetes runtimes, this capability
+    simply isn’t available, and you’ll need to resort to the Linkerd CNI plugin.
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里的缺点是 init 容器需要 `NET_ADMIN` 权限来执行所需的配置。在许多 Kubernetes 运行时中，这种权限可能根本不可用，因此您需要使用
+    Linkerd CNI 插件。
+- en: Also, the OS used in some Kubernetes clusters may not support the older `iptables`
+    binary used by default in Linkerd (this typically comes into play with the Red
+    Hat family). In these instances, you’ll need to set `proxyInit.iptablesMode=nft`
+    to instruct Linkerd to use `iptables-nft` instead. (This isn’t the default setting
+    because `iptables-nft` isn’t universally supported yet.)
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此外，某些 Kubernetes 集群中使用的操作系统可能不支持 Linkerd 默认使用的较旧的 `iptables` 二进制文件（这通常发生在 Red
+    Hat 家族中）。在这些情况下，您需要设置 `proxyInit.iptablesMode=nft`，以指示 Linkerd 使用 `iptables-nft`。这不是默认设置，因为
+    `iptables-nft` 尚未普遍支持。
+- en: The Linkerd CNI Plugin Method
+  id: totrans-70
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Linkerd CNI 插件方法
+- en: In contrast, the Linkerd CNI plugin simply requires that you install the plugin
+    prior to installing Linkerd itself. It doesn’t need any special capabilities,
+    and the CNI plugin will operate every time a Pod starts, configuring the packet
+    filter as required, as shown in [Figure 13-6](#cni-startup-diagram).
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 相比之下，Linkerd CNI 插件只需要在安装 Linkerd 之前安装插件即可。它不需要任何特殊的功能，并且每次 Pod 启动时 CNI 插件都会起作用，根据需要配置数据包过滤器，如
+    [图 13-6](#cni-startup-diagram) 所示。
+- en: '![luar 1306](assets/luar_1306.png)'
+  id: totrans-72
+  prefs: []
+  type: TYPE_IMG
+  zh: '![luar 1306](assets/luar_1306.png)'
+- en: Figure 13-6\. Startup with the CNI plugin
+  id: totrans-73
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 13-6\. 使用 CNI 插件启动
+- en: The main complication here is that the CNI was originally designed for the people
+    setting up the cluster in the first place, rather than people using it after it’s
+    been created. As a result, the CNI assumes that the ordering of CNI plugins is
+    handled completely outside the Kubernetes environment. This has turned out to
+    be less than ideal, so most CNI plugins these days (including the Linkerd CNI
+    plugin) are written to try to do the right thing no matter what the cluster operators
+    did.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 主要的复杂性在于 CNI 最初设计是为了在创建集群之后使用而不是在创建集群时使用。因此，CNI 假设 CNI 插件的顺序完全由 Kubernetes 环境之外的人员处理。这证明并不理想，因此大多数
+    CNI 插件（包括 Linkerd CNI 插件）现在都编写成尝试无论集群操作者做了什么都能正常工作的方式。
+- en: In the case of the Linkerd CNI plugin, when it’s enabled Linkerd installs a
+    DaemonSet designed to arrange for the Linkerd CNI plugin to always run last. This
+    allows other plugins the chance to configure what they need before Linkerd jumps
+    in to enable the Linkerd proxy to intercept traffic.
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在启用 Linkerd CNI 插件的情况下，Linkerd 将安装一个 DaemonSet，设计用于始终在最后运行 Linkerd CNI 插件。这允许其他插件在
+    Linkerd 开始拦截流量之前配置它们所需的内容。
+- en: When using the CNI plugin, Linkerd will still inject an init container. If you’re
+    using a version of Linkerd prior to `stable-2.13.0`, this will be a no-op init
+    container that, as the name suggests, essentially doesn’t do much. From `stable-2.13.0`
+    onward, the init container will verify that the packet filter is correctly configured.
+    If it’s not, the container will fail, prompting Kubernetes to restart the Pod.
+    This helps to avoid a startup race condition (more on this in the next section).
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 CNI 插件时，Linkerd 仍会注入一个 init 容器。如果您使用的是 `stable-2.13.0` 版本之前的 Linkerd 版本，则这将是一个基本不执行操作的
+    init 容器，正如其名称所示。从 `stable-2.13.0` 版本开始，init 容器将验证数据包过滤器是否正确配置。如果配置不正确，容器将失败，促使
+    Kubernetes 重新启动 Pod。这有助于避免启动时的竞争条件（更多详细信息请参阅下一节）。
+- en: Races and Ordering
+  id: totrans-77
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 竞争和排序
+- en: As you can see, the startup process in Kubernetes can be complex—which means
+    that there are several different ways things can fail.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如您所见，Kubernetes 中的启动过程可能很复杂，这意味着事情可能会以几种不同的方式失败。
+- en: Container ordering
+  id: totrans-79
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 容器排序
+- en: 'As mentioned previously, containers are launched in the order they appear in
+    the Pod’s `spec`, but Kubernetes doesn’t wait for a given container to start before
+    launching the next one (except for init containers). This can cause trouble during
+    Linkerd’s startup: what if the application container begins running and tries
+    to use the network before the Linkerd proxy container is functioning?'
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如前所述，容器按照 Pod 的 `spec` 中的顺序启动，但 Kubernetes 在启动下一个容器之前不会等待特定容器启动（除了 init 容器）。这可能在
+    Linkerd 启动过程中造成麻烦：如果应用容器开始运行并尝试在 Linkerd 代理容器正常运行之前使用网络，会怎么样？
+- en: Starting with Linkerd 2.12, there’s a `postStartHook` on the Linkerd proxy container
+    to deal with this. When a container has a `postStartHook`, Kubernetes starts the
+    container, then runs the `postStartHook` to completion before starting the next
+    container. This gives containers a straightforward way to ensure ordering.
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从Linkerd 2.12开始，Linkerd代理容器具有`postStartHook`来处理此问题。当容器具有`postStartHook`时，Kubernetes会先启动容器，然后完整运行`postStartHook`，然后再启动下一个容器。这为容器提供了一种简单的方法来确保顺序。
+- en: The Linkerd proxy’s `postStartHook` won’t complete until the proxy is actually
+    running, which forces Kubernetes to wait until the proxy is functional before
+    starting the application container. If necessary, this functionality can be disabled
+    by setting the annotation `config.linkerd.io/proxy-await=disabled`. However, we
+    recommend leaving it enabled unless there’s a compelling reason to do otherwise!
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linkerd代理的`postStartHook`在代理实际运行之前不会完成，这迫使Kubernetes等待代理正常运行后才启动应用容器。如有必要，可以通过设置注解`config.linkerd.io/proxy-await=disabled`来禁用此功能。但我们建议除非有充分理由，否则保持启用！
+- en: CNI plugin ordering
+  id: totrans-83
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: CNI插件排序
+- en: 'There are several ways CNI plugin ordering can cause confusion:'
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CNI插件排序可能会造成混淆的几种方式：
+- en: DaemonSets versus other Pods
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 守护集与其他Pods
+- en: Kubernetes treats DaemonSet Pods just like any other Pods, which means that
+    an application Pod might be scheduled before the Linkerd CNI DaemonSet can install
+    the Linkerd CNI plugin! This implies that the Linkerd CNI plugin won’t run for
+    the application Pod, which in turn means that the application container(s) won’t
+    have a functioning Linkerd proxy.
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes将守护集Pods与任何其他Pods一样对待，这意味着应用Pod可能会在Linkerd CNI DaemonSet安装Linkerd
+    CNI插件之前被调度！这意味着Linkerd CNI插件将不会为应用Pod运行，进而意味着应用容器将没有正常运行的Linkerd代理。
+- en: Before Linkerd `stable-2.13.0`, there was no way to catch this, and the application
+    container would simply never be present in the mesh. As of `stable-2.13.0`, though,
+    the init container checks that the packet filter has been configured correctly.
+    If it’s not, the init container will exit, causing a crash loop from Kubernetes’s
+    point of view, which will make the failure obvious.
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在Linkerd `stable-2.13.0`之前，没有办法捕获这一问题，应用容器可能根本不会出现在网格中。但是，从`stable-2.13.0`开始，初始化容器会检查数据包过滤器是否配置正确。如果未配置正确，初始化容器将退出，从Kubernetes的角度看，这会导致崩溃循环，从而明显地显示出失败。
+- en: Multiple CNI plugins
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 多个CNI插件
+- en: In most cases, a given Kubernetes installation will use more than one CNI plugin.
+    While the Linkerd CNI DaemonSet puts a lot of effort into allowing the Linkerd
+    CNI plugin to run last, and to not disrupting other CNI plugins, it’s not perfect.
+    If this goes wrong, the Pod will (again) probably never appear to be in the mesh.
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在大多数情况下，给定的Kubernetes安装将使用多个CNI插件。虽然Linkerd CNI DaemonSet竭尽全力确保Linkerd CNI插件最后运行，并且不会干扰其他CNI插件，但并非完美无缺。如果出现问题，Pod可能（再次）永远不会出现在网格中。
+- en: Misconfigured CNI
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 配置错误的CNI
+- en: 'It’s always possible to simply misconfigure the Linkerd CNI plugin when you
+    install it in the first place. For example, when running k3d, it’s necessary to
+    supply the plugin with certain paths, and if these are wrong, the plugin itself
+    won’t work. This might cause application Pods to silently fail to launch, or it
+    might cause “corrupt message” errors to show up in the proxy logs:'
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您首次安装Linkerd CNI插件时，很可能会简单地配置错误。例如，在运行k3d时，需要向插件提供某些路径，如果这些路径错误，插件本身将无法工作。这可能导致应用Pods在静默失败启动，或者在代理日志中显示“损坏消息”错误。
+- en: '[PRE0]'
+  id: totrans-92
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'The only real saving grace of CNI issues is that they’re typically pretty obvious,
+    conspicuous errors: you’ll see `linkerd check` fail, or Pods won’t start, or similar
+    things. On the other hand, *resolving* the failures can be tricky and depends
+    greatly on the specific CNI involved, so in general we recommend sticking with
+    the init container mechanism where possible.'
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CNI问题的唯一真正救赎在于它们通常是非常明显、显眼的错误：您将看到`linkerd check`失败，或者Pods无法启动，或类似的问题。另一方面，解决这些故障可能会很棘手，并且在很大程度上取决于具体的CNI插件，因此一般情况下，我们建议尽可能坚持使用初始化容器机制。
+- en: Summary
+  id: totrans-94
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 总结
+- en: 'There’s a lot of complexity to the Kubernetes startup process—especially with
+    Linkerd—but there are also some simple recommendations to help keep everything
+    going smoothly:'
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes启动过程非常复杂，特别是涉及Linkerd时，但也有一些简单的建议可以帮助一切顺利进行：
+- en: Keep Linkerd up-to-date! Recent versions have added some really helpful things
+    for startup.
+  id: totrans-96
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 保持Linkerd更新！最新版本已经添加了一些对启动非常有帮助的功能。
+- en: Use `proxy-await` unless you have a *very* good reason to disable it. It’ll
+    make sure that your application code has a working mesh before starting.
+  id: totrans-97
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用 `proxy-await`，除非你有一个*非常*好的理由禁用它。这将确保你的应用程序在启动之前具有一个可用的网格。
+- en: Stick with the init container if you can. If not, just use the CNI plugin, but
+    if your cluster can run with the init container, it’s probably simplest to do
+    so.
+  id: totrans-98
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如果可能的话，请坚持使用初始化容器。如果不能，只需使用 CNI 插件，但如果你的集群可以运行初始化容器，那么这可能是最简单的方式。

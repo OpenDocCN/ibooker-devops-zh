@@ -1,0 +1,845 @@
+- en: Chapter 12\. Managing Multiple Clusters
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第12章。管理多个集群
+- en: In this chapter, we discuss best practices for managing multiple Kubernetes
+    clusters. We dive into the details of the differences between multicluster management
+    and federation, tools to manage multiple clusters, and operational patterns for
+    managing multiple clusters.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们讨论了管理多个Kubernetes集群的最佳实践。我们深入探讨了多集群管理与联邦之间的区别、管理多个集群的工具以及管理多个集群的操作模式的细节。
+- en: You might wonder why you would need multiple Kubernetes clusters. Kubernetes
+    was built to consolidate many workloads to a single cluster, correct? This is
+    true, but there are scenarios that might require multiple clusters, such as workloads
+    across regions, concerns of blast radius, regulatory compliance, and specialized
+    workloads.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可能会想为什么需要多个Kubernetes集群。Kubernetes被设计为将许多工作负载整合到一个单一集群中，是吗？这是正确的，但有些场景可能需要多个集群，比如跨区域的工作负载、爆炸半径的考虑、合规性和特定的工作负载。
+- en: We discuss these scenarios and explore the tools and techniques for managing
+    multiple clusters in Kubernetes.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们讨论了这些场景，并探讨了在Kubernetes中管理多个集群的工具和技术。
+- en: Why Multiple Clusters?
+  id: totrans-4
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: '**为什么需要多个集群？**'
+- en: 'When adopting Kubernetes, you will likely have more than one cluster, and you
+    might even start with more than one cluster to break out production from staging,
+    user acceptance testing (UAT), or development. Kubernetes provides some multitenancy
+    features with namespaces, which are a logical way to break up a cluster into smaller
+    logical constructs. Namespaces allow you to define Role-Based Access Control (RBAC),
+    quotas, pod security policies, and network policies to allow separation of workloads.
+    This is a great way to separate multiple teams and projects, but there are other
+    concerns that might require you to build a multicluster architecture. Concerns
+    to think about when deciding to use multicluster versus a single-cluster architecture:'
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当采用Kubernetes时，你可能会拥有多个集群，甚至可能从一开始就分别部署生产环境、暂存环境、用户验收测试（UAT）或开发环境。Kubernetes提供了一些多租户特性，如命名空间，这是将集群分割成较小逻辑结构的一种方式。命名空间允许你定义基于角色的访问控制（RBAC）、配额、Pod安全策略和网络策略，以实现工作负载的分离。这是分隔多个团队和项目的好方法，但在决定使用多集群架构还是单一集群架构时，需要考虑其他问题：
+- en: Blast radius
+  id: totrans-6
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '**爆炸半径**'
+- en: Compliance
+  id: totrans-7
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '**合规性**'
+- en: Security
+  id: totrans-8
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '**安全性**'
+- en: Hard multitenancy
+  id: totrans-9
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '**硬多租户**'
+- en: Regional-based workloads
+  id: totrans-10
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '**基于区域的工作负载**'
+- en: Specialized workloads
+  id: totrans-11
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '**特定的工作负载**'
+- en: When thinking through your architecture, *blast radius* should come front and
+    center. This is one of the main concerns that we see with users designing for
+    multicluster architectures. With microservice architectures we employ circuit
+    breakers, retries, bulkheads, and rate limiting to constrain the extent of damage
+    to our systems. You should design the same into your infrastructure layer, and
+    multiple clusters can help with preventing the impact of cascading failures due
+    to software issues. For example, if you have one cluster that serves 500 applications
+    and you have a platform issue, it takes out 100% of the 500 applications. If you
+    had a platform layer issue with five clusters serving those 500 applications,
+    you affect only 20% of the applications. The downside to this is that now you
+    need to manage five clusters, and your consolidation ratios will not be as good
+    as with a single cluster. Dan Woods wrote a great [article](https://oreil.ly/YnGUD)
+    about an actual cascading failure in a production Kubernetes environment. It is
+    a great example of why you will want to consider multicluster architectures for
+    larger environments.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在思考架构时，*爆炸半径*应当置于首位。这是我们在设计多集群架构时看到的主要问题之一。在微服务架构中，我们采用断路器、重试、隔舱和速率限制来限制系统的损害范围。你应当在基础架构层面设计相同的机制，多集群可以帮助防止由软件问题导致的级联故障影响。例如，如果你有一个集群为500个应用提供服务，而且遇到平台问题，将会导致这500个应用全部受到影响。如果这些500个应用分布在五个集群中，当你遇到平台层面的问题时，只会影响到20%的应用。然而，这样做的不利之处在于你需要管理五个集群，而且聚合比率不如单一集群好。Dan
+    Woods撰写了一篇出色的[文章](https://oreil.ly/YnGUD)，详细描述了在生产Kubernetes环境中的实际级联故障。这是一个很好的例子，说明为什么你应当考虑在较大的环境中采用多集群架构。
+- en: '*Compliance* is another area of concern for multicluster design because there
+    are special considerations for Payment Card Industry (PCI), Health Insurance Portability
+    and Accountability (HIPAA), and other workloads. It’s not that Kubernetes doesn’t
+    provide some multitenant features, but these workloads might be easier to manage
+    if they are segregated from general purpose workloads. These compliant workloads
+    might have specific requirements with respect to security hardening, nonshared
+    components, or dedicated workload requirements. It’s just much easier to separate
+    these workloads than to have to treat the cluster in such a specialized fashion.'
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*合规性*是多集群设计的另一个关注点，因为对于PCI（付款卡行业）、HIPAA（健康保险便携性和责任）和其他工作负载，有特殊的考虑因素。 Kubernetes确实提供了一些多租户功能，但这些工作负载如果与通用目的工作负载隔离，可能更容易管理。这些符合规定的工作负载可能具有关于安全加固、非共享组件或专用工作负载需求的具体要求。与将集群视为如此专业化的处理相比，将这些工作负载分开要容易得多。'
+- en: '*Security* in large Kubernetes clusters can become difficult to manage. As
+    you start onboarding more and more teams to a Kubernetes cluster, each team may
+    have different security requirements, and it can become very difficult to meet
+    those needs in a large multitenant cluster. Even just managing RBAC, network policies,
+    and pod security policies can become difficult at scale in a single cluster. A
+    small change to a network policy can inadvertently open up security risk to other
+    users of the cluster. With multiple clusters you can limit the security impact
+    with a misconfiguration. If you decide that a larger Kubernetes cluster fits your
+    requirements, then ensure that you have a very good operational process for making
+    security changes and that you understand the blast radius of making a change to
+    RBAC, network policy, and pod security policies.'
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在大型Kubernetes集群中，*安全性*可能变得难以管理。当您开始将更多团队引入Kubernetes集群时，每个团队可能具有不同的安全需求，满足这些需求在大型多租户集群中可能变得非常困难。即使在单个集群中管理RBAC、网络策略和Pod安全策略也可能在规模化时变得困难。对网络策略的小改动可能会无意中为集群的其他用户打开安全风险。通过多个集群，您可以限制由于配置错误而带来的安全影响。如果您决定较大的Kubernetes集群符合您的要求，那么请确保您有非常好的操作过程来进行安全更改，并且了解对RBAC、网络策略和Pod安全策略进行更改的影响范围。
+- en: Kubernetes doesn’t provide *hard multitenancy* because it shares the same API
+    boundary with all workloads running within the cluster. With namespacing this
+    gives us good soft multitenancy, but not enough to protect against hostile workloads
+    within the cluster. Hard multitenancy is not a requirement for a lot of users;
+    they trust the workloads that will be running within the cluster. Hard multitenancy
+    is typically a requirement if you are a cloud provider, hosting software as a
+    service (SaaS)-based software, or hosting untrusted workloads with untrusted user
+    control.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes并不提供*硬多租户*，因为它与集群中所有工作负载共享相同的API边界。使用命名空间可以实现良好的软多租户，但不足以保护集群内的恶意工作负载。对于许多用户来说，硬多租户并不是必需的；他们信任将在集群内运行的工作负载。如果您是云提供商、托管基于软件即服务（SaaS）的软件或托管不受信任的工作负载和不受信任的用户控制，则通常需要硬多租户。
+- en: Note
+  id: totrans-16
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The Kubernetes project does address hard multitenancy concerns with Virtual
+    Clusters, outside the scope of the book. Find more information on the [project’s
+    GitHub](https://oreil.ly/KlFlK).
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes项目确实通过虚拟集群来解决硬多租户问题，超出了本书的范围。在[项目的GitHub页面](https://oreil.ly/KlFlK)上可以找到更多信息。
+- en: When running workloads that need to serve traffic from in-region endpoints,
+    your design will include multiple clusters that are based per region. When you
+    have a globally distributed application, it becomes a requirement at that point
+    to run multiple clusters. When you have workloads that need to be *regionally
+    distributed*, it’s a great use case for cluster federation of multiple clusters,
+    which we dig into further later in this chapter.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当运行需要从区域端点提供流量的工作负载时，您的设计将包括基于每个区域的多个集群。当您拥有全球分布的应用程序时，在那时运行多个集群就成为必要条件。当您有需要*区域分布*的工作负载时，使用多个集群的集群联合是一个非常好的用例，我们将在本章后面进一步探讨此问题。
+- en: '*Specialized workloads*, such as high-performance computing (HPC), machine
+    learning (ML), and grid computing, also need to be addressed in the multicluster
+    architecture. These types of specialized workloads might require specific types
+    of hardware, have unique performance profiles, and have specialized users of the
+    clusters. We’ve seen this use case to be less prevalent in the design decision
+    because having multiple Kubernetes node pools can help address specialized hardware
+    and performance profiles. When you need a very large cluster for an HPC or machine
+    learning workload, you should consider just dedicating clusters for these workloads.'
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*专业工作负载*，例如高性能计算（HPC）、机器学习（ML）和网格计算，也需要在多集群架构中加以考虑。这些类型的专业工作负载可能需要特定类型的硬件，具有独特的性能配置文件，并且集群的用户也可能是专业化的。我们发现这种用例在设计决策中不太常见，因为拥有多个Kubernetes节点池可以帮助解决专用硬件和性能配置文件问题。当您需要一个非常大的集群用于HPC或机器学习工作负载时，您应该考虑专门为这些工作负载分配集群。'
+- en: With multicluster, you get isolation for “free,” but it also has design concerns
+    that you need to address at the outset.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用多集群，您可以免费获得隔离，但也有设计方面的问题需要在开始时解决。
+- en: Multicluster Design Concerns
+  id: totrans-21
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 多集群设计的关注点
+- en: 'When choosing a multicluster design there are some challenges that you’ll run
+    into. Some of these challenges might deter you from attempting a multicluster
+    design given that the design might overcomplicate your architecture. Some of the
+    common challenges we find users running into are:'
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在选择多集群设计时，会遇到一些挑战。其中一些挑战可能会阻止您尝试多集群设计，因为这种设计可能会使架构过于复杂化。我们发现用户常遇到的一些常见挑战包括：
+- en: Data replication
+  id: totrans-23
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 数据复制
+- en: Service discovery
+  id: totrans-24
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 服务发现
+- en: Network routing
+  id: totrans-25
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 网络路由
+- en: Operational management
+  id: totrans-26
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 运营管理
+- en: Continuous deployment
+  id: totrans-27
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 持续部署
+- en: '*Data replication* and consistency have always been the crux of deploying workloads
+    across geographical regions and multiple clusters. When running these services,
+    you need to decide what runs where and develop a replication strategy. Most databases
+    have built-in tools to perform the replication, but you need to design the application
+    to be able to handle the replication strategy. For NoSQL-type database services
+    this can be easier because they can handle scaling across multiple instances,
+    but you still need to ensure that your application can handle eventual consistency
+    across geographic regions or at least the latency across regions. Some cloud services,
+    such as Google Cloud Spanner and Microsoft Azure CosmosDB, have built database
+    services to help with the complications of handling data across multiple geographic
+    regions.'
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*数据复制*和一致性一直是在跨地理区域和多个集群部署工作负载的关键。在运行这些服务时，您需要决定何处运行以及开发复制策略。大多数数据库都有内置工具来执行复制，但您需要设计应用程序以处理复制策略。对于NoSQL类型的数据库服务来说，这可能更容易，因为它们可以处理跨多个实例的扩展，但您仍然需要确保您的应用程序可以处理跨地理区域的最终一致性，或者至少处理区域之间的延迟。一些云服务，例如Google
+    Cloud Spanner和Microsoft Azure CosmosDB，提供了建立在多个地理区域处理数据复杂性的数据库服务。'
+- en: Each Kubernetes cluster deploys its own *service discovery* registry, and registries
+    are not synchronized across multiple clusters. This complicates applications being
+    able to easily identify and discover one another. Tools such as HashiCorp’s Consul
+    can transparently synchronize services from multiple clusters and even services
+    that reside outside of Kubernetes. Other tools like Istio, Linkerd, and Cilium
+    are building on multiple cluster architectures to extend service discovery between
+    clusters.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个Kubernetes集群都部署自己的*服务发现*注册表，并且注册表在多个集群之间不同步。这使得应用程序难以轻松识别和发现彼此。诸如HashiCorp的Consul之类的工具可以透明地同步来自多个集群甚至在Kubernetes之外的服务。其他工具如Istio、Linkerd和Cilium正在构建多集群架构，以扩展集群之间的服务发现。
+- en: Kubernetes makes networking from within the cluster very easy, as it’s a flat
+    network and avoids using network address translation (NAT). If you need to route
+    traffic in and out of the cluster, this becomes more complicated. Ingress into
+    the cluster is implemented as a 1:1 mapping of ingress to the cluster because
+    it doesn’t support multicluster topologies with the Ingress resource. You’ll also
+    need to consider the egress traffic between clusters and how to route that traffic.
+    When your applications reside within a single cluster this is easy, but when introducing
+    multicluster, you need to think about the latency of extra hops for services that
+    have application dependencies in another cluster. For applications that have tightly
+    coupled dependencies, you should consider running these services within the same
+    cluster to remove latency and extra complexity.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes使得在集群内部进行网络工作变得非常简单，因为它是一个扁平网络，并且避免使用网络地址转换（NAT）。如果需要在集群内外路由流量，则这变得更加复杂。对集群的入口实施为将入口与集群的1:1映射，因为它不支持具有Ingress资源的多集群拓扑。您还需要考虑集群间出口流量的路由。当应用程序位于单个集群内时，这很容易，但在引入多集群时，您需要考虑服务的额外跳跃的延迟。对于具有紧密耦合依赖关系的应用程序，应考虑在同一集群内运行这些服务，以消除延迟和额外的复杂性。
+- en: One of the biggest overheads to managing multiclusters is the *operational management*.
+    Instead of one or a couple of clusters to manage and keep consistent, you might
+    now have many clusters to manage in your environment. One of the most important
+    aspects to managing multiclusters is ensuring that you have good automation practices
+    in place because this will help to reduce the operational burden. When automating
+    your clusters, you need to take into account the infrastructure deployment and
+    managing add-on features to your clusters. For managing the infrastructure, using
+    a tool like HashiCorp’s Terraform can help with deploying and managing a consistent
+    state across your fleet of clusters.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 管理多集群的最大开销之一是*运营管理*。不再是管理和保持一两个一致的集群，你可能需要在你的环境中管理多个集群。管理多集群的最重要的方面之一是确保你有良好的自动化实践，因为这将有助于减少运营负担。在自动化你的集群时，你需要考虑基础设施部署和管理集群的附加功能。对于管理基础设施来说，使用像HashiCorp的Terraform这样的工具可以帮助部署和管理跨多个集群的一致状态。
+- en: Using an *Infrastructure as Code* (IaC) tool like Terraform will give you the
+    benefit of providing a reproducible way to deploy your clusters. On the other
+    hand, you also need to be able to consistently manage add-ons to the cluster,
+    such as monitoring, logging, ingress, security, and other tools. Security is another
+    important aspect of operational management, and you must be able to maintain security
+    policies, RBAC, and network policies across clusters. Later in this chapter, we
+    dive deeper into the topic of maintaining consistent clusters with automation.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用像Terraform这样的*基础设施即代码*（IaC）工具将使您获得部署集群的可重复方法的好处。另一方面，您还需要能够一致地管理集群的附加功能，例如监视、日志记录、入口、安全性和其他工具。安全性是运营管理的另一个重要方面，您必须能够在集群间维护安全策略、RBAC和网络策略。本章后面我们将更深入地探讨使用自动化来维护一致的集群。
+- en: With multiple clusters and continuous delivery (CD), you now need to deal with
+    multiple Kubernetes API endpoints versus a single API endpoint. This can cause
+    challenges in the distribution of applications. You can easily manage multiple
+    pipelines, but suppose that you have a hundred different pipelines to manage,
+    which can make application distribution very difficult. With this in mind, you
+    need to look at different approaches to managing this situation. We take a look
+    at solutions to help manage this later in the chapter.
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 随着多个集群和持续交付（CD），现在您需要处理多个Kubernetes API端点与单个API端点之间的差异。这可能会在应用程序分发中带来挑战。您可以轻松地管理多个流水线，但假设您有一百个不同的流水线需要管理，则应用程序分发将变得非常困难。考虑到这一点，您需要考虑不同的方法来管理这种情况。我们稍后在本章中会探讨帮助管理此问题的解决方案。
+- en: Managing Multiple Cluster Deployments
+  id: totrans-34
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 管理多集群部署
+- en: One of the first steps you want to take when managing multicluster deployments
+    is to use an IaC tool like Terraform to set up deployments. Other deployment tools,
+    such as kubespray, kops, or other cloud provider–specific tools, are all valid
+    choices, but, most importantly, use a tool that allows you to source control your
+    cluster deployment for repeatability.
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在管理多集群部署时，您希望采取的第一步之一是使用像Terraform这样的IaC工具设置部署。其他部署工具，如kubespray、kops或其他特定于云提供商的工具，都是有效的选择，但更重要的是使用一个允许您为可重复性进行源代码控制的工具。
+- en: Automation is key to successfully managing multiple clusters in your environment.
+    You might not have everything automated on day one, but you should make it a priority
+    to automate all aspects of your cluster deployments and operations.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 自动化是成功管理环境中多个集群的关键。您可能无法在第一天就自动化所有内容，但您应该优先考虑自动化集群部署和操作的所有方面。
+- en: An interesting project is the [Kubernetes Cluster API](https://oreil.ly/edzIa),
+    a Kubernetes project to bring declarative, Kubernetes-style APIs to cluster creation,
+    configuration, and management. It provides optional additive functionality on
+    top of core Kubernetes. The Cluster API provides a cluster-level configuration
+    declared through a common API, which will give you the ability to easily automate
+    and build tooling around cluster automation. The Cluster API is still in its early
+    stages, but it’s a project to keep an eye on.
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个有趣的项目是[Kubernetes Cluster API](https://oreil.ly/edzIa)，这是一个将声明式、Kubernetes风格的API引入集群创建、配置和管理的Kubernetes项目。它在核心Kubernetes之上提供了可选的附加功能。Cluster
+    API通过一个共同的API提供了集群级配置，这将使您能够轻松自动化和构建围绕集群自动化的工具。Cluster API目前仍处于早期阶段，但这是一个值得关注的项目。
+- en: Deployment and Management Patterns
+  id: totrans-38
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 部署和管理模式
+- en: Kubernetes operators were introduced as an implementation of the *Infrastructure
+    as Software* concept. Using them allows you to abstract the deployment of applications
+    and services in a Kubernetes cluster. For example, suppose that you want to standardize
+    on Prometheus for monitoring your Kubernetes clusters. You would need to create
+    and manage various objects (deployment, service, ingress, etc.) for each cluster
+    and team. You would also need to maintain the fundamental configurations of Prometheus,
+    such as versions, persistence, retention policies, and replicas. As you can imagine,
+    the maintenance of such a solution could be difficult across a large number of
+    clusters and teams.
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes操作员作为*基础设施即代码*概念的实现引入。使用它们允许您在Kubernetes集群中抽象应用程序和服务的部署。例如，假设您想要在监视Kubernetes集群时标准化为Prometheus。您需要为每个集群和团队创建和管理各种对象（部署、服务、入口等）。您还需要维护Prometheus的基本配置，如版本、持久性、保留策略和副本。可以想象，在大量集群和团队中维护这样的解决方案可能会很困难。
+- en: Instead of dealing with so many objects and configurations, you could install
+    the `prometheus-operator`. This extends the Kubernetes API, exposing multiple
+    new object kinds called `Prometheus`, `ServiceMonitor`, `PrometheusRule`, and
+    `AlertManager`, which allow you to specify all the details of a Prometheus deployment
+    using just a few objects. You can use the `kubectl` tool to manage such objects,
+    just as it manages any other Kubernetes API object.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以安装`prometheus-operator`而不是处理如此多的对象和配置。这扩展了Kubernetes API，暴露了多个名为`Prometheus`、`ServiceMonitor`、`PrometheusRule`和`AlertManager`的新对象种类，允许您仅使用几个对象指定Prometheus部署的所有细节。您可以使用`kubectl`工具管理这些对象，就像管理任何其他Kubernetes
+    API对象一样。
+- en: '[Figure 12-1](#figure13-1) shows the architecture of the `prometheus-operator`.'
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 12-1](#figure13-1)展示了`prometheus-operator`的架构。'
+- en: '![prometheus-operator architecture](assets/kbp2_1201.png)'
+  id: totrans-42
+  prefs: []
+  type: TYPE_IMG
+  zh: '![prometheus-operator 架构](assets/kbp2_1201.png)'
+- en: Figure 12-1\. `prometheus-operator` architecture
+  id: totrans-43
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 12-1\. `prometheus-operator` 架构
+- en: 'Utilizing the *Operator* pattern for automating key operational tasks can help
+    improve your overall cluster management capabilities. The Operator pattern was
+    introduced by the CoreOS team in 2016 with the etcd operator and `prometheus-operator`.
+    The Operator pattern builds on two concepts:'
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 利用*Operator*模式来自动化关键操作任务可以帮助提高整体集群管理能力。Operator模式由CoreOS团队在2016年引入，使用etcd操作员和`prometheus-operator`。Operator模式建立在两个概念之上：
+- en: Custom resource definitions
+  id: totrans-45
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 自定义资源定义
+- en: Custom controllers
+  id: totrans-46
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 自定义控制器
+- en: '*Custom resource definitions* (CRDs) are objects that allow you to extend the
+    Kubernetes API, based on your own API that you define.'
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*自定义资源定义*（CRDs）是允许您根据您定义的自己的API扩展Kubernetes API的对象。'
+- en: '*Custom controllers* are built on the core Kubernetes concepts of resources
+    and controllers. Custom controllers allow you to build your own logic by watching
+    events from Kubernetes API objects such as namespaces, Deployments, pods, or your
+    own CRD. With custom controllers, you can build your CRDs in a declarative way.
+    If you consider how the Kubernetes Deployment controller works in a reconciliation
+    loop to always maintain the state of the Deployment object to maintain its declarative
+    state, this brings the same advantages of controllers to your CRDs.'
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*自定义控制器*基于核心Kubernetes资源和控制器的概念构建。自定义控制器允许您通过监视来自Kubernetes API对象（如命名空间、部署、Pod或您自己的CRD）的事件来构建自己的逻辑。通过自定义控制器，您可以以声明性方式构建您的CRD。如果考虑到Kubernetes部署控制器如何在协调循环中始终维护部署对象的状态来维护其声明状态，这也为您的CRD带来了控制器的同样优势。'
+- en: 'When utilizing the Operator pattern, you can build in automation to operational
+    tasks that need to be performed on operational tooling in multiclusters. Let’s
+    take the following [Elasticsearch operator](https://oreil.ly/9WvJQ) as an example.
+    The Elasticsearch operator can perform the following operations:'
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在使用操作员模式时，您可以将操作工具中需要执行的操作自动化到多集群中。让我们以[Elasticsearch操作员](https://oreil.ly/9WvJQ)为例。Elasticsearch操作员可以执行以下操作：
+- en: Replicas for master, client, and data nodes
+  id: totrans-50
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 主、客户端和数据节点的副本
+- en: Zones for highly available deployments
+  id: totrans-51
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 高可用部署的区域
+- en: Volume sizes for master and data nodes
+  id: totrans-52
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 主节点和数据节点的卷大小
+- en: Resizing of cluster
+  id: totrans-53
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 调整集群大小
+- en: Snapshot for backups of the Elasticsearch cluster
+  id: totrans-54
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Elasticsearch集群备份的快照
+- en: As you can see, the operator provides automation for many tasks that you would
+    need to perform when managing Elasticsearch, such as automating snapshots for
+    backup and resizing the cluster. The beauty of this is that you manage everything
+    through familiar Kubernetes objects.
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如您所见，操作员为您管理Elasticsearch时提供了自动化，例如自动快照备份和调整集群大小。这种方法的美妙之处在于您通过熟悉的Kubernetes对象来管理一切。
+- en: Think about how you can take advantage of different operators like the `prometheus-operator`
+    in your environment and also how you can build your own custom operator to offload
+    common operational tasks.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 考虑如何在您的环境中利用不同的操作员，如`prometheus-operator`，以及如何构建您自己的自定义操作员来卸载常见的运维任务。
+- en: The GitOps Approach to Managing Clusters
+  id: totrans-57
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 管理集群的GitOps方法
+- en: '*GitOps* was popularized by the folks at Weaveworks, and the idea and fundamentals
+    were based on their experience of running Kubernetes in production. GitOps takes
+    the concepts of the software development life cycle and applies them to operations.
+    With GitOps, your Git repository becomes your source of truth, and your cluster
+    is synchronized to the configured Git repository. For example, if you update a
+    Kubernetes Deployment manifest, those configuration changes are automatically
+    reflected in the cluster state.'
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*GitOps*被Weaveworks团队推广开来，其理念和基础是基于他们在生产中运行Kubernetes的经验。GitOps将软件开发生命周期的概念应用到运维中。通过GitOps，您的Git仓库成为了事实来源，而您的集群则与配置好的Git仓库同步。例如，如果您更新了一个Kubernetes部署清单，这些配置变更会自动反映在集群状态中。'
+- en: By using this method, you can make it easier to maintain multiclusters that
+    are consistent and avoid configuration drift across the fleet. GitOps allows you
+    to declaratively describe your clusters for multiple environments and drives to
+    maintain that state for the cluster. The practice of GitOps can apply to both
+    application delivery and operations, but in this chapter, we focus on using it
+    to manage clusters and operational tooling.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过使用这种方法，您可以更容易地维护一致的多集群，并避免整个设备组中的配置漂移。GitOps允许您声明性地描述多个环境的集群，并努力维护集群的状态。GitOps的实践可以应用于应用程序交付和运维，但在本章中，我们专注于使用它来管理集群和运维工具。
+- en: Weaveworks Flux was one of the first tools to enable the GitOps approach, and
+    it’s the tool we will use throughout the rest of the chapter. There are many new
+    tools that have been released into the cloud native ecosystem that are worth a
+    look, such as Argo CD, from the folks at Intuit, which has also been widely adopted
+    for the GitOps approach.
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Weaveworks Flux是最早支持GitOps方法的工具之一，也是我们在本章剩余部分将使用的工具。在云原生生态系统中发布了许多新工具值得关注，例如来自Intuit团队的Argo
+    CD，它也被广泛采用了GitOps方法。
+- en: We’ll get into a deeper dive of utilizing a GitOps model in [Chapter 18](ch18.html#gitops),
+    but the following provides a quick glance at the benefit of utilizing GitOps for
+    cluster management.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将深入探讨在[第18章](ch18.html#gitops)中利用GitOps模型的方法，但以下内容快速概述了利用GitOps管理集群的好处。
+- en: '[Figure 12-2](#gitops_workflow) presents a representation of a GitOps workflow.'
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图12-2](#gitops_workflow)呈现了GitOps工作流程的表示。'
+- en: '![GitOps workflow](assets/kbp2_1202.png)'
+  id: totrans-63
+  prefs: []
+  type: TYPE_IMG
+  zh: '![GitOps工作流程](assets/kbp2_1202.png)'
+- en: Figure 12-2\. GitOps workflow
+  id: totrans-64
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图12-2\. GitOps工作流程
+- en: 'So, let’s get Flux set up in your cluster and get a repository synchronized
+    to the cluster:'
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，让我们在您的集群中设置Flux，并将一个存储库同步到集群中：
+- en: '[PRE0]'
+  id: totrans-66
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'You now need to change the Deployment manifest to configure it with your forked
+    repo from [Chapter 5](ch05.html#continuous_integration_testing_and_deployment).
+    Modify the following line in the Deployment file to match your forked GitHub repository:'
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在您需要更改部署清单，以配置它使用您从[第5章](ch05.html#continuous_integration_testing_and_deployment)分叉的存储库。
+    修改部署文件中的以下行以匹配您的分叉GitHub存储库：
+- en: '[PRE1]'
+  id: totrans-68
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: 'Modify the following line with your Git repository:'
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用您的Git存储库修改以下行：
+- en: '[PRE2]'
+  id: totrans-70
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'Now, go ahead and deploy Flux to your cluster:'
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，继续在您的集群中部署Flux：
+- en: '[PRE3]'
+  id: totrans-72
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: When Flux installs, it creates an SSH key so that it can authenticate with the
+    Git repository. Use the Flux command-line tool to retrieve the SSH key so that
+    you can configure access to your forked repository; first, you need to install
+    `fluxctl`.
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当Flux安装时，它会创建一个SSH密钥，以便可以使用Git存储库进行身份验证。 使用Flux命令行工具检索SSH密钥，以便您可以配置访问您的分叉存储库；
+    首先，您需要安装`fluxctl`。
+- en: 'For macOS:'
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于macOS：
+- en: '[PRE4]'
+  id: totrans-75
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: 'For Linux Snap Packages:'
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于Linux Snap软件包：
+- en: '[PRE5]'
+  id: totrans-77
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'For all other packages, you can find the [latest binaries here](https://oreil.ly/4TAx5):'
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于所有其他软件包，您可以在[这里找到最新的二进制文件](https://oreil.ly/4TAx5)：
+- en: '[PRE6]'
+  id: totrans-79
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: Open GitHub, navigate to your fork, go to Setting > “Deploy keys,” click “Add
+    deploy key,” give it a Title, select the “Allow write access” checkbox, paste
+    the Flux public key, and then click “Add key.” See the [GitHub documentation](https://oreil.ly/Oet57)
+    for more information on how to manage deploy keys.
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 打开GitHub，导航到您的分叉版本，转到“设置”>“部署密钥”，点击“添加部署密钥”，给它一个标题，选择“允许写访问”复选框，粘贴Flux公钥，然后点击“添加密钥”。
+    更多关于如何管理部署密钥的信息，请参见[GitHub文档](https://oreil.ly/Oet57)。
+- en: 'Now if you view the Flux logs, you should see that it is synchronizing with
+    your GitHub repository:'
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，如果您查看Flux日志，您应该会看到它正在与您的GitHub存储库同步：
+- en: '[PRE7]'
+  id: totrans-82
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: 'After you see that it’s synchronizing with your GitHub repository, you should
+    see that the Elasticsearch, Prometheus, Redis, and frontend pods are created:'
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在您看到它与您的GitHub存储库同步后，您应该会看到创建了Elasticsearch、Prometheus、Redis和前端Pods：
+- en: '[PRE8]'
+  id: totrans-84
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: With this example complete, you should be able to see how easy it is for you
+    to synchronize your GitHub repository state with your Kubernetes cluster. This
+    makes managing the multiple operational tools in your cluster much easier, because
+    multiple clusters can synchronize with a single repository and you avoid the situation
+    of having snowflake clusters.
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过这个例子完成后，您应该能够看到如何轻松地将您的GitHub存储库状态与Kubernetes集群同步。 这使得管理集群中的多个操作工具变得更加容易，因为多个集群可以与单个存储库同步，并且您避免了拥有雪花集群的情况。
+- en: Multicluster Management Tools
+  id: totrans-86
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 多集群管理工具
+- en: When working with multiple clusters, using `kubectl` can immediately become
+    confusing because you need to set different contexts to manage the different clusters.
+    Two tools that you will want to install right away when dealing with multiple
+    clusters are *kubectx* and *kubens*, which allow you to easily change between
+    multiple contexts and namespaces.
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在处理多个集群时，使用`kubectl`可能会立即变得令人困惑，因为您需要设置不同的上下文来管理不同的集群。 处理多个集群时，您需要立即安装的两个工具是*kubectx*和*kubens*，它们允许您轻松在多个上下文和命名空间之间切换。
+- en: 'When you need a full-fledged multicluster management tool, there are a few
+    within the Kubernetes ecosystem to look at for managing multiple clusters. Following
+    is a summary of some of the more popular tools:'
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您需要一个完整的多集群管理工具时，Kubernetes生态系统中有一些工具可以用来管理多个集群。 以下是一些较受欢迎工具的摘要：
+- en: '[Rancher](https://oreil.ly/8qGNh)'
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[牧场主](https://oreil.ly/8qGNh)'
+- en: Rancher centrally manages multiple Kubernetes clusters in a centrally managed
+    UI. It monitors, manages, backs up, and restores Kubernetes clusters across on-premises,
+    cloud, and hosted Kubernetes setups. It also has tools for controlling applications
+    deployed across multiple clusters and provides operational tooling.
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Rancher在一个集中管理的用户界面中集中管理多个Kubernetes集群。它监控、管理、备份和恢复跨本地、云和托管Kubernetes设置中的Kubernetes集群。它还提供了控制跨多个集群部署的应用程序和运维工具。
+- en: '[Open Cluster Management](https://oreil.ly/HUv5k) (OCM)'
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[开放集群管理](https://oreil.ly/HUv5k) (OCM)'
+- en: OCM is a community-driven project focused on multicluster and multicloud scenarios
+    for Kubernetes apps. It provides cluster registration, workload distribution,
+    and dynamic placement of policies and workloads.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: OCM是一个专注于Kubernetes应用程序的多集群和多云场景的社区驱动项目。它提供集群注册、工作负载分发以及策略和工作负载的动态放置。
+- en: '[Gardener](https://oreil.ly/fElD5)'
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Gardener](https://oreil.ly/fElD5)'
+- en: Gardener takes a different approach to multicluster management in that it utilizes
+    Kubernetes primitives to provide Kubernetes as a Service to your end users. It
+    provides support for all major cloud vendors and was developed by the folks at
+    SAP. This solution is geared to users who are building a Kubernetes as a Service
+    offering.
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Gardener采用了不同的多集群管理方法，它利用Kubernetes原语为最终用户提供Kubernetes即服务。它支持所有主要的云供应商，并由SAP的工作人员开发。该解决方案面向构建Kubernetes即服务的用户。
+- en: Kubernetes Federation
+  id: totrans-95
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Kubernetes联邦
+- en: Kubernetes first introduced Federation v1 in Kubernetes 1.3, and it has since
+    been deprecated in lieu of Federation v2\. Federation v1 set out to help with
+    the distribution of applications to multiple clusters. Federation v1 was built
+    utilizing the Kubernetes API and heavily relied on Kubernetes annotations, which
+    imposed some problems in its design. The design was tightly coupled to the core
+    Kubernetes API, which made Federation v1 quite monolithic. At the time, the design
+    decisions were probably not bad choices, but they were built on the primitives
+    that were available. The introduction of Kubernetes CRDs allowed a different way
+    of thinking about how Federation could be designed.
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes在Kubernetes 1.3中首次引入了Federation v1，后来由于Federation v2的出现而被弃用。Federation
+    v1的初衷是帮助将应用程序分发到多个集群。Federation v1是利用Kubernetes API构建的，并且在设计中大量依赖于Kubernetes注解，这在设计上带来了一些问题。设计紧密耦合于核心Kubernetes
+    API，使得Federation v1相当单片化。当时的设计决策可能不是坏选择，但它们是基于当时可用的原语构建的。Kubernetes CRD的引入允许以不同的方式思考Federation的设计。
+- en: Managing Multiple Clusters Best Practices
+  id: totrans-97
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 管理多个集群的最佳实践
+- en: 'Consider the following best practices when managing multiple Kubernetes clusters:'
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在管理多个Kubernetes集群时，请考虑以下最佳实践：
+- en: Limit the blast radius of your clusters to ensure cascading failures don’t have
+    a bigger impact on your applications.
+  id: totrans-99
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 限制您的集群爆炸半径，以确保级联故障不会对应用程序造成更大的影响。
+- en: If you have regulatory concerns such as PCI, HIPPA, or HiTrust, think about
+    utilizing multiclusters to ease the complexity of mixing these workloads with
+    general workloads.
+  id: totrans-100
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如果您拥有PCI、HIPPA或HiTrust等监管问题，请考虑利用多集群来简化将这些工作负载与普通工作负载混合的复杂性。
+- en: If hard multitenancy is a business requirement, workloads should be deployed
+    to a dedicated cluster.
+  id: totrans-101
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如果硬多租户是业务需求，则应将工作负载部署到专用集群。
+- en: If multiple regions are needed for your applications, utilize a Global Load
+    Balancer to manage traffic between clusters.
+  id: totrans-102
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如果您的应用程序需要多个区域，请利用全局负载均衡器来管理集群之间的流量。
+- en: You can break out specialized workloads such as HPC into their own individual
+    clusters to ensure that the specialized needs for the workloads are met.
+  id: totrans-103
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 您可以将专业的工作负载（例如HPC）拆分为其自己的独立集群，以确保满足工作负载的专门需求。
+- en: If you’re deploying workloads that will be spread across multiple regional datacenters,
+    first ensure there is a data replication strategy for the workload. Multiple clusters
+    across regions can be easy, but replicating data across regions can be complicated,
+    so ensure there is a sound strategy to handle asynchronous and synchronous workloads.
+  id: totrans-104
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如果您部署的工作负载将分布在多个区域数据中心，请首先确保有工作负载的数据复制策略。跨区域的多个集群可以很容易，但是跨区域复制数据可能会很复杂，因此确保有处理异步和同步工作负载的可靠策略。
+- en: Utilize Kubernetes operators like the `prometheus-operator` or Elasticsearch
+    operator to handle automated operational tasks.
+  id: totrans-105
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 利用Kubernetes操作者，如`prometheus-operator`或Elasticsearch操作者来处理自动化运维任务。
+- en: When designing your multicluster strategy, also consider how you will implement
+    service discovery and networking between clusters. Service mesh tools like HashiCorp’s
+    Consul or Istio can help with networking across clusters.
+  id: totrans-106
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 当设计您的多集群策略时，还需考虑如何在集群之间实现服务发现和网络互联。像HashiCorp的Consul或Istio这样的服务网格工具可以帮助跨集群进行网络互联。
+- en: Be sure that your CD strategy can handle multiple rollouts between regions or
+    multiple clusters.
+  id: totrans-107
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 确保您的持续交付策略能够处理区域或多集群之间的多次部署。
+- en: Investigate utilizing a GitOps approach to managing multiple cluster operational
+    components to ensure consistency between all clusters in your fleet. The GitOps
+    approach doesn’t work for everyone’s environment, but you should at least investigate
+    it to ease the operational burden of multicluster environments.
+  id: totrans-108
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 调查利用GitOps方法来管理多个集群操作组件，以确保所有集群在整个集群中保持一致性。GitOps方法并不适用于每个环境，但您至少应该调查一下，以减轻多集群环境的操作负担。
+- en: Summary
+  id: totrans-109
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 摘要
+- en: In this chapter, we discussed different strategies for managing multiple Kubernetes
+    clusters. It’s important to think about your needs at the outset and whether those
+    needs match a multicluster topology. The first scenario to think about is whether
+    you truly need *hard* multitenancy because this will automatically require a multicluster
+    strategy. If you don’t, consider your compliance needs and whether you have the
+    operational capacity to consume the overhead of multicluster architectures. Finally,
+    if you’re going with more, smaller clusters, ensure that you automate their delivery
+    and management to reduce the operational burden.
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们讨论了管理多个 Kubernetes 集群的不同策略。在开始时考虑您的需求及这些需求是否符合多集群拓扑结构是非常重要的。首先要考虑的情况是，您是否真正需要*硬*多租户性能，因为这将自动要求采用多集群策略。如果不需要，考虑您的合规需求以及是否有操作能力来承担多集群架构的额外开销。最后，如果您选择更多、更小的集群，请确保自动化它们的交付和管理，以减少操作负担。

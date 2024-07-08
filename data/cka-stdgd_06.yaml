@@ -1,0 +1,978 @@
+- en: Chapter 6\. Storage
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第 6 章\. 存储
+- en: When container images are instantiated as containers, the container needs context—context
+    to CPU, memory, and I/O resources. Pods provide the network and the filesystem
+    context for the containers within. The network is provided as the Pod’s virtual
+    IP address, and the filesystem is mounted to the hosting node’s filesystem. Applications
+    running in the container can interact with the filesystem as part of the Pod context.
+    A container’s temporary filesystem is isolated from any other container or Pod
+    and is not persisted beyond a Pod restart. The “Storage” section of the CKA curriculum
+    addresses the technical abstraction in Kubernetes responsible for persisting data
+    beyond a container or Pod restart.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当容器镜像实例化为容器时，容器需要上下文——CPU、内存和 I/O 资源的上下文。Pod 为其内部的容器提供网络和文件系统上下文。网络以 Pod 的虚拟
+    IP 地址提供，并且文件系统挂载到主机节点的文件系统上。在容器内运行的应用程序可以作为 Pod 上下文的一部分与文件系统交互。容器的临时文件系统与任何其他容器或
+    Pod 隔离，并且在 Pod 重新启动后不会持久化。CKA 课程的“存储”部分处理了 Kubernetes 中负责在容器或 Pod 重新启动后持久化数据的技术抽象。
+- en: A volume is a Kubernetes capability that persists data beyond a Pod restart.
+    Essentially, a volume is a directory that’s shareable between multiple containers
+    of a Pod. You will learn about the different volume types and the process for
+    defining and mounting a volume in a container.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 卷是 Kubernetes 能力，可在 Pod 重新启动后持久化数据。本质上，卷是可以在 Pod 的多个容器之间共享的目录。您将学习不同卷类型的知识以及定义和挂载容器中卷的过程。
+- en: Persistent volumes are a specific category of the wider concept of volumes.
+    The mechanics for persistent volumes are slightly more complex. The persistent
+    volume is the resource that actually persists the data to an underlying physical
+    storage. The persistent volume claim represents the connecting resource between
+    a Pod and a persistent volume responsible for requesting the storage. Finally,
+    the Pod needs to *claim* the persistent volume and mount it to a directory path
+    available to the containers running inside of the Pod.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 持久卷是卷更广泛概念中的一种特定类别。持久卷的机制稍微复杂一些。持久卷是将数据持久保存到底层物理存储的资源。持久卷声明代表着 Pod 与负责请求存储的持久卷之间的连接资源。最后，Pod
+    需要*声明*持久卷并将其挂载到容器内运行的目录路径上。
+- en: 'At a high level, this chapter covers the following concepts:'
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在高层次上，本章涵盖以下概念：
+- en: Persistent volume
+  id: totrans-5
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 持久卷
+- en: Static versus dynamic provision of persistent volumes
+  id: totrans-6
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 静态与动态提供持久卷
+- en: Storage Class
+  id: totrans-7
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 存储类
+- en: Configuration options for a persistent volume
+  id: totrans-8
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 持久卷的配置选项
+- en: Persistent volume claim
+  id: totrans-9
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 持久卷声明
+- en: Mounting a persistent volume in a Pod
+  id: totrans-10
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在 Pod 中挂载持久卷
+- en: Understanding Volumes
+  id: totrans-11
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 理解卷
+- en: Applications running in a container can use the temporary filesystem to read
+    and write files. In the case of a container crash or a cluster/node restart, the
+    kubelet will restart the container. Any data that had been written to the temporary
+    filesystem is lost and cannot be retrieved anymore. The container effectively
+    starts with a clean slate again.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在容器中运行的应用程序可以使用临时文件系统读写文件。如果容器崩溃或集群/节点重新启动，则 kubelet 将重新启动容器。写入临时文件系统的任何数据都将丢失，无法再检索。容器实际上会再次以干净的状态启动。
+- en: There are many uses cases for wanting to mount a volume in a container. One
+    of the most prominent use cases are [multi-container Pods](https://oreil.ly/EtTx4)
+    that use a volume to exchange data between a main application container and a
+    sidecar. [Figure 6-1](#tmp_file_system_volume) illustrates the differences between
+    the temporary filesystem of a container and the use of a volume.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有许多情况需要在容器中挂载卷。其中最突出的用例之一是[多容器 Pods](https://oreil.ly/EtTx4)，它们使用卷在主应用容器和 sidecar
+    之间交换数据。[图 6-1](#tmp_file_system_volume)展示了容器的临时文件系统与使用卷的差异。
+- en: '![ckas 0601](Images/ckas_0601.png)'
+  id: totrans-14
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckas 0601](Images/ckas_0601.png)'
+- en: Figure 6-1\. A container using the temporary filesystem versus a volume
+  id: totrans-15
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-1\. 使用临时文件系统与使用卷的容器
+- en: Volume Types
+  id: totrans-16
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 卷类型
+- en: Every volume needs to define a type. The type determines the medium that backs
+    the volume and its runtime behavior. The Kubernetes documentation offers a long
+    list of volume types. Some of the types—for example, `azureDisk`, `awsElasticBlockStore`,
+    or `gcePersistentDisk`—are available only when running the Kubernetes cluster
+    in a specific cloud provider. [Table 6-1](#table_volume_types) shows a reduced
+    list of volume types that I deem to be most relevant to the exam.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个卷都需要定义一个类型。类型确定支持卷的介质及其运行时行为。Kubernetes 文档提供了一个长列表的卷类型。例如，`azureDisk`、`awsElasticBlockStore`
+    或 `gcePersistentDisk` 等类型仅在特定云提供商的 Kubernetes 集群中可用。[表 6-1](#table_volume_types)
+    显示了我认为在考试中最相关的卷类型的简化列表。
+- en: Table 6-1\. Volume types relevant to exam
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 6-1\. 考试相关的卷类型
+- en: '| Type | Description |'
+  id: totrans-19
+  prefs: []
+  type: TYPE_TB
+  zh: '| 类型 | 描述 |'
+- en: '| --- | --- |'
+  id: totrans-20
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| `emptyDir` | Empty directory in Pod with read/write access. Persisted for
+    only the lifespan of a Pod. A good choice for cache implementations or data exchange
+    between containers of a Pod. |'
+  id: totrans-21
+  prefs: []
+  type: TYPE_TB
+  zh: '| `emptyDir` | Pod 中具有读写访问权限的空目录。仅在 Pod 的生命周期内保留。用于缓存实现或容器间数据交换的良好选择。 |'
+- en: '| `hostPath` | File or directory from the host node’s filesystem. |'
+  id: totrans-22
+  prefs: []
+  type: TYPE_TB
+  zh: '| `hostPath` | 主机节点文件系统中的文件或目录。 |'
+- en: '| `configMap`, `secret` | Provides a way to inject configuration data. For
+    practical examples, see [“Defining and Consuming Configuration Data”](ch03.xhtml#defining_consuming_configuration_data).
+    |'
+  id: totrans-23
+  prefs: []
+  type: TYPE_TB
+  zh: '| `configMap`, `secret` | 提供注入配置数据的方式。有关实际示例，请参见 [“定义和使用配置数据”](ch03.xhtml#defining_consuming_configuration_data)。
+    |'
+- en: '| `nfs` | An existing Network File System (NFS) share. Preserves data after
+    Pod restart. |'
+  id: totrans-24
+  prefs: []
+  type: TYPE_TB
+  zh: '| `nfs` | 现有的网络文件系统（NFS）共享。在 Pod 重新启动后保留数据。 |'
+- en: '| `persistentVolumeClaim` | Claims a persistent volume. Fore more information,
+    see [“Creating PersistentVolumeClaims”](#creating_pvc). |'
+  id: totrans-25
+  prefs: []
+  type: TYPE_TB
+  zh: '| `persistentVolumeClaim` | 请求持久卷。有关更多信息，请参见 [“创建持久卷声明”](#creating_pvc)。 |'
+- en: Creating and Accessing Volumes
+  id: totrans-26
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 创建和访问卷
+- en: Defining a volume for a Pod requires two steps. First, you need to declare the
+    volume itself using the attribute `spec.volumes[]`. As part of the definition,
+    you provide the name and the type. Just declaring the volume won’t be sufficient,
+    though. Second, the volume needs to be mounted to a path of the consuming container
+    via `spec.containers.volumeMounts[]`. The mapping between the volume and the volume
+    mount occurs by the matching name.
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为 Pod 定义卷需要两个步骤。首先，您需要使用属性 `spec.volumes[]` 声明卷本身。作为定义的一部分，您提供名称和类型。然而，仅仅声明卷是不够的。其次，需要通过
+    `spec.containers.volumeMounts[]` 将卷挂载到消费容器的路径上。卷和卷挂载之间的映射是通过匹配的名称完成的。
+- en: From the YAML manifest stored in the file `pod-with-volume.yaml` and shown in
+    [Example 6-1](#pod_defining_mounting_volume), you can see the definition of a
+    volume with type `emptyDir`. The volume has been mounted to the path */var/logs*
+    inside of the container named `nginx`.
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从存储在文件 `pod-with-volume.yaml` 中的 YAML 清单，并显示在 [示例 6-1](#pod_defining_mounting_volume)
+    中，您可以看到类型为 `emptyDir` 的卷的定义。该卷已经挂载到名为 `nginx` 的容器内部的路径 */var/logs*。
+- en: Example 6-1\. A Pod defining and mounting a volume
+  id: totrans-29
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 6-1\. 定义和挂载卷的 Pod
+- en: '[PRE0]'
+  id: totrans-30
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'Let’s create the Pod and see if we can interact with the mounted volume. The
+    following commands open an interactive shell after the Pod’s creation and then
+    navigate to the mount path. You can see that the volume type `emptyDir` initializes
+    the mount path as an empty directory. New files and directories can be created
+    as needed without limitations:'
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们创建 Pod 并查看是否可以与挂载的卷交互。以下命令在 Pod 创建后打开一个交互式 shell，然后导航到挂载路径。您可以看到，卷类型 `emptyDir`
+    将挂载路径初始化为空目录。可以根据需要创建新文件和目录，没有限制：
+- en: '[PRE1]'
+  id: totrans-32
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: Understanding Persistent Volumes
+  id: totrans-33
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 理解持久卷
+- en: 'Data stored on Volumes outlive a container restart. In many applications, the
+    data lives far beyond the lifecycles of the applications, container, Pod, nodes,
+    and even the clusters themselves. Data persistence ensures the lifecycles of the
+    data are decoupled from the lifecycles of the cluster resources. A typical example
+    would be data persisted by a database. That’s the responsibility of a persistent
+    volume. Kubernetes models persist data with the help of two primitives: the PersistentVolume
+    and the PersistentVolumeClaim.'
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 存储在卷上的数据会在容器重新启动后继续存在。在许多应用程序中，数据的生命周期远远超过了应用程序、容器、Pod、节点甚至集群本身的生命周期。数据持久性确保了数据的生命周期与集群资源的生命周期分离。典型的例子是由数据库持久化的数据。这是持久卷的责任。Kubernetes
+    使用两个基本构建块来持久化数据：持久卷（PersistentVolume）和持久卷声明（PersistentVolumeClaim）。
+- en: The PersistentVolume is the storage device in a Kubernetes cluster. It is completely
+    decoupled from the Pod and therefore has its own lifecycle. The object captures
+    the source of the storage (e.g., storage made available by a cloud provider).
+    A PersistentVolume is either provided by a Kubernetes administrator or assigned
+    dynamically by mapping to a storage class.
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 持久卷是 Kubernetes 集群中的存储设备。它与 Pod 完全解耦，因此具有自己的生命周期。该对象捕获存储的来源（例如，由云提供商提供的存储）。持久卷可以由
+    Kubernetes 管理员提供，也可以通过映射到存储类动态分配。
+- en: The PersistentVolumeClaim requests the resources of a PersistentVolume—for example,
+    the size of the storage and the access type. In the Pod, you will use the type
+    `persistentVolumeClaim` to mount the abstracted PersistentVolume by using the
+    PersistentVolumeClaim.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 持久卷声明请求持久卷的资源，例如存储大小和访问类型。在 Pod 中，您将使用类型`persistentVolumeClaim`通过持久卷声明来挂载抽象的持久卷。
+- en: '[Figure 6-2](#pvc_relationship) shows the relationship between the Pod, the
+    PersistentVolumeClaim, and the PersistentVolume.'
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 6-2](#pvc_relationship)显示了 Pod、持久卷声明和持久卷之间的关系。'
+- en: '![ckas 0602](Images/ckas_0602.png)'
+  id: totrans-38
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ckas 0602](Images/ckas_0602.png)'
+- en: Figure 6-2\. Claiming a PersistentVolume from a Pod
+  id: totrans-39
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-2\. 从 Pod 中索取持久卷
+- en: Static vs. Dynamic Provisioning
+  id: totrans-40
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 静态 vs. 动态配置
+- en: A PersistentVolume can be created statically or dynamically. If you go with
+    the static approach, then you need to create a storage device first and reference
+    it by explicitly creating an object of kind PersistentVolume. The dynamic approach
+    doesn’t require you to create a PersistentVolume object. It will be automatically
+    created from the PersistentVolumeClaim by setting a storage class name using the
+    attribute `spec.storageClassName`.
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 持久卷可以静态或动态创建。如果选择静态方法，则需要首先创建存储设备，并通过显式创建`PersistentVolume`对象来引用它。动态方法不需要您创建`PersistentVolume`对象。它将通过设置存储类名称使用属性`spec.storageClassName`从`PersistentVolumeClaim`自动创建。
+- en: A storage class is an abstraction concept that defines a class of storage device
+    (e.g., storage with slow or fast performance) used for different application types.
+    It’s the job of a Kubernetes administrator to set up storage classes. For a deeper
+    discussion on storage classes, see [“Understanding Storage Classes”](#understanding_storage_class).
+    For now, we’ll focus on the static provisioning of PersistentVolumes.
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 存储类是一个抽象概念，定义了用于不同应用程序类型的存储设备类别（例如，性能慢或快的存储）。Kubernetes 管理员的工作是设置存储类。有关存储类的更深入讨论，请参见[“理解存储类”](#understanding_storage_class)。现在，我们将专注于持久卷的静态配置。
+- en: Creating PersistentVolumes
+  id: totrans-43
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 创建持久卷
+- en: When you create a PersistentVolume object yourself, we refer to the approach
+    as static provisioning. A PersistentVolume can be created only by using the manifest-first
+    approach. At this time, `kubectl` doesn’t allow the creation of a PersistentVolume
+    using the `create` command. Every PersistentVolume needs to define the storage
+    capacity using `spec.capacity` and an access mode set via `spec.accessModes`.
+    See [“Configuration Options for a PersistentVolume”](#configuring_pv) for more
+    information on the configuration options available to a PersistentVolume.
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您自己创建一个持久卷对象时，我们将这种方法称为静态配置。持久卷只能通过先创建清单的方法来创建。此时，`kubectl`不允许使用`create`命令创建持久卷。每个持久卷都需要使用`spec.capacity`定义存储容量，并通过`spec.accessModes`设置访问模式。有关持久卷可用配置选项的更多信息，请参见[“持久卷的配置选项”](#configuring_pv)。
+- en: '[Example 6-2](#yaml_manifest_persistent_volume) creates a PersistentVolume
+    named `db-pv` with a storage capacity of 1Gi and read/write access by a single
+    node. The attribute `hostPath` mounts the directory `/data/db` from the host node’s
+    filesystem. We’ll store the YAML manifest in the file `db-pv.yaml`.'
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[示例 6-2](#yaml_manifest_persistent_volume)创建了一个名为`db-pv`的持久卷，存储容量为1Gi，由单个节点具有读/写访问权限。属性`hostPath`将主机节点文件系统中的目录`/data/db`挂载到持久卷上。我们将将
+    YAML 清单存储在文件`db-pv.yaml`中。'
+- en: Example 6-2\. YAML manifest defining a PersistentVolume
+  id: totrans-46
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 6-2\. 定义持久卷的 YAML 清单
+- en: '[PRE2]'
+  id: totrans-47
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'Upon inspection of the created PersistentVolume, you’ll find most of the information
+    you provided in the manifest. The status `Available` indicates that the object
+    is ready to be claimed. The reclaim policy determines what should happen with
+    the PersistentVolume after it has been released from its claim. By default, the
+    object will be retained. The following example uses the short-form command `pv`
+    to avoid having to type `persistentvolume`:'
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 检查创建的持久卷后，您将在清单中找到大部分提供的信息。状态`Available`表示对象已准备好被申领。回收策略决定持久卷在被释放后应该如何处理。默认情况下，对象将会被保留。以下示例使用了简写命令`pv`，避免输入`persistentvolume`：
+- en: '[PRE3]'
+  id: totrans-49
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: Configuration Options for a PersistentVolume
+  id: totrans-50
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 持久卷的配置选项
+- en: A PersistentVolume offers a variety of configuration options that determine
+    their innate runtime behavior. For the exam, it’s important to understand the
+    volume mode, access mode, and reclaim policy configuration options.
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 持久卷提供了多种配置选项，确定其固有的运行时行为。在考试中，重要的是理解卷模式、访问模式和回收策略配置选项。
+- en: Volume Mode
+  id: totrans-52
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 卷模式
+- en: The volume mode handles the type of device. That’s a device either meant to
+    be consumed from the filesystem or backed by a block device. The most common case
+    is a filesystem device. You can set the volume mode using the attribute `spec.volumeMode`.
+    [Table 6-2](#persistentvolume_volume_modes) shows all available volume modes.
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 卷模式处理设备类型。设备可以是文件系统设备或由块设备支持的设备。最常见的情况是文件系统设备。您可以使用属性`spec.volumeMode`设置卷模式。[表 6-2](#persistentvolume_volume_modes)
+    显示了所有可用的卷模式。
+- en: Table 6-2\. PersistentVolume volume modes
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表6-2\. 持久卷卷模式
+- en: '| Type | Description |'
+  id: totrans-55
+  prefs: []
+  type: TYPE_TB
+  zh: '| 类型 | 描述 |'
+- en: '| --- | --- |'
+  id: totrans-56
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| `Filesystem` | Default. Mounts the volume into a directory of the consuming
+    Pod. Creates a filesystem first if the volume is backed by a block device and
+    the device is empty. |'
+  id: totrans-57
+  prefs: []
+  type: TYPE_TB
+  zh: '| `Filesystem` | 默认。将卷挂载到消耗 Pod 的目录中。如果卷由块设备支持且设备为空，则首先创建文件系统。 |'
+- en: '| `Block` | Used for a volume as a raw block device without a filesystem on
+    it. |'
+  id: totrans-58
+  prefs: []
+  type: TYPE_TB
+  zh: '| `Block` | 用于作为原始块设备而不带文件系统的卷。 |'
+- en: 'The volume mode is not rendered by default in the console output of the `get
+    pv` command. You will need to provide the `-o wide` command-line option to see
+    the VOLUMEMODE column, as shown here:'
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，卷模式不会在`get pv`命令的控制台输出中显示。您需要提供`-o wide`命令行选项才能看到`VOLUMEMODE`列，如下所示：
+- en: '[PRE4]'
+  id: totrans-60
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: Access Mode
+  id: totrans-61
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 访问模式
+- en: Each PersistentVolume can express how it can be accessed using the attribute
+    `spec.accessModes`. For example, you can define that the volume can be mounted
+    only by a single Pod in a read or write mode or that a volume is read-only but
+    accessible from different nodes simultaneously. [Table 6-3](#persistentvolume_access_modes)
+    provides a high-level overview of the available access modes. The short-form notation
+    of the access mode is usually rendered in outputs of specific commands, e.g.,
+    `get pv` or `describe pv`.
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个持久卷可以使用属性`spec.accessModes`表达其访问方式。例如，您可以定义卷仅由单个 Pod 挂载且为读写模式，或者卷为只读但可以同时从不同节点访问。[表 6-3](#persistentvolume_access_modes)
+    提供了可用访问模式的高级概述。访问模式的简写通常在特定命令的输出中显示，例如`get pv`或`describe pv`。
+- en: Table 6-3\. PersistentVolume access modes
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表6-3\. 持久卷访问模式
+- en: '| Type | Short Form | Description |'
+  id: totrans-64
+  prefs: []
+  type: TYPE_TB
+  zh: '| 类型 | 简写形式 | 描述 |'
+- en: '| --- | --- | --- |'
+  id: totrans-65
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- |'
+- en: '| `ReadWriteOnce` | RWO | Read/write access by a single node |'
+  id: totrans-66
+  prefs: []
+  type: TYPE_TB
+  zh: '| `ReadWriteOnce` | RWO | 单节点读写访问 |'
+- en: '| `ReadOnlyMany` | ROX | Read-only access by many nodes |'
+  id: totrans-67
+  prefs: []
+  type: TYPE_TB
+  zh: '| `ReadOnlyMany` | ROX | 多节点只读访问 |'
+- en: '| `ReadWriteMany` | RWX | Read/write access by many nodes |'
+  id: totrans-68
+  prefs: []
+  type: TYPE_TB
+  zh: '| `ReadWriteMany` | RWX | 多节点读写访问 |'
+- en: '| `ReadWriteOncePod` | RWOP | Read/write access mounted by a single Pod |'
+  id: totrans-69
+  prefs: []
+  type: TYPE_TB
+  zh: '| `ReadWriteOncePod` | RWOP | 单 Pod 挂载的读写访问 |'
+- en: 'The following command parses the access modes from the PersistentVolume named
+    `db-pv`. As you can see, the returned value is an array underlining the fact that
+    you can assign multiple access modes at once:'
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下命令解析名为`db-pv`的持久卷的访问模式。如您所见，返回的值是一个数组，强调您可以一次分配多个访问模式：
+- en: '[PRE5]'
+  id: totrans-71
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: Reclaim Policy
+  id: totrans-72
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 回收策略
+- en: Optionally, you can also define a reclaim policy for a PersistentVolume. The
+    reclaim policy specifies what should happen to a PersistentVolume object when
+    the bound PersistentVolumeClaim is deleted (see [Table 6-4](#persistentvolume_reclaim_policy)).
+    For dynamically created PersistentVolumes, the reclaim policy can be set via the
+    attribute `.reclaimPolicy` in the storage class. for statically created PersistentVolumes,
+    use the attribute `spec.persistentVolumeReclaimPolicy` in the PersistentVolume
+    definition .
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可选地，您还可以为持久卷定义回收策略。回收策略指定在绑定的持久卷索取声明被删除时持久卷对象应该发生什么变化（参见[表 6-4](#persistentvolume_reclaim_policy)）。对于动态创建的持久卷，可以通过存储类中的属性`.reclaimPolicy`来设置回收策略。对于静态创建的持久卷，请使用持久卷定义中的属性`spec.persistentVolumeReclaimPolicy`。
+- en: Table 6-4\. PersistentVolume reclaim policies
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 6-4\. 持久卷回收策略
+- en: '| Type | Description |'
+  id: totrans-75
+  prefs: []
+  type: TYPE_TB
+  zh: '| 类型 | 描述 |'
+- en: '| --- | --- |'
+  id: totrans-76
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| `Retain` | Default. When PersistentVolumeClaim is deleted, the PersistentVolume
+    is “released” and can be reclaimed. |'
+  id: totrans-77
+  prefs: []
+  type: TYPE_TB
+  zh: '| `Retain` | 默认选项。当持久卷索取声明被删除时，持久卷会被“释放”，可以被重新获取。 |'
+- en: '| `Delete` | Deletion removes PersistentVolume and its associated storage.
+    |'
+  id: totrans-78
+  prefs: []
+  type: TYPE_TB
+  zh: '| `Delete` | 删除会移除持久卷及其关联存储。 |'
+- en: '| `Recycle` | This value is deprecated. You should use one of the values above.
+    |'
+  id: totrans-79
+  prefs: []
+  type: TYPE_TB
+  zh: '| `Recycle` | 此值已弃用。您应该使用上述值之一。 |'
+- en: 'The following command retrieves the assigned reclaim policy of the PersistentVolume
+    named `db-pv`:'
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下命令检索名为`db-pv`的持久卷的分配回收策略：
+- en: '[PRE6]'
+  id: totrans-81
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: Creating PersistentVolumeClaims
+  id: totrans-82
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 创建持久卷索取声明
+- en: The next object we’ll need to create is the PersistentVolumeClaim. Its purpose
+    is to bind the PersistentVolume to the Pod. Let’s take a look at the YAML manifest
+    stored in the file `db-pvc.yaml`, as shown in [Example 6-3](#yaml_manifest_persistent_volume_claim).
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们接下来需要创建的对象是持久卷索取声明。它的目的是将持久卷绑定到 Pod 上。让我们看一下存储在文件`db-pvc.yaml`中的 YAML 清单，如[示例 6-3](#yaml_manifest_persistent_volume_claim)所示。
+- en: Example 6-3\. Definition of a PersistentVolumeClaim
+  id: totrans-84
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: Example 6-3\. 持久卷索取声明的定义
+- en: '[PRE7]'
+  id: totrans-85
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: What we’re saying here is, “Give me a PersistentVolume that can fulfill the
+    resource request of 256Mi and provides the access mode `ReadWriteOnce`.” Static
+    provisioning should use an empty string for the attribute `spec.storageClassName`
+    if you do not want it to automatically assign the default storage class. The binding
+    to an appropriate PersistentVolume happens automatically based on those criteria.
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在这里要表达的是，“给我一个可以满足资源请求为256Mi并提供访问模式`ReadWriteOnce`的持久卷。”如果不希望静态配置自动分配默认存储类，请将属性`spec.storageClassName`设置为空字符串。根据这些条件，适当的持久卷的绑定会自动发生。
+- en: 'After creating the PersistentVolumeClaim, the status is set as `Bound`, which
+    means that the binding to the PersistentVolume was successful. Once the associated
+    binding occurs, nothing else can bind to it. The binding relationship is 1-to-1\.
+    Nothing else can bind to the PersistentVolume once claimed. The following `get`
+    command uses the short-form `pvc` instead of `persistentvolumeclaim`:'
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建持久卷索取声明后，状态被设置为`Bound`，这意味着成功绑定到了持久卷。一旦关联绑定发生，其他内容就不能再绑定到它。绑定关系是一对一的。一旦索取，其他内容就不能再绑定到持久卷。以下`get`命令使用了短格式`pvc`而不是`persistentvolumeclaim`：
+- en: '[PRE8]'
+  id: totrans-88
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: 'The PersistentVolume has not been mounted by a Pod yet. Therefore, inspecting
+    the details of the object shows `<none>`. Using the `describe` command is a good
+    way to verify if the PersistentVolumeClaim was mounted properly:'
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 持久卷尚未被 Pod 挂载。因此，检查对象的详细信息显示为`<none>`。使用`describe`命令是验证持久卷索取声明是否被正确挂载的好方法：
+- en: '[PRE9]'
+  id: totrans-90
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: Mounting PersistentVolumeClaims in a Pod
+  id: totrans-91
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 在 Pod 中挂载持久卷索取声明
+- en: All that’s left is to mount the PersistentVolumeClaim in the Pod that wants
+    to consume it. You already learned how to mount a volume in a Pod. The big difference
+    here shown in [Example 6-4](#pod_referencing_persistent_volume_claim) is using
+    `spec.volumes[].persistentVolumeClaim` and providing the name of the PersistentVolumeClaim.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 唯一剩下的是在希望使用它的 Pod 中挂载持久卷索取声明。您已经学会了如何在 Pod 中挂载卷。这里在[示例 6-4](#pod_referencing_persistent_volume_claim)中显示的主要区别是使用了`spec.volumes[].persistentVolumeClaim`并提供了持久卷索取声明的名称。
+- en: Example 6-4\. A Pod referencing a PersistentVolumeClaim
+  id: totrans-93
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 6-4\. 引用持久卷索取声明的 Pod
+- en: '[PRE10]'
+  id: totrans-94
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: 'Let’s assume we stored the configuration in the file `app-consuming-pvc.yaml`.
+    After creating the Pod from the manifest, you should see the Pod transitioning
+    into the `Ready` state. The `describe` command will provide additional information
+    on the volume:'
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设我们将配置存储在文件 `app-consuming-pvc.yaml` 中。从清单创建 Pod 后，您应该看到 Pod 进入 `Ready` 状态。`describe`
+    命令将提供有关卷的额外信息：
+- en: '[PRE11]'
+  id: totrans-96
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: 'The PersistentVolumeClaim now also shows the Pod that mounted it:'
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: PersistentVolumeClaim 现在还显示安装它的 Pod：
+- en: '[PRE12]'
+  id: totrans-98
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: 'You can now go ahead and open an interactive shell to the Pod. Navigating to
+    the mount path at */mnt/data* gives you access to the underlying PersistentVolume:'
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在可以打开 Pod 的交互式 shell。导航到 */mnt/data* 的挂载路径，即可访问底层 PersistentVolume：
+- en: '[PRE13]'
+  id: totrans-100
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: Understanding Storage Classes
+  id: totrans-101
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 理解存储类
+- en: 'A storage class is a Kubernetes primitive that defines a specific type or “class”
+    of storage. Typical characteristics of a storage can be the type (e.g., fast SSD
+    storage versus a remote cloud storage or the backup policy for a storage). The
+    storage class is used to provision a PersistentVolume dynamically based on its
+    criteria. In practice, this means that you do not have to create the PersistentVolume
+    object yourself. The provisioner assigned to the storage class takes care of it.
+    Most Kubernetes cloud providers come with a list of existing provisioners. Minikube
+    already creates a default storage class named `standard`, which you can query
+    for with the following command:'
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 存储类是 Kubernetes 的基元，定义了特定类型或“类”存储。典型存储的特征可以是类型（例如，快速 SSD 存储与远程云存储或备份策略）。存储类用于根据其条件动态提供
+    PersistentVolume。实际上，这意味着您无需自己创建 PersistentVolume 对象。分配给存储类的提供者会处理它。大多数 Kubernetes
+    云提供商都有现有提供者列表。Minikube 已经创建了一个名为 `standard` 的默认存储类，您可以使用以下命令查询：
+- en: '[PRE14]'
+  id: totrans-103
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: Creating Storage Classes
+  id: totrans-104
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 创建存储类
+- en: Storage classes can be created declaratively only with the help of a YAML manifest.
+    At a minimum, you need to declare the provisioner. All other attributes are optional
+    and use default values if not provided upon creation. Most provisioners let you
+    set parameters specific to the storage type. [Example 6-5](#storage_class_gce)
+    defines a storage class on Google Compute Engine denoted by the provisioner `kubernetes.io/gce-pd`.
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 只能通过 YAML 清单声明式地创建存储类。最低限度，您需要声明提供者。如果未在创建时提供，所有其他属性均使用默认值。大多数提供者允许您设置特定于存储类型的参数。[示例
+    6-5](#storage_class_gce) 定义了一个由提供者 `kubernetes.io/gce-pd` 标识的 Google Compute Engine
+    存储类。
+- en: Example 6-5\. Definition of a storage class
+  id: totrans-106
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 6-5\. 存储类的定义
+- en: '[PRE15]'
+  id: totrans-107
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: 'Say you saved the YAML contents in the file `fast-sc.yaml`; then the following
+    command will create the object. The storage class can be listed using the `get
+    storageclass` command:'
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设您将 YAML 内容保存在文件 `fast-sc.yaml` 中；然后以下命令将创建对象。可以使用 `get storageclass` 命令列出存储类：
+- en: '[PRE16]'
+  id: totrans-109
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: Using Storage Classes
+  id: totrans-110
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用存储类
+- en: Provisioning a PersistentVolume dynamically requires the assignment of the storage
+    class when you create the PeristentVolumeClaim. [Example 6-6](#yaml_manifest_persistent_volume_claim_storage_class)
+    shows the usage of the attribute `spec.storageClassName` for assigning the storage
+    class named `standard`.
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在创建 PersistentVolumeClaim 时，动态配置持久卷需要分配存储类。[示例 6-6](#yaml_manifest_persistent_volume_claim_storage_class)
+    展示了使用属性 `spec.storageClassName` 来分配名为 `standard` 的存储类。
+- en: Example 6-6\. Using a storage class in a PersistentVolumeClaim
+  id: totrans-112
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 6-6\. 在 PersistentVolumeClaim 中使用存储类
+- en: '[PRE17]'
+  id: totrans-113
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: The corresponding PersistentVolume object will be created only if the storage
+    class can provision a fitting PersistentVolume using its provisioner. It’s important
+    to understand that Kubernetes does not render an error or warning message if it
+    isn’t the case.
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 仅当存储类能够使用其提供者动态提供适当的 PersistentVolume 时，才会创建相应的 PersistentVolume 对象。重要的是要理解，如果不是这种情况，Kubernetes
+    不会显示错误或警告消息。
+- en: 'The following command renders the created PersistentVolumeClaim and PersistentVolume.
+    As you can see, the name of the dynamically provisioned PersistentVolume is using
+    a hash to ensure a unique naming:'
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下命令渲染已创建的 PersistentVolumeClaim 和 PersistentVolume。如您所见，动态提供的 PersistentVolume
+    的名称使用哈希来确保唯一命名：
+- en: '[PRE18]'
+  id: totrans-116
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: The steps for mounting the PersistentVolumeClaim from a Pod are the same as
+    for static and dynamic provisioning. Refer to [“Mounting PersistentVolumeClaims
+    in a Pod”](#mounting_persistent_volume) for more information.
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将 PersistentVolumeClaim 从 Pod 挂载的步骤与静态和动态提供相同。有关更多信息，请参阅 [“在 Pod 中挂载 PersistentVolumeClaim”](#mounting_persistent_volume)。
+- en: Summary
+  id: totrans-118
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 总结
+- en: Containers store data in a temporary filesystem, which is empty each time a
+    new Pod is started. Application developers need to persist data beyond the lifecycles
+    of the containers, Pods, node, and cluster. Typical examples include persistent
+    log files or data in a database.
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器将数据存储在临时文件系统中，每次启动新的Pod时都会清空。应用程序开发人员需要将数据持久保存超出容器、Pod、节点和集群的生命周期。典型示例包括持久日志文件或数据库中的数据。
+- en: Kubernetes offers the concept of a volume to implement the use case. A Pod mounts
+    a volume to a path in the container. Any data written to the mounted storage will
+    be persisted beyond a container restart. Kubernetes offers a wide range of volume
+    types to fulfill different requirements.
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes提供了卷的概念以实现用例。一个Pod将一个卷挂载到容器中的路径上。写入挂载存储的任何数据将在容器重新启动后持久保存。Kubernetes提供了广泛的卷类型以满足不同的需求。
+- en: PersistentVolumes even store data beyond a Pod or cluster/node restart. Those
+    objects are decoupled from the Pod’s lifecycle and are therefore represented by
+    a Kubernetes primitive. The PersistentVolumeClaim abstracts the underlying implementation
+    details of a PersistentVolume and acts as an intermediary between the Pod and
+    PersistentVolume. A PersistentVolume can be provisioned statically by creating
+    the object or dynamically with the help of a provisioner assigned to a storage
+    class.
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: PersistentVolumes甚至在Pod或集群/节点重新启动后仍然存储数据。这些对象与Pod的生命周期解耦，因此由Kubernetes原语表示。PersistentVolumeClaim抽象了PersistentVolume的底层实现细节，并充当Pod和PersistentVolume之间的中介。可以通过创建对象静态或通过分配给存储类的提供程序动态地提供PersistentVolume。
+- en: Exam Essentials
+  id: totrans-122
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 考试要点
+- en: Understand the need and use cases for a volume
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 了解卷的需求和用例
+- en: Many production-ready application stacks running in a cloud-native environment
+    need to persist data. Read up on common use cases and explore recipes that describe
+    typical scenarios. You can find some examples in the O’Reilly books [*Kubernetes
+    Patterns*](https://oreil.ly/mQKRj), [*Kubernetes Best Practices*](https://oreil.ly/hcFNA),
+    and [*Cloud Native DevOps with Kubernetes*](https://oreil.ly/G7V3W).
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 许多在云原生环境中运行的生产就绪应用程序堆栈需要持久保存数据。阅读常见用例并探索描述典型场景的配方。您可以在O’Reilly书籍[*Kubernetes
+    Patterns*](https://oreil.ly/mQKRj)、[*Kubernetes Best Practices*](https://oreil.ly/hcFNA)和[*Cloud
+    Native DevOps with Kubernetes*](https://oreil.ly/G7V3W)中找到一些示例。
+- en: Practice defining and consuming volumes
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 练习定义和使用卷
+- en: Volumes are a cross-cutting concept applied in different areas of the exam.
+    Know where to find the relevant documentation for defining a volume and the multitude
+    of ways to consume a volume from a container. Definitely revisit [“Defining and
+    Consuming Configuration Data”](ch03.xhtml#defining_consuming_configuration_data)
+    for a deep dive on how to mount ConfigMaps and Secrets as a volume.
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 卷是考试中不同领域中应用的一个横切概念。了解在哪里找到定义卷的相关文档以及从容器消耗卷的多种方式。一定要深入阅读[“定义和消耗配置数据”](ch03.xhtml#defining_consuming_configuration_data)，详细了解如何将ConfigMaps和Secrets挂载为卷。
+- en: Internalize the mechanics of defining and consuming a PersistentVolume
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 内化定义和消耗PersistentVolume的机制
+- en: Creating a PersistentVolume involves a couple of moving parts. Understand the
+    configuration options for PersistentVolumes and PersistentVolumeClaims and how
+    they play together. Try to emulate situations that prevent a successful binding
+    of a PersistentVolumeClaim. Then fix the situation by taking counteractions. Internalize
+    the short-form commands `pv` and `pvc` to save precious time during the exam.
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建PersistentVolume涉及几个移动部件。了解PersistentVolumes和PersistentVolumeClaims的配置选项及其如何协同工作。尝试模拟阻止成功绑定PersistentVolumeClaim的情况。然后通过采取对策来解决问题。在考试期间掌握`pv`和`pvc`的简短命令，以节省宝贵的时间。
+- en: Know the differences between static and dynamic provisioning of a PersistentVolume
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 了解静态和动态提供PersistentVolume的差异
+- en: A PersistentVolume can be created statically by creating the object from a YAML
+    manifest using the `create` command. Alternatively, you can let Kubernetes provision
+    a PersistentVolume dynamically without your direct involvement. For this to happen,
+    assign a storage class to the PersistentVolumeClaim. The provisioner of the storage
+    class takes care of creating PersistentVolume object for you.
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以通过使用`create`命令从YAML清单静态创建PersistentVolume对象来创建PersistentVolume。或者，您可以让Kubernetes动态地为您创建PersistentVolume，而无需直接参与。为此，将存储类分配给PersistentVolumeClaim。存储类的提供程序负责为您创建PersistentVolume对象。
+- en: Sample Exercises
+  id: totrans-131
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 示例练习
+- en: Solutions to these exercises are available in the [Appendix](app01.xhtml#appendix-a).
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些练习的解决方案可以在[附录](app01.xhtml#appendix-a)中找到。
+- en: Create a PersistentVolume named `logs-pv` that maps to the `hostPath` */tmp/logs*.
+    The access mode should be `ReadWriteOnce` and `ReadOnlyMany`. Provision a storage
+    capacity of 2Gi. Assign the reclaim policy `Delete` and an empty string as the
+    storage class. Ensure that the status of the PersistentVolume shows `Available`.
+  id: totrans-133
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 创建一个名为`logs-pv`的PersistentVolume，映射到`hostPath`为*/tmp/logs*。访问模式应为`ReadWriteOnce`和`ReadOnlyMany`。配置存储容量为2Gi。分配回收策略为`Delete`，存储类为空字符串。确保PersistentVolume的状态显示为`Available`。
+- en: Create a PersistentVolumeClaim named `logs-pvc`. The access it uses is `ReadWriteOnce`.
+    Request a capacity of 1Gi. Ensure that the status of the PersistentVolume shows
+    `Bound`.
+  id: totrans-134
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 创建一个名为`logs-pvc`的PersistentVolumeClaim。使用的访问模式是`ReadWriteOnce`。请求容量为1Gi。确保PersistentVolume的状态显示为`Bound`。
+- en: Mount the PersistentVolumeClaim in a Pod running the image `nginx` at the mount
+    path */var/log/nginx*.
+  id: totrans-135
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 将PersistentVolumeClaim挂载到运行`nginx`镜像的Pod中，挂载路径为*/var/log/nginx*。
+- en: Open an interactive shell to the container and create a new file named *my-nginx.log*
+    in */var/log/nginx*. Exit out of the Pod.
+  id: totrans-136
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 打开容器的交互式shell，并在*/var/log/nginx*中创建一个名为*my-nginx.log*的新文件。退出Pod。
+- en: Delete the Pod and PersistentVolumeClaim. What happens to the PersistentVolume?
+  id: totrans-137
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 删除Pod和PersistentVolumeClaim。PersistentVolume会发生什么？
+- en: List the available storage classes and identify the default storage class. Note
+    the provisioner.
+  id: totrans-138
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 列出可用的存储类，并确定默认存储类。注意提供程序。
+- en: Create a new storage class named `custom` using the provisioner of the default
+    storage class.
+  id: totrans-139
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 创建一个名为`custom`的新存储类，使用默认存储类的提供程序。
+- en: Create a PersistentVolumeClaim named `custom-pvc`. Request a capacity of 500Mi
+    and declare the access mode `ReadWriteOnce`. Assign the storage class name `custom`.
+  id: totrans-140
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 创建一个名为`custom-pvc`的PersistentVolumeClaim。请求容量为500Mi，并声明访问模式为`ReadWriteOnce`。分配存储类名称为`custom`。
+- en: The PersistentVolume should have been provisioned dynamically. Find out the
+    name and write it to the file named `pv-name.txt`.
+  id: totrans-141
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: PersistentVolume应该是动态配置的。找出名称并将其写入名为`pv-name.txt`的文件中。
+- en: Delete the PersistentVolumeClaim. What happens to the PersistentVolume?
+  id: totrans-142
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 删除PersistentVolumeClaim。PersistentVolume会发生什么？

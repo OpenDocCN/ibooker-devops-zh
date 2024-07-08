@@ -1,0 +1,757 @@
+- en: Chapter 7\. Worldwide Application Distribution and Staging
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第7章。全球应用分发与分级
+- en: To this point in the book, we have seen a number of different practices for
+    building, developing, and deploying applications, but a whole different set of
+    concerns arises when deploying and managing an application with a global footprint.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，本书中我们已经看到了许多不同的实践方法，用于构建、开发和部署应用程序，但是在部署和管理具有全球影响力的应用程序时，会出现一整套不同的考虑因素。
+- en: There are many different reasons why an application might need to scale to a
+    global deployment. The first and most obvious one is simply scale. It might be
+    that your application is so successful or mission critical that it simply needs
+    to be deployed around the world to provide the capacity necessary for its users.
+    Examples of such applications include a worldwide API gateway for a public cloud
+    provider, a large-scale IoT product with a worldwide footprint, a highly successful
+    social network, and more.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用程序可能需要扩展到全球部署的原因有很多。第一个也是最明显的原因就是规模。您的应用程序可能非常成功或者具有使命关键性，因此需要全球部署以提供用户所需的容量。此类应用程序的示例包括公共云提供商的全球
+    API 网关、具有全球足迹的大规模物联网产品、非常成功的社交网络等。
+- en: Although relatively few of us will build out systems that require worldwide
+    scale, many more applications require a worldwide footprint for latency. Even
+    with containers and Kubernetes there is no getting around the speed of light.
+    To minimize latency between clients and our applications, it is sometimes necessary
+    to distribute our applications around the world to minimize the physical distance
+    between the application and its users.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管我们中相对较少的人会构建需要全球规模的系统，但更多的应用程序需要全球足迹来减少延迟。即使使用容器和 Kubernetes，也无法摆脱光速。为了最小化客户端与我们应用程序之间的延迟，有时需要将我们的应用程序分布到世界各地，以尽量减少应用程序与其用户之间的物理距离。
+- en: Finally, an even more common reason for global distribution is locality. Either
+    for reasons of bandwidth (e.g., a remote sensing platform) or data privacy (e.g.,
+    geographic restrictions), it is sometimes necessary to deploy an application in
+    specific locations for the application to be possible or successful. As more and
+    more countries and regions implement data privacy and sovereignty laws and regulations,
+    it is becoming a common business necessity to deploy your application in specific
+    locations to serve users who reside in that location.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，全球分布的更常见原因是地理位置的需求。出于带宽（例如，远程感知平台）或数据隐私（例如，地理限制）的原因，有时需要在特定位置部署应用程序，以使应用程序的部署或成功成为可能。随着越来越多的国家和地区实施数据隐私和主权法律法规，将您的应用程序部署在特定位置以服务于居住在该地区的用户正在成为一种常见的商业必要性。
+- en: In all these cases, your application is no longer simply present in a small
+    handful of production clusters. Instead it is distributed across tens to hundreds
+    of different geographic locations. The management of these locations, as well
+    as the demands of rolling out a globally reliable service, is a significant challenge.
+    This chapter covers approaches and practices for doing this successfully.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在所有这些情况下，您的应用程序不再仅仅存在于少数几个生产集群中。相反，它分布在数十到数百个不同的地理位置。管理这些位置以及推出一个全球可靠的服务的需求是一个重大挑战。本章涵盖了成功实现这一目标的方法和实践。
+- en: Distributing Your Image
+  id: totrans-6
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 分发您的镜像
+- en: Before you can even consider running your application around the world, you
+    need to have that image available to clusters located around the globe. The first
+    thing to consider is whether your image registry has automatic geo-replication.
+    Many image registries supplied by cloud providers will automatically distribute
+    your image around the world and resolve a request for that image to the storage
+    location nearest to the cluster from which you are pulling the image. Many clouds
+    enable you to decide where you want to replicate the image; for example, you might
+    know of locations where you are not going to be present. An example of such a
+    registry is the [Microsoft Azure container registry](https://oreil.ly/4jWNh),
+    but others provide similar services. If you use a cloud-provided registry that
+    supports geo-replication, distributing your image around the world is simple.
+    You push the image into the registry, select the regions for geo-distribution,
+    and the registry takes care of the rest.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在你考虑将你的应用程序在全球范围内运行之前，你需要确保这个镜像可以在全球各地的集群中使用。首先要考虑的是你的镜像仓库是否支持自动地理复制。许多由云提供商提供的镜像仓库会自动将你的镜像分发到全球，并将请求定位到离拉取镜像的集群最近的存储位置。许多云平台允许你决定在哪些地方复制镜像；例如，你可能知道某些你不会出现的地方。一个例子是[Microsoft
+    Azure 容器注册表](https://oreil.ly/4jWNh)，但其他提供类似服务的也有很多。如果你使用支持地理复制的云提供的注册表，将你的镜像分发到全球就变得很简单。你只需将镜像推送到注册表，选择地理复制的区域，剩下的就由注册表来处理了。
+- en: If you are not using a cloud registry, or your provider does not support automatic
+    geo-distribution of images, you will need to solve that problem yourself. One
+    option is to use a registry situated in a specific location. There are several
+    concerns about such an approach. Image pull latency often dictates the speed with
+    which you can launch a container in a cluster. This in turn can determine how
+    quickly you can respond to a machine failure, given that generally in the case
+    of a machine failure, you will need to pull the container image down to a new
+    machine.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你没有使用云注册表，或者你的提供商不支持镜像的自动地理分发，你就需要自己解决这个问题。一个选项是使用位于特定位置的注册表。对这种方法有几个担忧。镜像拉取延迟通常决定了你在集群中启动容器的速度。这反过来可以决定在机器故障时你能多快地做出响应，考虑到通常情况下，在机器故障时你需要将容器镜像下载到新机器上。
+- en: Another concern about a single registry is that it can be a single point of
+    failure. If the registry is located in a single region or a single datacenter,
+    it’s possible that the registry could go offline due to a large-scale incident
+    in that datacenter. If your registry goes offline, your CI/CD pipeline will stop
+    working, and you’ll be unable to deploy new code. This obviously has a significant
+    impact on both developer productivity and application operations. Additionally,
+    a single registry can be much more expensive because you will be using significant
+    bandwidth each time you launch a new container, and even though container images
+    are generally fairly small, the bandwidth can add up. Despite these negatives,
+    a single registry solution can be the appropriate answer for small-scale applications
+    running in only a few global regions. It certainly is simpler to set up than full-scale
+    image replication.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 关于单一注册表的另一个问题是它可能是单点故障。如果注册表位于单一区域或单一数据中心，那么在该数据中心发生大规模事故时，注册表可能会下线。如果你的注册表下线了，你的
+    CI/CD 管道将停止工作，你将无法部署新的代码。这显然会对开发者的生产力和应用程序的运行产生重大影响。此外，单一注册表可能会更加昂贵，因为每次启动新容器时都会使用大量带宽，尽管容器镜像通常很小，但带宽消耗会累积。尽管存在这些负面因素，对于只在少数全球区域运行的小规模应用程序来说，单一注册表解决方案可能是合适的答案。它确实比全面复制镜像更容易设置。
+- en: If you cannot use cloud-provided geo-replication and you need to replicate your
+    image, you are on your own to craft a solution for image replication. To implement
+    such a service, you have two options. The first is to use geographic names for
+    each image registry (e.g., `us.my-registry.io`, `eu.my-registry.io`, etc.). The
+    advantage of this approach is that it is simple to set up and manage. Each registry
+    is entirely independent, and you can simply push to all registries at the end
+    of your CI/CD pipeline. The downside is that each cluster will require a slightly
+    different configuration to pull the image from the nearest geographic location.
+    However, given that you likely will have geographic differences in your application
+    configurations anyway, this downside is relatively easy to manage and likely already
+    present in your environment.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您无法使用云提供的地理复制，并且需要复制您的镜像，您就需要自行制定镜像复制的解决方案。要实施这样的服务，您有两个选择。第一个选择是为每个镜像注册表使用地理名称（例如，`us.my-registry.io`，`eu.my-registry.io`等）。这种方法的优点是设置和管理简单。每个注册表都是完全独立的，您可以在CI/CD流程结束时简单地推送到所有注册表。缺点是每个集群将需要稍微不同的配置来从最近的地理位置拉取镜像。然而，鉴于您的应用配置可能会在地理上存在差异，这种缺点相对容易管理，并且可能已经存在于您的环境中。
+- en: The second option is to use a networking configuration to connect your image
+    pulls to a specific repository. In this approach you still push your image to
+    multiple registries, but instead of giving them each a unique name, you give them
+    all a single DNS endpoint (e.g., `my-registry.io`). You can use geography-aware
+    DNS (GeoDNS), which will respond to DNS requests from different geographic regions
+    with different IP addresses, or if you have the right networking infrastructure,
+    you can use multicast IP addresses. In multicast, all your registries share the
+    same IP address, but it is advertised to the internet in multiple physical locations,
+    and shortest-path network routing is relied on to take traffic to the server that
+    provides the nearest image registry. Both of these network configurations are
+    tricky to implement correctly. The best answer is definitely to use a cloud-based
+    registry, even if you are pulling to on-premises servers. If you really want to
+    run your own registry (and take on the operational burden that implies), we strongly
+    suggest you use the regional server approach discussed in the previous paragraph
+    unless you have prior network experience with replicated services. The next section
+    describes how you can parameterize your deployment to, for example, use different
+    registries in different regions.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 第二个选项是使用网络配置将您的镜像拉取连接到特定的仓库。在这种方法中，您仍然将镜像推送到多个注册表，但不是为每个注册表提供唯一的名称，而是为它们都提供一个单一的DNS终端点（例如，`my-registry.io`）。您可以使用地理感知DNS（GeoDNS），它会对来自不同地理区域的DNS请求响应不同的IP地址，或者如果您拥有正确的网络基础设施，可以使用组播IP地址。在组播中，所有的注册表共享相同的IP地址，但会在多个物理位置向互联网广播，依靠最短路径网络路由将流量发送到提供最近镜像注册表的服务器。这两种网络配置都很难正确实施。最佳答案无疑是使用基于云的注册表，即使您是在本地服务器上进行拉取。如果您确实想要运行自己的注册表（并承担相应的运营负担），我们强烈建议您使用前一段讨论过的区域服务器方法，除非您已经具备复制服务的网络经验。接下来的部分将描述如何对您的部署进行参数化，例如在不同区域使用不同的注册表。
+- en: Parameterizing Your Deployment
+  id: totrans-12
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 参数化您的部署
+- en: When you have replicated your image everywhere, you need to parameterize your
+    deployments for different global locations. Whenever you are deploying to a variety
+    of different regions, there are bound to be differences in the configuration of
+    your application in those regions. For example, if you don’t have a geo-replicated
+    registry, you might need to tweak the image name for different regions. However,
+    even if you have a geo-replicated image, it’s likely that different geographic
+    locations will present different load on your application, and thus the size (e.g.,
+    the number of replicas) as well as other configuration can be different between
+    regions. Managing this complexity in a manner that doesn’t incur undue toil is
+    key to successfully managing a worldwide application.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您在所有地方复制了您的镜像后，您需要对不同的全球位置进行部署参数化。每当您部署到各种不同的地区时，这些地区的应用配置都可能有所不同。例如，如果您没有地理复制的注册表，您可能需要为不同的区域调整镜像名称。然而，即使您有地理复制的镜像，不同的地理位置可能会对您的应用产生不同的负载，因此大小（例如副本数）以及其他配置可能会在区域之间有所不同。以一种不会增加过多负担的方式管理这种复杂性，是成功管理全球应用的关键。
+- en: The first thing to consider is how to organize your different configurations
+    on disk. A common way to achieve this is by using a different directory for each
+    global region. Given these directories, it might be tempting to simply copy the
+    same configurations into each directory, but doing this is guaranteed to lead
+    to drift and changes between configurations in which some regions are modified
+    and other regions are forgotten. Instead, use a template-based approach so that
+    most of the configuration is retained in a single template that is shared by all
+    regions, and then parameters are applied to that template to produce the region-specific
+    templates. [Helm](https://helm.sh) is a commonly used tool for this sort of templating
+    (for details, see [Chapter 1](ch01.html#setting_up_a_basic_service)).
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先要考虑的是如何在磁盘上组织不同的配置。一种常见的实现方法是为每个全局区域使用不同的目录。在这些目录中，也许会诱惑你简单地将相同的配置复制到每个目录中，但这样做肯定会导致配置之间的漂移和变化，某些区域被修改而其他区域被遗忘。相反，采用基于模板的方法，使大部分配置保留在一个单一模板中，该模板被所有区域共享，然后将参数应用于该模板以生成特定于区域的模板。[Helm](https://helm.sh)
+    是用于这种模板化的常用工具（详细信息请参见[第1章](ch01.html#setting_up_a_basic_service)）。
+- en: Load-Balancing Traffic Around the World
+  id: totrans-15
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 在全球范围内负载均衡流量
+- en: Now that your application is running around the world, the next step is to determine
+    how to direct traffic to the application. In general, you want to take advantage
+    of geographic proximity to ensure low-latency access to your service. But you
+    also want to failover across geographic regions in case of an outage or any other
+    source of service failure. Correctly setting up the balancing of traffic to your
+    various regional deployments is key to establishing both a performant and reliable
+    system.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，您的应用程序已经在全球运行，下一步是确定如何将流量引导到该应用程序。通常情况下，您希望利用地理位置的近距离来确保对服务的低延迟访问。但您还希望在发生故障或任何其他服务故障源的情况下，在地理区域之间进行故障切换。正确设置流量平衡到各个区域部署是建立高性能和可靠系统的关键。
+- en: Let’s begin with the assumption that you have a single hostname that you want
+    to use for your service, for example, *myapp.myco.com*. One initial decision that
+    you need to make is whether you want to use the Domain Name System (DNS) protocol
+    to implement load balancing across your regional endpoints. If you use DNS for
+    load balancing, the IP address that is returned when a user makes a DNS query
+    to *myapp.myco.com* is based on both the location of the user accessing your service
+    as well as the current availability of your service. The other alternative is
+    multicast IP addresses, where the same IP address is advertised from multiple
+    locations on the internet. When a user looks up *myapp.myco.com*, the DNS always
+    returns this fixed IP address, but the actual routing of packets varies depending
+    on where the connection is in the network.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们从假设您有一个要用于服务的单个主机名开始，例如*myapp.myco.com*。您需要做出的第一个决定是是否要使用域名系统（DNS）协议来实现负载均衡跨您的区域终端点。如果您使用DNS进行负载平衡，当用户对*myapp.myco.com*进行DNS查询时返回的IP地址基于用户访问服务的位置以及您服务的当前可用性。另一种选择是多播IP地址，其中相同的IP地址从互联网上的多个位置进行广告。当用户查找*myapp.myco.com*时，DNS始终返回这个固定IP地址，但实际数据包的路由因连接在网络中的位置而异。
+- en: Reliably Rolling Out Software Around the World
+  id: totrans-18
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 在全球范围内可靠地推出软件
+- en: After you have templatized your application so that you have proper configurations
+    for each region, the next important problem is how to deploy these configurations
+    around the world. It might be tempting to simultaneously deploy your application
+    worldwide so that you can efficiently and quickly iterate your application, but
+    this, although Agile, is an approach that can easily leave you with a global outage.
+    Any errors that you accidentally roll out to the world are immediately present
+    for all users in all regions. Instead, for most production applications, a more
+    carefully staged approach to rolling out your software around the world is more
+    appropriate. When combined with things like global load balancing, these approaches
+    can maintain high availability even in the face of major application failures.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当你将应用程序模板化，为每个区域准备适当的配置后，下一个重要问题是如何在全球范围内部署这些配置。可能会有诱惑，同时在全球范围内部署你的应用程序，以便你可以高效快速地迭代应用程序，但这种做法虽然敏捷，却很容易导致全球性故障。你在世界范围内意外推出的任何错误都会立即影响到所有地区的所有用户。相比之下，对于大多数生产应用程序而言，更为谨慎的全球软件推出策略更为合适。当结合全球负载均衡等因素时，这些方法可以在面对重大应用程序故障时保持高可用性。
+- en: Tip
+  id: totrans-20
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: Overall, when approaching the problem of a global rollout, the goal is to roll
+    out software as quickly as possible, while simultaneously detecting issues quickly—ideally
+    before they affect many users.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 总的来说，在处理全球推出的问题时，目标是尽快推出软件，同时迅速检测问题，最好是在影响到多个用户之前就能发现。
+- en: Let’s assume that by the time you are performing a global rollout, your application
+    has already passed basic functional and load testing. Before a particular image
+    (or images) is certified for a global rollout, it should have gone through enough
+    testing that you believe the application is operating correctly. It is important
+    to note that this *does not* mean that your application *is* operating correctly.
+    Though testing catches many problems, in the real world, application problems
+    are often first noticed when they are rolled out to production traffic. This is
+    because the true nature of production traffic is often difficult to simulate with
+    perfect fidelity. For example, you might test with only English-language inputs,
+    whereas in the real world, you see input from a variety of languages. Or your
+    set of test inputs may not be comprehensive for the real-world data your application
+    ingests. Of course, any time that you do see a failure in production that wasn’t
+    caught by testing, it is a strong indicator that you need to extend and expand
+    your testing. Nonetheless, it is still true that many problems are caught during
+    a production rollout.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们假设在进行全球推出时，你的应用程序已经通过了基本功能和负载测试。在某个特定镜像（或镜像）被认证为全球推出之前，它应该经过足够的测试，你相信应用程序正在正确运行。重要的是要注意，这并不意味着你的应用程序确实正在正确运行。尽管测试可以发现许多问题，但在现实世界中，应用程序问题通常是在推出到生产流量时首次注意到的。这是因为生产流量的真实性质通常很难完美模拟。例如，你可能只测试英语输入，而在现实世界中，你会看到多种语言的输入。或者你的测试输入集可能对应用程序接收的真实世界数据不够全面。当然，每当你在生产环境中看到未经测试就发生的故障时，这是需要扩展和扩大你的测试的一个强烈指示。尽管如此，仍然有许多问题是在生产推出期间被捕捉到的。
+- en: With this in mind, each region that you roll out to is an opportunity to discover
+    a new problem. And because the region is a production region, it is also a potential
+    outage to which you will need to react. These factors combine to set the stage
+    for how you should approach regional rollouts.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当你考虑到这一点时，你每次推出新的区域都是发现新问题的机会。而且由于该区域是生产区域，它也是一个潜在的故障停机，你需要对此做出反应。这些因素共同为你如何应对区域性推出奠定了基础。
+- en: Note
+  id: totrans-24
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注
+- en: Throughout this discussion we talk about rolling out software to a geographic
+    region, but this sort of progressive rollout is only one form of progressive exposure
+    control. An alternative way to roll out a feature is to use feature flags to do
+    progressive exposure. With feature flags, a new feature is first rolled out via
+    a release that follows a geographic rollout as described next; however, the feature
+    is flagged “off” by default. Once the release is in all regions, the flag is gradually
+    turned on by (for example) activating the feature for 10% of all users, followed
+    by 20%, and so on until the feature is fully rolled out. There are numerous configuration
+    systems for doing flag-based experiments and progressive rollouts. And combining
+    flags with geographic releases is a very stable way to release new features while
+    being able to quickly respond to failures.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本讨论中，我们谈论的是将软件推广到一个地理区域，但这种渐进式推广只是渐进式暴露控制的一种形式。推出功能的另一种方法是使用特征标志来进行渐进式暴露。使用特征标志时，新功能首先通过遵循接下来描述的地理推广的发布进行推广；然而，默认情况下，该功能的标志被设为“关闭”。一旦发布到所有地区，标志就会逐渐打开，例如，首先激活10%的用户的功能，然后是20%，依此类推，直到功能完全推出。有许多配置系统可用于进行基于标志的实验和渐进式推广。将标志与地理发布结合使用是发布新功能的一种非常稳定的方式，同时可以快速响应故障。
+- en: Pre-Rollout Validation
+  id: totrans-26
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 预发布验证
+- en: Before you even consider rolling out a particular version of your software around
+    the world, it’s critically important to validate that software in some sort of
+    synthetic testing environment. If you have your CD pipeline set up correctly,
+    all code prior to a particular release build will have undergone some form of
+    unit testing, and possibly limited integration testing. However, even with this
+    testing in place, it’s important to consider two other sorts of tests for a release
+    before it begins its journey through the release pipeline. The first is complete
+    integration testing. This means that you assemble the entirety of your stack into
+    a full-scale deployment of your application but without any real-world traffic.
+    This complete stack generally will include either a copy of your production data
+    or simulated data on the same size and scale as your true production data. If
+    in the real world, the data in your application is 500 GB, it’s critical that
+    in preproduction testing your dataset is roughly the same size (and possibly even
+    literally the same dataset).
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在您甚至考虑将软件的特定版本在全球范围内推广之前，非常重要的是在某种合成测试环境中验证该软件。如果您的持续交付流水线设置正确，特定发布构建之前的所有代码将经过某种形式的单元测试，可能还有有限的集成测试。然而，即使有这些测试，也很重要考虑发布之前的另外两种测试。第一种是完整的集成测试。这意味着您将整个堆栈组装成您应用程序的全面部署，但没有任何真实世界的流量。这个完整的堆栈通常会包括一个生产数据的副本或者在与您真实生产数据相同规模和尺度的模拟数据。如果在现实世界中，您的应用程序数据为500
+    GB，那么在预生产测试中，您的数据集大致应该是相同的大小（甚至可能是确实相同的数据集）。
+- en: Generally speaking, setting up a complete integration testing environment is
+    a significant challenge. Often, production data is present only in production,
+    and generating a synthetic dataset of the same size and scale is quite difficult.
+    Because of this complexity, setting up a realistic integration testing dataset
+    is a great example of a task that it pays to do early on in the development of
+    an application. If you set up a synthetic copy of your dataset early, when the
+    dataset itself is quite small, your integration test data grows gradually at the
+    same pace as your production data. This is generally significantly more manageable
+    than if you attempt to duplicate your production data when you are already at
+    scale.
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一般来说，建立完整的集成测试环境是一个重大挑战。通常，生产数据仅在生产环境中存在，生成相同规模和尺度的合成数据集非常困难。由于这种复杂性，设置一个真实的集成测试数据集是一个非常值得在应用程序开发早期就做的任务的绝佳示例。如果早期设置了数据集的合成副本，当数据集本身很小的时候，您的集成测试数据会与生产数据的增长速度保持一致。这通常比在已经达到规模时尝试复制生产数据要容易得多。
+- en: Sadly, many people don’t realize that they need a copy of their data until they
+    are already at a large scale and the task is difficult. In such cases it might
+    be possible to deploy a read/write-deflecting layer in front of your production
+    data store. Obviously, you don’t want your integration tests writing to production
+    data, but it is often possible to set up a proxy in front of your production data
+    store that reads from production but stores writes in a side table that is also
+    consulted on subsequent reads.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不幸的是，许多人直到已经处于大规模并且任务困难时才意识到他们需要数据的副本。在这种情况下，可能可以在您的生产数据存储前部署一个读写偏转层。显然，您不希望您的集成测试写入生产数据，但通常可以在您的生产数据存储前设置一个代理，从生产中读取但将写入存储在一个侧表中，后续读取时也会查询该侧表。
+- en: Of course, it is also extremely important that if you use your production data
+    for testing and development you are very careful with the security of that data.
+    Numerous data leaks have been associated with developers accidentally placing
+    their production user data in insecure locations.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当然，如果您将生产数据用于测试和开发，非常重要的是要非常小心该数据的安全性。许多数据泄漏事件与开发人员意外地将他们的生产用户数据放置在不安全的位置有关。
+- en: 'Regardless of how you manage to set up your integration testing environment,
+    the goal is the same: to validate that your application behaves as expected when
+    given a series of test inputs and interactions. There are a variety of ways to
+    define and execute these tests—from the most manual, a worksheet of tests and
+    human effort (not recommended because it is fairly error prone), through tests
+    that simulate browsers and user interactions, like clicks and so forth. In the
+    middle are tests that probe RESTful APIs but don’t necessarily test the web UI
+    built on top of those APIs. Regardless of how you define your integration tests,
+    the goal should be the same: an automated test suite that validates the correct
+    behavior of your application in response to a complete set of real-world inputs.
+    For simple applications it may be possible to perform this validation in premerge
+    testing, but for most large-scale real-world applications, a complete integration
+    environment is required.'
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 无论您如何设置集成测试环境，目标都是相同的：验证在给定一系列测试输入和交互时，您的应用程序是否按预期行为。有多种方法来定义和执行这些测试——从最手动的方式，即测试工作表和人工操作（不建议，因为容易出错），到模拟浏览器和用户交互（例如点击等）的测试。在中间阶段是探测RESTful
+    API的测试，但不一定测试构建在这些API之上的Web UI。无论您如何定义集成测试，目标都应该是相同的：一个自动化测试套件，验证您的应用程序对完整一组真实世界输入的正确行为。对于简单的应用程序，可能可以在合并前进行此验证，但对于大多数大规模现实世界的应用程序，需要一个完整的集成环境。
+- en: Integration testing will validate the correct operation of your application,
+    but you should also load-test the application. It is one thing to demonstrate
+    that the application behaves correctly; it is quite another to demonstrate that
+    it stands up to real-world load. In any reasonably high-scale system, a significant
+    regression in performance—for example, a 20% increase in request latency—has a
+    significant impact on the UX of the application and, in addition to frustrating
+    users, can cause an application to completely fail. Thus, it is critical to ensure
+    that such performance regressions do not happen in production.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 集成测试将验证您的应用程序的正确操作，但您还应该对应用程序进行负载测试。证明应用程序的行为正确是一回事；证明它能够经受住真实世界的负载是另一回事。在任何相当高规模的系统中，例如请求延迟增加20%这样的性能显著回退，对应用程序的用户体验有重大影响，并且除了让用户感到沮丧外，还可能导致应用程序完全失败。因此，确保在生产环境中不发生这种性能退化非常关键。
+- en: Like integration testing, identifying the correct way to load-test an application
+    can be a complex proposition; after all, it requires that you generate a load
+    similar to production traffic but in a synthetic and reproducible way. One of
+    the easiest ways to do this is to simply replay the logs of traffic from a real-world
+    production system. Doing this can be a great way to perform a load test whose
+    characteristics match what your application will experience when deployed. However,
+    using replay isn’t always foolproof. For example, if your logs are old, and your
+    application or dataset has changed, it’s possible that the performance on old,
+    replayed logs will be different than the performance on fresh traffic. Additionally,
+    if you have real-world dependencies that you haven’t mocked, it’s possible that
+    the old traffic will be invalid when sent over to the dependencies (e.g., the
+    data might no longer exist).
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 像集成测试一样，识别正确的应用程序负载测试方式可能是一个复杂的命题；毕竟，这需要您以合成和可重现的方式生成类似于生产流量的负载。其中一个最简单的方法就是简单地回放来自真实生产系统流量的日志。这样做可以是执行负载测试的一种很好的方式，因为其特性与应用程序在部署时将会经历的情况相匹配。然而，使用回放并非总是万无一失。例如，如果您的日志已经过时，而您的应用程序或数据集已发生变化，那么旧的回放日志上的性能可能与新鲜流量上的性能不同。此外，如果您有实际的依赖关系没有进行模拟，那么当发送到依赖关系时，旧的流量可能是无效的（例如，数据可能不再存在）。
+- en: As with production data it is critical to safeguard the security of any recorded
+    real-world requests. Just like the production databases, production requests often
+    contain private information or secure credentials (or both!), and it is critical
+    that the security of any recordings be treated the same as the actual user requests.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 就像生产数据一样，保护记录的任何真实请求的安全性至关重要。就像生产数据库一样，生产请求通常包含私人信息或安全凭据（或两者都有！），确保任何记录的安全性与实际用户请求同等重要。
+- en: Because of the challenges associated with saving, securing, and managing this
+    test data, many systems, even critical systems, are developed for a long time
+    without a load test. Like modeling your production data, this is a clear example
+    of something that is easier to maintain if you start earlier. If you build a load
+    test when your application has only a handful of dependencies, and improve and
+    iterate the load test as you adapt your application, you will have a far easier
+    time than if you attempt to retrofit load testing onto an existing large-scale
+    application.
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因为与保存、保护和管理这些测试数据相关的挑战，许多系统，甚至是关键系统，在长时间内开发而没有进行负载测试。就像对生产数据建模一样，这是一个明显的例子，如果你早点开始，就会更容易维护。如果在应用程序只有少数依赖关系时建立负载测试，并在调整应用程序时改进和迭代负载测试，你将比试图在现有的大型应用程序上进行负载测试要容易得多。
+- en: Assuming that you have crafted a load test, the next question is the metrics
+    to watch when load-testing your application. The obvious ones are requests per
+    second and request latency because those are clearly the user-facing metrics.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设您已经创建了一个负载测试，下一个问题是在负载测试应用程序时要关注的指标。显而易见的是每秒请求和请求延迟，因为这些显然是用户关注的指标。
+- en: When measuring latency, it’s important to realize that this is actually a distribution,
+    and you need to measure both the mean latency as well as the outlier percentiles
+    (like the 90th and 99th percentiles) since they represent the “worst” UX of your
+    application. Problems with very long latencies can be hidden if you just look
+    at the averages, but if 10% of your users are having a bad time, it can have a
+    significant impact on the success of your product.
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在测量延迟时，重要的是要意识到这实际上是一个分布，并且您需要测量平均延迟以及异常百分位数（如第90和第99百分位数），因为它们代表了您应用程序的“最差”用户体验。如果只看平均值，则可能隐藏具有非常长延迟的问题，但如果有10%的用户体验不佳，那么这可能会对您产品的成功产生显著影响。
+- en: In addition, it’s worth looking at the resource usage (CPU, memory, network,
+    disk) of the application under load test. Though these metrics do not directly
+    contribute to the UX, large changes in resource usage for your application should
+    be identified and understood in preproduction testing. If your application is
+    suddenly consuming twice as much memory, it’s something you will want to investigate,
+    even if you pass your load test, because eventually such significant resource
+    growth will affect the quality and availability of your application. Depending
+    on the circumstances, you might continue bringing a release to production, but
+    at the same time, you need to understand why the resource footprint of your application
+    is changing.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另外，值得关注的是应用程序在负载测试下的资源使用情况（CPU、内存、网络、磁盘）。虽然这些指标并不直接影响用户体验，但你的应用程序资源使用发生较大变化时，应在预生产测试中识别并理解。如果你的应用程序突然消耗了两倍的内存，即使通过了负载测试，你也需要调查，因为这样显著的资源增长最终会影响应用程序的质量和可用性。根据情况，你可能会继续将发布推向生产，但同时，你需要理解为什么应用程序的资源占用量在变化。
+- en: Canary Region
+  id: totrans-39
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 金丝雀区域
+- en: When your application appears to be operating correctly, the first step should
+    be a *canary region*. A canary region is a deployment that receives real-world
+    traffic from people and teams who want to validate your release. These can be
+    internal teams that depend on your service, or they might be external customers
+    who are using your service. Canaries exist to give a team some early warning about
+    changes that you are about to roll out that might break them. No matter how good
+    your integration and load testing, it’s always possible that a bug will slip through
+    that isn’t covered by your tests but is critical to some user or customer. In
+    such cases, it is much better to catch these issues in a space where everyone
+    using or deploying against the service understands that there is a higher probability
+    of failure. This is the canary region.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当你的应用程序看起来运行正常时，第一步应该是一个*金丝雀区域*。金丝雀区域是一个接收来自希望验证你发布的真实流量的人和团队的部署。这些可以是依赖于你服务的内部团队，也可以是使用你服务的外部客户。金丝雀的存在是为了给团队一些关于即将推出的变化的早期警告。无论你的集成和负载测试有多好，总有可能有一些未被你的测试覆盖但对某些用户或客户至关重要的错误会漏过。在这种情况下，在每个人都知道失败可能性更高的空间中捕捉到这些问题要好得多。这就是金丝雀区域。
+- en: Note
+  id: totrans-41
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Canary is also a great place for your team or company to *dogfood* or self-test
+    the early release before it goes further in production. A great best practice
+    is to set up an HTTP redirector so that requests from within your company are
+    redirected to an instance of your product that is running in canary. That way
+    every person on your team becomes an end-to-end tester before the release proceeds
+    to external users.
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 金丝雀也是你的团队或公司在生产之前进行*自我测试*或早期测试的好地方。一个很好的最佳实践是设置一个HTTP重定向器，使得公司内部的请求重定向到运行在金丝雀环境中的产品实例。这样你团队的每个人在发布进入外部用户之前都变成了端到端的测试人员。
+- en: Canaries must be treated as a production region in terms of monitoring, scale,
+    features, and so on. However, because it is the first stop on the release process,
+    it is also the location most likely to see a broken release. This is OK; in fact
+    it is precisely the point. Your customers will knowingly use a canary for lower-risk
+    use cases (e.g., development or internal users) so that they can get an early
+    indication of any breaking changes that you might be rolling out as part of a
+    release.
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 金丝雀在监控、规模、功能等方面必须像生产区域一样对待。然而，由于它是发布过程中的第一站，它也是最有可能看到出现故障发布的位置。这没问题；事实上，这正是目的所在。你的客户将会有意使用金丝雀来进行低风险的用例（例如开发或内部用户），以便他们能够早期了解到你可能作为发布的一部分推出的任何破坏性变化。
+- en: Because the goal of a canary is to get early feedback on a release, it is a
+    good idea to leave the release in the canary region for a few days. This enables
+    a broad collection of customers to access it before you move on to additional
+    regions. This length of time is needed because sometimes a bug is probabilistic
+    (e.g., affects 1% of requests), or it manifests only in an edge case that takes
+    some time to present itself. It might not even be severe enough to trigger automated
+    alerts, but there might be a problem in business logic that is visible only via
+    customer interactions.
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因为金丝雀的目标是在发布后获得早期反馈，所以在金丝雀区域保留发布几天是个好主意。这样能让广泛的客户群体在您移动到其他区域之前就能访问它。这段时间是必要的，因为有时候
+    bug 是概率性的（例如，影响到 1% 的请求），或者它只在一个需要时间才能显现的边缘案例中出现。它甚至可能不严重到触发自动警报，但可能存在业务逻辑问题，只有通过客户互动才能看到。
+- en: Identifying Region Types
+  id: totrans-45
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 辨识区域类型
+- en: When you begin thinking about rolling out your software across the world, it’s
+    important to think about the different characteristics of your different regions.
+    After you begin rolling out software to production regions, you need to run it
+    through integration testing as well as initial canary testing. This means that
+    any subsequent issues you find will be issues that did not manifest in either
+    of these settings. Think about your different regions. Do some get more traffic
+    than others? Are some accessed in a different way? An example of a difference
+    might be that in the developing world, traffic is more likely to come from mobile
+    web browsers. Thus, a region that is geographically close to more developing countries
+    might have significantly more mobile traffic than your test or canary regions.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您开始考虑在全球范围内推广您的软件时，重要的是考虑不同区域的不同特征。在将软件推向生产区域后，您需要进行集成测试以及初始的金丝雀测试。这意味着您找到的任何后续问题将是在这两种设置中都没有显现的问题。思考一下您的不同区域。有些区域的流量比其他区域多吗？有些区域的访问方式不同吗？一个例子是，发展中国家的流量更可能来自移动
+    Web 浏览器。因此，与更多发展中国家地理上接近的区域可能比您的测试或金丝雀区域有更多的移动流量。
+- en: Another example might be input language. Regions in non-English-speaking areas
+    of the world might send more Unicode characters that could manifest bugs in string
+    or character handling. If you are building an API-driven service, some APIs might
+    be more popular in some regions versus others. All these things are examples of
+    differences that might be present in your application and might be different than
+    your canary traffic. Each of these differences is a possible source of a production
+    incident. Build a table of different characteristics that you think are important.
+    Identifying these characteristics will help you plan your global rollout.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个例子可能是输入语言。世界非英语区域的区域可能会发送更多的 Unicode 字符，这可能在字符串或字符处理中显现出 bug。如果您正在构建一个基于
+    API 的服务，某些 API 在某些区域可能比其他区域更受欢迎。所有这些都是您的应用程序可能存在的差异的示例，这些差异可能与您的金丝雀流量不同。每个这些差异都是生产事故的可能来源。建立一个您认为重要的不同特征的表格。识别这些特征将帮助您规划全球推广。
+- en: Constructing a Global Rollout
+  id: totrans-48
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 构建全球推广
+- en: Having identified the characteristics of your regions, you want to identify
+    a plan for rolling out to all regions. Obviously, you want to minimize the impact
+    of a production outage, so a great first region to start with is a region that
+    looks mostly like your canary and has light user traffic. Such a region is very
+    unlikely to have problems, but if they do occur, the impact is also smaller because
+    the region receives less traffic.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 识别了您的各个区域的特征后，您希望制定一个向所有区域推出的计划。显然，您希望尽量减少生产中断的影响，因此一个很好的起始区域是一个看起来大部分像您的金丝雀区域并且用户流量较轻的区域。这样的区域几乎不太可能出现问题，但如果出现问题，影响也较小，因为该区域接收的流量较少。
+- en: With a successful rollout to the first production region, you need to decide
+    how long to wait before moving on to the next region. The reason for waiting is
+    not to artificially delay your release; rather, it’s to wait long enough for a
+    fire to send up smoke. This time-to-smoke period is a measure of how long it generally
+    takes between a rollout completing and your monitoring seeing some sign of a problem.
+    Clearly if a rollout contains a problem, the minute the rollout completes, the
+    problem is present in your infrastructure. But even though it is present, it can
+    take some time to manifest. For example, a memory leak might take an hour or more
+    before the impact of the leaked memory is clearly discernible in monitoring or
+    is affecting users. The time-to-smoke is the probability distribution that indicates
+    how long you should wait to have a strong probability that your release is operating
+    correctly. Generally speaking, a decent rule of thumb is doubling the average
+    time it took for a problem to manifest in the past.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在第一个生产区域成功推出后，你需要决定在转移到下一个区域之前等待多长时间。等待的原因不是为了人为延迟你的发布；相反，是为了等待足够长的时间以便发现问题。这个时间到问题发现的间隔是一个衡量标准，通常是在推出完成后多长时间内，你的监控看到问题的迹象。显然，如果一个推出包含问题，那么在推出完成的那一刻，问题就存在于你的基础设施中。但即使它存在，也可能需要一些时间才能显现。例如，内存泄漏可能需要一个小时或更长时间，才能在监控中清晰地看到泄漏内存的影响或影响用户。时间到问题发现的间隔是一个概率分布，指示你应该等待多长时间才能有很强的概率表明你的发布正在正确运行。一般来说，一个不错的经验法则是将过去问题显现的平均时间加倍。
+- en: If, over the past six months, each outage took an average of an hour to show
+    up, waiting two hours between regional rollouts gives you a decent probability
+    that your release is successful. If you want to derive richer (and more meaningful)
+    statistics based on the history of your application, you can estimate this time-to-smoke
+    even more closely.
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果在过去六个月中，每次故障平均需要一个小时才能出现，那么在区域推出之间等待两个小时可以让你有很大的概率成功。如果你想根据应用程序历史推导出更丰富（和更有意义）的统计数据，你可以更加准确地估计这个时间到问题发现的间隔。
+- en: Having successfully rolled out to a canary-like, low-traffic region, it’s time
+    to roll out to a canary-like, high-traffic region. This is a region where the
+    input data looks like that in your canary, but it receives a large volume of traffic.
+    Because you successfully rolled out to a similar-looking region with lower traffic,
+    at this point the only thing you are testing is your application’s ability to
+    scale. If you safely perform this rollout, you can have strong confidence in the
+    quality of your release.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在成功向类似金丝雀的低流量区域推出后，现在是时候向类似金丝雀的高流量区域推出了。这是一个输入数据看起来与你的金丝雀相似，但接收大量流量的区域。因为你已经成功向流量较低的类似区域推出，此时你所测试的唯一事情就是你的应用程序扩展的能力。如果你安全地执行了这次推出，你就可以对你的发布质量有很强的信心。
+- en: After you have rolled out to a high-traffic region receiving canary-like data,
+    you should follow the same pattern for other potential differences in traffic.
+    For example, you might roll out to a low-traffic region in Asia or Europe next.
+    At this point, it might be tempting to accelerate your rollout, but it is critically
+    important to roll out only to a single region that represents any significant
+    change in either input or load to your release. After you are confident that you
+    have tested all the potential variability in the production input to your application,
+    then you can start parallelizing the release to speed it up with strong confidence
+    that it is operating correctly and your rollout can complete successfully.
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在向接收类似金丝雀数据的高流量区域推出后，你应该对其他潜在的流量差异遵循相同的模式。例如，接下来你可能会向亚洲或欧洲的低流量区域推出。此时，加速推出可能很诱人，但关键是只向代表任何输入或负载变化的单个区域推出。在你确信已经测试了应用程序生产输入的所有潜在变化后，你可以开始并行化发布以加快速度，并且有很强的信心它正在正确运行，你的推出可以成功完成。
+- en: When Something Goes Wrong
+  id: totrans-54
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 当出现问题时
+- en: So far, we have seen the pieces that go into setting up a worldwide rollout
+    for your software system, and we have seen the ways that you can structure this
+    rollout to minimize the chances that something goes wrong. But what do you do
+    when something actually does go wrong? All emergency responders know that in the
+    heat and panic of a crisis, your brain is significantly stressed and it is much
+    more difficult to remember even the simplest processes. Add to this pressure the
+    knowledge that when an outage happens, everyone in the company from the CEO down
+    is going to be feverishly waiting for the “all clear” signal, and you can see
+    how easy it is to make a mistake. Additionally, in such circumstances, a simple
+    mistake, like forgetting a particular step in a recovery process, or rolling out
+    a “fixed” build that actually has more problems, can make a bad situation an order
+    of magnitude worse.
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，我们已经看到了设置软件系统全球发布的各个要素，并了解了如何构建这种发布方式以尽量减少出错的机会。但是，当确实出现问题时，你该怎么办呢？所有应急响应人员都知道，在危机的热情和恐慌中，你的大脑处于极度紧张状态，即使是最简单的流程也更难记住。加上这种压力，你知道一旦发生故障，公司中从CEO到基层的每个人都会急切地等待“一切清楚”的信号，你就能明白，犯错误是多么容易。此外，在这种情况下，一个简单的错误，比如在恢复过程中忘记某个步骤，或者推出一个“修复”版本实际上有更多问题，都会使糟糕的情况恶化十倍。
+- en: For all these reasons, it is critical that you are capable of responding quickly,
+    calmly, and correctly when a problem happens with a rollout. To ensure that everything
+    necessary is done, and done in the correct order, it pays to have a clear checklist
+    of tasks organized in the order in which they are to be executed as well as the
+    expected output for each step. Write down every step, no matter how obvious it
+    might seem. In the heat of the moment, even the most obvious and easy steps can
+    be the ones that are forgotten and accidentally skipped.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 出于所有这些原因，当发布出现问题时，能够迅速、冷静和正确地响应是至关重要的。为了确保所有必要的事情都做到位，并按正确的顺序进行，有一个清晰的任务检查列表是值得的，按照执行顺序组织每个步骤的预期输出。记录下每一步，无论看起来多么显而易见。在紧要关头，即使是最显而易见和简单的步骤也可能被遗忘并意外地跳过。
+- en: The way that first responders ensure a correct response in a high-stress situation
+    is to practice that response without the stress of the emergency. The same practice
+    applies to all the activities that you might take in response to a problem with
+    your rollout. You begin by identifying all the steps needed to respond to an issue
+    and perform a rollback. Ideally, the first response is to “stop the bleeding,”
+    to move user traffic away from the impacted region(s) and into a region where
+    the rollout hasn’t happened and your system is operating correctly. This is the
+    first thing you should practice. Can you successfully direct traffic away from
+    a region? How long does it take?
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 急救人员确保在高压情况下作出正确响应的方式是在紧急情况之外练习这种响应。同样的练习也适用于你在处理发布问题时可能采取的所有活动。你首先要确定应对问题和执行回滚所需的所有步骤，并进行练习。理想情况下，首要响应是“止血”，将用户流量从受影响区域转移到尚未进行发布且系统正常运行的区域。这是你应该练习的第一件事情。你能成功地引导流量远离一个区域吗？需要多长时间？
+- en: The first time you attempt to move traffic using a DNS-based traffic load balancer,
+    you will realize just how long and in how many ways our computers cache DNS entries.
+    It can take nearly a day to fully drain traffic away from a region using a DNS-based
+    traffic shaper. Regardless of how your first attempt to drain traffic goes, take
+    notes. What worked well? What went poorly? Given this data, set a goal for how
+    long a traffic drain should take in terms of time to drain a percentage of traffic,
+    for example, being able to drain 99% of traffic in less than 10 minutes. Keep
+    practicing until you can achieve that goal. You might need to make architectural
+    changes to make this possible. You might need to add automation so that humans
+    aren’t cutting and pasting commands. Regardless of necessary changes, practice
+    will ensure that you are more capable when responding to an incident and that
+    you will learn where your system design needs to be improved.
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 第一次尝试使用基于DNS的流量负载均衡器来移动流量时，您会意识到我们的计算机如何缓存DNS条目，以及这需要多长时间。使用基于DNS的流量整形器完全消除某一区域的流量可能需要将近一天的时间。无论您第一次尝试排放流量的情况如何，都要做好记录。哪些方面运作良好？哪些方面运作不佳？根据这些数据，设定一个排放流量所需时间的目标，例如，在不到10分钟内排放掉99%的流量。持续练习，直到达到这个目标。您可能需要进行架构更改才能实现这一目标。您可能需要添加自动化，以确保不再需要人工复制和粘贴命令。无论需要做出哪些变更，实践将确保您在应对事件时更为从容，并且您将了解到系统设计需要改进的地方。
+- en: The same sort of practice applies to every action that you might take on your
+    system. Practice a full-scale data recovery. Practice a global rollback of your
+    system to a previous version. Set goals for the length of time it should take.
+    Note any places where you made mistakes, and add validation and automation to
+    eliminate the possibility of mistakes. Achieving your incident reaction goals
+    in practice gives you confidence that you will be able to respond correctly in
+    a real incident. But just like every emergency responder continues to train and
+    learn, you too need to set up a regular cadence of practice to ensure that everyone
+    on a team stays well versed in the proper responses and (perhaps more important)
+    that your responses stay up to date as your system changes.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对您可能在系统上采取的每个操作都应采用相同的实践。实践全面的数据恢复。实践将您的系统全球回滚到以前的版本。设定时间目标。记录任何可能犯的错误，并添加验证和自动化来消除错误的可能性。在实践中达到您的事件反应目标将使您确信，在真实事件中您将能够做出正确反应。但就像每个紧急响应人员都继续训练和学习一样，您也需要建立定期实践的节奏，以确保团队中的每个人都熟悉正确的应对措施，并且（也许更重要的是）随着系统的变化，您的响应保持最新。
+- en: Worldwide Rollout Best Practices
+  id: totrans-60
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 全球推出最佳实践
+- en: 'Rolling out your software around the world, especially if you have never done
+    it before, can be a significant challenge. Here are some best practices based
+    on our years of production experience for how to manage the global deployment
+    of mission critical software:'
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在全球范围内推出您的软件，特别是如果您以前从未这样做过，可能是一个重大挑战。以下是我们多年生产经验基础上的一些最佳实践，用于管理关键任务软件的全球部署：
+- en: Distribute each image around the world. A successful rollout depends on the
+    release bits (binaries, images, etc.) being nearby to where they will be used.
+    This also ensures reliability of the rollout in the presence of networking slowdowns
+    or irregularities. Geographic distribution should be a part of your automated
+    release pipeline for guaranteed consistency.
+  id: totrans-62
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 将每个镜像分布到全球各地。成功的推出取决于发布的位（二进制文件、镜像等）是否靠近它们将被使用的地方。这也确保在网络减速或不规则性存在时推出的可靠性。地理分布应成为您的自动化发布流水线的一部分，以确保一致性。
+- en: Shift as much of your testing as possible to the left by having as much extensive
+    integration and replay testing of your application as possible. You want to start
+    a rollout only with a release that you strongly believe to be correct.
+  id: totrans-63
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 尽可能将您的测试尽量向左移动，通过尽可能广泛的集成和重放测试来测试您的应用程序。您希望仅通过您强烈相信正确的发布才开始推出。
+- en: Begin a release in a canary region, which is a preproduction environment in
+    which other teams or large customers can validate *their* use of your service
+    before you begin a larger-scale rollout.
+  id: totrans-64
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在金丝雀区域开始发布，这是一个预生产环境，在这里其他团队或大客户可以在您开始更大规模的推出之前验证他们对您服务的使用。
+- en: Identify different characteristics of the regions where you are rolling out.
+    Each difference can be one that causes a failure and a full or partial outage.
+    Try to roll out to low-risk regions first.
+  id: totrans-65
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 辨识您部署的不同地区的特征。每一个差异可能都会导致故障和完全或部分的停机。尽量先向风险较低的地区推出。
+- en: Document and practice your response to any problem or process (e.g., a rollback)
+    that you might encounter. Trying to remember what to do in the heat of the moment
+    is a recipe for forgetting something and making a bad problem worse.
+  id: totrans-66
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 记录并实践对可能遇到的任何问题或流程（例如回滚）的响应。试图在紧急情况下记住该做什么往往会导致遗漏某些步骤，使问题更加严重。
+- en: Summary
+  id: totrans-67
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 总结
+- en: It might seem unlikely today, but most of us will end up running a worldwide
+    scale system sometime during our careers. This chapter described how you can gradually
+    build and iterate your system to be a truly global design. It also discussed how
+    you can set up your rollout to ensure minimal downtime of the system while it
+    is being updated. Finally, we covered setting up and practicing the processes
+    and procedures necessary to react when (note that we didn’t say “if”) something
+    goes wrong.
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 今天看起来可能不太可能，但我们大多数人在职业生涯中最终会运行一个全球规模的系统。本章描述了如何逐步构建和迭代您的系统，使其成为真正的全球设计。还讨论了如何设置您的部署以确保系统在更新期间最小化停机时间。最后，我们讨论了设置和实践必要的流程和程序，以在出现问题时做出反应（请注意，我们没有说“如果”而是“当”出现问题时）。
