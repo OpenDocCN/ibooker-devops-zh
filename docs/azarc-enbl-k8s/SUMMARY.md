@@ -1,0 +1,6 @@
++   [Azure Arc 支持的面向多云的 Kubernetes 指南](README.md)
++   [前言](azarc-enbl-k8s_0.md)
++   [第一章：Azure Arc 跨多云的一致性](azarc-enbl-k8s_1.md)
++   [第二章：扩展 Azure 控制平面用于 Kubernetes](azarc-enbl-k8s_2.md)
++   [第三章：GitOps：Git 作为事实的来源](azarc-enbl-k8s_3.md)
++   [第四章：使用 Azure Arc 启用的 Kubernetes](azarc-enbl-k8s_4.md)

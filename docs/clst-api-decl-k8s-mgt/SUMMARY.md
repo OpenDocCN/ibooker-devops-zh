@@ -1,0 +1,6 @@
++   [集群 API 与声明式 Kubernetes 管理指南](README.md)
++   [第一章：Kubernetes 采用复杂性的原因](clst-api-decl-k8s-mgt_01.md)
++   [第二章：声明性 Kubernetes 集群管理](clst-api-decl-k8s-mgt_02.md)
++   [第三章：集群 API 的工作原理](clst-api-decl-k8s-mgt_03.md)
++   [第四章：用例、优势和局限性](clst-api-decl-k8s-mgt_04.md)
++   [第五章：Cluster API 和 Kubernetes 的未来](clst-api-decl-k8s-mgt_05.md)
