@@ -1,0 +1,531 @@
+- en: Chapter 11\. Stateless Service
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第11章 无状态服务
+- en: The *Stateless Service* pattern describes how to create and operate applications
+    that are composed of identical ephemeral replicas. These applications are best
+    suited for dynamic cloud environments where they can be rapidly scaled and made
+    highly available.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*无状态服务*模式描述了如何创建和操作由相同的短暂副本组成的应用程序。这些应用程序最适合于动态云环境，可以快速扩展并保持高可用性。'
+- en: Problem
+  id: totrans-2
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 问题
+- en: The microservices architecture style is the dominant choice for implementing
+    new greenfield cloud native applications. Among the driving principles of this
+    architecture are things such as how it addresses a single concern, how it owns
+    its data, how it has a well-encapsulated deployment boundary, and others. Typically,
+    such applications also follow the [twelve-factor app principles](https://12factor.net),
+    which makes them easy to operate with Kubernetes on dynamic cloud environments.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 微服务架构风格是实现新的云原生应用的主要选择。这种架构的驱动原则之一是如何处理单一关注点，如何管理自己的数据，以及如何有一个良好封装的部署边界等。通常，这类应用还遵循[十二因素应用原则](https://12factor.net)，这使它们可以在动态云环境中与
+    Kubernetes 轻松操作。
+- en: Applying some of these principles requires understanding the business domain,
+    identifying the service boundary, or applying domain-driven design or a similar
+    methodology during the service implementation. Implementing some of the other
+    principles may involve making the services ephemeral, which means the service
+    can be created, scaled, and destroyed with no side effects. These latter concerns
+    are easier to address when a service is stateless rather than stateful.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用一些这些原则需要理解业务域、确定服务边界，或在服务实现过程中应用领域驱动设计或类似的方法。实施其他一些原则可能涉及使服务短暂化，这意味着服务可以在没有副作用的情况下创建、扩展和销毁。当服务是无状态而不是有状态时，更容易解决这些后者关注点。
+- en: A stateless service does not maintain any state internally within the instance
+    across service interactions. In our context, it means a container is stateless
+    if it does not hold any information from requests in its internal storage (memory
+    or temporary filesystem) that is critical for serving future requests. A stateless
+    process has no stored knowledge of or reference to past requests, so each request
+    is made as if from scratch. Instead, if the process needs to store such information,
+    it should store it in an external storage such as a database, message queue, mounted
+    filesystem, or some other data store that can be accessed by other instances.
+    A good thought experiment is to imagine the instances of your services deployed
+    on different nodes and a load-balancer that randomly distributes the requests
+    to the instances without any sticky session (i.e., without an affinity between
+    a client and a specific service instance). If the service can fulfill its purpose
+    in this setup, it is likely a stateless service (or it has a mechanism for state
+    distribution among the instances, such as a data grid).
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 无状态服务在服务间交互时不会在实例内部保留任何状态。在我们的背景下，这意味着如果容器在其内部存储（内存或临时文件系统）中不保存任何来自请求的信息（这些信息对于处理未来请求是关键的），则容器是无状态的。无状态进程不会存储或引用过去请求的任何信息，因此每个请求都像从头开始一样。相反，如果进程需要存储这样的信息，则应将其存储在外部存储中，例如数据库、消息队列、挂载文件系统或其他可以被其他实例访问的数据存储中。一个好的思维实验是想象你的服务实例部署在不同节点上，有一个负载均衡器将请求随机分发给这些实例，而没有任何粘性会话（即客户端和特定服务实例之间没有关联）。如果服务能够在这种设置中完成其目的，它很可能是无状态的服务（或者它有一种状态在实例之间分发的机制，比如数据网格）。
+- en: Stateless services are made of identical, replaceable instances that often offload
+    state to external permanent storage systems and use load-balancers for distributing
+    incoming requests among themselves. In this chapter, we will see specifically
+    which Kubernetes abstractions can help operate such stateless applications.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 无状态服务由相同、可替换的实例组成，通常将状态转移到外部永久存储系统，并使用负载均衡器在它们之间分配传入请求。在本章中，我们将具体看到哪些 Kubernetes
+    抽象可以帮助操作这样的无状态应用程序。
+- en: Solution
+  id: totrans-7
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 解决方案
+- en: In [Chapter 3, “Declarative Deployment”](ch03.html#DeclarativeDeployment), you
+    learned how to use the concept of Deployment to control how an application should
+    be updated to the next version, using the `RollingUpdate` and `Recreate` strategies.
+    But this is only the upgrading aspect of Deployment. At a broader level, a Deployment
+    represents an application deployed in the cluster. Kubernetes doesn’t have the
+    notion of an `Application` or a `Container` as top-level entities. Instead, an
+    application is typically composed of a collection of Pods managed by a controller
+    such as ReplicaSet, Deployment, or StatefulSet, combined with ConfigMap, Secret,
+    Service, PersistentVolumeClaim, etc. The controller that is used for managing
+    stateless Pods is ReplicaSet, but that is a lower-level internal control structure
+    used by a Deployment. Deployment is the recommended user-facing abstraction for
+    creating and updating stateless applications, which creates and manages the ReplicaSets
+    behind the scene. A ReplicaSet should be used when the update strategies provided
+    by Deployment are not suitable, or a custom mechanism is required, or no control
+    over the update process is needed at all.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[第 3 章，“声明式部署”](ch03.html#DeclarativeDeployment)中，您学习了如何使用部署（Deployment）的概念来控制应用程序如何升级到下一个版本，使用`RollingUpdate`和`Recreate`策略。但这只涉及部署的升级方面。从更广泛的角度来看，部署代表了集群中部署的应用程序。Kubernetes没有`Application`或`Container`作为顶级实体的概念。相反，一个应用程序通常由由
+    ReplicaSet、Deployment 或 StatefulSet 管理的一组 Pod 组成，结合 ConfigMap、Secret、Service、PersistentVolumeClaim
+    等。用于管理无状态 Pod 的控制器是 ReplicaSet，但它是部署使用的低级内部控制结构。部署是推荐的用户面向抽象化，用于创建和更新无状态应用程序，它在后台创建和管理
+    ReplicaSets。当部署提供的更新策略不合适，或需要自定义机制，或根本不需要控制更新过程时，应使用 ReplicaSet。
+- en: Instances
+  id: totrans-9
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 实例
+- en: The primary purpose of a ReplicaSet is to ensure a specified number of identical
+    Pod replicas running at any given time. The main sections of a ReplicaSet definition
+    include the number of replicas indicating how many Pods it should maintain, a
+    selector that specifies how to identify the Pods it manages, and a Pod template
+    for creating new Pod replicas. Then, a ReplicaSet creates and deletes Pods as
+    needed to maintain the desired replica count using the given Pod template, as
+    demonstrated in [Example 11-1](#stateless-service-instances).
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ReplicaSet 的主要目的是确保任何给定时间运行指定数量的相同 Pod 副本。ReplicaSet 定义的主要部分包括副本数指示应该维护多少 Pod、选择器指定如何识别其管理的
+    Pod，以及用于创建新 Pod 副本的 Pod 模板。然后，ReplicaSet 根据需要创建和删除 Pod 以维护所需的副本数量，使用给定的 Pod 模板，正如[示例
+    11-1](#stateless-service-instances)所示。
+- en: Example 11-1\. ReplicaSet definition for a stateless Pod
+  id: totrans-11
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 11-1\. 用于无状态 Pod 的 ReplicaSet 定义
+- en: '[PRE0]'
+  id: totrans-12
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: '[![1](assets/1.png)](#co_stateless_service_CO1-1)'
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_stateless_service_CO1-1)'
+- en: Desired number of Pod replicas to maintain running.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 维护运行的 Pod 副本的期望数量。
+- en: '[![2](assets/2.png)](#co_stateless_service_CO1-2)'
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_stateless_service_CO1-2)'
+- en: Label selector used to identify the Pods to manage.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用于识别要管理的 Pod 的标签选择器。
+- en: '[![3](assets/3.png)](#co_stateless_service_CO1-3)'
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_stateless_service_CO1-3)'
+- en: Template specifying the data for creating new Pods.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 模板指定用于创建新 Pod 的数据。
+- en: The template is used when the ReplicaSet needs to create new Pods to meet the
+    desired number of replicas. But a ReplicaSet is not limited to managing the Pods
+    specified by the template. If a bare Pod has no owner reference (meaning it is
+    not managed by a controller), and it matches the label selector, it will be acquired
+    by setting the owner reference and managed by the ReplicaSet. This setup can lead
+    to a ReplicaSet owning a nonidentical set of Pods created by different means,
+    and terminate existing bare Pods that exceed the declared replica count. To avoid
+    such undesired side effects, it is recommended that you ensure bare Pods do not
+    have labels matching ReplicaSet selectors.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当 ReplicaSet 需要创建新的 Pod 以满足所需的副本数时，将使用该模板。但 ReplicaSet 并不局限于管理模板中指定的 Pod。如果一个裸
+    Pod 没有所有者引用（意味着它不由控制器管理），并且它与标签选择器匹配，那么它将通过设置所有者引用被获取，并由 ReplicaSet 管理。这种设置可能导致
+    ReplicaSet 拥有由不同方式创建的非相同的一组 Pod，并终止超过声明的副本计数的现有裸 Pod。为了避免这种不良副作用，建议确保裸 Pod 不具有与
+    ReplicaSet 选择器匹配的标签。
+- en: Regardless of whether you create a ReplicaSet directly or through a Deployment,
+    the end result will be that the desired number of identical Pod replicas are created
+    and maintained. The added benefit of using Deployment is that we can control how
+    the replicas are upgraded and rolled back, which we described in detail in [Chapter 3,
+    “Declarative Deployment”](ch03.html#DeclarativeDeployment). Next, the replicas
+    are scheduled to the available nodes as per the policies we covered in [Chapter 6,
+    “Automated Placement”](ch06.html#AutomatedPlacement). The ReplicaSet’s job is
+    to restart the containers if needed and scale out or in when the number of replicas
+    is increased or decreased, respectively. With this behavior, Deployment and ReplicaSet
+    can automate the lifecycle management of stateless applications.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 无论您是直接创建 ReplicaSet 还是通过部署，最终结果都是创建并维护所需数量的相同 Pod 副本。使用部署的附加好处是，我们可以控制副本如何升级和回滚，我们在[第
+    3 章，“声明式部署”](ch03.html#DeclarativeDeployment)中详细描述了这一点。接下来，根据我们在[第 6 章，“自动化部署”](ch06.html#AutomatedPlacement)中介绍的策略，将副本调度到可用节点。ReplicaSet
+    的工作是在需要时重新启动容器，并在副本数量增加或减少时扩展或缩减。通过这种行为，部署和 ReplicaSet 可以自动化无状态应用程序的生命周期管理。
+- en: Networking
+  id: totrans-21
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 网络
+- en: Pods created by ReplicaSet are ephemeral and may disappear at any time, such
+    as when a Pod is evicted because of resource starvation or because the node the
+    Pod is running on fails. In such a situation, the ReplicaSet will create a new
+    Pod that will have a new name, hostname, and IP address. If the application is
+    stateless, as we’ve defined earlier in the chapter, new requests should be handled
+    from the newly created Pod the same way as by any other Pod.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由 ReplicaSet 创建的 Pod 是暂时的，可能随时消失，例如当 Pod 因资源匮乏而被驱逐或因运行 Pod 的节点失败时。在这种情况下，ReplicaSet
+    将创建一个新的 Pod，该 Pod 将具有新的名称、主机名和 IP 地址。如果应用程序是无状态的，正如我们在本章前面所定义的，新请求应该像处理任何其他 Pod
+    一样处理从新创建的 Pod 进来。
+- en: Depending on how the application within the container connects to the other
+    systems to accept requests or poll for messages, for example, you may require
+    a Kubernetes Service. If the application is starting an egress connection to a
+    message broker or database, and that is the only way it exchanges data, then there
+    is no need for a Kubernetes Service. But more often, stateless services are contacted
+    by other services over synchronous request/response-driven protocols such as HTTP
+    and gRPC. Since the Pod IP address changes with every Pod restart, it is better
+    to use a permanent IP address based on a Kubernetes Service that service consumers
+    can use. A Kubernetes Service has a fixed IP address that doesn’t change during
+    the lifetime of the Service, and it ensures the client requests are always load-balanced
+    across instances and routed to the healthy and ready-to-accept-requests Pods.
+    We cover different types of Kubernetes Services in [Chapter 13, “Service Discovery”](ch13.html#ServiceDiscovery).
+    In [Example 11-2](#stateless-service-discovery), we use a simple Service to expose
+    the Pods internally within the cluster to other Pods.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 根据容器内的应用程序如何连接到其他系统以接受请求或轮询消息的方式，例如，您可能需要一个 Kubernetes 服务。如果应用程序正在启动到消息代理或数据库的出站连接，并且这是它交换数据的唯一方式，那么就不需要
+    Kubernetes 服务。但更常见的是，无状态服务通过同步请求/响应驱动的协议（如 HTTP 和 gRPC）被其他服务联系。由于 Pod IP 地址在每次
+    Pod 重启时都会更改，因此最好使用基于 Kubernetes 服务的固定 IP 地址，以便服务使用者可以使用。Kubernetes 服务具有在服务生命周期内不变的固定
+    IP 地址，并确保客户端请求始终在实例之间进行负载均衡，并路由到健康且准备好接受请求的 Pod。我们在[第 13 章，“服务发现”](ch13.html#ServiceDiscovery)中涵盖了不同类型的
+    Kubernetes 服务。在[示例 11-2](#stateless-service-discovery)中，我们使用一个简单的服务在集群内部向其他 Pod
+    公开 Pod。
+- en: Example 11-2\. Exposing a stateless service
+  id: totrans-24
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 11-2\. 暴露一个无状态服务
+- en: '[PRE1]'
+  id: totrans-25
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: '[![1](assets/1.png)](#co_stateless_service_CO2-1)'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_stateless_service_CO2-1)'
+- en: Name of the service that can be used to reach the matching Pods.
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可用于访问匹配 Pod 的服务名称。
+- en: '[![2](assets/2.png)](#co_stateless_service_CO2-2)'
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_stateless_service_CO2-2)'
+- en: Selector matching the Pod labels from the ReplicaSet.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从 ReplicaSet 匹配 Pod 标签的选择器。
+- en: 'The definition in this example will create a Service named `random-generator`
+    that accepts TCP connections on port 80 and routes them to port 8080 on all the
+    matching Pods with selector `app: random-generator`. Once a Service is created,
+    it is assigned a `clusterIP` that is accessible only from within the Kubernetes
+    cluster, and that IP remains unchanged as long as the Service definition exists.
+    This acts as a permanent entrypoint to all matching Pods that are ephemeral and
+    have changing IP addresses.'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '此示例中的定义将创建名为 `random-generator` 的服务，该服务在端口 80 上接受 TCP 连接，并将其路由到所有匹配的带有选择器 `app:
+    random-generator` 的 Pod 的端口 8080。一旦创建了服务，它将被分配一个 `clusterIP`，该 IP 只能从 Kubernetes
+    集群内部访问，并且只要服务定义存在，该 IP 将保持不变。这充当了所有匹配的 Pod 的永久入口点，这些 Pod 是短暂的并且具有变化的 IP 地址。'
+- en: Notice that Deployment and the resulting ReplicaSet are only responsible for
+    maintaining the desired number of stateless Pods that match the label selector.
+    They are unaware of any Kubernetes Service that might be directing traffic to
+    the same set of Pods or a different combination of Pods.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，部署和生成的副本集仅负责维护与标签选择器匹配的无状态 Pod 的所需数量。它们不知道任何可能将流量引导到相同一组 Pod 或不同组合的 Kubernetes
+    服务。
+- en: Storage
+  id: totrans-32
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 存储
+- en: Few stateless services don’t need any state and can process requests based only
+    on the data provided in every request. Most stateless services require state,
+    but they are stateless because they offload the state to some other stateful system
+    or data store, such as a filesystem. Any Pod, whether it is created by a ReplicaSet
+    or not, can declare and use file storage through volumes. Different types of volumes
+    can be used to store state. Some of these are cloud-provider-specific storage,
+    while others allow mounting network storage or even sharing filesystems from the
+    node where the Pod is placed. In this section, we’ll look at the `persistentVolumeClaim`
+    volume type, which allows you to use manually or dynamically provisioned persistent
+    storage.
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 少数无状态服务不需要任何状态，只能基于每个请求提供的数据处理请求。大多数无状态服务需要状态，但它们是无状态的，因为它们将状态转移到某些其他有状态系统或数据存储，例如文件系统。无论是由
+    ReplicaSet 创建的 Pod 还是其他方式创建的，都可以通过卷声明并使用文件存储。可以使用不同类型的卷存储状态。其中一些是特定于云提供商的存储，而其他允许挂载网络存储甚至共享节点上的文件系统。在本节中，我们将介绍
+    `persistentVolumeClaim` 卷类型，它允许您使用手动或动态配置的持久存储。
+- en: A PersistentVolume (PV) represents a storage resource abstraction in a Kubernetes
+    cluster that has a lifecycle independent of any Pod lifecycle that is using it.
+    A Pod cannot directly refer to a PV; however, a Pod uses PersistentVolumeClaim
+    (PVC) to request and bind to the PV, which points to the actual durable storage.
+    This indirect connection allows for a separation of concerns and Pod lifecycle
+    decoupling from PV. A cluster administrator can configure storage provisioning
+    and define PVs. The developer creating Pod definitions can use PVC to use the
+    storage. With this indirection, even if the Pod is deleted, the ownership of the
+    PV remains attached to the PVC and continues to exist. [Example 11-3](#stateless-service-storage)
+    shows a storage claim that can be used in a Pod template.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 持久卷（PV）代表 Kubernetes 集群中的存储资源抽象，其生命周期独立于任何正在使用它的 Pod 生命周期。Pod 不能直接引用 PV；然而，Pod
+    使用持久卷声明（PVC）来请求并绑定到 PV，后者指向实际的持久存储。这种间接连接允许关注点分离，并使 Pod 生命周期与 PV 解耦。集群管理员可以配置存储供应并定义
+    PV。创建 Pod 定义的开发人员可以使用 PVC 使用存储。通过这种间接方式，即使删除了 Pod，PV 的所有权仍然附加到 PVC 并继续存在。[示例 11-3](#stateless-service-storage)
+    展示了可以在 Pod 模板中使用的存储声明。
+- en: Example 11-3\. A claim for a PersistentVolume
+  id: totrans-35
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 11-3\. 用于 PersistentVolume 的声明。
+- en: '[PRE2]'
+  id: totrans-36
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: '[![1](assets/1.png)](#co_stateless_service_CO3-1)'
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_stateless_service_CO3-1)'
+- en: Name of the claim that can be referenced from a Pod template.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以从 Pod 模板中引用的声明名称。
+- en: '[![2](assets/2.png)](#co_stateless_service_CO3-2)'
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_stateless_service_CO3-2)'
+- en: Indicates that only a single node can mount the volume for reading and writing.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表示只有一个节点可以挂载该卷进行读写操作。
+- en: '[![3](assets/3.png)](#co_stateless_service_CO3-3)'
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_stateless_service_CO3-3)'
+- en: Requesting 1 GiB of storage.
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请求 1 GiB 的存储空间。
+- en: 'Once a PVC is defined, it can be referenced from a Pod template through the
+    `persistentVolumeClaim` field. One of the interesting fields of PersistentVolumeClaim
+    is `accessModes`. It controls how the storage is mounted to the nodes and consumed
+    by the Pods. For example, network filesystems can be mounted to multiple nodes
+    and can allow reading and writing to multiple applications at the same time. Other
+    storage implementations can be mounted to only a single node at a time and can
+    be accessed only by the Pods scheduled on that node. Let’s look at different `accessModes`
+    offered by Kubernetes:'
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦定义了PVC，就可以通过`persistentVolumeClaim`字段从Pod模板引用它。PersistentVolumeClaim的一个有趣字段是`accessModes`。它控制存储如何挂载到节点并被Pod消耗。例如，网络文件系统可以挂载到多个节点，并且可以同时允许多个应用程序读取和写入。其他存储实现一次只能挂载到单个节点，并且只能被调度在该节点上的Pod访问。让我们看看Kubernetes提供的不同`accessModes`：
+- en: ReadWriteOnce
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ReadWriteOnce
+- en: This represents a volume that can be mounted to a single node at a time. In
+    this mode, one or multiple Pods running on the node could carry out read and write
+    operations.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这代表一种一次只能挂载到单个节点的卷。在此模式下，运行在节点上的一个或多个Pod可以执行读取和写入操作。
+- en: ReadOnlyMany
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ReadOnlyMany
+- en: The volume can be mounted to multiple nodes, but it allows read-only operations
+    to all Pods.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 卷可以挂载到多个节点，但只允许所有Pod进行只读操作。
+- en: ReadWriteMany
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ReadWriteMany
+- en: In this mode, the volume can be mounted by many nodes and allows both read and
+    write operations.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在此模式下，卷可以被多个节点挂载，并允许读取和写入操作。
+- en: ReadWriteOncePod
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ReadWriteOncePod
+- en: Notice that all of the access modes described so far offer per-node granularity.
+    Even `ReadWriteOnce` allows multiple Pods on the same node to read from and write
+    to the same volume simultaneously. Only `ReadWriteOncePod` access mode guarantees
+    that only a single Pod has access to a volume. This is invaluable in scenarios
+    where at most one writer application is allowed to access data for data-consistency
+    guarantees. Use this mode with caution as it will turn your services into a singleton
+    and prevent scaling out. If another Pod replica uses the same PVC, the Pod will
+    fail to start because the PVC is already in use by another Pod. As of this writing,
+    `ReadWriteOncePod` doesn’t honor preemption either, which means a lower-priority
+    Pod will hold on to the storage and not be preempted from the node in favor of
+    a higher-priority Pod waiting on the same `ReadWriteOncePod` claim.
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注意到到目前为止描述的所有访问模式都提供了每个节点的粒度。即使`ReadWriteOnce`允许同一节点上的多个Pod同时从同一卷读取和写入。只有`ReadWriteOncePod`访问模式保证只有一个Pod可以访问卷。在最多允许一个写入应用程序访问数据以确保数据一致性的情况下，这是无价的。请谨慎使用此模式，因为它会将您的服务转变为单例，并阻止扩展。如果另一个Pod副本使用相同的PVC，该Pod将无法启动，因为PVC已被另一个Pod使用。截至目前，`ReadWriteOncePod`也不支持抢占，这意味着优先级较低的Pod将保留存储空间，并且不会被抢占以让出节点给等待相同`ReadWriteOncePod`声明的优先级较高的Pod。
+- en: In a ReplicaSet, all Pods are identical; they share the same PVC and refer to
+    the same PV. This is in contrast to StatefulSets covered in the next chapter,
+    where PVCs are created dynamically for each stateful Pod replica. This is one
+    of the major differences between how stateless and stateful workloads are handled
+    in Kubernetes.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在一个ReplicaSet中，所有Pod都是相同的；它们共享相同的PVC并引用相同的PV。这与下一章中介绍的StatefulSets形成对比，在StatefulSets中，为每个有状态的Pod副本动态创建PVC。这是Kubernetes中处理无状态和有状态工作负载的主要区别之一。
+- en: Discussion
+  id: totrans-53
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 讨论
+- en: A complex distributed system is usually composed of multiple services, some
+    of which will be stateful and perform some form of distributed coordination, some
+    of which might be short-lived jobs, and some of which might be highly scalable
+    stateless services. Stateless services are composed of identical, swappable, ephemeral,
+    and replaceable instances. They are ideal for handling short-lived requests and
+    can scale up and down rapidly without having any dependencies among the instances.
+    As shown in [Figure 11-1](#img-stateless-service-application), Kubernetes offers
+    a number of useful primitives to manage such applications.
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 复杂的分布式系统通常由多个服务组成，其中一些将是有状态的并执行某种形式的分布式协调，一些可能是短暂的作业，一些可能是高度可扩展的无状态服务。无状态服务由相同、可互换、短暂和可替换的实例组成。它们非常适合处理短暂的请求，并且可以在实例之间没有任何依赖关系的情况下快速扩展和缩减。正如在[图11-1](#img-stateless-service-application)中所示，Kubernetes提供了许多有用的原语来管理这些应用程序。
+- en: '![A Distributed Stateless Application on Kubernetes](assets/kup2_1101.png)'
+  id: totrans-55
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Kubernetes上的分布式无状态应用程序](assets/kup2_1101.png)'
+- en: Figure 11-1\. A distributed stateless application on Kubernetes
+  id: totrans-56
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 11-1\. Kubernetes 上的分布式无状态应用程序
+- en: At the lowest level, the Pod abstraction ensures that one or more containers
+    are observed with liveness checks and are always up and running. Building on that,
+    the ReplicaSet also ensures that the desired number of stateless Pods are always
+    running on the healthy nodes. Deployments automate the upgrade and rollback mechanism
+    of Pod replicas. When there is incoming traffic, the Service abstraction discovers
+    and distributes traffic to healthy Pod instances with passing readiness probes.
+    When a persistent file storage is required, PVCs can request and mount storage.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在最低层次上，Pod 抽象确保一个或多个容器通过活力检查始终处于运行状态。基于此，ReplicaSet 还确保在健康节点上始终运行所需数量的无状态 Pod。部署自动化处理了
+    Pod 副本的升级和回滚机制。当有流量进入时，Service 抽象会发现并将流量分发到通过健康性检查的 Pod 实例。当需要持久文件存储时，PVC 可以请求并挂载存储。
+- en: Although Kubernetes offers these building blocks, it will not enforce any direct
+    relationship between them. It is your responsibility to combine them to match
+    the application nature. You have to understand how liveness checks and ReplicaSet
+    control Pods’ lifecycles, and how they relate to readiness probes and Service
+    definitions controlling how the traffic is directed to the Pods. You should also
+    understand how PVCs and `accessMode` control where the storage is mounted and
+    how it is accessed. When Kubernetes primitives are not sufficient, you should
+    know how to combine it with other frameworks such as Knative and KEDA and how
+    to autoscale and even turn stateless applications into serverless. The latter
+    frameworks are covered in [Chapter 29, “Elastic Scale”](ch29.html#ElasticScale).
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管 Kubernetes 提供了这些构建模块，但不会强制执行它们之间的直接关系。你需要负责将它们组合以适应应用的特性。你必须理解活力检查和 ReplicaSet
+    如何控制 Pod 的生命周期，以及它们与就绪探针和服务定义的关系，后者控制流量如何指向 Pod。你还需要理解 PVC 和 `accessMode` 如何控制存储挂载和访问方式。当
+    Kubernetes 的原语不够用时，你应该了解如何与其他框架（如Knative和KEDA）结合，以及如何实现自动伸缩，甚至将无状态应用程序转换为无服务器。后面的框架在
+    [第 29 章，“弹性伸缩”](ch29.html#ElasticScale) 中有详细介绍。
+- en: More Information
+  id: totrans-59
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 更多信息
+- en: '[Stateless Service Example](https://oreil.ly/h0Ytj)'
+  id: totrans-60
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[无状态服务示例](https://oreil.ly/h0Ytj)'
+- en: '[ReplicaSet](https://oreil.ly/XugMo)'
+  id: totrans-61
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[ReplicaSet](https://oreil.ly/XugMo)'
+- en: '[Persistent Volumes](https://oreil.ly/HvApe)'
+  id: totrans-62
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[持久卷](https://oreil.ly/HvApe)'
+- en: '[Storage Classes](https://oreil.ly/qxFrz)'
+  id: totrans-63
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[存储类](https://oreil.ly/qxFrz)'
+- en: '[Access Modes](https://oreil.ly/iovaa)'
+  id: totrans-64
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[访问模式](https://oreil.ly/iovaa)'

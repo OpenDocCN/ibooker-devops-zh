@@ -1,0 +1,639 @@
+- en: Chapter 6\. Observability and Security
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第六章 观测性和安全性
+- en: 'This chapter will explain how an observability platform can help improve the
+    security of your Kubernetes cluster. We will cover the following topics:'
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本章将解释一个观测性平台如何帮助提升您的 Kubernetes 集群的安全性。我们将涵盖以下主题：
+- en: Alerting
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 警报
+- en: In [Chapter 5](ch05.xhtml#observability-id000002) we covered best practices
+    for implementing log collection. In this chapter, we will focus on how to build
+    a system that helps generate high-fidelity alerts. We will also discuss the use
+    of machine learning for anomaly detection.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[第五章](ch05.xhtml#observability-id000002)中，我们介绍了实施日志收集的最佳实践。本章将重点讨论如何构建一个能够生成高保真警报的系统。我们还将讨论使用机器学习进行异常检测。
+- en: Security operations center
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安全运营中心
+- en: We will review a reference implementation of a security operations center (SOC)
+    and how observability can help you build an SOC for your Kubernetes cluster.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将审查一个安全运营中心（SOC）的参考实现，以及观测性如何帮助您为 Kubernetes 集群构建 SOC。
+- en: Behavioral analytics
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 行为分析
+- en: We will cover the concept of user and entity behavior analytics (UEBA) and how
+    to implement it in your Kubernetes cluster.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将介绍用户与实体行为分析（UEBA）的概念，以及如何在您的 Kubernetes 集群中实施它。
+- en: Alerting
+  id: totrans-8
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 警报
+- en: 'In the previous chapter we discussed how to implement logging for your Kubernetes
+    cluster. An effective alerting system must include the following:'
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在前一章中，我们讨论了如何为您的 Kubernetes 集群实施日志记录。一个有效的警报系统必须包括以下内容：
+- en: The system should be able to automatically run queries across various log data
+    sources (e.g., Kubernetes activity logs, network logs, application logs, DNS logs,
+    etc.).
+  id: totrans-10
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 系统应能够自动在各种日志数据源（例如 Kubernetes 活动日志、网络日志、应用程序日志、DNS 日志等）上运行查询。
+- en: The system must be able to support a state machine that is used to generate
+    events for a specified number of threshold violations in a specified duration.
+    The system must also support setting a time period for the query (known as *lookback*).
+    We will cover an example in the next section.
+  id: totrans-11
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 系统必须能够支持一个状态机，用于在指定持续时间内生成特定数目的阈值违规事件。系统还必须支持设置查询的时间段（称为*回溯*）。我们将在下一节中介绍一个示例。
+- en: The system must be able to export actionable alerts to external security, information,
+    and event management (SIEM) so that they can be a part of the incident response
+    process in an enterprise.
+  id: totrans-12
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 系统必须能够向外部安全、信息和事件管理（SIEM）导出可操作的警报，以便它们成为企业中的事件响应过程的一部分。
+- en: Alerting systems are available from major cloud providers that can help you
+    define alerts on logs collected in the cloud provider environment. Google Cloud
+    has an excellent resource to [learn about its alerting capabilities](https://oreil.ly/DyLh3).
+    Amazon Web Services (AWS) also has similar alerting capabilities. These alerts
+    work on logs collected in the cloud provider’s logging system and allow you to
+    define rules to trigger alerts based on thresholds. For example, the number of
+    API calls to an API endpoint in a given time period can be an indicator of a potential
+    denial of service (DoS) attack. While these systems are good for general logging
+    and alerting, a log collection system that is native to Kubernetes, like the one
+    we covered in [Chapter 5](ch05.xhtml#observability-id000002), is necessary to
+    detect security-based events in your Kubernetes cluster, as it correlates data
+    at the time of collection and makes it easy to define alerts on one log source.
+    Also, an alerting system native to Kubernetes will help you define alerts using
+    Kubernetes constructs like deployments, labels, etc., as it will be able to enhance
+    log data with the right context so queries are simple. (For example, you do not
+    need to join a set of labels to services and labels to IPs in network flow logs
+    to query network activity for a service.)
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 主要的云服务提供商提供的警报系统可以帮助您在云服务提供商环境中定义基于日志的警报。Google Cloud 提供了关于其警报能力的[学习资源](https://oreil.ly/DyLh3)。Amazon
+    Web Services（AWS）也有类似的警报能力。这些警报可以在云提供商的日志系统中收集的日志上定义规则，以基于阈值触发警报。例如，在给定时间段内 API
+    调用的数量可能表明可能存在拒绝服务（DoS）攻击。虽然这些系统适用于一般的日志记录和警报，但是对于 Kubernetes 的日志收集系统来说，像我们在[第五章](ch05.xhtml#observability-id000002)中讨论的那种本地化系统是必要的，以便在
+    Kubernetes 集群中检测基于安全性的事件，因为它在收集时相关数据，并且可以轻松地在一个日志源上定义警报。此外，一个适用于 Kubernetes 的警报系统将帮助您使用
+    Kubernetes 构建如部署、标签等的构造定义警报，因为它可以增强正确的上下文与查询网络活动服务的服务和 IP 的标签集。
+- en: Figures [6-1](#configuring_an_alert_operation) and [6-2](#query_configuration_for_an_alert)
+    show you an example of how you can define an alert to detect lateral movement
+    in your Kubernetes cluster.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 图 [6-1](#configuring_an_alert_operation) 和 [6-2](#query_configuration_for_an_alert)
+    展示了如何定义警报来检测您的 Kubernetes 集群中的横向移动的示例。
+- en: '![](Images/ksao_0601.png)'
+  id: totrans-15
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/ksao_0601.png)'
+- en: Figure 6-1\. Configuring an alert operation
+  id: totrans-16
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-1\. 配置警报操作
+- en: '[Figure 6-1](#configuring_an_alert_operation) shows how you can configure the
+    operation of an alert and metadata like name, description, severity, and time
+    period to poll for the data and the lookback period, which is how far back the
+    system will look when querying the data. You can also define thresholds for occurrences
+    of threshold violations before an alert is triggered. It is also important to
+    be able to configure the format of the output; in this example the data will be
+    aggregated by the source of the traffic (namespace and deployment) when the alert
+    is reported. The output alert data helps facilitate the management of the alert
+    by downstream systems (e.g., SIEM).'
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 6-1](#configuring_an_alert_operation) 显示了如何配置警报的操作及元数据，如名称、描述、严重程度和时间段，以轮询数据和回溯期限。回溯期限指系统在查询数据时查看的时间跨度。您还可以定义在触发警报之前发生阈值违规的次数阈值。此外，能够配置输出格式也非常重要；在本例中，当报告警报时，数据将按流量来源（命名空间和部署）进行聚合。输出的警报数据有助于下游系统（例如
+    SIEM）管理警报。'
+- en: '![](Images/ksao_0602.png)'
+  id: totrans-18
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/ksao_0602.png)'
+- en: Figure 6-2\. Query configuration for an alert
+  id: totrans-19
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-2\. 警报查询配置
+- en: '[Figure 6-2](#query_configuration_for_an_alert) shows an example of query configuration
+    for the alert. The things to note in the query are the ability to use Kubernetes
+    metadata (e.g., labels) with network flow activity (e.g., destination, protocol)
+    and policy verdict (e.g., action) in a single query. This gives you a lot of flexibility
+    in defining alerts that are effective in your Kubernetes cluster. Please note
+    that this is a representative example of how you should think about building an
+    effective alerting system. In addition to the cloud provider’s alerting systems,
+    there are several other tools like Datadog, Sysdig, and Calico Enterprise that
+    provide Kubernetes-native alerting systems.'
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 6-2](#query_configuration_for_an_alert) 展示了一个警报查询配置的示例。在查询中需要注意的是能够使用 Kubernetes
+    元数据（例如标签）与网络流活动（例如目的地、协议）和策略判断（例如操作）进行单一查询。这使您能够在定义有效的 Kubernetes 集群警报时具有极大的灵活性。请注意，这是如何考虑构建有效警报系统的代表性示例。除了云提供商的警报系统之外，还有多种其他工具如
+    Datadog、Sysdig 和 Calico Enterprise 提供了基于 Kubernetes 的警报系统。'
+- en: The alerting systems we covered previously are great at detecting and reporting
+    alerts when your system has predictable behavior and you can easily define thresholds
+    for normal activity of the system. It would be great for an alerting system to
+    be able to “learn” the behavior of the system and be able to dynamically define
+    thresholds; this will help generate high-fidelity alerts and reduce false positives
+    due to thresholds not changing with the state of the system. Let’s explore how
+    machine learning can be used to help with this issue.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们之前介绍的警报系统非常擅长在系统具有可预测行为并且您可以轻松定义系统正常活动阈值时检测和报告警报。如果警报系统能够“学习”系统的行为并能够动态定义阈值，那将是非常有用的；这将有助于生成高保真度的警报，并减少由于阈值未随系统状态变化而产生的误报。让我们探讨一下机器学习如何解决这个问题。
+- en: Machine Learning
+  id: totrans-22
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 机器学习
+- en: 'Machine learning fundamentals and how it works are outside the scope of this
+    book. In this section we will review a few concepts of machine learning that will
+    show us how it can help with learning the behavior of a given metric and alerting
+    on deviations from the expected behavior. Before we do that, let’s review the
+    high-level techniques in machine learning:'
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 机器学习的基础知识及其工作原理超出了本书的范围。在本节中，我们将回顾一些机器学习的概念，这些概念将向我们展示它如何帮助学习给定指标的行为，并在偏离预期行为时发出警报。在我们进行这些回顾之前，让我们来看看机器学习中的高级技术：
+- en: Supervised learning
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 监督学习
+- en: This is a technique where the system is trained by labeling test data over a
+    period of time. It allows the system to use the learnings to classify new data
+    and predict outcomes.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是一种通过一段时间内标记测试数据来训练系统的技术。它允许系统利用所学来对新数据进行分类并预测结果。
+- en: Unsupervised learning
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 无监督学习
+- en: 'This is a technique where algorithms are used to detect and classify patterns
+    in data that is not labeled. Please note that there are many resources to understand
+    these concepts; one example is Julianna Delua’s[“Supervised vs. Unsupervised Learning:
+    What’s the Difference?”](https://oreil.ly/9aBfa). Given the ephemeral nature of
+    entities (e.g., pods) in a Kubernetes cluster and our goal of detecting anomalies
+    in the data generated from that activity, we recommend using the technique of
+    unsupervised learning for detecting anomalies.'
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是一种使用算法来检测和分类未标记数据中模式的技术。请注意，有许多资源可以理解这些概念；其中一个例子是朱利安娜·德卢亚的[“监督学习与无监督学习的区别是什么？”](https://oreil.ly/9aBfa)。考虑到
+    Kubernetes 集群中实体（例如 pod）的短暂性，以及我们检测来自该活动产生的数据中的异常的目标，我们建议使用无监督学习技术来检测异常。
+- en: Baselining
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 基线设定
+- en: 'Baselining is a technique used to build a model in machine learning that can
+    continuously predict values for a given metric (e.g., connections per second)
+    and detect anomalies (deviations) from the expected value. [CMU ML’s blog post
+    “3–Baselines”](https://oreil.ly/zpeNO) is a great resource for understanding how
+    baselines work and the different types of models that can be built using baselining.
+    As mentioned in the blog, it is possible to create simple models that are very
+    effective in achieving human-level performance. This is exactly what we want in
+    our alerting system: The system should automatically define thresholds and alert
+    on deviations from the baseline.'
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 基线设定是一种在机器学习中用来连续预测给定度量标准（例如每秒连接数）的值并检测偏离的技术。[CMU ML 的博客文章“3–Baselines”](https://oreil.ly/zpeNO)是理解基线设定如何工作以及可以使用基线设定构建哪些类型模型的好资源。正如博客中提到的，可以创建简单但非常有效的模型，以达到人类水平的性能。这正是我们在警报系统中想要的：系统应该自动定义阈值，并在偏离基线时发出警报。
+- en: Now that we understand the high-level techniques we should use, let’s look at
+    some example machine learning jobs that help with implementing observability and
+    securing a Kubernetes cluster. In a dynamic environment like Kubernetes, where
+    workloads are ephemeral and can be restarted/scheduled on a different node, it
+    is not practical in most cases to use a rule-based engine to detect anomalies.
+    What is needed is the anomaly-detection engine layered over a machine learning
+    engine that reports deviations from the baseline for any given metric.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们了解了应该使用的高级技术之后，让我们看一些例子，这些例子可以帮助实现对 Kubernetes 集群的可观察性和安全性。在像 Kubernetes
+    这样的动态环境中，工作负载是短暂的，可以在不同节点上重新启动/调度，因此在大多数情况下，使用基于规则的引擎来检测异常是不切实际的。需要的是将异常检测引擎层叠在机器学习引擎之上，该引擎报告给定度量标准的基线偏离。
+- en: Examples of Machine Learning Jobs
+  id: totrans-31
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 机器学习工作的例子
+- en: 'How to create a machine learning model is outside the scope of this book; you
+    should have the data science team build models for your deployments. Major cloud
+    providers like Google Cloud offer a [service to build machine learning models
+    for Kubernetes workloads](https://oreil.ly/0JxKq) that can help the data science
+    team implement the right ML model. The following are some examples of ML jobs
+    that are effective to detect anomalous events in your cluster:'
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如何创建机器学习模型超出了本书的范围；您应该让数据科学团队为您的部署构建模型。像谷歌云这样的主要云服务提供商为 Kubernetes 工作负载提供了一个[构建机器学习模型的服务](https://oreil.ly/0JxKq)，可以帮助数据科学团队实现合适的
+    ML 模型。以下是在您的集群中检测异常事件的一些有效的 ML 工作负载的示例：
+- en: IP sweep detection
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: IP 扫描检测
+- en: The job looks for pods in your cluster that are sending packets to many destinations.
+    This may indicate an attacker has gained control of a pod and is gathering reconnaissance
+    on what else they can reach. The job compares pods both with other pods in their
+    replica set and with other pods in the cluster generally.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 该工作负责查找您集群中向多个目标发送数据包的 pod。这可能表明攻击者已经控制了一个 pod，并正在收集有关其它可达目标的情报。该工作将 pod 与其复制集中的其他
+    pod，以及集群中的其他 pod 进行比较。
+- en: Port scan detection
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 端口扫描检测
+- en: The job looks for pods in your cluster that are sending packets to one destination
+    on multiple ports. This may indicate an attacker has gained control of a pod and
+    is gathering reconnaissance on what else they can reach. The job compares pods
+    both with other pods in their replica set and with other pods in the cluster generally.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 该工作负责查找您集群中向一个目标发送数据包的 pod。这可能表明攻击者已经控制了一个 pod，并正在收集有关其它可达目标的情报。该工作将 pod 与其复制集中的其他
+    pod，以及集群中的其他 pod 进行比较。
+- en: Service bytes anomaly
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 服务字节异常
+- en: The job looks for services that receive/send an anomalously high amount of data.
+    This could indicate a denial of service attack, data exfiltrating, or other attacks.
+    The job looks for services that are unusual with respect to their replica set,
+    and replica sets that are unusual with respect to the rest of the cluster.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 该工作查找接收/发送异常高数据量的服务。这可能表明拒绝服务攻击、数据外泄或其他攻击。该工作查找相对于其副本集不寻常的服务，以及相对于集群其他部分不寻常的副本集。
+- en: Process restarts anomaly
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 进程重启异常
+- en: The job looks for pods with an excessive number of the process restarts. This
+    could indicate problems with the processes, such as resource problems or attacks.
+    The job looks for pods that are unusual with respect to their process restart
+    behavior.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 该工作查找具有过多进程重启的Pod。这可能表明进程存在问题，如资源问题或攻击。该工作查找相对于其进程重启行为不寻常的Pod。
+- en: DNS latency anomaly
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: DNS延迟异常
+- en: The job looks for the clients that have too-high latency of DNS requests. This
+    could indicate a denial of service attack.
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 该工作查找具有过高DNS请求延迟的客户端。这可能表明拒绝服务攻击。
+- en: L7 latency anomaly
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: L7延迟异常
+- en: The job looks for the pods that have too-high latency of L7 requests. All HTTP
+    requests are measured here. This anomaly could indicate a denial of service attack
+    or other attacks.
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 该工作查找具有过高L7请求延迟的Pod。所有HTTP请求在此测量。此异常可能表明拒绝服务攻击或其他攻击。
+- en: HTTP connection spike anomaly
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: HTTP连接峰值异常
+- en: The job looks for services that get too many HTTP inbound connections. This
+    anomaly could indicate a denial of service attack.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 该工作查找接收过多HTTP入站连接的服务。这种异常可能表明拒绝服务攻击。
+- en: This list gives you examples of jobs you can use to detect anomalies. You can
+    use [this resource offered by Google Cloud](https://oreil.ly/1FaTm) to build a
+    machine learning job for your Kubernetes cluster. Note the descriptions of each
+    job rely on a set of context-rich logs that are native to Kubernetes (e.g., comparing
+    pods to other pods in a replica set, using bytes sent to/from a service).
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此列表提供了检测异常的作业示例。您可以使用[Google Cloud提供的此资源](https://oreil.ly/1FaTm)为您的Kubernetes集群构建机器学习作业。请注意，每个作业的描述依赖于一组与Kubernetes原生相关的上下文丰富的日志（例如，比较副本集中的Pod与其他Pod，使用发送到/从服务的字节）。
+- en: Now that we have covered how to build an effective alerting system to detect
+    and report anomalies, let’s look at an example implementation of a security operations
+    center for your Kubernetes cluster.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经讨论了如何构建有效的警报系统来检测和报告异常，让我们看一个基于Kubernetes集群的安全运营中心的示例实现。
+- en: Security Operations Center
+  id: totrans-49
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 安全运营中心
+- en: In this section we will review a reference implementation for a security operations
+    center (SOC) for a SaaS service based on Kubernetes. An SOC is used to detect
+    and respond to security events; we will explore how to leverage observability
+    when you implement an SOC for your Kubernetes-based services. Note this is a sample
+    and should be used as an example to guide your implementation. When you implement
+    this in production, you should use these concepts but will need to design and
+    implement an SOC suited to your use case. [Figure 6-3](#sample_implementation_of_an_soc_in_goog)
+    shows an SOC implementation for your service hosted in Google Cloud.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本节中，我们将审查基于Kubernetes的SaaS服务的安全运营中心（SOC）的参考实现。SOC用于检测和响应安全事件；我们将探讨在实施SOC时如何利用可观察性。请注意，这是一个示例，应用于指导您的实施。在生产中实施时，您应该使用这些概念，但需要设计和实施适合您用例的SOC。[图 6-3](#sample_implementation_of_an_soc_in_goog)展示了Google
+    Cloud中托管的服务的SOC实现示例。
+- en: '![](Images/ksao_0603.png)'
+  id: totrans-51
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/ksao_0603.png)'
+- en: Figure 6-3\. Sample implementation of an SOC in Google Cloud
+  id: totrans-52
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-3\. Google Cloud中的SOC示例实现
+- en: '[Figure 6-3](#sample_implementation_of_an_soc_in_goog) shows a set of Kubernetes
+    clusters running in Google Cloud with a namespace representing a tenant. Each
+    tenant cluster can be deployed in Google Kubernetes Engine (GKE) or as an upstream
+    Kubernetes cluster in Google Cloud. There is an ingress representing how the service
+    is accessed by external entities. The details of the workload deployment and provisioning
+    are omitted from the figure, as we want to focus on how you can secure the service.
+    In order to secure the service, you need logging and monitoring and alerting.
+    This can be achieved by using the [Google Cloud operations suite](https://oreil.ly/9rTas),
+    which provides capabilities to support logging and monitoring and alerting. In
+    case you are using GKE, [Google Cloud’s blog](https://oreil.ly/QCGa0) describes
+    how to leverage these services to detect and manage alerts for your Kubernetes
+    clusters. As mentioned before, you need to leverage ML for baselining and to improve
+    the quality of alerts. Google offers a set of ML services known as [AI Hub](https://oreil.ly/ICHTe).
+    Note you still need to build ML models that are relevant and effective for your
+    SaaS service (see the example ML jobs earlier in this chapter). You can then use
+    well-known tools like [OpsGenie](https://oreil.ly/gNSbr) to route alerts for alert
+    management to SIEM, Slack, PagerDuty, JIRA, and other tools. These alerts will
+    then trigger the remediation workflows as defined by the security team. Note we
+    have used Google Cloud as an example, but you can use the previously mentioned
+    approach to build an SOC for AWS and Azure. These cloud providers also have a
+    similar set of services available to users.'
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 6-3](#sample_implementation_of_an_soc_in_goog) 显示了一组运行在 Google Cloud 中的
+    Kubernetes 集群，每个租户都有一个命名空间表示。每个租户集群可以部署在 Google Kubernetes Engine (GKE) 中，也可以作为
+    Google Cloud 中的上游 Kubernetes 集群。有一个入口表示外部实体如何访问服务。图中省略了工作负载部署和供应的详细信息，因为我们想重点关注如何确保服务的安全性。为了确保服务的安全性，您需要日志记录、监视和警报。这可以通过使用
+    [Google Cloud 运营套件](https://oreil.ly/9rTas) 实现，该套件提供支持日志记录、监视和警报的能力。如果您正在使用 GKE，[Google
+    Cloud 的博客](https://oreil.ly/QCGa0) 描述了如何利用这些服务来检测和管理 Kubernetes 集群的警报。如前所述，您需要利用机器学习进行基线制定，并提高警报的质量。Google
+    提供了一组称为 [AI Hub](https://oreil.ly/ICHTe) 的机器学习服务。请注意，您仍然需要构建与您的 SaaS 服务相关且有效的机器学习模型（请参阅本章前面的示例
+    ML 作业）。然后，您可以使用众所周知的工具，如 [OpsGenie](https://oreil.ly/gNSbr)，将警报路由到 SIEM、Slack、PagerDuty、JIRA
+    和其他工具进行警报管理。这些警报将触发由安全团队定义的修复工作流。请注意，我们以 Google Cloud 为例，但您可以使用前面提到的方法为 AWS 和
+    Azure 构建 SOC。这些云提供商也为用户提供了类似的一组服务。'
+- en: The previously mentioned approach is very effective in case you are using only
+    one cloud provider and do not have any workloads running on-premise or in other
+    cloud provider environments. Also, all the services mentioned earlier will increase
+    the cost of deployment, and you also need to delegate some of your DevOps/DevSecOps
+    resources to implement and manage these services. Therefore, we recommend that
+    you build your SOC using a tool that is agnostic to any cloud provider and can
+    be used across cloud providers/on-premise environments.
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如前所述的方法在您仅使用一个云提供商并且没有任何工作负载在本地或其他云提供商环境中时非常有效。此外，前面提到的所有服务都会增加部署成本，您还需要委派部分
+    DevOps/DevSecOps 资源来实施和管理这些服务。因此，我们建议您使用一种不特定于任何云提供商且可以跨云提供商/本地环境使用的工具来构建您的 SOC。
+- en: '[Figure 6-4](#soc_using_a_kubernetes_native_platform) shows how you can replace
+    some of the cloud provider–specific components and create an SOC using a Kubernetes-native
+    observability and security platform. You can build the platform yourself or you
+    can choose to use products that offer these platforms, such as Datadog, VMware,
+    and Calico Enterprise. When you choose products, keep in mind the concepts covered
+    in the previous section about alerting, and ensure that the platform supports
+    integrations to your remediation/management systems.'
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 6-4](#soc_using_a_kubernetes_native_platform) 显示了如何替换一些特定于云提供商的组件，并使用基于
+    Kubernetes 的可观测性和安全平台创建 SOC。您可以自行构建这个平台，也可以选择使用产品，例如 Datadog、VMware 和 Calico Enterprise
+    提供的平台。选择产品时，请记住前一节涵盖的警报概念，并确保平台支持与您的修复/管理系统的集成。'
+- en: Now that we have reviewed how you build an SOC that is effective for your Kubernetes
+    cluster, let’s review another application of observability to secure your Kubernetes
+    cluster.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经回顾了如何构建一个对您的 Kubernetes 集群有效的 SOC，让我们再来看看如何将可观测性应用于保护您的 Kubernetes 集群。
+- en: '![](Images/ksao_0604.png)'
+  id: totrans-57
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/ksao_0604.png)'
+- en: Figure 6-4\. SOC using a Kubernetes-native platform
+  id: totrans-58
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-4\. 使用Kubernetes原生平台的SOC
+- en: User and Entity Behavior Analytics
+  id: totrans-59
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 用户和实体行为分析
+- en: User and entity behavior analytics (UEBA) is an area where you use ML- and AI-based
+    techniques to profile the behavior of a user or an entity (e.g., a pod, service,
+    or deployment) over time and detect anomalous behavior by the user/entity. Microsoft
+    Azure offers UEBA as a part of its cloud platform. Microsoft Azure’s blog post,
+    [Identify Advanced Threats with User and Entity Behavior Analytics (UEBA) in Azure
+    Sentinel”](https://oreil.ly/FDspV), and an excellent resources that describes
+    how you can use UEBA for security use cases. Note that anomalous behavior by an
+    entity is not always suspicious behavior; you need to map the behavior to frameworks
+    like the MITRE attack framework or other indicators of compromise to confirm it
+    is a security issue.
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用户和实体行为分析（UEBA）是一个领域，在此领域中，您使用基于ML和AI的技术来分析用户或实体（如pod、服务或部署）随时间的行为，并通过用户/实体的异常行为检测来检测异常行为。Microsoft
+    Azure作为其云平台的一部分提供UEBA。Microsoft Azure的博客文章，《在Azure Sentinel中使用用户和实体行为分析（UEBA）识别高级威胁》（https://oreil.ly/FDspV）是一篇优秀的资源，描述了如何在安全用例中使用UEBA。请注意，实体的异常行为并不总是可疑行为；您需要将行为映射到如MITRE攻击框架或其他妥协指标的框架，以确认它是一个安全问题。
+- en: Let’s take a simple example of how you can implement UEBA for an entity in Kubernetes,
+    such as a service.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们举一个简单的例子，说明如何在Kubernetes中为实体（如服务）实施UEBA。
+- en: '[Figure 6-5](#profiling_the_behavior_of_a_kubernetes) shows a service in your
+    Kubernetes cluster and the various interactions of the service we will consider
+    when we profile the behavior of the service. As a part of its normal operation,
+    the service will interact with the Kubernetes API server and the Kubernetes datastore.
+    In addition, it will interact with the ingress resource to communicate with entities
+    external to the cluster and use cluster networking to interact with other entities
+    inside the cluster. The service will also use the DNS service in the cluster for
+    its operation.'
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 6-5](#profiling_the_behavior_of_a_kubernetes)展示了你的Kubernetes集群中的一个服务以及我们在分析服务行为时将考虑的各种交互。作为其正常操作的一部分，该服务将与Kubernetes
+    API服务器和Kubernetes数据存储交互。此外，它将与入口资源交互，以与集群外的实体通信，并使用集群网络与集群内的其他实体交互。该服务还将使用集群中的DNS服务进行操作。'
+- en: '![](Images/ksao_0605.png)'
+  id: totrans-63
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/ksao_0605.png)'
+- en: Figure 6-5\. Profiling the behavior of a Kubernetes service
+  id: totrans-64
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-5\. Kubernetes服务行为分析
+- en: In order to build a profile for the service, we would need to consider the following
+    aspects of the service. These are known as features in machine learning.
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了为服务建立一个档案，我们需要考虑服务的以下方面。这些在机器学习中被称为特征。
+- en: Service composition (number of endpoints such as pods, RBAC, policies)
+  id: totrans-66
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 服务组成（如pod的端点数、RBAC、策略）
+- en: Filesystem activity, process information, and system call activity for the service
+  id: totrans-67
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 对服务的文件系统活动、进程信息和系统调用活动
+- en: Service accounts associated with the service
+  id: totrans-68
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 与服务相关联的服务账户
+- en: Service life cycle operations (e.g., create, delete, scale up/down)
+  id: totrans-69
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 服务的生命周期操作（例如创建、删除、缩放）
+- en: Traffic to and from the service (network, application)
+  id: totrans-70
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 向服务的流量（网络、应用程序）和从服务的流量
+- en: DNS activity by pods in the service
+  id: totrans-71
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 服务中pod的DNS活动
+- en: The UEBA engine shown in [Figure 6-5](#profiling_the_behavior_of_a_kubernetes)
+    will collect logs from various data sources (network flow logs, application flow
+    logs, Kubernetes audit logs, DNS activity logs, process information, filesystem,
+    syscall activity logs) and store them in the datastore. These logs are aggregated
+    and correlated by the analytics engine to generate correlated logs for the service
+    across various features.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 6-5](#profiling_the_behavior_of_a_kubernetes)中显示的UEBA引擎将从各种数据源（网络流日志、应用程序流日志、Kubernetes审计日志、DNS活动日志、进程信息、文件系统、系统调用活动日志）收集日志，并将它们存储在数据存储中。这些日志由分析引擎聚合和关联，以生成服务在各种特征上的关联日志。'
+- en: The machine learning engine uses a complex model to baseline the behavior of
+    the service across various features. This is an advanced concept in machine learning
+    where the model considers each feature and interactions between features, among
+    other things, to build a profile for the service. This is best implemented by
+    your data science team. This profile is then used to predict anomalies and generate
+    alerts for deviations. There is a dashboard to allow SOC operators to review analyzed
+    data and use it for forensics or to hunt threats. Please note a security and observability
+    platform built using the concepts described in [Chapter 5](ch05.xhtml#observability-id000002)
+    will help build an effective UEBA system.
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 机器学习引擎使用复杂模型来基线服务在各种特征上的行为。这是机器学习中的一个高级概念，其中模型考虑每个特征及其相互作用等因素来构建服务的配置文件。这最好由您的数据科学团队实施。然后，此配置文件用于预测异常并生成偏离的警报。有一个仪表板允许SOC操作员审查分析数据并用于取证或威胁狩猎。请注意，使用第5章描述的概念构建的安全和可观察性平台将有助于构建有效的UEBA系统。
+- en: UEBA is an advanced technique and is complex to implement, but it is a very
+    effective way to quickly find out which entities in your cluster are potentially
+    vulnerable. This makes SOC operation very efficient and scalable. Once your deployment
+    scales up to several clusters (50+), it is not practical to use alerts/manual
+    reviews of dashboards to find real issues. UEBA will alert you to entities that
+    are abnormal and need immediate attention.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: UEBA是一种高级技术，实施起来复杂，但却是快速查找集群中潜在脆弱实体的非常有效方式。这使得SOC运营非常高效和可扩展。一旦您的部署扩展到多个集群（50+），使用警报/仪表板手动审查以查找实际问题就不再实际。UEBA将警告您有异常且需要立即关注的实体。
+- en: Conclusion
+  id: totrans-75
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 结论
+- en: 'When you think about how you can use observability to help secure your cluster,
+    please consider the following:'
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您考虑如何利用可观察性来帮助保护您的集群时，请考虑以下几点：
+- en: The alerting system you use must be Kubernetes-native and must support baselining
+    using ML so that you do not have to manually define thresholds for various features.
+  id: totrans-77
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 您使用的警报系统必须是基于Kubernetes的，并且必须支持使用机器学习进行基线设置，以便您无需手动定义各种特征的阈值。
+- en: It is recommended that you consider a Kubernetes-native platform that works
+    across your cloud and on-premise deployments to build your SOC.
+  id: totrans-78
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 建议您考虑选择一个基于Kubernetes的平台，可以跨云和本地部署，以建立您的SOC。
+- en: UEBA is an advanced concept and is complex to implement, but it can be very
+    effective in securing a Kubernetes cluster.
+  id: totrans-79
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: UEBA是一个高级概念，实施起来复杂，但在保护Kubernetes集群方面非常有效。

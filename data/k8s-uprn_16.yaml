@@ -1,0 +1,1025 @@
+- en: Chapter 16\. Integrating Storage Solutions and Kubernetes
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第16章。集成存储解决方案与Kubernetes
+- en: In many cases, decoupling state from applications and building your microservices
+    to be as stateless as possible results in maximally reliable, manageable systems.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在许多情况下，将状态从应用程序中解耦，并构建你的微服务尽可能无状态，能够最大程度地提高系统的可靠性和可管理性。
+- en: However, nearly every system that has any complexity has state in the system
+    somewhere, from the records in a database to the index shards that serve results
+    for a web search engine. At some point, you have to have data stored somewhere.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，几乎每个有任何复杂性的系统在系统中都有状态，从数据库中的记录到为网页搜索引擎提供结果的索引碎片。总有一些时候，你必须将数据存储在某个地方。
+- en: Integrating this data with containers and container orchestration solutions
+    is often the most complicated aspect of building a distributed system. This complexity
+    largely stems from the fact that the move to containerized architectures is also
+    a move toward decoupled, immutable, and declarative application development. These
+    patterns are relatively easy to apply to stateless web applications, but even
+    “cloud native” storage solutions like Cassandra or MongoDB involve some sort of
+    manual or imperative steps to set up a reliable, replicated solution.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将这些数据与容器和容器编排解决方案集成，通常是构建分布式系统中最复杂的方面。这种复杂性很大程度上源于向容器化架构的迁移也是向解耦、不可变和声明式应用程序开发的迁移。这些模式相对容易应用于无状态的Web应用程序，但即使是像Cassandra或MongoDB这样的“云原生”存储解决方案，也涉及一些手动或命令式的步骤来设置可靠的、复制的解决方案。
+- en: As an example of this, consider setting up a ReplicaSet in MongoDB, which involves
+    deploying the Mongo daemon and then running an imperative command to identify
+    the leader, as well as the participants, in the Mongo cluster. Of course, these
+    steps can be scripted, but in a containerized world, it is difficult to see how
+    to integrate such commands into a deployment. Likewise, even getting DNS-resolvable
+    names for individual containers in a replicated set of containers is challenging.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为例子，考虑在MongoDB中设置一个ReplicaSet，这涉及到部署Mongo守护进程，然后运行一个命令来识别Mongo集群中的领导者和参与者。当然，这些步骤可以通过脚本完成，但在容器化的世界中，很难看到如何将这些命令集成到部署中。同样，即使为一个容器化的副本集的单个容器获取DNS可解析的名称也是一项挑战。
+- en: Additional complexity comes from the fact that there is data gravity. Most containerized
+    systems aren’t built in a vacuum; they are usually adapted from existing systems
+    deployed onto VMs, and these systems likely include data that has to be imported
+    or migrated.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 额外的复杂性来自于数据引力的存在。大多数容器化系统并不是在真空中构建的；它们通常是从部署在虚拟机上的现有系统改编而来的，这些系统可能包括必须导入或迁移的数据。
+- en: Finally, evolution to the cloud often means that storage is an externalized
+    cloud service, and, in that context, it can never really exist inside of the Kubernetes
+    cluster.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最   最终，向云端演进通常意味着存储是一个外部化的云服务，在这种情况下，它永远不可能真正存在于Kubernetes集群内部。
+- en: This chapter covers a variety of approaches for integrating storage into containerized
+    microservices in Kubernetes. First, we cover how to import existing external storage
+    solutions (either cloud services or running on VMs) into Kubernetes. Next, we
+    explore how to run reliable singletons inside of Kubernetes that enable you to
+    have an environment that largely matches the VMs where you previously deployed
+    storage solutions. Finally, we cover StatefulSets, which are the Kubernetes resource
+    most people use for stateful workloads in Kubernetes.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本章涵盖了多种将存储集成到Kubernetes容器化微服务中的方法。首先，我们介绍如何将现有的外部存储解决方案（无论是云服务还是运行在虚拟机上的）导入到Kubernetes中。接下来，我们探讨如何在Kubernetes中运行可靠的单例服务，使你能够拥有一个与之前部署存储解决方案的虚拟机环境大致相同的环境。最后，我们介绍
+    StatefulSets，这是大多数人用来在Kubernetes中处理有状态工作负载的Kubernetes资源。
+- en: Importing External Services
+  id: totrans-8
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 导入外部服务
+- en: In many cases, you have an existing machine running in your network that has
+    some sort of database running on it. In this situation, you may not want to immediately
+    move that database into containers and Kubernetes. Perhaps it is run by a different
+    team, or you are doing a gradual move, or the task of migrating the data is simply
+    more trouble than it’s worth.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在许多情况下，你在网络中运行着一台已有的机器，机器上运行着某种数据库。在这种情况下，你可能不希望立即将该数据库迁移到容器和Kubernetes中。也许它由不同的团队维护，或者你正在进行渐进式迁移，或者迁移数据的任务本身就是值得的麻烦。
+- en: Regardless of the reasons for staying put, this legacy server and service are
+    not going to move into Kubernetes⁠—but it’s still worthwhile to represent this
+    server in Kubernetes. When you do this, you get to take advantage of all the built-in
+    naming and service-discovery primitives provided by Kubernetes. Additionally,
+    this enables you to configure all your applications so that it looks like the
+    database that is running on a machine somewhere is actually a Kubernetes service.
+    This means that it is trivial to replace it with a database that is a Kubernetes
+    service. For example, in production, you may rely on your legacy database that
+    is running on a machine, but for continuous testing, you may deploy a test database
+    as a transient container. Since it is created and destroyed for each test run,
+    data persistence isn’t important in the continuous testing case. Representing
+    both databases as Kubernetes services enables you to maintain identical configurations
+    in both testing and production. High fidelity between test and production ensures
+    that passing tests will lead to successful deployment in production.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不管停留在此的原因是什么，这个旧的服务器和服务都不会迁移到 Kubernetes⁠—但在 Kubernetes 中代表这个服务器仍然是有价值的。这样做的好处是您可以利用
+    Kubernetes 提供的所有内置命名和服务发现原语。此外，这使您能够配置所有应用程序，使其看起来像在某台机器上运行的数据库实际上是一个 Kubernetes
+    服务。这意味着可以轻松地将其替换为作为瞬态容器运行的测试数据库。例如，在生产环境中，您可能依赖运行在某台机器上的旧数据库，但对于连续测试，您可以部署一个测试数据库作为临时容器。由于它每次测试运行时都会创建和销毁，数据持久性在连续测试案例中并不重要。将这两个数据库都表示为
+    Kubernetes 服务使您能够在测试和生产中保持相同的配置。测试和生产之间的高度一致性确保通过测试将导致在生产环境中成功部署。
+- en: 'To see concretely how you maintain high fidelity between development and production,
+    remember that all Kubernetes objects are deployed into *namespaces*. Imagine that
+    we have `test` and `production` namespaces defined. The test service is imported
+    using an object like this:'
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要具体了解如何在开发和生产之间保持高度一致，请记住所有 Kubernetes 对象都部署到 *命名空间* 中。假设我们定义了 `test` 和 `production`
+    命名空间。可以使用类似以下对象导入测试服务：
+- en: '[PRE0]'
+  id: totrans-12
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'The production service looks the same, except it uses a different namespace:'
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 生产服务看起来一样，只是使用了不同的命名空间：
+- en: '[PRE1]'
+  id: totrans-14
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: When you deploy a Pod into the `test` namespace and it looks up the service
+    named `my-database`, it will receive a pointer to `my-database.test.svc.cluster.internal`,
+    which in turn points to the test database. In contrast, when a Pod deployed in
+    the `prod` namespace looks up the same name (`my-database`), it will receive a
+    pointer to `my-database.prod.svc.cluster.internal`, which is the production database.
+    Thus, the same service name, in two different namespaces, resolves to two different
+    services. For more details on how this works, see [Chapter 7](ch07.xhtml#service_discovery).
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您将 Pod 部署到 `test` 命名空间并查找名为 `my-database` 的服务时，它将接收指向 `my-database.test.svc.cluster.internal`
+    的指针，这将指向测试数据库。相比之下，当部署在 `prod` 命名空间中的 Pod 查找相同名称 (`my-database`) 时，它将收到指向 `my-database.prod.svc.cluster.internal`
+    的指针，这是生产数据库。因此，相同的服务名称在两个不同的命名空间中解析为两个不同的服务。有关此工作原理的更多详细信息，请参阅[第7章](ch07.xhtml#service_discovery)。
+- en: Note
+  id: totrans-16
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The following techniques all use database or other storage services, but these
+    approaches can be used equally well with other services that aren’t running inside
+    your Kubernetes cluster.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有以下技术都使用数据库或其他存储服务，但这些方法同样适用于没有在您的 Kubernetes 集群内运行的其他服务。
+- en: Services Without Selectors
+  id: totrans-18
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 没有选择器的服务
+- en: When we first introduced services, we talked at length about label queries and
+    how they were used to identify the dynamic set of Pods that were the backends
+    for a particular service. With external services, however, there is no such label
+    query. Instead, you generally have a DNS name that points to the specific server
+    running the database. For our example, let’s assume that this server is named
+    `database.company.com`. To import this external database service into Kubernetes,
+    we start by creating a service without a Pod selector that references the DNS
+    name of the database server ([Example 16-1](#example1301)).
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当我们首次介绍服务时，我们详细讨论了标签查询及其如何用于识别特定服务的后端动态 Pod 集合。然而，对于外部服务，没有这样的标签查询。相反，通常有一个
+    DNS 名称，它指向运行数据库的特定服务器。在我们的示例中，假设此服务器命名为 `database.company.com`。要将此外部数据库服务导入 Kubernetes，我们首先创建一个服务，它没有
+    Pod 选择器，而是引用数据库服务器的 DNS 名称（[示例 16-1](#example1301)）。
+- en: Example 16-1\. dns-service.yaml
+  id: totrans-20
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 16-1\. dns-service.yaml
+- en: '[PRE2]'
+  id: totrans-21
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: When a typical Kubernetes service is created, an IP address is also created,
+    and the Kubernetes DNS service is populated with an A record that points to that
+    IP address. When you create a service of type `ExternalName`, the Kubernetes DNS
+    service is instead populated with a CNAME record that points to the external name
+    you specified (`database.company.com` in this case). When an application in the
+    cluster does a DNS lookup for the hostname `external-database.svc.default.cluster`,
+    the DNS protocol aliases that name to `database.company.com`. This then resolves
+    to the IP address of your external database server. In this way, all containers
+    in Kubernetes believe that they are talking to a service that is backed with other
+    containers, when in fact they are being redirected to an external database.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当创建典型的 Kubernetes 服务时，还会创建一个 IP 地址，并且 Kubernetes DNS 服务会填充一个 A 记录，指向该 IP 地址。当您创建
+    `ExternalName` 类型的服务时，Kubernetes DNS 服务会填充一个 CNAME 记录，指向您指定的外部名称（在本例中为 `database.company.com`）。当集群中的应用程序对主机名
+    `external-database.svc.default.cluster` 进行 DNS 查找时，DNS 协议将该名称别名为 `database.company.com`。然后，这将解析为您外部数据库服务器的
+    IP 地址。通过这种方式，Kubernetes 中的所有容器都认为它们正在与支持其他容器的服务通信，而实际上它们被重定向到外部数据库。
+- en: Note that this is not restricted to databases you are running on your own infrastructure.
+    Many cloud databases and other services provide you with a DNS name to use when
+    accessing the database (e.g., `my-database.databases.cloudprovider.com`). You
+    can use this DNS name as the `externalName`. This imports the cloud-provided database
+    into the namespace of your Kubernetes cluster.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，这并不仅限于您自己基础设施上运行的数据库。许多云数据库和其他服务在访问数据库时会提供一个 DNS 名称（例如，`my-database.databases.cloudprovider.com`）。您可以将此
+    DNS 名称用作 `externalName`。这将把由云提供的数据库导入到您的 Kubernetes 集群的命名空间中。
+- en: Sometimes, however, you don’t have a DNS address for an external database service,
+    just an IP address. In such cases, it is still possible to import this service
+    as a Kubernetes service, but the operation is a little different. First, you create
+    a Service without a label selector, but also without the `ExternalName` type we
+    used before ([Example 16-2](#example1302)).
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有时，您可能没有外部数据库服务的 DNS 地址，只有一个 IP 地址。在这种情况下，仍然可以将此服务导入为 Kubernetes 服务，但操作略有不同。首先，创建一个没有标签选择器的服务，但也不使用我们之前使用的
+    `ExternalName` 类型（[示例 16-2](#example1302)）。
+- en: Example 16-2\. external-ip-service.yaml
+  id: totrans-25
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 16-2\. external-ip-service.yaml
+- en: '[PRE3]'
+  id: totrans-26
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: Kubernetes will allocate a virtual IP address for this service and populate
+    an A record for it. However, because there is no selector for the service, there
+    will be no endpoints populated for the load balancer to redirect traffic to.
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 将为此服务分配一个虚拟 IP 地址，并为其填充一个 A 记录。然而，由于服务没有选择器，负载均衡器将不会填充任何端点以重定向流量。
+- en: Given that this is an external service, the user is responsible for populating
+    the endpoints manually with an Endpoints resource ([Example 16-3](#example1303)).
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 鉴于这是一个外部服务，用户需负责手动使用 Endpoints 资源（[示例 16-3](#example1303)）来填充端点。
+- en: Example 16-3\. external-ip-endpoints.yaml
+  id: totrans-29
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 16-3\. external-ip-endpoints.yaml
+- en: '[PRE4]'
+  id: totrans-30
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: If you have more than one IP address for redundancy, you can repeat them in
+    the `addresses` array. Once the endpoints are populated, the load balancer will
+    start redirecting traffic from your Kubernetes service to the IP address endpoint(s).
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您有多个 IP 地址以实现冗余，可以在 `addresses` 数组中重复它们。一旦填充了端点，负载均衡器将开始将流量从 Kubernetes 服务重定向到
+    IP 地址端点。
+- en: Note
+  id: totrans-32
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Because the user has assumed responsibility for keeping the IP address of the
+    server up-to-date, you need to either ensure that it never changes or make sure
+    that some automated process updates the `Endpoints` record.
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于用户已经承担了保持服务器 IP 地址更新的责任，您需要确保它永远不会更改，或者确保某些自动化流程更新 `Endpoints` 记录。
+- en: 'Limitations of External Services: Health Checking'
+  id: totrans-34
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 外部服务的限制：健康检查
+- en: 'External services in Kubernetes have one significant restriction: they do not
+    perform any health checking. The user is responsible for ensuring that the endpoint
+    or DNS name supplied to Kubernetes is as reliable as necessary for the application.'
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 中的外部服务有一个重要的限制：它们不执行任何健康检查。用户需确保供给 Kubernetes 的端点或 DNS 名称对应的可靠性足够满足应用需求。
+- en: Running Reliable Singletons
+  id: totrans-36
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 运行可靠的单例
+- en: The challenge of running storage solutions in Kubernetes is often that primitives
+    like ReplicaSet expect that every container is identical and replaceable, but
+    for most storage solutions, this isn’t the case. One option to address this is
+    to use Kubernetes primitives, but not attempt to replicate the storage. Instead,
+    simply run a single Pod that runs the database or other storage solution. In this
+    way, the challenges of running replicated storage in Kubernetes don’t occur because
+    there is no replication.
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 中运行存储解决方案的挑战通常在于，诸如 ReplicaSet 这样的基元期望每个容器都是相同且可替换的，但对于大多数存储解决方案来说，情况并非如此。解决这个问题的一个选项是使用
+    Kubernetes 基元，但不尝试复制存储。相反，只需运行一个单独的 Pod，其中运行数据库或其他存储解决方案即可。通过这种方式，运行 Kubernetes
+    中复制的存储的挑战不会发生，因为没有复制。
+- en: At first blush, this might seem to run counter to the principles of building
+    reliable distributed systems, but in general, it is no less reliable than running
+    your database or storage infrastructure on a single virtual or physical machine,
+    which is how many systems are currently built. Indeed, in reality, if you structure
+    the system properly, the only thing you are sacrificing is potential downtime
+    for upgrades or in case of machine failure. While for large-scale or mission-critical
+    systems this may not be acceptable, for many smaller-scale applications, this
+    kind of limited downtime is a reasonable trade-off for the reduced complexity.
+    If this is not true for you, feel free to skip this section and either import
+    existing services as described in the previous section, or move on to [“Kubernetes-Native
+    Storage with StatefulSets”](#kub-nat-stor-w-statefulsets). For everyone else,
+    we’ll review how to build reliable singletons for data storage.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 乍一看，这似乎与构建可靠的分布式系统的原则相悖，但总体而言，它并不比将数据库或存储基础设施运行在单个虚拟或物理机器上不可靠。实际上，如果正确结构化系统，您所牺牲的唯一东西就是在升级或机器故障时的潜在停机时间。尽管对于大规模或关键任务的系统而言，这可能是不可接受的，但对于许多较小规模的应用程序来说，这种有限的停机时间是减少复杂性的合理权衡。如果这对您不适用，请随意跳过本节，或按照前一节描述的导入现有服务的方式进行操作，或者继续阅读[“使用
+    StatefulSets 实现 Kubernetes 本地存储”](#kub-nat-stor-w-statefulsets)。对于其他人，我们将介绍如何构建可靠的数据存储单例。
+- en: Running a MySQL Singleton
+  id: totrans-39
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 运行 MySQL 单例
+- en: 'In this section, we’ll describe how to run a reliable singleton instance of
+    the MySQL database as a Pod in Kubernetes and how to expose that singleton to
+    other applications in the cluster. To do this, we are going to create three basic
+    objects:'
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这一节中，我们将描述如何在 Kubernetes 中将 MySQL 数据库的可靠单例实例作为 Pod 运行，并且如何将该单例暴露给集群中的其他应用程序。为此，我们将创建三个基本对象：
+- en: A persistent volume to manage the lifespan of the on-disk storage independently
+    from the lifespan of the running MySQL application
+  id: totrans-41
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 持久卷用于独立管理磁盘存储的生命周期，与运行中的 MySQL 应用程序的生命周期无关。
+- en: A MySQL Pod that will run the MySQL application
+  id: totrans-42
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一个将运行 MySQL 应用程序的 MySQL Pod
+- en: A service that will expose this Pod to other containers in the cluster
+  id: totrans-43
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一个服务，将此 Pod 暴露给集群中的其他容器
+- en: 'In [Chapter 5](ch05.xhtml#pods), we described persistent volumes: storage locations
+    that have a lifetime independent of any Pod or container. Persistent volume is
+    useful in the case of persistent storage solutions where the on-disk representation
+    of a database should survive even if the containers running the database application
+    crash, or move to different machines. If the application moves to a different
+    machine, the volume should move with it, and data should be preserved. Separating
+    the data storage out as a persistent volume makes this possible.'
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[第 5 章](ch05.xhtml#pods)中，我们描述了持久卷：这些存储位置的生命周期与任何 Pod 或容器无关。持久卷在持久存储解决方案的情况下非常有用，其中数据库的磁盘表示应该在容器运行数据库应用程序崩溃或移动到不同机器时仍然存在。如果应用程序移动到不同的机器，卷应随之移动，并且数据应该得到保留。将数据存储分离为持久卷使这一切成为可能。
+- en: To begin, we’ll create a persistent volume for our MySQL database to use. This
+    example uses NFS for maximum portability, but Kubernetes supports many different
+    persistent volume driver types. For example, there are persistent volume drivers
+    for all major public cloud providers as well as many private cloud providers.
+    To use these solutions, simply replace `nfs` with the appropriate cloud provider
+    volume type (e.g., `azure`, `awsElasticBlockStore`, or `gcePersistentDisk`). In
+    all cases, this change is all you need. Kubernetes knows how to create the appropriate
+    storage disk in the respective cloud provider. This is a great example of how
+    Kubernetes simplifies the development of reliable distributed systems. [Example 16-4](#example1304)
+    shows the PersistentVolume object.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，我们将为我们的 MySQL 数据库创建一个持久卷供其使用。本示例使用 NFS 实现最大的可移植性，但 Kubernetes 支持许多不同的持久卷驱动程序类型。例如，有适用于所有主要公共云提供商以及许多私有云提供商的持久卷驱动程序。要使用这些解决方案，只需将
+    `nfs` 替换为适当的云提供商卷类型（例如 `azure`、`awsElasticBlockStore` 或 `gcePersistentDisk`）。在所有情况下，这些更改就足够了。Kubernetes
+    知道如何在相应的云提供商中创建适当的存储磁盘。这是 Kubernetes 简化可靠分布式系统开发的一个很好的例子。[示例 16-4](#example1304)
+    展示了 PersistentVolume 对象。
+- en: Example 16-4\. nfs-volume.yaml
+  id: totrans-46
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 16-4\. nfs-volume.yaml
+- en: '[PRE5]'
+  id: totrans-47
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'This defines an NFS PersistentVolume object with 1 GB of storage space. We
+    can create this persistent volume as usual with:'
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这定义了一个具有 1 GB 存储空间的 NFS PersistentVolume 对象。我们可以像往常一样创建这个持久卷：
+- en: '[PRE6]'
+  id: totrans-49
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: Now that we have created a persistent volume, we need to claim that persistent
+    volume for our Pod. We do this with a PersistentVolumeClaim object ([Example 16-5](#example1305)).
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经创建了一个持久卷，我们需要为我们的 Pod 声明该持久卷。我们使用 PersistentVolumeClaim 对象来实现这一点（[示例 16-5](#example1305)）。
+- en: Example 16-5\. nfs-volume-claim.yaml
+  id: totrans-51
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 16-5\. nfs-volume-claim.yaml
+- en: '[PRE7]'
+  id: totrans-52
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: The `selector` field uses labels to find the matching volume we defined previously.
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`selector` 字段使用标签来查找我们之前定义的匹配卷。'
+- en: This kind of indirection may seem overly complicated, but it has a purpose—it
+    serves to isolate our Pod definition from our storage definition. You can declare
+    volumes directly inside a Pod specification, but this locks that Pod specification
+    to a particular volume provider (e.g., a specific public or private cloud). By
+    using volume claims, you can keep your Pod specifications cloud-agnostic; simply
+    create different volumes, specific to the cloud, and use a PersistentVolumeClaim
+    to bind them together. Furthermore, in many cases, the persistent volume controller
+    will actually automatically create a volume for you. There are more details of
+    this process in the following section.
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种间接的方法可能看起来过于复杂，但它有其目的——它用来将我们的 Pod 定义与存储定义隔离开来。您可以直接在 Pod 规范中声明卷，但这会将该 Pod
+    规范锁定到特定的卷提供者（例如特定的公共或私有云）。通过使用卷声明，您可以保持您的 Pod 规范与云无关；简单地创建不同的卷，特定于云，并使用 PersistentVolumeClaim
+    将它们绑定在一起。此外，在许多情况下，持久卷控制器实际上会自动为您创建卷。关于此过程的更多详细信息，请参见下一节。
+- en: Now that we’ve claimed our volume, we can use a ReplicaSet to construct our
+    singleton Pod. It might seem odd that we are using a ReplicaSet to manage a single
+    Pod, but it is necessary for reliability. Remember that once scheduled to a machine,
+    a bare Pod is bound to that machine forever. If the machine fails, then any Pods
+    that are on that machine that are not being managed by a higher-level controller
+    like a ReplicaSet vanish along with the machine and are not rescheduled elsewhere.
+    Consequently, to ensure that our database Pod is rescheduled in the presence of
+    machine failures, we use the higher-level ReplicaSet controller, with a replica
+    size of `1`, to manage our database ([Example 16-6](#example1306)).
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经声明了我们的卷，我们可以使用 ReplicaSet 来构建我们的单例 Pod。也许使用 ReplicaSet 来管理单个 Pod 看起来有些奇怪，但这对于可靠性是必要的。请记住，一旦调度到一台机器上，一个裸
+    Pod 将永远绑定到该机器上。如果机器发生故障，则任何不受高级控制器（如 ReplicaSet）管理的 Pod 都将与该机器一起消失，并且不会在其他地方重新调度。因此，为了确保我们的数据库
+    Pod 在机器故障时重新调度，我们使用高级别的 ReplicaSet 控制器，其副本大小为 `1`，来管理我们的数据库（[示例 16-6](#example1306)）。
+- en: Example 16-6\. mysql-replicaset.yaml
+  id: totrans-56
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 16-6\. mysql-replicaset.yaml
+- en: '[PRE8]'
+  id: totrans-57
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: Once we create the ReplicaSet, it will, in turn, create a Pod running MySQL
+    using the persistent disk we originally created. The final step is to expose this
+    as a Kubernetes service ([Example 16-7](#example1307)).
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦我们创建了 ReplicaSet，它将进而创建一个运行 MySQL 的 Pod，使用我们最初创建的持久磁盘。最后一步是将其公开为 Kubernetes
+    服务（[示例 16-7](#example1307)）。
+- en: Example 16-7\. mysql-service.yaml
+  id: totrans-59
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 16-7\. mysql-service.yaml
+- en: '[PRE9]'
+  id: totrans-60
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: Now we have a reliable singleton MySQL instance running in our cluster and exposed
+    as a service named `mysql`, which we can access at the full domain name `mysql.svc.default.cluster`.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，我们在集群中运行了一个可靠的单例 MySQL 实例，并将其公开为名为`mysql`的服务的完整域名`mysql.svc.default.cluster`可访问。
+- en: Similar instructions can be used for a variety of data stores, and if your needs
+    are simple and you can survive limited downtime in the face of a machine failure
+    or when you need to upgrade the database software, a reliable singleton may be
+    the right approach to storage for your application.
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 类似的说明可以用于各种数据存储，并且如果您的需求简单，并且可以在面对机器故障或需要升级数据库软件时承受有限的停机时间，那么可靠的单例可能是您的应用程序存储的正确方法。
+- en: Dynamic Volume Provisioning
+  id: totrans-63
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 动态卷供应
+- en: Many clusters also include *dynamic volume provisioning*. With dynamic volume
+    provisioning, the cluster operator creates one or more `StorageClass` objects.
+    In Kubernetes, a `StorageClass` encapsulates the characteristics of a particular
+    type of storage. A cluster can have multiple different storage classes installed.
+    For example, you might have a storage class for an NFS server on your network
+    and a storage class for iSCSI block store. Storage classes can also encapsulate
+    different levels of reliability or performance. [Example 16-8](#example1308) shows
+    a default storage class that automatically provisions disk objects on the Microsoft
+    Azure platform.
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 许多集群还包括*动态卷供应*。通过动态卷供应，集群操作员创建一个或多个`StorageClass`对象。在 Kubernetes 中，`StorageClass`封装了特定类型存储的特征。一个集群可以安装多个不同的存储类。例如，您可能在网络上有一个
+    NFS 服务器的存储类和一个 iSCSI 块存储的存储类。存储类还可以封装不同的可靠性或性能级别。[示例 16-8](#example1308)展示了在 Microsoft
+    Azure 平台上自动创建磁盘对象的默认存储类。
+- en: Example 16-8\. storageclass.yaml
+  id: totrans-65
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 16-8\. storageclass.yaml
+- en: '[PRE10]'
+  id: totrans-66
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: Once a storage class has been created for a cluster, you can refer to this storage
+    class in your persistent volume claim, rather than referring to any specific persistent
+    volume. When the dynamic provisioner sees this storage claim, it uses the appropriate
+    volume driver to create the volume and bind it to your persistent volume claim.
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦为集群创建了存储类，您可以在持久卷声明中引用此存储类，而不是引用任何特定的持久卷。当动态供应程序看到这个存储声明时，它会使用适当的卷驱动程序来创建卷并将其绑定到您的持久卷声明上。
+- en: '[Example 16-9](#example1309) shows an example of a PersistentVolumeClaim that
+    uses the `default` storage class we just defined to claim a newly created persistent
+    volume.'
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[示例 16-9](#example1309)展示了一个使用我们刚刚定义的`default`存储类来声明新创建的持久卷的PersistentVolumeClaim的示例。'
+- en: Example 16-9\. dynamic-volume-claim.yaml
+  id: totrans-69
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 16-9\. dynamic-volume-claim.yaml
+- en: '[PRE11]'
+  id: totrans-70
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: The `volume.beta.kubernetes.io/storage-class` annotation is what links this
+    claim back up to the storage class we created.
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`volume.beta.kubernetes.io/storage-class`注释将此声明与我们创建的存储类关联起来。'
+- en: Caution
+  id: totrans-72
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Automatic provisioning of a persistent volume is a great feature that makes
+    it significantly easier to build and manage stateful applications in Kubernetes.
+    However, the lifespan of these persistent volumes is dictated by the reclamation
+    policy of the PersistentVolumeClaim, and the default is to bind that lifespan
+    to the lifespan of the Pod that creates the volume.
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 自动提供持久卷是一个很棒的功能，它显著简化了在 Kubernetes 中构建和管理有状态应用程序的过程。但是，这些持久卷的生命周期取决于PersistentVolumeClaim的回收策略，默认情况下将其绑定到创建卷的
+    Pod 的生命周期。
+- en: This means that if you happen to delete the Pod (e.g., via a scale-down or other
+    event), then the volume is deleted as well. While this may be what you want in
+    certain circumstances, you need to be careful to ensure that you don’t accidentally
+    delete your persistent volumes.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这意味着如果您删除 Pod（例如通过缩减规模或其他事件），那么卷也将被删除。虽然在某些情况下这可能是您希望的结果，但您需要小心确保不会意外删除您的持久卷。
+- en: Persistent volumes are great for traditional applications that require storage,
+    but if you need to develop high-availability, scalable storage in a Kubernetes-native
+    fashion, the newly released StatefulSet object can be used instead. We’ll describe
+    how to deploy MongoDB using StatefulSets in the next section.
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 持久卷非常适合需要存储的传统应用程序，但是如果您需要以 Kubernetes 本地方式开发高可用性、可扩展的存储，那么新发布的 StatefulSet
+    对象可以代替。我们将在下一节中描述如何使用 StatefulSets 部署 MongoDB。
+- en: Kubernetes-Native Storage with StatefulSets
+  id: totrans-76
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用 StatefulSets 的 Kubernetes 本地存储
+- en: When Kubernetes was first developed, there was a heavy emphasis on homogeneity
+    for all replicas in a replicated set. In this design, no replica had an individual
+    identity or configuration. It was up to the application developer to determine
+    a design that could establish this identity for their application.
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当 Kubernetes 最初开发时，对于复制集中的所有副本都强调了同质性。在这种设计中，没有任何副本具有独立的身份或配置。这要求应用开发者为他们的应用程序确定一个可以建立这种身份的设计。
+- en: While this approach provides a great deal of isolation for the orchestration
+    system, it also makes it quite difficult to develop stateful applications. After
+    significant input from the community and a great deal of experimentation with
+    various existing stateful applications, StatefulSets were introduced in Kubernetes
+    version 1.5.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然这种方法为编排系统提供了大量隔离性，但也使得开发有状态应用程序变得相当困难。在社区的大量参与和对各种现有有状态应用程序的大量实验后，StatefulSets
+    在 Kubernetes 版本 1.5 中被引入。
+- en: Properties of StatefulSets
+  id: totrans-79
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: StatefulSets 的特性
+- en: 'StatefulSets are replicated groups of Pods, similar to ReplicaSets. But unlike
+    a ReplicaSet, they have certain unique properties:'
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: StatefulSets 是一组复制的 Pod，类似于 ReplicaSets。但与 ReplicaSet 不同，它们具有某些独特的特性：
+- en: Each replica gets a persistent hostname with a unique index (e.g., `database-0`,
+    `database-1`, etc.).
+  id: totrans-81
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 每个副本都会获得一个带有唯一索引的持久主机名（例如 `database-0`，`database-1` 等）。
+- en: Each replica is created in order from lowest to highest index, and creation
+    will pause until the Pod at the previous index is healthy and available. This
+    also applies to scaling up.
+  id: totrans-82
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 每个副本按照从最低到最高索引的顺序创建，创建过程将暂停，直到前一个索引处的 Pod 健康且可用。这也适用于扩展。
+- en: When a StatefulSet is deleted, each of the managed replica Pods is also deleted
+    in order from highest to lowest. This also applies to scaling down the number
+    of replicas.
+  id: totrans-83
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 当删除 StatefulSet 时，管理的每个副本 Pod 也将按照从最高到最低的顺序删除。这也适用于减少副本数量时的缩容。
+- en: It turns out that this simple set of requirements makes it drastically easier
+    to deploy storage applications on Kubernetes. For example, the combination of
+    stable hostnames (e.g., `database-0`) and the ordering constraints mean that all
+    replicas, other than the first one, can reliably reference `database-0` for the
+    purposes of discovery and establishing a replication quorum.
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 原来这简单的要求集使得在 Kubernetes 上部署存储应用程序变得极为简便。例如，稳定的主机名组合（例如 `database-0`）和顺序约束意味着，除了第一个副本外，所有副本都可以可靠地引用
+    `database-0` 用于发现和建立复制共识。
+- en: Manually Replicated MongoDB with StatefulSets
+  id: totrans-85
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用 StatefulSets 手动复制的 MongoDB
+- en: In this section, we’ll deploy a replicated MongoDB cluster. For now, the replication
+    setup itself will be done manually to give you a feel for how StatefulSets work.
+    Eventually, we will automate this setup as well.
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本节中，我们将部署一个复制的 MongoDB 集群。现在，复制设置本身将手动完成，以让你感受一下 StatefulSets 的工作方式。最终，我们也将自动化这个设置过程。
+- en: To start, we’ll create a replicated set of three MongoDB Pods using a StatefulSet
+    object ([Example 16-10](#example1310)).
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，我们将使用 StatefulSet 对象创建一个包含三个 MongoDB Pod 的复制集（[示例 16-10](#example1310)）。
+- en: Example 16-10\. mongo-simple.yaml
+  id: totrans-88
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 16-10\. mongo-simple.yaml
+- en: '[PRE12]'
+  id: totrans-89
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: As you can see, the definition is similar to the ReplicaSet definitions we’ve
+    seen previously. The only changes are in the `apiVersion` and `kind` fields.
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如你所看到的，该定义与我们之前见过的 ReplicaSet 定义类似。唯一的变化在于 `apiVersion` 和 `kind` 字段。
+- en: 'Create the StatefulSet:'
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建 StatefulSet：
+- en: '[PRE13]'
+  id: totrans-92
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: 'Once created, the differences between a ReplicaSet and a StatefulSet become
+    apparent. Run `kubectl get pods` and you will likely see this:'
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦创建完成，ReplicaSet 和 StatefulSet 之间的区别就显而易见了。运行 `kubectl get pods`，你可能会看到如下情况：
+- en: '[PRE14]'
+  id: totrans-94
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: There are two important differences between this and what you would see with
+    a ReplicaSet. The first is that each replicated Pod has a numeric index (`0`,
+    `1`, …), instead of the random suffix that is added by the ReplicaSet controller.
+    The second is that the Pods are being slowly created in order, not all at once
+    as they would be with a ReplicaSet.
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这与使用 ReplicaSet 的情况有两个重要区别。首先，每个复制的 Pod 都有一个数字索引（`0`，`1`，…），而不是 ReplicaSet 控制器添加的随机后缀。其次，这些
+    Pod 是按顺序逐步创建的，而不是像 ReplicaSet 那样一次性创建。
+- en: 'After the StatefulSet is created, we also need to create a “headless” service
+    to manage the DNS entries for the StatefulSet. In Kubernetes, a service is called
+    “headless” if it doesn’t have a cluster virtual IP address. Since with StatefulSets,
+    each Pod has a unique identity, it doesn’t really make sense to have a load-balancing
+    IP address for the replicated service. You can create a headless service using
+    `clusterIP: None` in the service specification ([Example 16-11](#example1311)).'
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '创建StatefulSet之后，我们还需要创建一个“无头”服务来管理StatefulSet的DNS条目。在Kubernetes中，如果服务没有集群虚拟IP地址，则称为“无头”服务。由于StatefulSets中每个Pod都有唯一的标识，为复制服务创建负载均衡IP地址实际上并不合理。您可以使用服务规范中的`clusterIP:
+    None`来创建无头服务（[示例 16-11](#example1311)）。'
+- en: Example 16-11\. mongo-service.yaml
+  id: totrans-97
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 16-11\. mongo-service.yaml
+- en: '[PRE15]'
+  id: totrans-98
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: 'Once you create that service, four DNS entries are usually populated. As usual,
+    `mongo.default.svc.cluster.local` is created, but unlike with a standard service,
+    doing a DNS lookup on this hostname provides all the addresses in the StatefulSet.
+    In addition, entries are created for `mongo-0⁠.mongo⁠.default⁠.svc⁠.cluster​.local`
+    as well as `mongo-1.mongo` and `mongo-2.mongo`. Each of these resolves to the
+    specific IP address of the replica index in the StatefulSet. Thus, with StatefulSets
+    you get well-defined, persistent names for each replica in the set. This is often
+    very useful when you are configuring a replicated storage solution. You can see
+    these DNS entries in action by running the following command in one of the Mongo
+    replicas:'
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦创建了该服务，通常会填充四个DNS条目。像往常一样，会创建`mongo.default.svc.cluster.local`，但与标准服务不同的是，对此主机名进行DNS查找会提供StatefulSet中所有地址。此外，还会创建`mongo-0.mongo.default.svc.cluster.local`、`mongo-1.mongo`和`mongo-2.mongo`的条目。这些条目分别解析为StatefulSet中复制索引的特定IP地址。因此，使用StatefulSets可以为集合中的每个复制提供明确定义的持久名称。当您配置复制存储解决方案时，这通常非常有用。您可以通过在Mongo复制品之一中运行以下命令来查看这些DNS条目的效果：
+- en: '[PRE16]'
+  id: totrans-100
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: 'Next, we’re going to manually set up Mongo replication using these per-Pod
+    hostnames. We’ll choose `mongo-0.mongo` to be our initial primary. Run the `mongo`
+    tool in that Pod:'
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，我们将使用这些逐个Pod主机名手动设置Mongo复制。我们将选择`mongo-0.mongo`作为我们的初始主节点。在该Pod中运行`mongo`工具：
+- en: '[PRE17]'
+  id: totrans-102
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: This command tells `mongodb` to initiate the ReplicaSet `rs0` with `mongo-0.mongo`
+    as the primary replica.
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这条命令告诉`mongodb`使用`mongo-0.mongo`作为主复制集启动ReplicaSet `rs0`。
+- en: Note
+  id: totrans-104
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The `rs0` name is arbitrary. You can use whatever you’d like, but you’ll need
+    to change it in the *mongo-simple.yaml* StatefulSet definition as well.
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`rs0`的名称是任意的。您可以使用任何您喜欢的名称，但在*mongo-simple.yaml* StatefulSet定义中也需要进行更改。'
+- en: 'Once you have initiated the Mongo ReplicaSet, you can add the remaining replicas
+    by running the following commands in the `mongo` tool on the `mongo-0.mongo` Pod:'
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦初始化了Mongo ReplicaSet，您可以在`mongo-0.mongo` Pod上的`mongo`工具中运行以下命令添加其余的副本：
+- en: '[PRE18]'
+  id: totrans-107
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: As you can see, we are using the replica-specific DNS names to add them as replicas
+    in our Mongo cluster. At this point, we’re done. Our replicated MongoDB is up
+    and running. But it’s really not as automated as we’d like it to be—in the next
+    section, we’ll see how to use scripts to automate the setup.
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如您所看到的，我们正在使用特定于复制品的DNS名称将它们添加为Mongo集群中的副本。在此时，我们已经完成了。我们的复制MongoDB已经运行起来了。但实际上并没有像我们希望的那样自动化—在下一节中，我们将看到如何使用脚本来自动设置。
+- en: Automating MongoDB Cluster Creation
+  id: totrans-109
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 自动化MongoDB集群创建
+- en: To automate the deployment of our StatefulSet-based MongoDB cluster, we’re going
+    to add a container to our Pods to perform the initialization. To configure this
+    Pod without having to build a new Docker image, we’re going to use a ConfigMap
+    to add a script into the existing MongoDB image.
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了自动化基于StatefulSet的MongoDB集群的部署，我们将向我们的Pods添加一个容器来执行初始化。为了配置此Pod而无需构建新的Docker镜像，我们将使用ConfigMap将脚本添加到现有的MongoDB镜像中。
+- en: 'We are going to run this script using an *initialization container*. Initialization
+    containers (or “init” containers) are specialized containers that run once at
+    the startup of a Pod. They are generally used for cases like this, where there
+    is a small amount of setup work to do before the main application runs. In the
+    Pod definition, there is a separate `initContainers` list where init containers
+    can be defined. An example of this is given here:'
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将使用“初始化容器”来运行此脚本。“初始化容器”（或“init”容器）是在Pod启动时运行一次的专用容器。通常用于像这样需要做少量设置工作以便主应用程序运行的情况。在Pod定义中，有一个单独的`initContainers`列表，可以在其中定义init容器。这里提供了一个示例：
+- en: '[PRE19]'
+  id: totrans-112
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: Note that it is mounting a ConfigMap volume whose name is `mongo-init`. This
+    ConfigMap holds a script that performs our initialization. First, the script determines
+    whether it is running on `mongo-0` or not. If it is on `mongo-0`, it creates the
+    ReplicaSet using the same command we ran imperatively previously. If it is on
+    a different Mongo replica, it waits until the ReplicaSet exists, and then it registers
+    itself as a member of that ReplicaSet.
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注意，它正在挂载一个名为 `mongo-init` 的 ConfigMap 卷，该 ConfigMap 包含执行我们初始化的脚本。首先，脚本确定它是否正在
+    `mongo-0` 上运行。如果它在不同的 Mongo 副本上，则等待 ReplicaSet 存在，然后将自身注册为该 ReplicaSet 的成员。
+- en: '[Example 16-12](#example1312) has the complete ConfigMap object.'
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[示例 16-12](#example1312) 包含完整的 ConfigMap 对象。'
+- en: Example 16-12\. mongo-configmap.yaml
+  id: totrans-115
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 16-12\. mongo-configmap.yaml
+- en: '[PRE20]'
+  id: totrans-116
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: You’ll notice that this script immediately exits. This is important when using
+    `init​Con⁠tainers`. Each initialization container waits until the previous container
+    has finished, before running. The main application container waits until all of
+    the initialization containers are done. If this script didn’t exit, the main Mongo
+    server would never start up.
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个脚本会立即退出，这在使用 `initContainers` 时非常重要。每个初始化容器都会等待前一个容器完成后再运行。主应用容器会等待所有初始化容器都完成。如果这个脚本没有退出，主
+    Mongo 服务器将永远无法启动。
+- en: Putting it all together, [Example 16-13](#example1313) is the complete StatefulSet
+    that uses the ConfigMap.
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 综合起来，[示例 16-13](#example1313) 是使用 ConfigMap 的完整 StatefulSet。
+- en: Example 16-13\. mongo.yaml
+  id: totrans-119
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 16-13\. mongo.yaml
+- en: '[PRE21]'
+  id: totrans-120
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: 'Given all of these files, you can create a Mongo cluster with:'
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 给定所有这些文件，你可以创建一个 Mongo 集群：
+- en: '[PRE22]'
+  id: totrans-122
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: Or, if you want, you can combine them all into a single YAML file where the
+    individual objects are separated by `---`. Ensure that you keep the same ordering,
+    since the StatefulSet definition relies on the ConfigMap definition existing.
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 或者，如果你愿意，你可以将它们全部合并到一个单独的 YAML 文件中，其中各个对象由 `---` 分隔。确保保持相同的顺序，因为 StatefulSet
+    定义依赖于存在 ConfigMap 定义。
+- en: Persistent Volumes and StatefulSets
+  id: totrans-124
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 持久卷和 StatefulSets
+- en: 'For persistent storage, you need to mount a persistent volume into the */data/db*
+    directory. In the Pod template, you need to update it to mount a persistent volume
+    claim to that directory:'
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于持久存储，你需要将持久卷挂载到 */data/db* 目录中。在 Pod 模板中，你需要更新它以将持久卷声明挂载到该目录：
+- en: '[PRE23]'
+  id: totrans-126
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: 'While this approach is similar to the one we saw with reliable singletons,
+    because the StatefulSet replicates more than one Pod, you cannot simply reference
+    a persistent volume claim. Instead, you need to add a *persistent volume claim
+    template*. You can think of the claim template as identical to the Pod template,
+    but instead of creating Pods, it creates volume claims. You need to add the following
+    to the bottom of your StatefulSet definition:'
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管这种方法与我们看到的可靠的单例方法类似，因为 StatefulSet 复制了多个 Pod，你不能简单地引用一个持久卷声明。相反，你需要添加一个 *持久卷声明模板*。你可以将声明模板视为与
+    Pod 模板相同，但它不是创建 Pod，而是创建卷声明。你需要将以下内容添加到 StatefulSet 定义的底部：
+- en: '[PRE24]'
+  id: totrans-128
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: When you add a volume claim template to a StatefulSet definition, each time
+    the StatefulSet controller creates a Pod that is part of the StatefulSet, it will
+    create a persistent volume claim based on this template as part of that Pod.
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当你向 StatefulSet 定义添加一个卷声明模板时，每当 StatefulSet 控制器创建 StatefulSet 的一部分的 Pod 时，它将根据该模板创建一个持久卷声明作为该
+    Pod 的一部分。
+- en: Note
+  id: totrans-130
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: For these replicated persistent volumes to work correctly, you need to either
+    set up autoprovisioning for persistent volumes or prepopulate a collection of
+    persistent volume objects for the StatefulSet controller to draw from. If there
+    are no claims that can be created, the StatefulSet controller will not be able
+    to create the corresponding Pods.
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要使这些复制的持久卷正常工作，你需要设置持久卷的自动配置或预先填充一个持久卷对象集合供 StatefulSet 控制器使用。如果没有可以创建的声明，StatefulSet
+    控制器将无法创建相应的 Pod。
+- en: 'One Final Thing: Readiness Probes'
+  id: totrans-132
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 最后一点：就绪探针
+- en: The final piece in productionizing our MongoDB cluster is to add liveness checks
+    to our Mongo-serving containers. As we learned in [“Health Checks”](ch05.xhtml#health_checks_sec_ref),
+    the liveness probe is used to determine if a container is operating correctly.
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在生产环境中配置我们的 MongoDB 集群的最后一步是为我们的 Mongo 服务容器添加活性检查。正如我们在[“健康检查”](ch05.xhtml#health_checks_sec_ref)中学到的那样，活性探针用于确定容器是否正常运行。
+- en: 'For the liveness checks, we can use the `mongo` tool itself by adding the following
+    to the Pod template in the StatefulSet object:'
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于存活性检查，我们可以通过将以下内容添加到StatefulSet对象中的Pod模板来使用`mongo`工具本身：
+- en: '[PRE25]'
+  id: totrans-135
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE25]'
+- en: Summary
+  id: totrans-136
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 摘要
+- en: Once we have combined StatefulSets, persistent volume claims, and liveness probing,
+    we have a hardened, scalable cloud native MongoDB installation running on Kubernetes.
+    While this example dealt with MongoDB, the steps for creating StatefulSets to
+    manage other storage solutions are quite similar and similar patterns can be followed.
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦我们结合了StatefulSets、持久卷索赔和存活探测，我们就在Kubernetes上运行一个经过硬化、可扩展的云原生MongoDB安装。虽然这个示例涉及MongoDB，但创建StatefulSets来管理其他存储解决方案的步骤非常类似，可以遵循相似的模式。

@@ -1,0 +1,1576 @@
+- en: Chapter 4\. Data Sources
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第四章 数据源
+- en: In this chapter we’ll take a deep dive into the kernel of the operating system
+    and Falco’s data collection stack. You’ll learn how Falco captures the different
+    types of events that feed its rule engine, how its data collection process compares
+    to alternative approaches, and why it was built the way it is. You’ll get to understand
+    the details well enough that you will be able to pick and deploy the right drivers
+    and plugins for your needs by the end of this chapter.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们将深入研究操作系统内核和Falco数据收集堆栈。您将了解Falco如何捕获喂入其规则引擎的不同类型事件，其数据收集过程如何与替代方法进行比较，以及为什么它被构建成现在这样。到本章结束时，您将充分了解细节，能够选择并部署适合您需求的正确驱动程序和插件。
+- en: 'The first order of business is understanding what data sources you can use
+    in Falco. Falco’s data sources can be grouped into two main families: system calls
+    and plugins. System calls are Falco’s original data source. They come from the
+    kernel of the operating system and offer visibility into the activities of processes,
+    containers, virtual machines, and hosts. Falco uses them to protect workloads
+    and applications. The second family of data sources, plugins*,* is relatively
+    new: support was added in 2022\. Plugins connect various types of inputs to Falco,
+    such as cloud logs and APIs.'
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首要任务是了解Falco中可以使用的数据源。Falco的数据源可以分为两大类：系统调用和插件。系统调用是Falco的原始数据源。它们来自操作系统的内核，并提供对进程、容器、虚拟机和主机活动的可见性。Falco使用它们来保护工作负载和应用程序。第二类数据源，插件，相对较新：2022年添加了支持。插件将各种输入连接到Falco，如云日志和API。
+- en: Falco previously supported Kubernetes audit logs as a third, separate source
+    type; starting from Falco 0.32, however, this data source has been reimplemented
+    as a plugin, so we won’t cover it in this chapter.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco先前支持Kubernetes审计日志作为第三个独立的数据源类型；然而，从Falco 0.32开始，这个数据源已被重新实现为插件，因此我们不会在本章涵盖它。
+- en: System Calls
+  id: totrans-4
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 系统调用
+- en: 'As we’ve stated several times already, system calls are a key source of data
+    for Falco and one of the ingredients that make it unique. But what exactly is
+    a system call? Let’s start with a high-level definition, courtesy of [Wikipedia](https://oreil.ly/pbS0B):'
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如我们已经多次提到的，系统调用是Falco的一个重要数据源，也是使其独特的关键因素之一。但系统调用究竟是什么？让我们从维基百科的高层次定义开始：
+- en: In computing, a system call (commonly abbreviated to syscall) is the programmatic
+    way in which a computer program requests a service from the kernel of the operating
+    system on which it is executed. This may include hardware-related services (for
+    example, accessing a hard disk drive or accessing the device’s camera), creation
+    and execution of new processes, and communication with integral kernel services
+    such as process scheduling.
+  id: totrans-6
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 在计算机领域，系统调用（通常缩写为syscall）是计算机程序向其所在操作系统的内核请求服务的编程方式。这可能涉及硬件相关的服务（例如访问硬盘驱动器或访问设备的摄像头）、创建和执行新进程，以及与内核的核心服务进行通信，例如进程调度。
+- en: 'Let’s unpack this. At the highest level of abstraction, a computer consists
+    of a bunch of hardware that runs a bunch of software. In modern computing, however,
+    it’s extremely unusual for a program to run directly on the hardware. Instead,
+    in the vast majority of cases, programs run on top of an operating system. Falco’s
+    drivers focus specifically on the operating system powering the cloud and the
+    modern data center: Linux.'
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们详细解释一下。在最高抽象层次上，计算机由运行各种软件的硬件组成。然而，在现代计算中，程序直接在硬件上运行的情况极为罕见。相反，在绝大多数情况下，程序在操作系统之上运行。Falco的驱动程序专门针对驱动云和现代数据中心的操作系统Linux。
+- en: 'An *operating system* is a piece of software designed to conduct and support
+    the execution of other software. Among many other things, the OS takes care of:'
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 操作系统是一种旨在进行和支持其他软件执行的软件。除了许多其他功能外，操作系统还负责：
+- en: Scheduling processes
+  id: totrans-9
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 进程调度
+- en: Managing memory
+  id: totrans-10
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 管理内存
+- en: Mediating hardware access
+  id: totrans-11
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 中介硬件访问
+- en: Implementing network connectivity
+  id: totrans-12
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 实现网络连接
+- en: Handling concurrency
+  id: totrans-13
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 处理并发性
+- en: 'Clearly, the vast majority of this functionality needs to be exposed to the
+    programs that are running on top of the OS, so that they can do something useful.
+    And clearly, the best way for a piece of software to expose functionality is to
+    offer an *application programming interface* (API): a set of functions that client
+    programs can call. This is what system calls *almost* are: APIs to interact with
+    the operating system.'
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 显然，几乎所有这些功能都需要向运行在操作系统之上的程序公开，以便它们可以做一些有用的事情。显然，软件公开功能的最佳方式是提供一个 *应用程序编程接口*
+    (API)：一组客户程序可以调用的函数。这几乎就是系统调用的作用：与操作系统交互的 API。
+- en: Wait, why almost?
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 等等，为什么几乎？
+- en: Well, the operating system is a unique piece of software, and you can’t just
+    call it like you would a library. The OS runs in a separate execution mode, called
+    privileged mode, that’s isolated from user mode, which is the context used for
+    executing regular processes (that is, running programs). This separation makes
+    calling the OS more complicated. With some CPUs, you invoke a system call by triggering
+    an interrupt. With most modern CPUs, however, you need to use a specific CPU instruction.
+    If we exclude this additional level of complexity, it is fair to say that system
+    calls are APIs to access operating system functionality. There are lots of them,
+    each with their own input arguments and return value.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 嗯，操作系统是一种独特的软件，你不能像调用库一样直接调用它。操作系统在称为特权模式的分离执行模式中运行，与用户模式（用于执行常规进程，即运行程序的上下文）隔离开来。这种分离使得调用操作系统变得更加复杂。在某些
+    CPU 中，您通过触发中断来调用系统调用。然而，在大多数现代 CPU 中，您需要使用特定的 CPU 指令。如果我们排除这种额外的复杂性，可以说系统调用就是访问操作系统功能的
+    API。它们有很多，每个系统调用都有自己的输入参数和返回值。
+- en: 'Every program, with no exceptions, makes extensive and constant use of the
+    system call interface for anything that is not pure computation: reading input,
+    generating output, accessing the disk, communicating on the network, running a
+    new program, and so on. This means, as you can imagine, that observing system
+    calls gives a very detailed picture of what each process does.'
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个程序，无一例外，都广泛而持续地使用系统调用接口来处理任何非纯计算的事务：读取输入，生成输出，访问磁盘，网络通信，运行新程序等等。这意味着，正如你所能想象的那样，观察系统调用能够提供每个进程活动的非常详细的图像。
+- en: Operating system developers have long treated the system call interface as a
+    stable API. This means that you can expect it to stay the same even if, inside,
+    the kernel changes dramatically. This is important because it guarantees consistency
+    across time and execution environments, making the system call API an ideal choice
+    for collecting reliable security signals. Falco rules, for example, can reference
+    specific system calls and assume that using them will work on any Linux distribution.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 操作系统开发者长期以来一直将系统调用接口视为稳定的 API。这意味着，即使内核内部发生了巨大变化，您也可以期望它保持不变。这一点非常重要，因为它确保了时间和执行环境的一致性，使系统调用
+    API 成为收集可靠安全信号的理想选择。例如，Falco 规则可以引用特定系统调用，并假定在任何 Linux 发行版上使用它们都可以正常工作。
+- en: Examples
+  id: totrans-19
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 例子
+- en: Linux offers *many* system calls—more than 300 of them. Going over all of them
+    would be next to impossible and very boring, so we’ll spare you that. However,
+    we do want to give you an idea of the kinds of system calls that are available.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linux 提供了 *许多* 系统调用——超过 300 个。要完整讲解它们几乎是不可能且非常无聊的，所以我们就不细说了。但是，我们确实想给你一些可用系统调用类型的概念。
+- en: '[Table 4-1](#noteworthy_system_call_categories) includes some of the system
+    call categories that are most relevant for a security tool like Falco. For each
+    category, the table includes examples of representative system calls. You can
+    find more information on each by entering `**man 2 *X***`, where `***X***` is
+    the system call name, in a Linux terminal or in your browser’s search bar.'
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[表 4-1](#noteworthy_system_call_categories) 包括了一些对像 Falco 这样的安全工具最相关的系统调用类别。对于每个类别，表中列出了代表性系统调用的示例。你可以通过在
+    Linux 终端或浏览器的搜索栏中输入 `**man 2 *X***` 来查找每个系统调用的更多信息，其中 `***X***` 是系统调用的名称。'
+- en: Table 4-1\. Noteworthy system call categories
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 4-1\. 重要的系统调用类别
+- en: '| Category | Examples |'
+  id: totrans-23
+  prefs: []
+  type: TYPE_TB
+  zh: '| 类别 | 示例 |'
+- en: '| --- | --- |'
+  id: totrans-24
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| File I/O | `open`, `creat`, `close`, `read`, `write`, `ioctl`, `link`, `unlink`,
+    `chdir`, `chmod`, `stat`, `seek`, `mount`, `rename`, `mkdir`, `rmdir` |'
+  id: totrans-25
+  prefs: []
+  type: TYPE_TB
+  zh: '| 文件 I/O | `open`, `creat`, `close`, `read`, `write`, `ioctl`, `link`, `unlink`,
+    `chdir`, `chmod`, `stat`, `seek`, `mount`, `rename`, `mkdir`, `rmdir` |'
+- en: '| Network | `socket`, `bind`, `connect`, `listen`, `accept`, `sendto`, `recvfrom`,
+    `getsockopt`, `setsockopt`, `shutdown` |'
+  id: totrans-26
+  prefs: []
+  type: TYPE_TB
+  zh: '| 网络 | `socket`, `bind`, `connect`, `listen`, `accept`, `sendto`, `recvfrom`,
+    `getsockopt`, `setsockopt`, `shutdown` |'
+- en: '| Interprocess communication | `pipe`, `futex`, `inotify_add_watch`, `eventfd`,
+    `semop`, `semget`, `semctl`, `msgctl` |'
+  id: totrans-27
+  prefs: []
+  type: TYPE_TB
+  zh: '| 进程间通信 | `pipe`, `futex`, `inotify_add_watch`, `eventfd`, `semop`, `semget`,
+    `semctl`, `msgctl` |'
+- en: '| Process management | `clone`, `execve`, `fork`, `nice`, `kill`, `prctl`,
+    `exit`, `setrlimit`, `setpriority`, `capset` |'
+  id: totrans-28
+  prefs: []
+  type: TYPE_TB
+  zh: '| 进程管理 | `clone`, `execve`, `fork`, `nice`, `kill`, `prctl`, `exit`, `setrlimit`,
+    `setpriority`, `capset` |'
+- en: '| Memory management | `brk`, `mmap`, `mprotect`, `mlock`, `madvise` |'
+  id: totrans-29
+  prefs: []
+  type: TYPE_TB
+  zh: '| 内存管理 | `brk`, `mmap`, `mprotect`, `mlock`, `madvise` |'
+- en: '| User management | `setuid`, `getuid`, `setgid`, `getgid` |'
+  id: totrans-30
+  prefs: []
+  type: TYPE_TB
+  zh: '| 用户管理 | `setuid`, `getuid`, `setgid`, `getgid` |'
+- en: '| System | `sethostname`, `setdomainname`, `reboot`, `syslog`, `uname`, `swapoff`,
+    `init_module`, `delete_module` |'
+  id: totrans-31
+  prefs: []
+  type: TYPE_TB
+  zh: '| 系统 | `sethostname`, `setdomainname`, `reboot`, `syslog`, `uname`, `swapoff`,
+    `init_module`, `delete_module` |'
+- en: Tip
+  id: totrans-32
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: If you are interested in taking a look at the full list of Linux system calls,
+    type `**man syscalls**` into a Linux terminal or a search engine. This will show
+    the official Linux manual page, which includes a comprehensive list of system
+    calls with hyperlinks to take a deeper look at many of them. In addition, software
+    engineer Filippo Valsorda offers a nicely organized and searchable [list](https://oreil.ly/P12lw)
+    on his personal home page.
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您有兴趣查看完整的 Linux 系统调用列表，请在 Linux 终端或搜索引擎中键入`**man syscalls**`。这将显示官方 Linux
+    手册页面，其中包含系统调用的全面列表，并带有超链接，以深入了解其中的许多内容。此外，软件工程师 Filippo Valsorda 在他的个人主页上提供了一个清晰组织且可搜索的[列表](https://oreil.ly/P12lw)。
+- en: Observing System Calls
+  id: totrans-34
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 观察系统调用
+- en: 'Given how crucial system calls are for Falco and for runtime security in general,
+    it’s important that you learn how to capture, observe, and interpret them. This
+    is a valuable skill that you will find useful in many situations. We’re going
+    to show you two different tools you can use for this purpose: strace and sysdig.'
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 考虑到系统调用对于 Falco 和一般运行时安全性是多么重要，学习如何捕获、观察和解释它们至关重要。这是一项有价值的技能，在许多情况下都会很有用。我们将向您展示两种不同的工具，您可以用它们来实现这个目的：strace
+    和 sysdig。
+- en: strace
+  id: totrans-36
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: strace
+- en: 'strace is a tool that you can expect to find on pretty much every machine running
+    a Unix-compatible operating system. In its simplest form, you use it to run a
+    program, and it will print every system call issued by the program to standard
+    error. In other words, add `**strace**` to the beginning of an arbitrary command
+    line and you will see all of the system calls that command line generates:'
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: strace 是一个工具，在几乎每台运行 Unix 兼容操作系统的机器上都可以找到。它的最简单用法是运行一个程序，它会将程序发出的每个系统调用打印到标准错误输出。换句话说，只需将`**strace**`添加到任意命令行的开头，你就能看到该命令行生成的所有系统调用：
+- en: '[PRE0]'
+  id: totrans-38
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: Note how strace’s output mimics C syntax and looks like a stream of function
+    invocations, with the addition of the return value after the `=` symbol at the
+    end of each line. For example, take a look at the `write` syscall (in bold) that
+    outputs the “hello world” string to standard output (file descriptor 1). It returns
+    the value `12`, which is the number of bytes that have been successfully written.
+    Note how the string “hello world” is printed to standard output *before* the `write`
+    system call returns and strace prints its return value on the screen.
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，strace 的输出模仿 C 语法，看起来像一系列函数调用的流，每行末尾的`=`符号后面加上返回值。例如，看看`write`系统调用（加粗）将字符串“hello
+    world”输出到标准输出（文件描述符 1）。它返回成功写入的字节数 `12`。请注意，在`write`系统调用返回之前，“hello world”字符串已经打印到标准输出，并且
+    strace 在屏幕上打印其返回值。
+- en: 'A second way to use strace is pointing it to a running process by specifying
+    the process ID (PID) on the command line:'
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 strace 的第二种方法是通过在命令行上指定进程 ID（PID）指向运行中的进程：
+- en: '[PRE1]'
+  id: totrans-41
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: strace has some pros and some cons. It’s broadly supported, so either it’s already
+    available or it’s an easy package install away. It’s also simple to use and ideal
+    when you need to inspect a single process, which makes it perfect for debugging
+    use cases.
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: strace 有一些优点和一些缺点。它得到了广泛的支持，因此它要么已经可用，要么可以轻松安装。它的使用也很简单，在需要检查单个进程时非常理想，因此非常适合调试用途。
+- en: As for disadvantages, strace instruments individual processes, which makes it
+    unsuitable for inspecting the activity of the whole system or when you don’t have
+    a specific process to start from. Further, strace is based on ptrace for system
+    call collection, which makes it very slow and unsuitable for use in production
+    environments. You should expect a process to slow down substantially (sometimes
+    by orders of magnitude) when you attach strace to it.
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 至于缺点，strace 仅对单个进程进行仪器化，这使得它不适合检查整个系统的活动或者当你没有特定的起点进程时使用。此外，strace 基于 ptrace
+    进行系统调用收集，这使得它在生产环境中非常慢且不适用。当你附加 strace 时，应该预期进程会显著减速（有时减速数倍）。
+- en: sysdig
+  id: totrans-44
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: sysdig
+- en: We introduced sysdig in [Chapter 3](ch03.xhtml#understanding_falcoapostr)’s
+    discussion of trace files. sysdig is more sophisticated than strace and includes
+    several advanced features. While this can make it a bit harder to use, the good
+    news is that sysdig shares Falco’s data model, output format, and filtering syntax—so
+    you can use a lot of what you learn about Falco in sysdig, and vice versa.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在[第三章](ch03.xhtml#understanding_falcoapostr)中介绍了 sysdig 的追踪文件。sysdig 比 strace
+    更复杂，并包含几个高级功能。虽然这可能使它有点难以使用，但好消息是 sysdig 与 Falco 的数据模型、输出格式和过滤语法相同——因此你可以在 sysdig
+    中应用你在 Falco 中学到的很多内容，反之亦然。
+- en: 'The first thing to keep in mind is that you don’t point sysdig to an individual
+    process like you do with strace. Instead, you just run it and it will capture
+    every system call invoked on the machine, inside or outside containers:'
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先要记住的是，与 strace 不同，你不需要像对待单个进程那样指定 sysdig。相反，只需运行它，它将捕获机器上内外的每个系统调用：
+- en: '[PRE2]'
+  id: totrans-47
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'Usually this is too noisy and not very useful, so you can restrict what sysdig
+    shows you by using filters. sysdig accepts the same filtering syntax as Falco
+    (which, incidentally, makes it a great tool to test and troubleshoot Falco rules).
+    Here’s an example where we restrict sysdig to capturing system calls for processes
+    named “cat”:'
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常这会造成很大噪音，且不太有用，所以你可以通过使用过滤器来限制 sysdig 显示的内容。sysdig 接受与 Falco 相同的过滤语法（顺便说一句，这使它成为一个测试和调试
+    Falco 规则的强大工具）。以下是一个例子，我们将 sysdig 限制为仅捕获名为“cat”的进程的系统调用：
+- en: '[PRE3]'
+  id: totrans-49
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'This output requires a little more explanation than strace’s. The fields sysdig
+    prints are:'
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个输出需要比 strace 更详细的解释。sysdig 打印的字段包括：
+- en: Incremental event number
+  id: totrans-51
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 增量事件编号
+- en: Event timestamp
+  id: totrans-52
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 事件时间戳
+- en: CPU ID
+  id: totrans-53
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: CPU ID
+- en: Command name
+  id: totrans-54
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 命令名称
+- en: Process ID and thread ID (TID), separated by a dot
+  id: totrans-55
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 进程ID和线程ID（TID），用点号分隔
+- en: Event direction (`>` means *enter*, while `<` means *exit*)
+  id: totrans-56
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 事件方向（`>` 表示 *进入*，`<` 表示 *退出*）
+- en: Event type (for our purposes, this is the system call name)
+  id: totrans-57
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 事件类型（对于我们来说，这是系统调用的名称）
+- en: System call arguments
+  id: totrans-58
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 系统调用参数
+- en: 'Unlike strace, sysdig prints *two* lines for each system call: the *enter*
+    line is generated when the system call starts and the *exit* line is printed when
+    the system call returns. This approach works well if you need to identify how
+    long a system call took to run or pinpoint a process that is stuck in a system
+    call.'
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与 strace 不同，sysdig 为每个系统调用打印了 *两* 行：*进入* 行是系统调用开始时生成的，*退出* 行是系统调用返回时打印的。如果你需要确定系统调用运行时间或找出卡在系统调用中的进程，这种方法非常有效。
+- en: 'Also note that, by default, sysdig prints thread IDs in addition to process
+    IDs. *Threads* are the core execution unit for the operating system and thus for
+    sysdig as well. Multiple threads can exist within the same process or command
+    and share resources, such as memory. The TID is the basic identifier to follow
+    when tracking execution activity in your machine. You do that by just looking
+    at the TID number, or by filtering out the noise with a command line like this
+    one:'
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 还要注意，默认情况下，sysdig 除了打印进程ID外还打印线程ID。*线程* 是操作系统和 sysdig 的核心执行单元。多个线程可以存在于同一个进程或命令中，并共享资源，比如内存。TID
+    是在跟踪机器上执行活动时跟踪执行活动的基本标识符。你可以通过查看 TID 号码或使用如下命令行来过滤掉噪音：
+- en: '[PRE4]'
+  id: totrans-61
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: which will preserve the execution flow only for thread 1234.
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这将仅保留线程 1234 的执行流。
+- en: Threads live inside processes, which are identified by a process ID. A lot of
+    the processes running on an average Linux box are single-threaded, and in that
+    case `thread.tid` is the same as `proc.pid`. Filtering by `proc.pid` is useful
+    to observe how threads interact with each other inside a process.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 线程存在于进程内部，进程通过进程ID进行标识。在平均 Linux 系统上运行的大部分进程都是单线程的，在这种情况下，`thread.tid`和`proc.pid`是相同的。通过`proc.pid`进行过滤很有用，可以观察线程在进程内部的交互情况。
+- en: Trace files
+  id: totrans-64
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 追踪文件
+- en: 'As you learned in [Chapter 3](ch03.xhtml#understanding_falcoapostr), you can
+    instruct sysdig to save the system calls it captures to a trace file, like so:'
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如在 [Chapter 3](ch03.xhtml#understanding_falcoapostr) 中所学到的，您可以指示 sysdig 将其捕获的系统调用保存到跟踪文件中，例如：
+- en: '[PRE5]'
+  id: totrans-66
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'You will likely want to use a filter to keep the file size under control. For
+    example:'
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可能想要使用过滤器来控制文件大小。例如：
+- en: '[PRE6]'
+  id: totrans-68
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: 'You can also use filters when reading trace files:'
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当读取跟踪文件时，您也可以使用过滤器：
+- en: '[PRE7]'
+  id: totrans-70
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: sysdig’s filters are important enough that we will devote a full chapter ([Chapter 6](ch06.xhtml#fields_and_filters))
+    to them.
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: sysdig 的过滤器非常重要，我们将专门为它们撰写一整章（[Chapter 6](ch06.xhtml#fields_and_filters)）。
+- en: We recommend you play with sysdig and explore the activity of common programs
+    in Linux. This will be helpful later, when creating or interpreting Falco rules.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们建议您使用 sysdig 并探索 Linux 中常见程序的活动。这将在稍后创建或解释 Falco 规则时非常有帮助。
+- en: Capturing System Calls
+  id: totrans-73
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 捕获系统调用
+- en: All right, system calls are cool and we need to capture them. So what’s the
+    best way to do it?
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 好的，系统调用很酷，我们需要捕获它们。那么最好的方法是什么？
+- en: 'Earlier in this chapter, we described how system calls involve transitioning
+    the execution flow from a running process to the kernel of the operating system.
+    Intuitively, and as shown in [Figure 4-1](#system_call_capture_options), there
+    are two places where system calls can be captured: in the running process or the
+    operating system kernel.'
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章的前面部分，我们描述了系统调用是如何将执行流从运行中的进程转移到操作系统内核的。直觉上，如图 [Figure 4-1](#system_call_capture_options)
+    所示，可以在两个地方捕获系统调用：在运行的进程中或操作系统内核中。
+- en: '![](Images/pcns_0401.png)'
+  id: totrans-76
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/pcns_0401.png)'
+- en: Figure 4-1\. System call capture options
+  id: totrans-77
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 4-1\. 系统调用捕获选项
+- en: Capturing system calls in a running process typically involves modifying either
+    the process or some of its libraries with some kind of instrumentation. The fact
+    that most programs in Linux use the C standard library, also known as *glibc*,
+    to execute system calls makes instrumenting it quite appealing. As a consequence,
+    there are abundant tools and frameworks to modify *glibc* (and other system libraries)
+    for instrumentation purposes. These techniques can be static, changing the library’s
+    source code and recompiling it, or dynamic, finding its location in the address
+    space of the target process and inserting hooks in it.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在运行的进程中捕获系统调用通常涉及修改进程或其某些库以进行某种形式的仪器化。由于 Linux 中大多数程序使用 C 标准库，也称为 *glibc*，来执行系统调用，使得仪器化它非常吸引人。因此，有大量工具和框架用于修改
+    *glibc*（和其他系统库）以进行仪器化。这些技术可以是静态的，改变库的源代码并重新编译它，或者是动态的，在目标进程的地址空间中找到其位置并插入钩子。
+- en: Note
+  id: totrans-79
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Another method to capture system calls without instrumenting the OS kernel involves
+    using the operating system’s debugging facilities. For example, strace uses a
+    facility called *ptrace*,^([1](ch04.xhtml#ch01fn2)) which is at the base of tools
+    like the GNU debugger (gdb).
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 捕获系统调用的另一种方法是利用操作系统的调试工具。例如，strace 使用一个名为 *ptrace* 的工具，^([1](ch04.xhtml#ch01fn2))
+    这个工具是像 GNU 调试器（gdb）这样工具的基础。
+- en: The second option involves intercepting the system call execution after it has
+    transitioned to the operating system. This requires running some code in the OS
+    kernel itself. It tends to be more delicate and riskier, because running code
+    in the kernel requires elevated privileges. Anything running in the kernel has
+    potential control of the machine, its processes, its users, and its hardware.
+    Therefore, a bug in anything that runs inside the kernel can cause major security
+    risks, data corruption, or, in some cases, even a machine crash. This is why many
+    security tools pick instrumentation option 1 and capture system calls at the user
+    level, inside the process.
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 第二种选择涉及在系统调用转移到操作系统后拦截其执行。这需要在操作系统内核中运行一些代码。这往往更加棘手和风险更高，因为在内核中运行代码需要提升的权限。在内核中运行的任何内容都有可能控制机器、其进程、其用户和其硬件。因此，内核中运行的任何错误可能导致重大的安全风险、数据损坏或在某些情况下甚至机器崩溃。这就是为什么许多安全工具选择仪器化选项
+    1 并在用户级别内捕获系统调用的原因。
+- en: 'Falco does the opposite: it sits squarely on the kernel instrumentation side.
+    The rationale behind this choice can be summarized in three words: accuracy, performance,
+    and scalability. Let’s explore each in turn.'
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco 则相反：它完全基于内核的仪器化。选择背后的理由可以总结为三个词：准确性、性能和可伸缩性。让我们依次探讨每一个。
+- en: Accuracy
+  id: totrans-83
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 准确性
+- en: User-level instrumentation techniques—in particular, those that work at the
+    *glibc* level—have a couple of major problems. First, a motivated attacker can
+    evade them by, well, not using *glibc*! You don’t *have* to use a library to issue
+    system calls, and attackers can easily craft a simple sequence of CPU instructions
+    instead, completely bypassing the *glibc* instrumentation. Not good.
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用户级别的工具技术，特别是在*glibc*层面工作的技术，有几个主要问题。首先，一个有动机的攻击者可以通过避开使用*glibc*来规避它们！你并不一定需要使用库来发出系统调用，攻击者可以很容易地编写一系列简单的CPU指令，完全绕过*glibc*的检测。这不是好事。
+- en: Even worse, there are major categories of software that just don’t load *glibc*
+    at all. For example, statically linked C programs, very common in containers,
+    import *glibc* functions at compile time and embed them in their executables.
+    With these programs, you don’t have the option to replace or modify the library.
+    The same goes for programs written in Go, which has its own statically linked
+    system call interface library.
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 更糟糕的是，有一些主要类别的软件根本不加载*glibc*。例如，在容器中非常常见的静态链接的C程序，在编译时导入*glibc*函数并将它们嵌入到可执行文件中。对于这些程序，你无法替换或修改库。Go语言编写的程序也是如此，它有自己静态链接的系统调用接口库。
+- en: Kernel-level capture doesn’t suffer from these limitations. It supports any
+    language, any stack, and any framework, because system call collection happens
+    at a level below all of the libraries and abstraction layers. This means that
+    kernel-level instrumentation is much harder for attackers to evade.
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 内核级别的捕获不受这些限制。它支持任何语言、任何堆栈和任何框架，因为系统调用的收集发生在所有库和抽象层之下。这意味着内核级别的工具更难以被攻击者规避。
+- en: Performance
+  id: totrans-87
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 性能
+- en: Some user-level capture techniques, such as using ptrace, have significant overhead
+    because they generate a high number of context switches. Every single system call
+    needs to be uniquely delivered to a separate process, which requires the execution
+    to ping-pong between processes. This is very, very slow, to the point that it
+    becomes an impediment to using such techniques in production, where such a substantial
+    impact on the instrumented processes is not acceptable.
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一些用户级别的捕获技术，比如使用`ptrace`，因为产生了大量的上下文切换，所以有很大的开销。每个系统调用都需要被单独传递到一个独立的进程，这就需要在进程之间来回“乒乓”。这非常非常慢，甚至影响到在生产环境中使用这种技术，因为对被检测进程的影响太大是不可接受的。
+- en: It’s true that *glibc*-based capture can be more efficient, but it still introduces
+    high overhead for basic operations like timestamping events. Kernel-level capture,
+    by contrast, requires zero context switches and can collect all of the necessary
+    context, like timestamps, from within the kernel. This makes it much faster than
+    any other technique, and thus the most suitable for production.
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*glibc*基础的捕获确实可以更有效率，但是对于基本操作如事件时间戳的捕获仍然引入了高开销。相比之下，内核级别的捕获不需要任何上下文切换，并且可以从内核中收集所有必要的上下文信息，比如时间戳。这使得它比任何其他技术都要快得多，因此最适合生产环境。'
+- en: Scalability
+  id: totrans-90
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 可伸缩性
+- en: As the name implies, process-level capture requires “doing something” for every
+    single process. What that something is can vary, but it still introduces an overhead
+    that is proportional to the number of observed processes. That’s not the case
+    with kernel-level instrumentation. Take a look at [Figure 4-2](#system_call_capture_scalabilitycomma_pr).
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如其名，进程级别的捕获要求对每个单独的进程“做某事”。这个“某事”可能有所不同，但它仍然引入了与观察到的进程数量成正比的开销。而使用内核级别的工具则不会出现这种情况。看看[图 4-2](#system_call_capture_scalabilitycomma_pr)。
+- en: If you insert kernel instrumentation in the right place, it is possible to have
+    one single instrumentation point (labeled 2 in [Figure 4-2](#system_call_capture_scalabilitycomma_pr)),
+    no matter how many processes are running. This ensures not only maximum efficiency
+    but also the certainty that you will never miss anything, because no process escapes
+    kernel-level capture.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你在正确的位置插入内核工具，可以有一个单一的工具插点（在[图 4-2](#system_call_capture_scalabilitycomma_pr)中标记为2），无论有多少进程在运行。这不仅确保了最大效率，还确保你永远不会遗漏任何事情，因为没有进程能逃过内核级别的捕获。
+- en: '![](Images/pcns_0402.png)'
+  id: totrans-93
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/pcns_0402.png)'
+- en: Figure 4-2\. System call capture scalability, process-level versus kernel
+  id: totrans-94
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 4-2\. 系统调用捕获的可伸缩性，进程级别与内核
+- en: So What About Stability and Security?
+  id: totrans-95
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 那么，稳定性和安全性呢？
+- en: We mentioned that kernel-level instrumentation is more delicate, because a bug
+    can cause serious problems. You might wonder, “Am I taking additional risk by
+    choosing a tool like Falco, which is based on kernel instrumentation, instead
+    of a product based on user-level instrumentation?”
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们提到过，内核级仪器化更为微妙，因为一个bug可能会导致严重问题。您可能会想，“选择基于内核仪器化的Falco这样的工具，而不是基于用户级仪器化的产品，是否会增加额外的风险？”
+- en: Not really. First of all, kernel-level instrumentation benefits from well-documented,
+    stable hooking interfaces, while approaches like *glibc*-based capture are less
+    clean and intrinsically riskier. They cannot crash the machine, but they can absolutely
+    crash the instrumented process, with results that are typically bad. In addition
+    to that, technologies like eBPF greatly reduce the risk involved in running code
+    in the kernel, making kernel-level instrumentation viable even for risk-averse
+    users.
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 实际上并不是这样。首先，内核级仪器化受益于有文档记录、稳定的挂钩接口，而像基于*glibc*的捕获方法则不够干净且内在风险更高。它们可能不会导致机器崩溃，但绝对可以导致被检测的进程崩溃，结果通常是糟糕的。除此之外，像eBPF这样的技术大大降低了在内核中运行代码的风险，使内核级仪器化即使对于风险规避的用户也是可行的。
+- en: Kernel-Level Instrumentation Approaches
+  id: totrans-98
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 内核级仪器化方法
+- en: 'We hope we’ve convinced you that, whenever it’s available, kernel instrumentation
+    is the way to go for runtime security. The question now becomes, what is the best
+    mechanism to implement it? Among the different available approaches, two are relevant
+    for a tool like Falco: kernel modules or eBPF probes. Let’s take a look at each
+    of these approaches.'
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们希望我们已经说服了您，无论何时可以使用，内核仪器化都是运行时安全的最佳选择。现在的问题是，实施它的最佳机制是什么？在不同可用方法中，两种对于像Falco这样的工具是相关的：内核模块或eBPF探针。让我们看看这两种方法。
+- en: Kernel modules
+  id: totrans-100
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 内核模块
+- en: Loadable kernel modules are pieces of code that can be loaded into the kernel
+    at runtime. Historically, modules have been heavily used in Linux (and many other
+    operating systems) to make the kernel extensible, efficient, and smaller.
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可加载内核模块是可以在运行时加载到内核中的代码片段。在Linux（以及许多其他操作系统）的历史上，模块被广泛用于使内核具有可扩展性、高效性和更小的体积。
+- en: Kernel modules extend the kernel’s functionality without the need to reboot
+    the system. They are typically used to implement device drivers, network protocols,
+    and filesystems. Kernel modules are written in C and are compiled for the specific
+    kernel inside which they will run. In other words, it’s not possible to compile
+    a module on one machine and then use it on another one (unless they have exactly
+    the same kernel). Kernel modules can also be unloaded when the user doesn’t need
+    them anymore, to save memory.
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 内核模块扩展了内核的功能，无需重新启动系统。它们通常用于实现设备驱动程序、网络协议和文件系统。内核模块使用C语言编写，并针对特定内核进行编译。换句话说，不可能在一台机器上编译模块然后在另一台机器上使用它（除非它们具有完全相同的内核）。当用户不再需要时，内核模块也可以被卸载以节省内存。
+- en: Linux has supported kernel modules for a very long time, so they work even with
+    very old versions of Linux. They also have extensive access to the kernel, which
+    means there are very few restrictions on what they can do. That makes them a great
+    choice to collect the detailed information required by a runtime security tool
+    like Falco. Since they are written in C, kernel modules are also very efficient
+    and therefore a great option when performance is important.
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linux长期支持内核模块，因此它们甚至与非常旧的Linux版本兼容。它们还可以广泛访问内核，这意味着它们几乎没有什么限制可以做什么。这使它们成为Falco等运行时安全工具所需的详细信息的收集的绝佳选择。由于它们使用C语言编写，内核模块也非常高效，因此在性能重要时是一个不错的选择。
+- en: 'If you want to see the list of modules that are loaded in your Linux box, use
+    this command:'
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您想查看在您的Linux系统上加载的模块列表，请使用以下命令：
+- en: '[PRE8]'
+  id: totrans-105
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: eBPF
+  id: totrans-106
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: eBPF
+- en: As mentioned in [Chapter 1](ch01.xhtml#introducing_falco), eBPF is the “next
+    generation” of the Berkeley Packet Filter (BPF). BPF was designed in 1992 for
+    network packet filtering with BSD operating systems, and it is still used today
+    by tools like Wireshark. BPF’s innovation was the ability to execute arbitrary
+    code in the kernel of the operating system. Since such code has more or less unlimited
+    privileges on the machine, however, this is potentially risky and must be done
+    with care.
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如[第1章](ch01.xhtml#introducing_falco)中提到的，eBPF是伯克利数据包过滤器（BPF）的“下一代”。BPF于1992年为BSD操作系统设计用于网络数据包过滤，今天仍然被像Wireshark这样的工具使用。BPF的创新之处在于能够在操作系统内核中执行任意代码。然而，由于这种代码在机器上拥有几乎无限的特权，因此这可能存在潜在风险，必须谨慎使用。
+- en: '[Figure 4-3](#bpf_filter_deployment_steps) shows how BPF safely runs arbitrary
+    packet filters in the kernel.'
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 4-3](#bpf_filter_deployment_steps) 显示了BPF如何在内核中安全地运行任意数据包过滤器。'
+- en: '![](Images/pcns_0403.png)'
+  id: totrans-109
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/pcns_0403.png)'
+- en: Figure 4-3\. BPF filter deployment steps
+  id: totrans-110
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 4-3\. BPF过滤器部署步骤
+- en: 'Let’s take a look at the steps depicted here:'
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们来看看这里描述的步骤：
+- en: The user inputs a filter in a program like Wireshark (e.g., `port 80`).
+  id: totrans-112
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 用户在诸如Wireshark的程序中输入过滤器（例如，`port 80`）。
+- en: 'The filter is fed to a compiler, which converts it into bytecode for a virtual
+    machine. This is conceptually similar to compiling a Java program, but both the
+    program and the virtual machine (VM) instruction set are much simpler when using
+    BPF. Here, for example, is what our `port 80` filter becomes after being compiled:'
+  id: totrans-113
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 过滤器被输入到编译器中，编译器将其转换为虚拟机的字节码。这在概念上类似于编译Java程序，但在使用BPF时，程序和虚拟机（VM）指令集都简单得多。例如，我们的`port
+    80`过滤器在编译后变成了这样：
+- en: '[PRE9]'
+  id: totrans-114
+  prefs:
+  - PREF_IND
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: To prevent a compiled filter from doing damage, it is analyzed by a verifier
+    before being injected into the kernel. The verifier examines the bytecode and
+    determines if the filter has dangerous attributes (for example, infinite loops
+    that would cause the filter to never return, consuming a lot of kernel CPU).
+  id: totrans-115
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 为了防止编译的过滤器造成损害，它在注入内核之前由验证器分析。验证器检查字节码，并确定过滤器是否具有危险属性（例如，导致过滤器永不返回的无限循环，消耗大量内核CPU）。
+- en: If the filter code is not safe, the verifier rejects it, returns an error to
+    the user, and stops the loading process. If the verifier is happy, the bytecode
+    is delivered to the virtual machine, which runs it against every incoming packet.
+  id: totrans-116
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 如果过滤器代码不安全，验证器将拒绝它，并向用户返回错误，停止加载过程。如果验证器满意，字节码将传递给虚拟机，虚拟机将其针对每个传入的数据包运行。
+- en: eBPF is a more recent (and much more capable) version of BPF, added to Linux
+    in 2014 and first included with kernel version 3.18\. eBPF takes BPF’s concepts
+    to new levels, delivering more efficiency and taking advantage of newer hardware.
+    Most importantly, with hooks throughout the kernel, eBPF enables use cases that
+    go beyond simple packet filtering, such as tracing, performance analysis, debugging,
+    and security. It’s essentially a general-purpose code execution VM that guarantees
+    the programs it runs won’t cause damage.
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: eBPF是BPF的更新版本（也更为强大），于2014年添加到Linux，并首次随内核版本3.18一同发布。eBPF将BPF的概念提升到新的水平，提供更高效的性能，并利用更新的硬件。最重要的是，通过内核各处的钩子，eBPF使得除了简单的数据包过滤外，还能支持跟踪、性能分析、调试和安全等用例。它本质上是一个通用的代码执行虚拟机，保证其运行的程序不会造成损害。
+- en: 'Here are some of the improvements that eBPF introduces over classic BPF:'
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里是eBPF相比经典BPF引入的一些改进：
+- en: A more advanced instruction set, which means eBPF can run much more sophisticated
+    programs.
+  id: totrans-119
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 更先进的指令集，意味着eBPF可以运行更复杂的程序。
+- en: A just-in-time (JIT) compiler. While classic BPF was interpreted, eBPF programs,
+    after being validated, are converted into native CPU instructions. This means
+    they run much faster, at close to native CPU speeds.
+  id: totrans-120
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 即时（JIT）编译器。经典BPF是解释执行的，而验证通过的eBPF程序会被转换为本机CPU指令。这意味着它们可以以接近本机CPU速度运行得更快。
+- en: The ability to write real C programs instead of just simple packet filters.
+  id: totrans-121
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 能够编写真正的C程序，而不仅仅是简单的数据包过滤器。
+- en: A mature set of libraries that let you control eBPF from languages like Go.
+  id: totrans-122
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一个成熟的库集，允许您从诸如Go之类的语言控制eBPF。
+- en: The ability to run subprograms and helper functions.
+  id: totrans-123
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 运行子程序和辅助函数的能力。
+- en: Safe access to several kernel objects. eBPF programs can safely “peek” into
+    kernel structures to collect information and context, which are gold for tools
+    like Falco.
+  id: totrans-124
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 安全访问多个内核对象。eBPF程序可以安全地“窥视”内核结构以收集信息和上下文，这对于像Falco这样的工具非常重要。
+- en: The concept of *maps,* memory areas that can be used to exchange data with the
+    user level efficiently and easily.
+  id: totrans-125
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '*映射* 的概念，可以用来高效、轻松地与用户级交换数据的内存区域。'
+- en: A much more sophisticated verifier, which lets eBPF programs do more while preserving
+    their safety.
+  id: totrans-126
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 更复杂的验证器，使得eBPF程序在保持安全性的同时可以做更多事情。
+- en: The ability to run in many more places in the kernel than the network stack,
+    using facilities like tracepoints, kprobes, uprobes, Linux Security Modules hooks,
+    and Userland Statically Defined Tracing (USDT).
+  id: totrans-127
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在内核中运行的位置更多，使用诸如tracepoints、kprobes、uprobes、Linux安全模块钩子和用户态静态定义跟踪（USDT）等设施，而不仅限于网络堆栈。
+- en: eBPF is evolving quickly and is rapidly becoming the standard way to extend
+    the Linux kernel. eBPF scripts are flexible and safe and run extremely fast, making
+    them perfect for capturing runtime activity.
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: eBPF 技术正在迅速发展，并迅速成为扩展 Linux 内核的标准方法。eBPF 脚本灵活安全，运行速度极快，非常适合捕获运行时活动。
+- en: The Falco Drivers
+  id: totrans-129
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Falco 驱动程序
+- en: 'Falco offers two different driver implementations that implement both the approaches
+    we just described: a kernel module and an eBPF probe. The two implementations
+    have the same functionality and are interchangeable when using Falco. Therefore,
+    we can describe how they work without focusing on a specific one.'
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco 提供了两种不同的驱动程序实现，分别实现了我们刚才描述的两种方法：一个是内核模块，另一个是 eBPF 探针。这两种实现具有相同的功能，在使用
+    Falco 时可以互换。因此，我们可以描述它们的工作方式，而不必专注于特定的实现。
+- en: The high-level capture flow is shown in [Figure 4-4](#the_driverapostrophes_capture_flow).
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 高级捕获流程显示在[图 4-4](#the_driverapostrophes_capture_flow)中。
+- en: '![](Images/pcns_0404.png)'
+  id: totrans-132
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/pcns_0404.png)'
+- en: Figure 4-4\. The driver’s capture flow
+  id: totrans-133
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 4-4\. 驱动程序的捕获流程
+- en: 'The approach used by the Falco drivers to capture a system call involves three
+    main steps, labeled in the figure:'
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco 驱动程序用于捕获系统调用的方法包括图中标记的三个主要步骤：
+- en: 'A kernel facility called a tracepoint intercepts the execution of the system
+    call. The tracepoint makes it possible to insert a hook at a specific place in
+    the operating system kernel so that a callback function will be called every time
+    kernel execution reaches that point.^([2](ch04.xhtml#idm45324227765696)) The Falco
+    drivers install two tracepoints for system calls: one where system calls enter
+    the kernel, and another one where they exit the kernel and give control back to
+    the caller process.'
+  id: totrans-135
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 内核设施称为追踪点截获了系统调用的执行。追踪点使得可以在操作系统内核中的特定位置插入一个钩子，以便每次内核执行到达该点时调用一个回调函数。Falco 驱动程序为系统调用安装了两个追踪点：一个用于系统调用进入内核，另一个用于系统调用退出内核并将控制返回给调用进程。
+- en: While in the tracepoint callback, the driver “packs” the system call arguments
+    into a shared memory buffer. During this phase, the system call is also time­stam⁠ped
+    and additional context is collected from the operating system (for example, the
+    thread ID, or the connection details for some socket syscalls). This phase needs
+    to be super-efficient, because the system call cannot be executed until the driver’s
+    tracepoint callback returns.
+  id: totrans-136
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 当在追踪点回调函数中时，驱动程序将系统调用参数“打包”到共享内存缓冲区中。在此阶段，系统调用也会被时间戳标记，并且从操作系统中收集额外的上下文信息（例如线程
+    ID，或者某些套接字系统调用的连接详情）。这个阶段需要非常高效，因为直到驱动程序的追踪点回调函数返回之前，系统调用才不能被执行。
+- en: The shared buffer now contains the system call data, and Falco can access it
+    directly through *libscap* (introduced in [Chapter 3](ch03.xhtml#understanding_falcoapostr)).
+    No data is copied during this phase, which minimizes CPU utilization while optimizing
+    cache coherency.
+  id: totrans-137
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 共享缓冲区现在包含系统调用数据，并且Falco 可以通过*libscap*直接访问它（在[第 3 章](ch03.xhtml#understanding_falcoapostr)介绍）。在此阶段不复制任何数据，从而最大程度地减少
+    CPU 利用率并优化缓存一致性。
+- en: There are a few things to keep in mind with regard to system call capture in
+    Falco. The first one is that the way system calls are packed in the buffer is
+    flexible and doesn’t necessarily reflect the arguments of the original calls.
+    In some cases, the driver skips unneeded arguments to maximize performance. In
+    other cases, the driver adds fields that contain state, useful context, or additional
+    information. For example, a `clone` event in Falco contains many fields that add
+    information about the newly created process, like the environment variables.
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在使用 Falco 进行系统调用捕获时需要记住几件事情。第一点是，系统调用在缓冲区中的打包方式是灵活的，并不一定反映原始调用的参数。在某些情况下，驱动程序跳过不需要的参数以最大化性能。在其他情况下，驱动程序添加包含状态、有用上下文或额外信息的字段。例如，Falco
+    中的 `clone` 事件包含许多字段，增加了有关新创建进程的信息，如环境变量。
+- en: 'The second thing to keep in mind is that, even if system calls are by far the
+    most important sources of data that the drivers capture, they are not the only
+    ones. Using tracepoints, the drivers hook into other places in the kernel, like
+    the scheduler, to capture context switches and signal deliveries. Take a look
+    at this command:'
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 第二点需要记住的是，即使系统调用是驱动程序捕获的数据中最重要的来源，但它们并不是唯一的来源。使用追踪点，驱动程序还钩入内核中的其他地方（如调度程序），以捕获上下文切换和信号传递。看一下这个命令：
+- en: '[PRE10]'
+  id: totrans-140
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: This line of code displays events captured through the context switch tracepoint.
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这行代码显示通过上下文切换追踪点捕获的事件。
+- en: Which Driver Should You Use?
+  id: totrans-142
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 您应该使用哪个驱动程序？
+- en: 'If you’re not sure which driver you should use, here are some simple guidelines:'
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您不确定应该使用哪个驱动程序，请参考以下简单指南：
+- en: Use the kernel module when you have an I/O-intensive workload and you care about
+    keeping the instrumentation overhead as low as possible. The kernel module has
+    lower overhead than the eBPF probe, and on machines that generate a high number
+    of system calls it will have less of a performance impact on running processes.
+    It’s not easy to estimate how much better the kernel module will perform, since
+    this depends on how many system calls a process is making, but expect the difference
+    to be noticeable with disk- or network-intensive workloads that generate many
+    system calls every second.
+  id: totrans-144
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在您有高 I/O 负载并且关心保持尽可能低的仪器化开销时，请使用内核模块。内核模块的开销比 eBPF 探针低，在生成大量系统调用的机器上，它对运行中的进程的性能影响较小。很难估计内核模块的性能会比
+    eBPF 探针好多少，因为这取决于进程产生多少系统调用，但是期望在每秒生成大量系统调用的磁盘或网络密集型工作负载中能够明显感觉到差异。
+- en: You should also use the kernel module when you need to support a kernel older
+    than Linux version 4.12.
+  id: totrans-145
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 当您需要支持早于 Linux 版本 4.12 的内核时，也应使用内核模块。
+- en: Use the eBPF probe in all other situations.
+  id: totrans-146
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在所有其他情况下，请使用 eBPF 探针。
+- en: That’s it!
+  id: totrans-147
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 就是这样！
+- en: Capturing System Calls Within Containers
+  id: totrans-148
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 在容器内捕获系统调用
+- en: The beauty of tracepoint-based kernel-level capture is that it sees everything
+    that runs in a machine, inside or outside a container. Nothing escapes it. It
+    is also easy to deploy, with no need to run anything inside the monitored containers,
+    and it doesn’t require sidecars.
+  id: totrans-149
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 基于跟踪点的内核级捕获的优势在于它可以看到运行在机器上的任何东西，无论是容器内还是容器外。它没有任何漏网之鱼。而且部署简单，无需在被监视的容器内运行任何东西，也不需要
+    sidecars。
+- en: '[Figure 4-5](#deploying_falco_in_a_containerized_envi) shows how you deploy
+    Falco in a containerized environment, with a simplified diagram of a machine running
+    three containers (labeled 1, 2, and 3) based on different container runtimes.'
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 4-5](#deploying_falco_in_a_containerized_envi) 展示了如何在容器化环境中部署 Falco，其中包含一个简化的图表，显示了基于不同容器运行时的机器上运行三个容器（标记为
+    1、2 和 3）。'
+- en: '![](Images/pcns_0405.png)'
+  id: totrans-151
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/pcns_0405.png)'
+- en: Figure 4-5\. Deploying Falco in a containerized environment
+  id: totrans-152
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 4-5\. 在容器化环境中部署 Falco
+- en: In such a scenario, Falco is typically installed as a container. Orchestrators
+    like Kubernetes make it easy to deploy Falco on every host, with facilities like
+    DaemonSets and Helm charts.
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这种情况下，Falco 通常作为一个容器安装。像 Kubernetes 这样的编排器使得在每个主机上部署 Falco 变得容易，使用诸如 DaemonSets
+    和 Helm charts 等工具。
+- en: When the Falco container starts, it installs the driver in the operating system.
+    Once installed, the driver can see the system calls of any process in any container,
+    with no further user action required, because all of these system calls go through
+    the same tracepoint. Advanced logic in the driver can attribute each captured
+    system call to its container so that Falco always knows which container has generated
+    a system call. Falco also fetches metadata from the container runtime, making
+    it easy to create rules that rely on container labels, image names, and other
+    metadata. (Falco includes a further level of enrichment based on Kubernetes metadata,
+    which we’ll discuss in the next chapter.)
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当 Falco 容器启动时，它会将驱动程序安装在操作系统中。一旦安装完成，驱动程序可以看到任何容器中任何进程的系统调用，无需进一步的用户操作，因为所有这些系统调用都通过相同的跟踪点。驱动程序中的高级逻辑可以将每个捕获的系统调用归因于其容器，以便
+    Falco 始终知道哪个容器生成了系统调用。Falco 还从容器运行时获取元数据，便于创建依赖于容器标签、镜像名称和其他元数据的规则。（Falco 还包括基于
+    Kubernetes 元数据的进一步增强，我们将在下一章讨论。）
+- en: Running the Falco Drivers
+  id: totrans-155
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 运行 Falco 驱动程序
+- en: Now that you have an idea of how they work, let’s take a look at how to deploy
+    and use the two Falco drivers on a local machine. (If you want to install Falco
+    in production environments, see Chapters [9](ch09.xhtml#installing_falco) and
+    [10](ch10.xhtml#configuring_and_running).)
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在您对它们的工作原理有了一个概念，让我们看看如何在本地机器上部署和使用两个 Falco 驱动程序。（如果您想在生产环境中安装 Falco，请参阅第 [9](ch09.xhtml#installing_falco)
+    章和第 [10](ch10.xhtml#configuring_and_running) 章。）
+- en: Kernel Module
+  id: totrans-157
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 内核模块
+- en: 'Falco, by default, runs using the kernel module, so no additional steps are
+    required if you want to use that as your driver. Just run Falco, and it will pick
+    up the kernel module. If you want to unload the kernel module and load a different
+    version, for example because you have built your own customized module, use the
+    following commands:'
+  id: totrans-158
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，Falco使用内核模块运行，因此如果要使用它作为驱动程序，则不需要额外的步骤。只需运行Falco，它将加载内核模块。如果要卸载内核模块并加载不同版本，例如因为您构建了自己的定制模块，请使用以下命令：
+- en: '[PRE11]'
+  id: totrans-159
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: eBPF Probe
+  id: totrans-160
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: eBPF探针
+- en: 'To enable eBPF support in Falco, you need to set the `FALCO_BPF_PROBE` environment
+    variable. If you set it to an empty value (`FALCO_BPF_PROBE=""`), Falco will load
+    the eBPF probe from *~/.falco/falco-bpf.o*. Otherwise, you can explicitly point
+    to the path where the eBPF probe resides:'
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要在Falco中启用eBPF支持，您需要设置`FALCO_BPF_PROBE`环境变量。如果将其设置为空值（`FALCO_BPF_PROBE=""`），Falco将从*~/.falco/falco-bpf.o*加载eBPF探针。否则，您可以显式指定eBPF探针所在的路径：
+- en: '[PRE12]'
+  id: totrans-162
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: After setting the environment variable, just run Falco normally and it will
+    use the eBPF probe.
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 设置环境变量后，只需正常运行Falco，它将使用eBPF探针。
+- en: Tip
+  id: totrans-164
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: To ensure that Falco’s eBPF probe (and any other eBPF program) runs with the
+    best performance, make sure that your kernel has `CONFIG_BPF_JIT` enabled and
+    that `net.core.bpf_jit_enable` is set to `1`. This enables the BPF JIT compiler
+    in the kernel, substantially speeding up the execution of eBPF programs.
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要确保Falco的eBPF探针（以及任何其他eBPF程序）具有最佳性能，请确保您的内核启用了`CONFIG_BPF_JIT`并且`net.core.bpf_jit_enable`设置为`1`。这会在内核中启用BPF
+    JIT编译器，显著加快eBPF程序的执行速度。
+- en: 'Using Falco in Environments Where Kernel Access Is Not Available: pdig'
+  id: totrans-166
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 在无法访问内核的环境中使用Falco：pdig
+- en: Kernel instrumentation, whenever possible, is always the way to go. But what
+    if you want to run Falco in environments where access to the kernel is not allowed?
+    This is common in managed container environments, like AWS Fargate. In such environments,
+    installing a kernel module is not an option because the cloud provider blocks
+    it.
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在可能的情况下，总是优先选择内核仪器化。但如果您想在禁止访问内核的环境中运行Falco会怎样？这在托管容器环境（如AWS Fargate）中很常见。在这种环境中，安装内核模块不是选项，因为云提供商会阻止它。
+- en: 'For these situations, the Falco developers have implemented a user-level instrumentation
+    driver called [*pdig*](https://oreil.ly/amRqP). It is built on top of ptrace,
+    so it uses the same approach as strace. Like strace, pdig can operate in two ways:
+    it can run a program that you specify on the command line, or it can attach to
+    a running process. Either way, pdig instruments the process and its children in
+    a way that produces a Falco-compatible stream of events.'
+  id: totrans-168
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于这些情况，Falco开发人员实现了一个称为[*pdig*](https://oreil.ly/amRqP)的用户级仪器驱动程序。它建立在ptrace之上，因此使用与strace相同的方法。与strace类似，pdig可以以两种方式运行：可以运行您在命令行上指定的程序，也可以附加到正在运行的进程。无论哪种方式，pdig都会以产生与Falco兼容的事件流的方式对进程及其子进程进行仪器化。
+- en: Note that pdig, like strace, requires you to enable `CAP_SYS_PTRACE` for the
+    container runtime. Make sure you launch your container with this capability, or
+    pdig will fail.
+  id: totrans-169
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，与strace类似，pdig需要您为容器运行时启用`CAP_SYS_PTRACE`。确保以此能力启动您的容器，否则pdig将无法工作。
+- en: The eBPF probe and kernel module work at the global host level, whereas pdig
+    works at the process level. This can make container instrumentation more challenging.
+    Fortunately, pdig can track the children of an instrumented process. This means
+    that running the entrypoint of a container with pdig will allow you to capture
+    every system call generated by any process for that container.
+  id: totrans-170
+  prefs: []
+  type: TYPE_NORMAL
+  zh: eBPF探针和内核模块在全局主机级别工作，而pdig在进程级别工作。这可能会使容器仪器化更具挑战性。幸运的是，pdig可以跟踪已仪器化进程的子进程。这意味着使用pdig运行容器的入口点将允许您捕获该容器中任何进程生成的每个系统调用。
+- en: The biggest limitation of pdig is performance. ptrace is versatile, but it introduces
+    substantial overhead on the instrumented processes. pdig employs several tricks
+    to reduce this overhead, but it’s still substantially slower than the kernel-level
+    Falco drivers.
+  id: totrans-171
+  prefs: []
+  type: TYPE_NORMAL
+  zh: pdig的最大限制是性能。ptrace功能广泛，但会对仪器化进程引入大量开销。pdig采用了几种技巧来减少这种开销，但仍比内核级别的Falco驱动程序慢得多。
+- en: Running Falco with pdig
+  id: totrans-172
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用pdig运行Falco
+- en: 'You run pdig with the path (and arguments, if any) of the process you want
+    to trace, much as you would with strace. Here’s an example:'
+  id: totrans-173
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以像使用strace一样，使用要跟踪的进程的路径（以及参数，如果有）。以下是一个示例：
+- en: '[PRE13]'
+  id: totrans-174
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: The `-a` option enables the full filter, which provides a richer set of instrumented
+    system calls. You probably don’t want to use this option with Falco, for performance
+    reasons.
+  id: totrans-175
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`-a` 选项启用了完整的过滤器，提供了更丰富的系统调用仪表化集合。出于性能原因，您可能不希望在 Falco 中使用此选项。'
+- en: 'You can also attach to a running process with the `-p` option:'
+  id: totrans-176
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您还可以使用 `-p` 选项附加到正在运行的进程：
+- en: '[PRE14]'
+  id: totrans-177
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: 'To observe any effect, you will need to have Falco running in a separate process.
+    Use the `-u` command-line flag:'
+  id: totrans-178
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要观察任何效果，您需要在单独的进程中运行 Falco。使用 `-u` 命令行标志：
+- en: '[PRE15]'
+  id: totrans-179
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: This will enable user-space instrumentation.
+  id: totrans-180
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这将启用用户空间的仪器化。
+- en: Falco Plugins
+  id: totrans-181
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Falco 插件
+- en: 'In addition to system calls, Falco can collect and process many other types
+    of data, such as application logs and cloud activity streams. Let’s round out
+    this chapter by exploring the mechanism at the base of this functionality: Falco’s
+    plugins framework.'
+  id: totrans-182
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了系统调用，Falco 还可以收集和处理许多其他类型的数据，例如应用程序日志和云活动流。让我们通过探索此功能的基础机制来结束本章：Falco 的插件框架。
+- en: 'Plugins are a modular, flexible way to extend Falco ingestion. Anyone can use
+    them to add a new source of data, local or remote, to Falco. [Figure 4-6](#falco_plugin)
+    indicates where plugins sit in the Falco capture stack: they are inputs for *libscap*
+    and act as alternatives to the drivers that are used when capturing system calls.'
+  id: totrans-183
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 插件是扩展 Falco 输入的一种模块化、灵活的方式。任何人都可以使用它们将新的数据源（本地或远程）添加到 Falco 中。[图 4-6](#falco_plugin)
+    显示了插件在 Falco 捕获堆栈中的位置：它们是 *libscap* 的输入，并作为捕获系统调用时驱动程序的替代品。
+- en: Plugins are implemented as shared libraries that conform to a documented API.
+    They allow you to add new event sources that you can then evaluate using filtering
+    expressions and Falco rules. They also let you define new fields that can extract
+    information from events.
+  id: totrans-184
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 插件实现为符合文档化 API 的共享库。它们允许您添加新的事件源，并使用过滤表达式和 Falco 规则对其进行评估。它们还允许您定义可以从事件中提取信息的新字段。
+- en: '![](Images/pcns_0406.png)'
+  id: totrans-185
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/pcns_0406.png)'
+- en: Figure 4-6\. Falco plugins
+  id: totrans-186
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 4-6\. Falco 插件
+- en: Plugin Architecture Concepts
+  id: totrans-187
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 插件架构概念
+- en: Plugins are dynamic shared libraries (*.so* files in Unix, *.dll* files in Windows)
+    that export C calling convention functions. Falco dynamically loads these libraries
+    and calls the exported functions. Plugins are versioned using semantic versioning
+    to minimize regressions and compatibility issues. They can be written in any language,
+    as long as they export the required functions. Go is the preferred language for
+    writing plugins, followed by C/C++.
+  id: totrans-188
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 插件是动态共享库（Unix 中的 *.so* 文件，Windows 中的 *.dll* 文件），导出 C 调用约定函数。Falco 动态加载这些库并调用导出的函数。插件使用语义化版本控制进行版本管理，以减少回归和兼容性问题。它们可以用任何语言编写，只要导出所需函数即可。首选用于编写插件的语言是
+    Go，其次是 C/C++。
+- en: 'Plugins include two main pieces of functionality, also called *capabilities*:'
+  id: totrans-189
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 插件包括两个主要功能模块，也称为 *能力*：
+- en: Event sourcing
+  id: totrans-190
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 事件溯源
+- en: This capability is used to implement a new event source. An event source can
+    “open” and “close” a stream of events and can return an event to *libscap* via
+    a `next` method. In other words, it’s used to feed new “stuff” to Falco.
+  id: totrans-191
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此功能用于实现新的事件源。事件源可以通过 `next` 方法“打开”和“关闭”事件流，并将事件返回给 *libscap*。换句话说，它用于向 Falco
+    提供新的“内容”。
+- en: Field extraction
+  id: totrans-192
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 字段提取
+- en: Field extraction focuses on producing fields from events generated by other
+    plugins or by the core libraries. Fields, you’ll recall, are the basic components
+    of Falco rules, so exposing new fields is equivalent to expanding the applicability
+    of Falco rules to new domains. An example is JSON parsing, where a plugin might
+    be able to extract fields from arbitrary JSON payloads. You’ll learn more about
+    fields in [Chapter 6](ch06.xhtml#fields_and_filters).
+  id: totrans-193
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 字段提取专注于从其他插件或核心库生成的事件中生成字段。字段是 Falco 规则的基本组成部分，因此暴露新字段相当于扩展 Falco 规则的适用范围到新的领域。例如，JSON
+    解析就是一个例子，插件可以从任意 JSON 负载中提取字段。关于字段的更多信息，请参见 [第 6 章](ch06.xhtml#fields_and_filters)。
+- en: An individual plugin can offer the event sourcing capability, field extraction
+    capability, or both at the same time. Capabilities are exported by implementing
+    certain functions in the plugin API interface.
+  id: totrans-194
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 单个插件可以同时提供事件溯源功能、字段提取功能，或者两者兼具。通过实现插件 API 接口中的特定函数来导出这些功能。
+- en: To make it easier to write plugins, there are [Go](https://oreil.ly/ylcdv) and
+    [C++](https://oreil.ly/0c2CH) SDKs that handle the details of memory management
+    and type conversion. They provide a streamlined way to implement plugins without
+    having to deal with all the details of lower-level functions that make up the
+    plugin API.
+  id: totrans-195
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了更容易编写插件，有处理内存管理和类型转换细节的 [Go](https://oreil.ly/ylcdv) 和 [C++](https://oreil.ly/0c2CH)
+    SDK。它们提供了一种简化的方式来实现插件，而不必处理构成插件 API 的所有底层函数的细节。
+- en: The libraries will do everything possible to validate data that comes from the
+    plugins, to protect Falco and other consumers from corrupted data. However, for
+    performance reasons plugins are trusted, and because they run in the same thread
+    and address space as Falco, they *could* crash the program. Falco assumes that
+    you, as a user, are in control and will make sure only plugins you have vetted
+    are loaded or packaged.
+  id: totrans-196
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了保护 Falco 和其他消费者免受损坏数据的影响，库将尽一切可能验证来自插件的数据。但基于性能考虑，插件是受信任的，并且因为它们与 Falco 在相同的线程和地址空间中运行，*可能*会导致程序崩溃。Falco
+    假定作为用户的你可以控制，确保只加载或打包了你审查过的插件。
+- en: How Falco Uses Plugins
+  id: totrans-197
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Falco 如何使用插件
+- en: Falco loads plugins based on the configuration in *falco.yaml*. As of summer
+    2022, when this book went to press, if a source plugin is loaded, the only events
+    processed are from that plugin, and system call capture is disabled. Also, a running
+    Falco instance can use only one plugin. If, on a single machine, you want Falco
+    to collect data from multiple plugins or from plugins and drivers, you will need
+    to run multiple Falco instances and use a different source for each of them.^([3](ch04.xhtml#ch01fn3))
+  id: totrans-198
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco 根据 *falco.yaml* 中的配置加载插件。截至 2022 年夏季，本书印刷时，如果加载了源插件，则仅处理来自该插件的事件，并且禁用系统调用捕获。此外，运行中的
+    Falco 实例只能使用一个插件。如果在单台机器上希望 Falco 从多个插件或从插件和驱动程序中收集数据，则需要运行多个 Falco 实例，并为每个实例使用不同的来源。^([3](ch04.xhtml#ch01fn3))
+- en: 'Falco configures plugins via the `plugins` property in *falco.yaml*. Here’s
+    an example:'
+  id: totrans-199
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco 通过 *falco.yaml* 中的 `plugins` 属性配置插件。以下是一个示例：
+- en: '[PRE16]'
+  id: totrans-200
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: The `plugins` property in *falco.yaml* defines the set of plugins that Falco
+    can load, and the `load_plugins` property controls which plugins load when Falco
+    starts.
+  id: totrans-201
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*falco.yaml* 中的 `plugins` 属性定义了 Falco 可以加载的插件集合，而 `load_plugins` 属性控制 Falco
+    启动时加载哪些插件。'
+- en: 'The mechanics of loading a plugin are implemented in *libscap* and leverage
+    the dynamic library functionality of the operating system.^([4](ch04.xhtml#ch01fn4))
+    The plugin loading code also ensures that:'
+  id: totrans-202
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 插件加载的机制在 *libscap* 中实现，并利用操作系统的动态库功能。^([4](ch04.xhtml#ch01fn4)) 插件加载代码还确保：
+- en: The plugin is valid (i.e., it exports the set of expected symbols).
+  id: totrans-203
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 插件有效（即，它导出了预期的符号集）。
+- en: The plugin’s API version number is compatible with the plugin framework.
+  id: totrans-204
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 插件的 API 版本号与插件框架兼容。
+- en: Only one source plugin is loaded at a time for a given event source.
+  id: totrans-205
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 对于给定事件源，一次只能加载一个源插件。
+- en: If a mix of source and extractor plugins is loaded for a given event source,
+    the exported fields have unique names that don’t overlap across plugins.
+  id: totrans-206
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如果为给定事件源加载了源和提取器插件的混合体，则导出字段具有不会跨插件重叠的唯一名称。
+- en: An up-to-date list of available Falco plugins can be found in the [plugins repository](https://oreil.ly/g495C)
+    under the Falcosecurity GitHub organization. As of this writing, the Falcosecurity
+    organization officially maintains plugins for CloudTrail, GitHub, Okta, Kubernetes
+    audit logs, and JSON. In addition to these, there are third-party plugins available
+    for seccomp and Docker.
+  id: totrans-207
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最新的 Falco 插件列表可以在 [插件仓库](https://oreil.ly/g495C) 中找到，属于 Falcosecurity GitHub
+    组织。截至本文写作时，Falcosecurity 组织正式维护 CloudTrail、GitHub、Okta、Kubernetes 审计日志和 JSON 的插件。除此之外，还有第三方插件可用于
+    seccomp 和 Docker。
+- en: If you are interested in writing your own plugins, you will find everything
+    you need to know in [Chapter 14](ch14.xhtml#falco_development). If you’re impatient
+    and just want to get to the code, you can find the source code for all the currently
+    available plugins in the plugins repo.
+  id: totrans-208
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你有兴趣编写自己的插件，你可以在 [第 14 章](ch14.xhtml#falco_development) 找到所有需要知道的内容。如果你迫不及待，只想看代码，你可以在插件库中找到所有当前可用插件的源代码。
+- en: Conclusion
+  id: totrans-209
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 结论
+- en: Congratulations on making it to the end of a rich chapter packed with a lot
+    of information! What you learned here is at the core of understanding and operating
+    Falco. It also constitutes a solid architectural foundation that will be useful
+    every time you need to run or deploy a security tool on Linux.
+  id: totrans-210
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 恭喜您完成了一个充满大量信息的丰富章节！您在这里学到的内容是理解和操作 Falco 的核心。这也构成了一个坚实的架构基础，每次在 Linux 上运行或部署安全工具时都会很有用。
+- en: Next, you’re going to learn about how context is added to the captured data
+    to make Falco even more powerful.
+  id: totrans-211
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，您将了解如何向捕获的数据添加上下文，从而使 Falco 的功能更加强大。
+- en: ^([1](ch04.xhtml#ch01fn2-marker)) Run `**man 2 ptrace**` for more information
+    on this.
+  id: totrans-212
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([1](ch04.xhtml#ch01fn2-marker)) 运行 `**man 2 ptrace**` 以获取更多信息。
+- en: ^([2](ch04.xhtml#idm45324227765696-marker)) For more information, see the article
+    [“Using the Linux Kernel Tracepoints”](https://oreil.ly/5ulP5) by Mathieu Desnoyer.
+  id: totrans-213
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([2](ch04.xhtml#idm45324227765696-marker)) 更多信息，请参阅 Mathieu Desnoyer 的文章 [“Using
+    the Linux Kernel Tracepoints”](https://oreil.ly/5ulP5)。
+- en: ^([3](ch04.xhtml#ch01fn3-marker)) Note that the Falco developers are working
+    on removing this limitation. As a consequence, in the future Falco will be able
+    to receive data from multiple plugins at the same time or to capture system calls
+    and at the same time use plugins.
+  id: totrans-214
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([3](ch04.xhtml#ch01fn3-marker)) 请注意，Falco 的开发人员正在努力消除这一限制。因此，将来 Falco 将能够同时从多个插件接收数据或捕获系统调用并同时使用插件。
+- en: ^([4](ch04.xhtml#ch01fn4-marker)) A dynamic library is loaded using `dlopen/dlsym`
+    in Unix, or `LoadLibrary/GetProcAddress` in Windows.
+  id: totrans-215
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([4](ch04.xhtml#ch01fn4-marker)) 在 Unix 系统中使用 `dlopen/dlsym` 或在 Windows 中使用
+    `LoadLibrary/GetProcAddress` 加载动态库。

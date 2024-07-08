@@ -1,0 +1,1022 @@
+- en: Chapter 7\. Service Discovery
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第7章 服务发现
+- en: Kubernetes is a very dynamic system. The system is involved in placing Pods
+    on nodes, making sure they are up and running, and rescheduling them as needed.
+    There are ways to automatically change the number of Pods based on load (such
+    as Horizontal Pod Autoscaling [see [“Autoscaling a ReplicaSet”](ch09.xhtml#autoscaling)]).
+    The API-driven nature of the system encourages others to create higher and higher
+    levels of automation.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes是一个非常动态的系统。该系统参与将Pod放置在节点上，确保它们正常运行，并根据需要重新调度它们。有助于根据负载自动更改Pod数量的方法（例如水平Pod自动缩放[参见[“ReplicaSet的自动缩放”](ch09.xhtml#autoscaling)]）。系统的API驱动特性鼓励其他人创建越来越高级别的自动化。
+- en: While the dynamic nature of Kubernetes makes it easy to run a lot of things,
+    it creates problems when it comes to *finding* those things. Most of the traditional
+    network infrastructure wasn’t built for the level of dynamism that Kubernetes
+    presents.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes的动态特性使得同时运行许多事物变得容易，但在*寻找*这些事物时却产生了问题。大多数传统的网络基础设施并不适用于Kubernetes所呈现的这种动态级别。
+- en: What Is Service Discovery?
+  id: totrans-3
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 什么是服务发现？
+- en: The general name for this class of problems and solutions is *service discovery*.
+    Service-discovery tools help solve the problem of finding which processes are
+    listening at which addresses for which services. A good service-discovery system
+    will enable users to resolve this information quickly and reliably. A good system
+    is also low-latency; clients are updated soon after the information associated
+    with a service changes. Finally, a good service-discovery system can store a richer
+    definition of what that service is. For example, perhaps there are multiple ports
+    associated with the service.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这类问题和解决方案的通用名称是*服务发现*。服务发现工具有助于解决查找哪些进程在哪些地址上监听哪些服务的问题。一个好的服务发现系统将使用户能够快速可靠地解析此信息。一个好的系统还应该是低延迟的；客户端在与服务关联信息更改后很快就会更新。最后，一个好的服务发现系统可以存储关于该服务的更丰富的定义。例如，也许与服务相关联的有多个端口。
+- en: The Domain Name System (DNS) is the traditional system of service discovery
+    on the internet. DNS is designed for relatively stable name resolution with wide
+    and efficient caching. It is a great system for the internet but falls short in
+    the dynamic world of Kubernetes.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 域名系统（DNS）是互联网上服务发现的传统系统。DNS设计用于相对稳定的名称解析，具有广泛且高效的缓存。它是互联网的一个很好的系统，但在Kubernetes动态世界中存在不足。
+- en: Unfortunately, many systems (for example, Java, by default) look up a name in
+    DNS directly and never re-resolve it. This can lead to clients caching stale mappings
+    and talking to the wrong IP. Even with a short TTL (time-to-live) and a well-behaved
+    client, there is a natural delay between when a name resolution changes and when
+    the client notices. There are natural limits to the amount and type of information
+    that can be returned in a typical DNS query too. Things start to break past 20
+    to 30 address (A) records for a single name. Service (SRV) records solve some
+    problems, but are often very hard to use. Finally, the way that clients handle
+    multiple IPs in a DNS record is usually to take the first IP address and rely
+    on the DNS server to randomize or round-robin the order of records. This is no
+    substitute for more purpose-built load balancing.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不幸的是，许多系统（例如默认情况下的Java）直接在DNS中查找名称并且不会重新解析它。这可能导致客户端缓存陈旧的映射并与错误的IP进行通信。即使有短暂的TTL（生存时间）和良好行为的客户端，名称解析更改时客户端注意到之间存在自然延迟。在典型DNS查询中，能够返回的信息量和类型也有自然限制。超过20到30个地址（A记录）对于单个名称会导致问题。服务（SRV）记录解决了一些问题，但通常很难使用。最后，客户端处理DNS记录中多个IP的方式通常是取第一个IP地址并依赖DNS服务器随机化或循环轮询记录的顺序。这不能替代更专门的负载平衡。
+- en: The Service Object
+  id: totrans-7
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Service对象
+- en: Real service discovery in Kubernetes starts with a Service object. A Service
+    object is a way to create a named label selector. As we will see, the Service
+    object does some other nice things for us too.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes中的真实服务发现始于一个Service对象。Service对象是创建命名标签选择器的一种方式。正如我们将看到的，Service对象还为我们提供了一些其他好处。
+- en: 'Just as the `kubectl run` command is an easy way to create a Kubernetes deployment,
+    we can use `kubectl expose` to create a service. We’ll talk about Deployments
+    in detail in [Chapter 10](ch10.xhtml#deployments_chapter), but for now you can
+    think of a Deployment as an instance of a microservice. Let’s create some deployments
+    and services so we can see how they work:'
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 就像`kubectl run`命令是创建Kubernetes部署的简单方法一样，我们可以使用`kubectl expose`来创建一个服务。我们将在[第10章](ch10.xhtml#deployments_chapter)详细讨论部署，但现在您可以将部署视为微服务的一个实例。让我们创建一些部署和服务，以便看看它们是如何工作的：
+- en: '[PRE0]'
+  id: totrans-10
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: After running these commands, we have three services. The ones we just created
+    are `alpaca-prod` and `bandicoot-prod`. The `kubernetes` service is automatically
+    created for you so that you can find and talk to the Kubernetes API from within
+    the app.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运行这些命令后，我们有了三个服务。我们刚刚创建的服务是`alpaca-prod`和`bandicoot-prod`。`kubernetes`服务会自动为您创建，以便您可以从应用程序内部找到并与Kubernetes
+    API交互。
+- en: If we look at the `SELECTOR` column, we see that the `alpaca-prod` service simply
+    gives a name to a selector and specifies which ports to talk to for that service.
+    The `kubectl expose` command will conveniently pull both the label selector and
+    the relevant ports (8080, in this case) from the deployment definition.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果我们查看`SELECTOR`列，我们会发现`alpaca-prod`服务只是为选择器指定一个名称，并指定了与该服务通信的端口（在本例中为8080）。`kubectl
+    expose`命令将方便地从部署定义中提取标签选择器和相关端口。
+- en: Furthermore, that service is assigned a new type of virtual IP called a *cluster
+    IP*. This is a special IP address the system will load balance across all of the
+    Pods that are identified by the selector.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此外，该服务被分配了一种新型虚拟IP，称为*集群IP*。这是系统将在所有由选择器标识的Pod之间进行负载均衡的特殊IP地址。
+- en: 'To interact with services, we are going to port-forward to one of the `alpaca`
+    Pods. Start this command and leave it running in a terminal window. You can see
+    the port-forward working by accessing the `alpaca` Pod at *http://localhost:48858*:'
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要与服务交互，我们将进行端口转发到一个`alpaca` Pod。执行此命令并在终端窗口中保持运行。您可以通过访问*http://localhost:48858*来查看端口转发的工作情况：
+- en: '[PRE1]'
+  id: totrans-15
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: Service DNS
+  id: totrans-16
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 服务DNS
+- en: Because the cluster IP is virtual, it is stable, and it is appropriate to give
+    it a DNS address. All of the issues around clients caching DNS results no longer
+    apply. Within a namespace, it is as easy as just using the service name to connect
+    to one of the Pods identified by a service.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因为集群IP是虚拟的，所以它是稳定的，并且适合分配DNS地址。客户端缓存DNS结果的所有问题都不再适用。在命名空间内，只需使用服务名称即可连接到由服务标识的Pod之一。
+- en: Kubernetes provides a DNS service exposed to Pods running in the cluster. This
+    Kubernetes DNS service was installed as a system component when the cluster was
+    first created. The DNS service is, itself, managed by Kubernetes and is a great
+    example of Kubernetes building on Kubernetes. The Kubernetes DNS service provides
+    DNS names for cluster IPs.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes为运行在集群中的Pod提供了一个DNS服务。该Kubernetes DNS服务在集群创建时作为系统组件安装。DNS服务本身由Kubernetes管理，并且是Kubernetes构建在Kubernetes上的一个很好的例子。Kubernetes
+    DNS服务为集群IP提供DNS名称。
+- en: 'You can try this out by expanding the “DNS Query” section on the `kuard` server
+    status page. Query the A record for `alpaca-prod`. The output should look something
+    like this:'
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在`kuard`服务器状态页面上展开“DNS查询”部分，您可以尝试这样做。查询`alpaca-prod`的A记录。输出应该类似于以下内容：
+- en: '[PRE2]'
+  id: totrans-20
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'The full DNS name here is `alpaca-prod.default.svc.cluster.local.`. Let’s break
+    this down:'
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里的完整DNS名称是`alpaca-prod.default.svc.cluster.local.`。让我们来详细了解一下：
+- en: '`alpaca-prod`'
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`alpaca-prod`'
+- en: The name of the service in question.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此服务的名称。
+- en: '`default`'
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`default`'
+- en: The namespace that this service is in.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此服务所在的命名空间。
+- en: '`svc`'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`svc`'
+- en: Recognizing that this is a service. This allows Kubernetes to expose other types
+    of things as DNS in the future.
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 确认这是一个服务。这使得Kubernetes可以在未来将其他类型的东西暴露为DNS。
+- en: '`cluster.local.`'
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`cluster.local.`'
+- en: The base domain name for the cluster. This is the default and what you will
+    see for most clusters. Administrators may change this to allow unique DNS names
+    across multiple clusters.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 集群的基本域名。这是大多数集群中的默认设置。管理员可以更改此设置，以允许跨多个集群使用唯一的DNS名称。
+- en: When referring to a service in your own namespace, you can just use the service
+    name (`alpaca-prod`). You can also refer to a service in another namespace with
+    `alpaca-prod.default`. And, of course, you can use the fully qualified service
+    name (`alpaca-prod.default.svc.cluster.local.`). Try each of these out in the
+    “DNS Query” section of `kuard`.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当引用自己命名空间中的服务时，您可以直接使用服务名称（`alpaca-prod`）。您还可以引用另一个命名空间中的服务，如`alpaca-prod.default`。当然，您也可以使用完全限定的服务名称（`alpaca-prod.default.svc.cluster.local.`）。请在
+    `kuard` 的“DNS查询”部分尝试每一种情况。
+- en: Readiness Checks
+  id: totrans-31
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 就绪检查
+- en: 'Often, when an application first starts up, it isn’t ready to handle requests.
+    There is usually some amount of initialization that can take anywhere from under
+    a second to several minutes. One nice thing the Service object does is track which
+    of your Pods are ready via a readiness check. Let’s modify our deployment to add
+    a readiness check that is attached to a Pod, as we discussed in [Chapter 5](ch05.xhtml#pods):'
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常，当应用程序首次启动时，它无法处理请求。通常需要一些初始化工作，可能需要不到一秒或几分钟。服务对象的一个好处是通过就绪检查跟踪哪些 Pod 是准备就绪的。让我们修改我们的部署，添加一个与
+    Pod 相关联的就绪检查，如我们在 [第5章](ch05.xhtml#pods) 中讨论的那样：
+- en: '[PRE3]'
+  id: totrans-33
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: This command will fetch the current version of the `alpaca-prod` deployment
+    and bring it up in an editor. After you save and quit your editor, it’ll write
+    the object back to Kubernetes. This is a quick way to edit an object without saving
+    it to a YAML file.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此命令将获取当前版本的 `alpaca-prod` 部署，并在编辑器中启动它。保存并退出编辑器后，它将将对象写回 Kubernetes。这是一种在不将对象保存到
+    YAML 文件中的情况下编辑对象的快速方法。
+- en: 'Add the following section:'
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 添加以下部分：
+- en: '[PRE4]'
+  id: totrans-36
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: This sets up the Pods this deployment will create so that they will be checked
+    for readiness via an HTTP `GET` to `/ready` on port 8080\. This check is done
+    every two seconds starting as soon as the Pod comes up. If three successive checks
+    fail, then the Pod will be considered not ready. However, if only one check succeeds,
+    the Pod will again be considered ready.
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这将设置此部署将创建的 Pod，以便通过在端口8080上的HTTP `GET`到`/ready`进行就绪检查。此检查在 Pod 启动后立即开始，每两秒钟进行一次。如果连续三次检查失败，则认为该
+    Pod 不可用。但是，如果只有一次检查成功，则再次认为该 Pod 是就绪的。
+- en: Only ready Pods are sent traffic.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 只有准备就绪的 Pod 才会收到流量。
+- en: 'Updating the deployment definition like this will delete and re-create the
+    `alpaca` Pods. As such, we need to restart our `port-forward` command from earlier:'
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 更新部署定义将删除并重新创建 `alpaca` Pods。因此，我们需要重新启动先前的 `port-forward` 命令：
+- en: '[PRE5]'
+  id: totrans-40
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: Point your browser to *http://localhost:48858*, and you should see the debug
+    page for that instance of `kuard`. Expand the “Readiness Probe” section. You should
+    see this page update every time there is a new readiness check from the system,
+    which should happen every two seconds.
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将您的浏览器指向 *http://localhost:48858*，您应该可以看到 `kuard` 实例的调试页面。展开“就绪探针”部分。每次系统进行新的就绪检查时，您应该看到此页面更新，这通常每两秒钟发生一次。
+- en: 'In another terminal window, start a `watch` command on the endpoints for the
+    `alpaca-prod` service. Endpoints are a lower-level way of finding what a service
+    is sending traffic to and are covered later in this chapter. The `--watch` option
+    here causes the `kubectl` command to hang around and output any updates. This
+    is an easy way to see how a Kubernetes object changes over time:'
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在另一个终端窗口上，对 `alpaca-prod` 服务的端点启动 `watch` 命令。端点是查找服务发送流量的更低级别方法，并将在本章后面进行介绍。这里的
+    `--watch` 选项导致 `kubectl` 命令挂起并输出任何更新。这是一种轻松查看 Kubernetes 对象随时间变化的方法：
+- en: '[PRE6]'
+  id: totrans-43
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: Now return to your browser and hit the “Fail” link for the readiness check.
+    You should see that the server is now returning errors with codes in the 500s.
+    After three of these, this server is removed from the list of endpoints for the
+    service. Hit the “Succeed” link and notice that after a single readiness check,
+    the endpoint is added back.
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在返回到浏览器，点击就绪检查的“失败”链接。您应该看到服务器现在返回500的错误代码。这三次失败后，此服务器将从服务的端点列表中删除。点击“成功”链接并注意，在单个就绪检查后，端点将被重新添加。
+- en: This readiness check is a way for an overloaded or sick server to signal to
+    the system that it doesn’t want to receive traffic anymore. This is a great way
+    to implement graceful shutdown. The server can signal that it no longer wants
+    traffic, wait until existing connections are closed, and then cleanly exit.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个就绪检查是过载或出现问题的服务器向系统发出信号，表明它不希望再接收流量。这是实现优雅关闭的一种好方法。服务器可以发出不再希望流量的信号，等待现有连接关闭，然后干净地退出。
+- en: Press Ctrl-C to exit out of both the `port-forward` and `watch` commands in
+    your terminals.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 按下 Ctrl-C 退出终端中的`port-forward`和`watch`命令。
+- en: Looking Beyond the Cluster
+  id: totrans-47
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 超越集群范围
+- en: So far, everything we’ve covered in this chapter has been about exposing services
+    inside of a cluster. Oftentimes, the IPs for Pods are only reachable from within
+    the cluster. At some point, we have to allow new traffic in!
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，本章涵盖的内容都是关于在集群内部暴露服务。通常情况下，Pod的IP只能在集群内部访问。但在某些时候，我们需要允许新的流量进入！
+- en: The most portable way to do this is to use a feature called NodePorts, which
+    enhance a service even further. In addition to a cluster IP, the system picks
+    a port (or the user can specify one), and every node in the cluster then forwards
+    traffic to that port to the service.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最便携的方法是使用称为 NodePorts 的功能，进一步增强了服务。除了一个集群 IP 外，系统还选择一个端口（或用户可以指定一个端口），然后集群中的每个节点都将流量转发到该端口的服务上。
+- en: With this feature, if you can reach any node in the cluster, you can contact
+    a service. You can use the NodePort without knowing where any of the Pods for
+    that service are running. This can be integrated with hardware or software load
+    balancers to expose the service further.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有了这个功能，如果你能够访问集群中的任何节点，就可以联系到一个服务。即使不知道运行该服务的任何 Pod 所在的位置，也可以使用 NodePort。这可以与硬件或软件负载均衡器集成，以进一步暴露服务。
+- en: 'Try this out by modifying the `alpaca-prod` service:'
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尝试修改`alpaca-prod`服务来测试一下：
+- en: '[PRE7]'
+  id: totrans-52
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: 'Change the `spec.type` field to `NodePort`. You can also do this when creating
+    the service via `kubectl expose` by specifying `--type=NodePort`. The system will
+    assign a new NodePort:'
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将`spec.type`字段改为`NodePort`。在使用`kubectl expose`创建服务时，也可以通过指定`--type=NodePort`来执行此操作。系统将分配一个新的
+    NodePort：
+- en: '[PRE8]'
+  id: totrans-54
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: 'Here we see that the system assigned port 32711 to this service. Now we can
+    hit any of our cluster nodes on that port to access the service. If you are sitting
+    on the same network, you can access it directly. If your cluster is in the cloud
+    someplace, you can use SSH tunneling with something like this:'
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这里，我们看到系统分配端口 32711 给这个服务。现在我们可以访问集群中任何节点上的该端口来访问服务。如果你在同一网络上，可以直接访问。如果你的集群在云端某处，可以使用类似以下的
+    SSH 隧道：
+- en: '[PRE9]'
+  id: totrans-56
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: Now if you point your browser to *http://localhost:8080*, you will be connected
+    to that service. Each request that you send to the service will be randomly directed
+    to one of the Pods that implements the service. Reload the page a few times, and
+    you will see that you are randomly assigned to different Pods.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，如果你将浏览器指向 *http://localhost:8080*，你将连接到该服务。每个发送到服务的请求将随机分配给实现该服务的不同 Pod。重新加载页面几次，你会发现请求随机分配到不同的
+    Pod 上。
+- en: When you are done, exit the SSH session.
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当完成后，退出 SSH 会话。
+- en: Load Balancer Integration
+  id: totrans-59
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 负载均衡器集成
+- en: If you have a cluster that is configured to integrate with external load balancers,
+    you can use the `LoadBalancer` type. This builds on the `NodePort` type by additionally
+    configuring the cloud to create a new load balancer and direct it at nodes in
+    your cluster. Most cloud-based Kubernetes clusters offer load balancer integration,
+    and there are a number of projects that implement load balancer integration for
+    common physical load balancers as well, although these may require more manual
+    integration with your cluster.
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你的集群配置了与外部负载均衡器集成，可以使用`LoadBalancer`类型。它在`NodePort`类型的基础上，进一步配置云端创建一个新的负载均衡器，并将其指向集群中的节点。大多数基于云的
+    Kubernetes 集群都支持负载均衡器集成，也有一些项目专门为常见的物理负载均衡器实现负载均衡器集成，尽管这些可能需要更多与集群的手动集成。
+- en: Edit the `alpaca-prod` service again (`kubectl edit service alpaca-prod`) and
+    change `spec.type` to `LoadBalancer`.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 再次编辑`alpaca-prod`服务（`kubectl edit service alpaca-prod`），并将`spec.type`改为`LoadBalancer`。
+- en: Note
+  id: totrans-62
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Creating a service of type `LoadBalancer` exposes that service to the public
+    internet. Before you do this, you should make certain that it is something that
+    is secure to be exposed to everyone in the world. We will discuss security risks
+    further in this section. Additionally, Chapters [9](ch19.xhtml#securing_pods)
+    and [20](ch20.xhtml#policy_and_governance_for_kubernetes_clusters) provide guidance
+    on how to secure your application.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建一个`LoadBalancer`类型的服务将该服务暴露给公共互联网。在执行此操作之前，请确保这是安全的，可以向全世界公开。我们将在本节进一步讨论安全风险。此外，第
+    [9](ch19.xhtml#securing_pods) 章和第 [20](ch20.xhtml#policy_and_governance_for_kubernetes_clusters)
+    章提供了如何保护应用程序的指导。
+- en: 'If you do a `kubectl get services` right away, you’ll see that the `EXTERNAL-IP`
+    column for `alpaca-prod` now says `<pending>`. Wait a bit and you should see a
+    public address assigned by your cloud. You can look in the console for your cloud
+    account and see the configuration work that Kubernetes did for you:'
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果立即运行 `kubectl get services`，您会看到 `alpaca-prod` 的 `EXTERNAL-IP` 列现在显示 `<pending>`。稍等片刻，您应该会看到云端为您分配的公共地址。您可以查看云账户的控制台，了解
+    Kubernetes 为您完成的配置工作：
+- en: '[PRE10]'
+  id: totrans-65
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: Here we see that we have an address of 104.196.248.204 now assigned to the `alpaca-prod`
+    service. Open up your browser and try!
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们看到 `alpaca-prod` 服务分配了 104.196.248.204 的地址。打开浏览器试试吧！
+- en: Note
+  id: totrans-67
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: This example is from a cluster launched and managed on the Google Cloud Platform
+    via GKE. The way a load balancer is configured is specific to a cloud. Some clouds
+    have DNS-based load balancers (e.g., AWS Elastic Load Balancing [ELB]). In this
+    case, you’ll see a hostname here instead of an IP. Depending on the cloud provider,
+    it may still take a little while for the load balancer to be fully operational.
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此示例来自通过 GKE 在谷歌云平台上启动和管理的集群。负载均衡器的配置方式特定于云。一些云有基于 DNS 的负载均衡器（例如 AWS 弹性负载均衡 [ELB]）。在这种情况下，您会看到一个主机名而不是
+    IP。根据云服务提供商的不同，负载均衡器可能需要一段时间才能完全运行。
+- en: Creating a cloud-based load balancer can take some time. Don’t be surprised
+    if it takes a few minutes on most cloud providers.
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建一个基于云的负载均衡器可能需要一些时间。大多数云服务提供商可能需要几分钟，这一点不要感到惊讶。
+- en: 'The examples that we have seen so far use *external* load balancers; that is,
+    load balancers that are connected to the public internet. While this is great
+    for exposing services to the world, you’ll often want to expose your application
+    within only your private network. To achieve this, use an *internal* load balancer.
+    Unfortunately, because support for internal load balancers was added to Kubernetes
+    more recently, it is done in a somewhat ad hoc manner via object annotations.
+    For example, to create an internal load balancer in an Azure Kubernetes Service
+    cluster, you add the annotation `service.beta.kubernetes.io/azure-load-balancer-internal:
+    "true"` to your `Service` resource. Here are the settings for some popular clouds:'
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '到目前为止，我们看到的示例都使用了 *外部* 负载均衡器；也就是说，连接到公共互联网的负载均衡器。虽然这对于向世界公开服务很好，但通常您只想在内部网络中公开应用程序。为了实现这一点，请使用
+    *内部* 负载均衡器。不幸的是，由于对内部负载均衡器的支持是较近期添加到 Kubernetes 的，因此通过对象注解以某种临时方式实现。例如，在 Azure
+    Kubernetes 服务集群中创建内部负载均衡器，您需要向您的 `Service` 资源添加注解 `service.beta.kubernetes.io/azure-load-balancer-internal:
+    "true"`。以下是一些流行云服务的设置：'
+- en: Microsoft Azure
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 微软 Azure
+- en: '`service.beta.kubernetes.io/azure-load-balancer-internal: "true"`'
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`service.beta.kubernetes.io/azure-load-balancer-internal: "true"`'
+- en: Amazon Web Services
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 亚马逊 Web 服务
+- en: '`service.beta.kubernetes.io/aws-load-balancer-internal: "true"`'
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`service.beta.kubernetes.io/aws-load-balancer-internal: "true"`'
+- en: Alibaba Cloud
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 阿里云
+- en: '`service.beta.kubernetes.io/alibaba-cloud-loadbalancer-address-type: "intranet"`'
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`service.beta.kubernetes.io/alibaba-cloud-loadbalancer-address-type: "intranet"`'
+- en: Google Cloud Platform
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 谷歌云平台
+- en: '`cloud.google.com/load-balancer-type: "Internal"`'
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`cloud.google.com/load-balancer-type: "Internal"`'
+- en: 'When you add this annotation to your Service, it should look like this:'
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您向您的服务添加此注解时，它应该是这样的：
+- en: '[PRE11]'
+  id: totrans-80
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: When you create a service with one of these annotations, an internally exposed
+    service will be created instead of one on the public internet.
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您使用这些注解之一创建服务时，将创建一个内部暴露的服务，而不是在公共互联网上的服务。
+- en: Tip
+  id: totrans-82
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: There are several other annotations that extend LoadBalancer behavior, including
+    ones for using a preexisiting IP address. The specific extensions for your provider
+    should be documented on its website.
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 还有几个注解可以扩展负载均衡器的行为，包括用于使用预先存在的 IP 地址的注解。您的提供商的具体扩展应该在其网站上有文档记录。
+- en: Advanced Details
+  id: totrans-84
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 高级细节
+- en: Kubernetes is built to be an extensible system. As such, there are layers that
+    allow for more advanced integrations. Understanding the details of how a sophisticated
+    concept like services is implemented may help you troubleshoot or create more
+    advanced integrations. This section goes a bit below the surface.
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 是一个可扩展的系统。因此，有一些层次可以支持更高级的集成。理解像服务这样复杂的概念的具体实现细节可能有助于您进行故障排除或创建更高级的集成。本节稍微深入了解这些。
+- en: Endpoints
+  id: totrans-86
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 终端点
+- en: 'Some applications (and the system itself) want to be able to use services without
+    using a cluster IP. This is done with another type of object called an Endpoints
+    object. For every Service object, Kubernetes creates a buddy Endpoints object
+    that contains the IP addresses for that service:'
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一些应用程序（以及系统本身）希望能够使用服务而不使用集群 IP。这可以通过另一种类型的对象——Endpoints 对象来实现。对于每个 Service
+    对象，Kubernetes 创建一个对应的 Endpoints 对象，其中包含该服务的 IP 地址：
+- en: '[PRE12]'
+  id: totrans-88
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: To use a service, an advanced application can talk to the Kubernetes API directly
+    to look up endpoints and call them. The Kubernetes API even has the capability
+    to “watch” objects and be notified as soon as they change. In this way, a client
+    can react immediately as soon as the IPs associated with a service change.
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要使用服务，高级应用程序可以直接与 Kubernetes API 通信以查找端点并调用它们。Kubernetes API 甚至具有“观察”对象并在它们发生变化时立即得到通知的能力。通过这种方式，客户端可以在服务关联的
+    IP 地址发生变化时立即做出反应。
+- en: 'Let’s demonstrate this. In a terminal window, start the following command and
+    leave it running:'
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们演示一下这一点。在终端窗口中启动以下命令并让其保持运行：
+- en: '[PRE13]'
+  id: totrans-91
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: 'It will output the current state of the endpoint and then “hang”:'
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 它将输出当前端点的当前状态，然后“挂起”：
+- en: '[PRE14]'
+  id: totrans-93
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: 'Now open up *another* terminal window and delete and re-create the deployment
+    backing `alpaca-prod`:'
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在打开*另一个*终端窗口，并删除并重新创建支持 `alpaca-prod` 的部署：
+- en: '[PRE15]'
+  id: totrans-95
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: 'If you look back at the output from the watched endpoint, you will see that
+    as you deleted and re-created these Pods, the output of the command reflected
+    the most up-to-date set of IP addresses associated with the service. Your output
+    will look something like this:'
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您回顾观察到的端点输出，您会发现随着删除和重新创建这些 Pods，命令的输出反映了与服务关联的最新一组 IP 地址集。您的输出将类似于以下内容：
+- en: '[PRE16]'
+  id: totrans-97
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: The Endpoints object is great if you are writing new code that is built to run
+    on Kubernetes from the start. But most projects aren’t in this position! Most
+    existing systems are built to work with regular old IP addresses that don’t change
+    that often.
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您正在编写从头开始在 Kubernetes 上运行的新代码，那么Endpoints 对象非常适合您。但是大多数项目并不处于这种位置！大多数现有系统都建立在不经常更改的常规
+    IP 地址上，这些系统可以使用 Endpoints 对象。
+- en: Manual Service Discovery
+  id: totrans-99
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 手动服务发现
+- en: Kubernetes services are built on top of label selectors over Pods. That means
+    that you can use the Kubernetes API to do rudimentary service discovery without
+    using a Service object at all! Let’s demonstrate.
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 服务是建立在对 Pods 的标签选择器之上的。这意味着即使完全不使用 Service 对象，您也可以使用 Kubernetes API
+    进行基本的服务发现！让我们演示一下。
+- en: 'With `kubectl` (and via the API) we can easily see what IPs are assigned to
+    each Pod in our example deployments:'
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 `kubectl`（通过 API）我们可以轻松地查看分配给我们示例部署中每个 Pod 的 IP 地址：
+- en: '[PRE17]'
+  id: totrans-102
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: 'This is great, but what if you have a ton of Pods? You’ll probably want to
+    filter this based on the labels applied as part of the deployment. Let’s do that
+    for just the `alpaca` app:'
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这很棒，但是如果您有大量的 Pods 怎么办？您可能希望基于部署中应用的标签进行过滤。让我们仅对 `alpaca` 应用程序这样做：
+- en: '[PRE18]'
+  id: totrans-104
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: At this point, you have the basics of service discovery! You can always use
+    labels to identify the set of Pods you are interested in, get all of the Pods
+    for those labels, and dig out the IP address. But keeping the correct set of labels
+    to use in sync can be tricky. This is why the Service object was created.
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，您已经掌握了服务发现的基础知识！您始终可以使用标签来识别您感兴趣的一组 Pods，获取所有这些标签的 Pods，并获取其 IP 地址。但是保持正确的标签集以同步使用可能会有些棘手。这就是为什么创建
+    Service 对象的原因。
+- en: kube-proxy and Cluster IPs
+  id: totrans-106
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: kube-proxy 和集群 IP
+- en: Cluster IPs are stable virtual IPs that load balance traffic across all of the
+    endpoints in a service. This magic is performed by a component running on every
+    node in the cluster called the `kube-proxy` ([Figure 7-1](#fig07in01)).
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 集群 IP 是稳定的虚拟 IP，它负载平衡服务中所有端点的流量。这项魔术由集群中每个节点上运行的组件 `kube-proxy` 完成（见 [图 7-1](#fig07in01)）。
+- en: '![](assets/kur3_0701.png)'
+  id: totrans-108
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](assets/kur3_0701.png)'
+- en: Figure 7-1\. Configuring and using a cluster IP
+  id: totrans-109
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 7-1\. 配置和使用集群 IP
+- en: In [Figure 7-1](#fig07in01), the `kube-proxy` watches for new services in the
+    cluster via the API server. It then programs a set of `iptables` rules in the
+    kernel of that host to rewrite the destinations of packets so they are directed
+    at one of the endpoints for that service. If the set of endpoints for a service
+    changes (due to Pods coming and going or due to a failed readiness check), the
+    set of `iptables` rules is rewritten.
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 [图 7-1](#fig07in01) 中，`kube-proxy` 通过 API 服务器监视集群中的新服务。然后，它在主机内核中编程一组 `iptables`
+    规则，以重写数据包的目的地，使其指向该服务的一个端点。如果服务的端点集合发生更改（由于 Pods 的出现和消失或由于失败的就绪检查），则重写 `iptables`
+    规则集。
+- en: The cluster IP itself is usually assigned by the API server as the service is
+    created. However, when creating the service, the user can specify a specific cluster
+    IP. Once set, the cluster IP cannot be modified without deleting and re-creating
+    the Service object.
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: API服务器在创建服务时通常会分配集群IP地址。但是，在创建服务时，用户可以指定特定的集群IP。一旦设置，集群IP就不能在不删除和重新创建服务对象的情况下进行修改。
+- en: Note
+  id: totrans-112
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The Kubernetes service address range is configured using the `--service-cluster-ip-range`
+    flag on the `kube-apiserver` binary. The service address range should not overlap
+    with the IP subnets and ranges assigned to each Docker bridge or Kubernetes node.
+    In addition, any explicit cluster IP requested must come from that range and not
+    already be in use.
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 `kube-apiserver` 二进制文件上的 `--service-cluster-ip-range` 标志配置Kubernetes服务地址范围。服务地址范围不应与分配给每个Docker桥接或Kubernetes节点的IP子网和范围重叠。此外，任何显式请求的集群IP必须来自该范围，而不是已经在使用中。
+- en: Cluster IP Environment Variables
+  id: totrans-114
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 集群IP环境变量
+- en: While most users should be using the DNS services to find cluster IPs, there
+    are some older mechanisms that may still be in use. One of these is injecting
+    a set of environment variables into Pods as they start up.
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管大多数用户应该使用DNS服务来查找集群IP，但仍然可能在使用一些旧的机制。其中之一是在Pod启动时将一组环境变量注入其中。
+- en: 'To see this in action, let’s look at the console for the `bandicoot` instance
+    of `kuard`. Enter the following commands in your terminal:'
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要看到这个过程，请查看 `kuard` 实例的 `bandicoot` 控制台。在终端中输入以下命令：
+- en: '[PRE19]'
+  id: totrans-117
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: Now point your browser to *http://localhost:48858* to see the status page for
+    this server. Expand the “Server Env” section and note the set of environment variables
+    for the `alpaca` service. The status page should show a table similar to [Table 7-1](#S.E.V._Table).
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，请将浏览器指向 *http://localhost:48858* ，查看此服务器的状态页面。展开“服务器环境”部分，并注意 `alpaca` 服务的环境变量集。状态页面应显示类似于
+    [Table 7-1](#S.E.V._Table) 的表格。
+- en: Table 7-1\. Service environment variables
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 7-1\. 服务环境变量
+- en: '| Key | Value |'
+  id: totrans-120
+  prefs: []
+  type: TYPE_TB
+  zh: '| Key | Value |'
+- en: '| --- | --- |'
+  id: totrans-121
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| `ALPACA_PROD_PORT` | `tcp://10.115.245.13:8080` |'
+  id: totrans-122
+  prefs: []
+  type: TYPE_TB
+  zh: '| `ALPACA_PROD_PORT` | `tcp://10.115.245.13:8080` |'
+- en: '| `ALPACA_PROD_PORT_8080_TCP` | `tcp://10.115.245.13:8080` |'
+  id: totrans-123
+  prefs: []
+  type: TYPE_TB
+  zh: '| `ALPACA_PROD_PORT_8080_TCP` | `tcp://10.115.245.13:8080` |'
+- en: '| `ALPACA_PROD_PORT_8080_TCP_ADDR` | `10.115.245.13` |'
+  id: totrans-124
+  prefs: []
+  type: TYPE_TB
+  zh: '| `ALPACA_PROD_PORT_8080_TCP_ADDR` | `10.115.245.13` |'
+- en: '| `ALPACA_PROD_PORT_8080_TCP_PORT` | `8080` |'
+  id: totrans-125
+  prefs: []
+  type: TYPE_TB
+  zh: '| `ALPACA_PROD_PORT_8080_TCP_PORT` | `8080` |'
+- en: '| `ALPACA_PROD_PORT_8080_TCP_PROTO` | `tcp` |'
+  id: totrans-126
+  prefs: []
+  type: TYPE_TB
+  zh: '| `ALPACA_PROD_PORT_8080_TCP_PROTO` | `tcp` |'
+- en: '| `ALPACA_PROD_SERVICE_HOST` | `10.115.245.13` |'
+  id: totrans-127
+  prefs: []
+  type: TYPE_TB
+  zh: '| `ALPACA_PROD_SERVICE_HOST` | `10.115.245.13` |'
+- en: '| `ALPACA_PROD_SERVICE_PORT` | `8080` |'
+  id: totrans-128
+  prefs: []
+  type: TYPE_TB
+  zh: '| `ALPACA_PROD_SERVICE_PORT` | `8080` |'
+- en: The two main environment variables to use are `ALPACA_PROD_SERVICE_HOST` and
+    `ALPACA_PROD_SERVICE_PORT`. The other environment variables are created to be
+    compatible with (now deprecated) Docker link variables.
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用的两个主要环境变量是 `ALPACA_PROD_SERVICE_HOST` 和 `ALPACA_PROD_SERVICE_PORT`。其他环境变量是为了与（现在已弃用的）Docker链接变量兼容而创建的。
+- en: A problem with the environment variable approach is that it requires resources
+    to be created in a specific order. The services must be created before the Pods
+    that reference them. This can introduce quite a bit of complexity when deploying
+    a set of services that make up a larger application. In addition, using *just*
+    environment variables seems strange to many users. For this reason, DNS is probably
+    a better option.
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 环境变量方法的一个问题是它要求资源按特定顺序创建。服务必须在引用它们的Pod之前创建。这在部署构成较大应用程序的一组服务时可能会引入相当多的复杂性。此外，对许多用户来说，仅仅使用环境变量似乎有些奇怪。因此，DNS可能是一个更好的选择。
+- en: Connecting with Other Environments
+  id: totrans-131
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 与其他环境连接
+- en: While it is great to have service discovery within your own cluster, many real-world
+    applications actually require that you integrate more cloud native applications
+    deployed in Kubernetes with applications deployed to more legacy environments.
+    Additionally, you may need to integrate a Kubernetes cluster in the cloud with
+    infrastructure that has been deployed on-premise. This is an area of Kubernetes
+    that is still undergoing a fair amount of exploration and development of solutions.
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管在自己的集群中进行服务发现非常好，但实际上，许多真实世界的应用程序实际上需要您集成更多在Kubernetes中部署的云原生应用程序与部署在更传统环境中的应用程序。此外，您可能需要将在云中部署的Kubernetes集群与部署在本地的基础设施集成。这是Kubernetes的一个仍在进行大量探索和解决方案开发的领域。
+- en: Connecting to Resources Outside of a Cluster
+  id: totrans-133
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 连接到集群外的资源
+- en: 'When you are connecting Kubernetes to legacy resources outside of the cluster,
+    you can use selector-less services to declare a Kubernetes service with a manually
+    assigned IP address that is outside of the cluster. That way, Kubernetes service
+    discovery via DNS works as expected, but the network traffic itself flows to an
+    external resource. To create a selector-less service, you remove the `spec.selector`
+    field from your resource, while leaving the `metadata` and the `ports` sections
+    unchanged. Because your service has no selector, no endpoints are automatically
+    added to the service. This means that you must add them manually. Typically the
+    endpoint that you will add will be a fixed IP address (e.g., the IP address of
+    your database server) so you only need to add it once. But if the IP address that
+    backs the service ever changes, you will need to update the corresponding endpoint
+    resource. To create or update the endpoint resource, you use an endpoint that
+    looks something like the following:'
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当你连接 Kubernetes 到集群外的传统资源时，你可以使用无选择器服务来声明一个 Kubernetes 服务，其手动分配的 IP 地址位于集群外部。这样，通过
+    DNS 的 Kubernetes 服务发现就能如预期地工作，但网络流量本身会流向外部资源。要创建无选择器服务，你需要从你的资源中移除 `spec.selector`
+    字段，同时保留 `metadata` 和 `ports` 部分不变。因为你的服务没有选择器，所以不会自动添加端点到服务中。这意味着你必须手动添加它们。通常你将添加的端点是一个固定的
+    IP 地址（例如，你的数据库服务器的 IP 地址），因此你只需添加一次。但如果支持服务的 IP 地址发生更改，你需要更新相应的端点资源。要创建或更新端点资源，你可以使用类似以下的端点：
+- en: '[PRE20]'
+  id: totrans-135
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: Connecting External Resources to Services Inside a Cluster
+  id: totrans-136
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 将外部资源连接到集群内部的服务
+- en: Connecting external resources to Kubernetes services is somewhat trickier. If
+    your cloud provider supports it, the easiest thing to do is to create an “internal”
+    load balancer, as described above, that lives in your virtual private network
+    and can deliver traffic from a fixed IP address into the cluster. You can then
+    use traditional DNS to make this IP address available to the external resource.
+    If an internal load balancer isn’t available, you can use a `NodePort` service
+    to expose the service on the IP addresses of the nodes in the cluster. You can
+    then either program a physical load balancer to serve traffic to those nodes,
+    or use DNS-based load-balancing to spread traffic between the nodes.
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将外部资源连接到 Kubernetes 服务内部有一些技巧。如果你的云服务提供商支持，最简单的方法是创建一个“内部”负载均衡器，就像上面描述的那样，它位于你的虚拟私有网络中，并且可以将流量从一个固定的
+    IP 地址传递到集群中。然后，你可以使用传统的 DNS 来使这个 IP 地址对外部资源可用。如果没有可用的内部负载均衡器，你可以使用 `NodePort`
+    服务在集群节点的 IP 地址上公开服务。然后，你可以编程一个物理负载均衡器来为这些节点提供服务，或者使用基于 DNS 的负载均衡来在节点之间分发流量。
+- en: If neither of those solutions works for your use case, more complex options
+    include running the full `kube-proxy` on an external resource and programming
+    that machine to use the DNS server in the Kubernetes cluster. Such a setup is
+    significantly more difficult to get right and should really only be used in on-premise
+    environments. There are also a variety of open source projects (for example, HashiCorp’s
+    Consul) that can be used to manage connectivity between in-cluster and out-of-cluster
+    resources. Such options require significant knowledge of both networking and Kubernetes
+    to get right and should really be considered a last resort.
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果以上两种解决方案对你的用例都不适用，更复杂的选项包括在外部资源上运行完整的 `kube-proxy` 并编程该机器使用 Kubernetes 集群中的
+    DNS 服务器。这样的设置要更难正确配置，实际上应该只在本地环境中使用。还有许多开源项目（例如 HashiCorp 的 Consul）可以用来管理集群内部和集群外部资源之间的连接。这些选项需要对网络和
+    Kubernetes 的知识有深入了解，真的应该作为最后的选择考虑。
+- en: Cleanup
+  id: totrans-139
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 清理工作
+- en: 'Run the following command to clean up all of the objects created in this chapter:'
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运行以下命令来清理本章创建的所有对象：
+- en: '[PRE21]'
+  id: totrans-141
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: Summary
+  id: totrans-142
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 概要
+- en: Kubernetes is a dynamic system that challenges traditional methods of naming
+    and connecting services over the network. The Service object provides a flexible
+    and powerful way to expose services both within the cluster and beyond. With the
+    techniques covered here, you can connect services to each other and expose them
+    outside the cluster.
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 是一个动态系统，挑战传统的命名和通过网络连接服务的方法。Service 对象提供了一种灵活而强大的方式来同时在集群内部和集群外部公开服务。通过本章介绍的技术，你可以将服务互相连接并将它们暴露到集群外部。
+- en: While using the dynamic service discovery mechanisms in Kubernetes introduces
+    some new concepts and may, at first, seem complex, understanding and adapting
+    these techniques is key to unlocking the power of Kubernetes. Once your application
+    can dynamically find services and react to the dynamic placement of those applications,
+    you are free to stop worrying about where things are running and when they move.
+    Thinking about services in a logical way and letting Kubernetes take care of the
+    details of container placement is a critical piece of the puzzle.
+  id: totrans-144
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然在 Kubernetes 中使用动态服务发现机制会引入一些新概念，可能一开始看起来比较复杂，但理解和适应这些技术是解锁 Kubernetes 强大功能的关键。一旦你的应用程序能够动态地找到服务并响应这些应用程序的动态部署，你就可以不再担心事物的运行位置和移动时间。以逻辑方式思考服务，并让
+    Kubernetes 处理容器放置的细节是解决问题关键的一部分。
+- en: Of course, service discovery is just the beginning of how application networking
+    works with Kubernetes. [Chapter 8](ch08.xhtml#ingress) covers Ingress networking,
+    which is dedicated to Layer 7 (HTTP) load balancing and routing, and [Chapter 15](ch15.xhtml#service_mesh)
+    is about service meshes, which are a more recently developed approach to cloud
+    native networking that provide many additional capabilities in addition to service
+    discovery and load balancing.
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当然，服务发现只是应用程序与 Kubernetes 配合工作的开始。[第 8 章](ch08.xhtml#ingress) 讨论了 Ingress 网络，专注于第
+    7 层（HTTP）负载均衡和路由，而 [第 15 章](ch15.xhtml#service_mesh) 是关于服务网格，这是最近在云原生网络中开发的一种方法，除了服务发现和负载均衡之外，还提供许多额外的功能。

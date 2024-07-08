@@ -1,0 +1,677 @@
+- en: Chapter 14\. Role-Based Access Control for Kubernetes
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第14章。Kubernetes的基于角色的访问控制（Role-Based Access Control for Kubernetes）
+- en: At this point, nearly every Kubernetes cluster you encounter has role-based
+    access control (RBAC) enabled. So you have likely encountered RBAC before. Perhaps
+    you initially couldn’t access your cluster until you used some magical command
+    to add a RoleBinding to map a user to a role. Even though you may have had some
+    exposure to RBAC, you may not have had a great deal of experience understanding
+    RBAC in Kubernetes, including what it is for and how to use it.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此时，您几乎会遇到的每个Kubernetes集群都已启用基于角色的访问控制（RBAC）。所以您很可能之前就遇到过RBAC。也许最初您无法访问您的集群，直到使用某些神奇的命令添加了一个RoleBinding来映射一个用户到一个角色。即使您可能已经接触过RBAC，您可能还没有很好地理解Kubernetes中的RBAC，包括其用途和如何使用它。
+- en: Role-based access control provides a mechanism for restricting both access to
+    and actions on Kubernetes APIs to ensure that only authorized users have access.
+    RBAC is a critical component to both harden access to the Kubernetes cluster where
+    you are deploying your application and (possibly more importantly) prevent unexpected
+    accidents where one person in the wrong namespace mistakenly takes down production
+    when they think they are destroying their test cluster.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 基于角色的访问控制提供了一种机制，用于限制对Kubernetes API的访问和操作，以确保只有授权的用户能够访问。RBAC是加固您部署应用程序的Kubernetes集群访问权限的关键组成部分，（可能更重要的是）防止一个人在错误的命名空间误以为正在销毁他们的测试集群时，意外地关闭生产环境。
+- en: Note
+  id: totrans-3
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: While RBAC can be quite useful in limiting access to the Kubernetes API, it’s
+    important to remember that anyone who can run arbitrary code inside the Kubernetes
+    cluster can effectively obtain root privileges on the entire cluster. There are
+    approaches that you can take to make such attacks harder and more expensive, and
+    a correct RBAC setup is part of this defense. But if you are focused on hostile
+    multitenant security, RBAC by itself is sufficient to protect you. You must isolate
+    the Pods running in your cluster to provide effective multitenant security. Generally
+    this is done using hypervisor isolated containers or a container sandbox.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然RBAC在限制对Kubernetes API的访问方面非常有用，但重要的是要记住，任何能在Kubernetes集群内运行任意代码的人都可以有效地获得整个集群的root权限。有一些方法可以使此类攻击变得更加困难和昂贵，正确的RBAC设置就是这种防御的一部分。但如果您专注于敌对的多租户安全性，仅仅RBAC本身是足以保护您的。您必须隔离运行在集群中的Pods，以提供有效的多租户安全性。通常，这是通过使用隔离容器或容器沙箱来完成的。
+- en: Before we dive into the details of RBAC in Kubernetes, it’s valuable to have
+    a high-level understanding of RBAC as a concept, as well as authentication and
+    authorization more generally.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在我们深入了解Kubernetes中的RBAC的详细信息之前，了解RBAC作为一个概念以及身份验证和授权的高层理解是非常有价值的。
+- en: Every request to Kubernetes is first *authenticated*. Authentication provides
+    the identity of the caller issuing the request. It could be as simple as saying
+    that the request is unauthenticated, or it could integrate deeply with a pluggable
+    authentication provider (e.g., Azure Active Directory) to establish an identity
+    within that third-party system. Interestingly enough, Kubernetes does not have
+    a built-in identity store, focusing instead on integrating other identity sources
+    within itself.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个对Kubernetes的请求首先需要进行*认证*。认证提供了发出请求的调用者的身份。可以简单地说该请求未经身份验证，或者它可以深度集成到可插拔的身份验证提供程序（例如Azure
+    Active Directory）中，在该第三方系统中建立一个身份。有趣的是，Kubernetes并没有内置的身份存储，而是专注于将其他身份源集成到自身中。
+- en: Once users have been authenticated, the authorization phase determines whether
+    they are authorized to perform the request. Authorization is a combination of
+    the identity of the user, the resource (effectively the HTTP path), and the verb
+    or action the user is attempting to perform. If the particular user is authorized
+    to perform that action on that resource, then the request is allowed to proceed.
+    Otherwise, an HTTP 403 error is returned. Let’s dive into this process.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦用户经过身份验证，授权阶段确定他们是否被授权执行该请求。授权是用户的身份、资源（实际上是HTTP路径）以及用户试图执行的动作的组合。如果特定用户被授权在该资源上执行该操作，则允许该请求继续进行。否则，将返回HTTP
+    403错误。让我们深入了解这个过程。
+- en: Role-Based Access Control
+  id: totrans-8
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 基于角色的访问控制
+- en: To properly manage access in Kubernetes, it’s critical to understand how identity,
+    roles, and role bindings interact to control who can do what with which resources.
+    At first, RBAC can seem like a challenge to understand, with a series of interconnected,
+    abstract concepts; but once it’s understood, you can be confident in your ability
+    to manage cluster access.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要在Kubernetes中正确管理访问权限，理解身份、角色和角色绑定如何交互以控制谁可以使用哪些资源是至关重要的。刚开始时，RBAC可能看起来像是一个难以理解的挑战，由一系列相互连接的抽象概念组成；但一旦理解了，您就可以确信自己能够有效地管理集群访问权限。
+- en: Identity in Kubernetes
+  id: totrans-10
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Kubernetes中的身份
+- en: Every request to Kubernetes is associated with some identity. Even a request
+    with no identity is associated with the `system:unauthenticated` group. Kubernetes
+    makes a distinction between user identities and service account identities. Service
+    accounts are created and managed by Kubernetes itself and are generally associated
+    with components running inside the cluster. User accounts are all other accounts
+    associated with actual users of the cluster, and often include automation like
+    continuous delivery services that run outside the cluster.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个对Kubernetes的请求都与某个身份相关联。即使是没有身份的请求也与`system:unauthenticated`组相关联。Kubernetes区分用户身份和服务账户身份。服务账户由Kubernetes自身创建和管理，通常与集群内运行的组件相关联。用户账户则是与集群的实际用户相关联的所有其他账户，通常包括在集群外运行的持续交付服务等自动化服务。
+- en: 'Kubernetes uses a generic interface for authentication providers. Each of the
+    providers supplies a username and, optionally, the set of groups to which the
+    user belongs. Kubernetes supports a number of authentication providers, including:'
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes为身份验证提供者使用通用接口。每个提供者提供一个用户名，以及可选的用户所属组集合。Kubernetes支持多种身份验证提供者，包括：
+- en: HTTP Basic Authentication (largely deprecated)
+  id: totrans-13
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: HTTP基本身份验证（已大部分废弃）
+- en: x509 client certificates
+  id: totrans-14
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: x509客户端证书
+- en: Static token files on the host
+  id: totrans-15
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 主机上的静态令牌文件
+- en: Cloud authentication providers, such as Azure Active Directory and AWS Identity
+    and Access Management (IAM)
+  id: totrans-16
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 云身份验证提供者，例如Azure Active Directory和AWS身份和访问管理（IAM）
+- en: Authentication webhooks
+  id: totrans-17
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 身份验证Webhook
+- en: While most managed Kubernetes installations configure authentication for you,
+    if you are deploying your own authentication, you will need to configure flags
+    on the Kubernetes API server appropriately.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管大多数托管的Kubernetes安装为您配置了身份验证，但如果您正在部署自己的身份验证，则需要适当地配置Kubernetes API服务器上的标志。
+- en: You should always use different identities for different applications in your
+    cluster. For example, you should have one identity for your production frontends,
+    a different identity for the production backends, and all production identities
+    should be distinct from development identities. You should also have different
+    identities for different clusters. All of these identities should be machine identities
+    that are not shared with users. You can either use Kubernetes Service Accounts
+    for achieving this, or you can use a Pod identity provider supplied by your identity
+    system; for example, Azure Active Directory supplies an [open source identity
+    provider for Pods](https://oreil.ly/YLymu) as do other popular identity providers.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在您的集群中，应始终为不同的应用程序使用不同的身份。例如，您应该为生产前端使用一个身份，为生产后端使用另一个身份，并且所有生产身份应该与开发身份不同。您还应为不同的集群使用不同的身份。所有这些身份应该是不与用户共享的机器身份。您可以使用Kubernetes服务账户来实现这一点，或者您可以使用由您的身份系统提供的Pod身份提供者；例如，Azure
+    Active Directory提供了一个[Pod的开源身份提供者](https://oreil.ly/YLymu)，其他流行的身份提供者也提供类似的解决方案。
+- en: Understanding Roles and Role Bindings
+  id: totrans-20
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 理解Kubernetes中的角色和角色绑定
+- en: Identity is just the beginning of authorization in Kubernetes. Once Kubernetes
+    knows the identity of the request, it needs to determine if the request is authorized
+    for that user. To achieve this, it uses roles and role bindings.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 身份仅是Kubernetes授权的起点。一旦Kubernetes知道请求的身份，它就需要确定是否授权该用户执行该请求。为了实现这一点，它使用角色和角色绑定。
+- en: A *role* is a set of abstract capabilities. For example, the `appdev` role might
+    represent the ability to create Pods and Services. A *role binding* is an assignment
+    of a role to one or more identities. Thus, binding the `appdev` role to the user
+    identity `alice` indicates that Alice has the ability to create Pods and Services.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*角色*是一组抽象的能力。例如，`appdev`角色可能代表创建Pod和服务的能力。*角色绑定*是将角色分配给一个或多个身份的过程。因此，将`appdev`角色绑定到用户身份`alice`表示Alice具有创建Pod和服务的能力。'
+- en: Roles and Role Bindings in Kubernetes
+  id: totrans-23
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Kubernetes中的角色和角色绑定
+- en: In Kubernetes, two pairs of related resources represent roles and role bindings.
+    One pair is scoped to a namespace (Role and RoleBinding), while the other pair
+    is scoped to the cluster (ClusterRole and ClusterRoleBinding).
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 中，有两对相关资源表示角色和角色绑定。一对作用域是命名空间级别（Role 和 RoleBinding），而另一对作用域是集群级别（ClusterRole
+    和 ClusterRoleBinding）。
+- en: Let’s examine Role and RoleBinding first. Role resources are namespaced and
+    represent capabilities within that single namespace. You cannot use namespaced
+    roles for nonnamespaced resources (e.g., CustomResourceDefinitions), and binding
+    a RoleBinding to a role only provides authorization within the Kubernetes namespace
+    that contains both the Role and the RoleBinding.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们首先检查 Role 和 RoleBinding。Role 资源是命名空间化的，表示该单个命名空间中的功能。你不能将命名空间角色用于非命名空间资源（例如
+    CustomResourceDefinitions），并且将 RoleBinding 绑定到角色只在包含 Role 和 RoleBinding 的 Kubernetes
+    命名空间中提供授权。
+- en: 'As a concrete example, here is a simple role that gives an identity the ability
+    to create and modify Pods and Services:'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为一个具体的例子，这里有一个简单的角色，赋予一个身份创建和修改 Pods 和 Services 的能力：
+- en: '[PRE0]'
+  id: totrans-27
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'To bind this Role to the user `alice`, we need to create a RoleBinding that
+    looks as follows. This role binding also binds the group `mydevs` to the same
+    role:'
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要将此角色绑定到用户 `alice`，我们需要创建一个如下所示的 RoleBinding。这个角色绑定还将组 `mydevs` 绑定到相同的角色：
+- en: '[PRE1]'
+  id: totrans-29
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: Sometimes you need to create a role that applies to the entire cluster, or you
+    want to limit access to cluster-level resources. To achieve this, you use the
+    ClusterRole and ClusterRoleBinding resources. They are largely identical to their
+    namespaced peers, but are cluster-scoped.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有时候你需要创建一个适用于整个集群的角色，或者你想要限制对集群级资源的访问。为了实现这一点，你可以使用 ClusterRole 和 ClusterRoleBinding
+    资源。它们在很大程度上与它们的命名空间对等物相同，但是作用域是集群级的。
+- en: Verbs for Kubernetes roles
+  id: totrans-31
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: Kubernetes 角色的动词
+- en: Roles are defined in terms of both a resource (e.g., Pods) and a verb that describes
+    an action that can be performed on that resource. The verbs correspond roughly
+    to HTTP methods. The commonly used verbs in Kubernetes RBAC are listed in [Table 14-1](#kubernetesRBAC).
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 角色定义了对资源（例如 Pods）以及描述可以在该资源上执行的动作的动词。这些动词大致对应于 HTTP 方法。Kubernetes RBAC 中常用的动词列在
+    [Table 14-1](#kubernetesRBAC) 中。
+- en: Table 14-1\. Common Kubernetes RBAC verbs
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Table 14-1\. Kubernetes RBAC 常见动词
+- en: '| Verb | HTTP method | Description |'
+  id: totrans-34
+  prefs: []
+  type: TYPE_TB
+  zh: '| Verb | HTTP 方法 | 描述 |'
+- en: '| --- | --- | --- |'
+  id: totrans-35
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- |'
+- en: '| `create` | `POST` | Create a new resource. |'
+  id: totrans-36
+  prefs: []
+  type: TYPE_TB
+  zh: '| `create` | `POST` | 创建新资源。 |'
+- en: '| `delete` | `DELETE` | Delete an existing resource. |'
+  id: totrans-37
+  prefs: []
+  type: TYPE_TB
+  zh: '| `delete` | `DELETE` | 删除现有资源。 |'
+- en: '| `get` | `GET` | Get a resource. |'
+  id: totrans-38
+  prefs: []
+  type: TYPE_TB
+  zh: '| `get` | `GET` | 获取资源。 |'
+- en: '| `list` | `GET` | List a collection of resources. |'
+  id: totrans-39
+  prefs: []
+  type: TYPE_TB
+  zh: '| `list` | `GET` | 列出资源集合。 |'
+- en: '| `patch` | `PATCH` | Modify an existing resource via a partial change. |'
+  id: totrans-40
+  prefs: []
+  type: TYPE_TB
+  zh: '| `patch` | `PATCH` | 通过部分更改修改现有资源。 |'
+- en: '| `update` | `PUT` | Modify an existing resource via a complete object. |'
+  id: totrans-41
+  prefs: []
+  type: TYPE_TB
+  zh: '| `update` | `PUT` | 通过完整对象修改现有资源。 |'
+- en: '| `watch` | `GET` | Watch for streaming updates to a resource. |'
+  id: totrans-42
+  prefs: []
+  type: TYPE_TB
+  zh: '| `watch` | `GET` | 监视资源的流式更新。 |'
+- en: '| `proxy` | `GET` | Connect to resource via a streaming WebSocket proxy. |'
+  id: totrans-43
+  prefs: []
+  type: TYPE_TB
+  zh: '| `proxy` | `GET` | 通过流式 WebSocket 代理连接资源。 |'
+- en: Using built-in roles
+  id: totrans-44
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 使用内建角色
+- en: 'Designing your own roles can be complicated and time-consuming. Kubernetes
+    has a large number of built-in cluster roles for well-known system identities
+    (e.g., a scheduler) that require a known set of capabilities. You can view these
+    by running:'
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 设计自己的角色可能会很复杂且耗时。Kubernetes 有大量用于已知系统身份（例如调度程序）的内建集群角色，需要已知的一组功能。你可以通过运行以下命令查看这些角色：
+- en: '[PRE2]'
+  id: totrans-46
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'While most of these built-in roles are for system utilities, four are designed
+    for generic end users:'
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然大多数内建角色是为系统实用程序设计的，但其中四个是为通用最终用户设计的：
+- en: The `cluster-admin` role provides complete access to the entire cluster.
+  id: totrans-48
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`cluster-admin` 角色提供对整个集群的完全访问权限。'
+- en: The `admin` role provides complete access to a complete namespace.
+  id: totrans-49
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`admin` 角色提供对完整命名空间的完全访问权限。'
+- en: The `edit` role allows an end user to modify resources in a namespace.
+  id: totrans-50
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`edit` 角色允许最终用户在命名空间中修改资源。'
+- en: The `view` role allows for read-only access to a namespace.
+  id: totrans-51
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`view` 角色允许对命名空间进行只读访问。'
+- en: Most clusters already have numerous ClusterRole bindings set up, and you can
+    view these bindings with `kubectl get clusterrolebindings`.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大多数集群已经设置了大量的 ClusterRole 绑定，你可以使用 `kubectl get clusterrolebindings` 查看这些绑定。
+- en: Auto-reconciliation of built-in roles
+  id: totrans-53
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 内建角色的自动协调
+- en: When the Kubernetes API server starts up, it automatically installs a number
+    of default ClusterRoles that are defined in the code of the API server itself.
+    This means that if you modify any built-in cluster role, those modifications are
+    transient. Whenever the API server is restarted (e.g., for an upgrade), your changes
+    will be overwritten.
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当 Kubernetes API 服务器启动时，它会自动安装一些默认的 ClusterRoles，这些 ClusterRoles 是在 API 服务器代码中定义的。这意味着，如果您修改任何内置的集群角色，这些修改是暂时的。每当
+    API 服务器重新启动（例如进行升级）时，您的更改将被覆盖。
+- en: To prevent this from happening, before you make any other modifications, you
+    need to add the `rbac.authorization.kubernetes.io/autoupdate` annotation with
+    a value of `false` to the built-in ClusterRole resource. If this annotation is
+    set to `false`, the API server will not overwrite the modified ClusterRole resource.
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了防止这种情况发生，在进行其他任何修改之前，您需要向内置的 ClusterRole 资源添加 `rbac.authorization.kubernetes.io/autoupdate`
+    注解，并将其值设置为 `false`。如果将此注解设置为 `false`，则 API 服务器将不会覆盖已修改的 ClusterRole 资源。
+- en: Warning
+  id: totrans-56
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: By default, the Kubernetes API server installs a cluster role that allows `system:unauthenticated`
+    users access to the API server’s API discovery endpoint. For any cluster exposed
+    to a hostile environment (e.g., the public internet) this is a bad idea, and there
+    has been at least one serious security vulnerability via this exposure. If you
+    are running a Kubernetes service on the public internet or an other hostile environment,
+    you should ensure that the `--anonymous-auth=false` flag is set on your API server.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，Kubernetes API 服务器安装一个集群角色，允许 `system:unauthenticated` 用户访问 API 服务器的 API
+    发现端点。对于任何暴露于敌对环境（例如公共互联网）的集群来说，这是一个不好的想法，并且已经至少发生过一个严重的安全漏洞通过这种暴露。如果您在公共互联网或其他敌对环境上运行
+    Kubernetes 服务，您应确保在您的 API 服务器上设置 `--anonymous-auth=false` 标志。
+- en: Techniques for Managing RBAC
+  id: totrans-58
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 管理 RBAC 的技术
+- en: Managing RBAC for a cluster can be complicated and frustrating. Possibly more
+    concerning is that misconfigured RBAC can lead to security issues. Fortunately,
+    there are several tools and techniques that make managing RBAC easier.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 管理集群的 RBAC 可能会很复杂和令人沮丧。可能更令人担忧的是，错误配置的 RBAC 可能会导致安全问题。幸运的是，有几种工具和技术可以使 RBAC
+    管理变得更加容易。
+- en: Testing Authorization with can-i
+  id: totrans-60
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用 can-i 进行授权测试
+- en: The first useful tool is the `auth can-i` command for `kubectl`. This tool is
+    used for testing whether a specific user can perform a specific action. You can
+    use `can-i` to validate configuration settings as you configure your cluster,
+    or you can ask users to use the tool to validate their access when filing errors
+    or bug reports.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 第一个有用的工具是 `kubectl` 的 `auth can-i` 命令。此工具用于测试特定用户是否可以执行特定操作。您可以在配置集群时使用 `can-i`
+    验证配置设置，或者要求用户在提交错误或 bug 报告时使用该工具验证其访问权限。
+- en: 'In its simplest usage, the `can-i` command takes a verb and a resource. For
+    example, this command will indicate if the current `kubectl` user is authorized
+    to create Pods:'
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在其最简单的用法中，`can-i` 命令接受一个动词和一个资源。例如，此命令将指示当前 `kubectl` 用户是否被授权创建 Pods：
+- en: '[PRE3]'
+  id: totrans-63
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'You can also test subresources like logs or port-forwarding with the `--subresource`
+    command-line flag:'
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您还可以使用 `--subresource` 命令行标志测试子资源，如日志或端口转发：
+- en: '[PRE4]'
+  id: totrans-65
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: Managing RBAC in Source Control
+  id: totrans-66
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 在源代码控制中管理 RBAC
+- en: Like all resources in Kubernetes, RBAC resources are modeled using YAML. Given
+    this text-based representation, it makes sense to store these resources in version
+    control, which allows for accountability, auditability, and rollback.
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与 Kubernetes 中的所有资源一样，RBAC 资源使用 YAML 建模。鉴于这种基于文本的表示形式，将这些资源存储在版本控制中是有意义的，这允许进行问责、审计和回滚。
+- en: 'The `kubectl` command-line tool provides a `reconcile` command that operates
+    somewhat like `kubectl apply` and will reconcile a set of roles and role bindings
+    with the current state of the cluster. You can run:'
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kubectl` 命令行工具提供了一个 `reconcile` 命令，类似于 `kubectl apply`，它将与集群的当前状态协调一组角色和角色绑定。您可以运行：'
+- en: '[PRE5]'
+  id: totrans-69
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: If you want to see changes before they are made, you can add the `--dry-run`
+    flag to the command to output, but not apply, the changes.
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您希望在应用更改之前查看它们，可以在命令中添加 `--dry-run` 标志以输出但不应用更改。
+- en: Advanced Topics
+  id: totrans-71
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 高级主题
+- en: Once you orient to the basics of role-based access control, it is relatively
+    easy to manage access to a Kubernetes cluster. But when managing a large number
+    of users or roles, there are additional advanced capabilities you can use to manage
+    RBAC at scale.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦您掌握了基于角色的访问控制的基础知识，管理 Kubernetes 集群的访问就相对容易了。但是，当管理大量用户或角色时，您可以使用其他高级功能来扩展
+    RBAC 的管理能力。
+- en: Aggregating ClusterRoles
+  id: totrans-73
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 聚合 ClusterRoles
+- en: Sometimes you want to be able to define roles that are combinations of other
+    roles. One option would be to simply clone all of the rules from one ClusterRole
+    into another ClusterRole, but this is complicated and error-prone, since changes
+    to one ClusterRole aren’t automatically reflected in the other. Instead, Kubernetes
+    RBAC supports the usage of an *aggregation rule* to combine multiple roles in
+    a new role. This new role combines all of the capabilities of all of the aggregate
+    roles, and any changes to any of the constituent subroles will automatically be
+    propogated back into the aggregate role.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有时您希望能够定义其他角色的组合角色。一种选择是简单地将一个ClusterRole的所有规则克隆到另一个ClusterRole中，但这很复杂且容易出错，因为对一个ClusterRole的更改不会自动反映在另一个ClusterRole中。相反，Kubernetes
+    RBAC支持使用*聚合规则*来将多个角色组合成一个新角色。此新角色结合了所有聚合角色的所有功能，并且任何对任何组成子角色的更改都将自动传播回聚合角色中。
+- en: As with other aggregations or groupings in Kubernetes, the ClusterRoles to be
+    aggregated are specified using label selectors. In this particular case, the `aggregationRule`
+    field in the ClusterRole resource contains a `clusterRoleSelector` field, which
+    in turn is a label selector. All ClusterRole resources that match this selector
+    are dynamically aggregated into the `rules` array in the aggregate ClusterRole
+    resource.
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与Kubernetes中的其他聚合或分组类似，要聚合的ClusterRoles是使用标签选择器指定的。在这种特定情况下，ClusterRole资源中的`aggregationRule`字段包含一个`clusterRoleSelector`字段，后者是一个标签选择器。所有与此选择器匹配的ClusterRole资源都动态聚合到聚合ClusterRole资源的`rules`数组中。
+- en: 'A best practice for managing ClusterRole resources is to create a number of
+    fine-grained cluster roles and then aggregate them to form higher-level or broader
+    cluster roles. This is how the built-in cluster roles are defined. For example,
+    you can see that the built-in `edit` role looks like this:'
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 管理ClusterRole资源的最佳实践是创建多个细粒度的集群角色，然后将它们聚合以形成更高级别或更广泛的集群角色。这就是内置集群角色的定义方式。例如，您可以看到内置的`edit`角色如下所示：
+- en: '[PRE6]'
+  id: totrans-77
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: This means that the `edit` role is defined to be the aggregate of all ClusterRole
+    objects that have a label of `rbac.authorization.k8s.io/aggregate-to-edit` set
+    to `true`.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这意味着`edit`角色被定义为所有具有标签`rbac.authorization.k8s.io/aggregate-to-edit`设置为`true`的ClusterRole对象的集合。
+- en: Using Groups for Bindings
+  id: totrans-79
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用组进行绑定
+- en: When managing a large number of people in different organizations with similar
+    access to the cluster, it’s generally a best practice to use groups to manage
+    the roles that define access, rather than individually adding bindings to specific
+    identities. When you bind a group to a Role or ClusterRole, anyone who is a member
+    of that group gains access to the resources and verbs defined by that role. Thus,
+    to enable any individual to gain access to the group’s role, that individual needs
+    to be added to the group.
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在管理不同组织中大量人员且具有相似集群访问权限时，通常最佳做法是使用组来管理定义访问权限的角色，而不是单独向特定身份添加绑定。当将组绑定到角色或ClusterRole时，属于该组的任何成员都可以访问该角色定义的资源和动作。因此，要使任何个人获得访问组角色的权限，需要将该个人添加到组中。
+- en: Using groups is a preferred strategy for managing access at scale for several
+    reasons. The first is that in any large organization, access to the cluster is
+    defined in terms of the team that someone is part of, rather than their specific
+    identity. For example, someone who is part of the frontend operations team will
+    need access to both view and edit the resources associated with the frontends,
+    while they may only need view/read access to resources associated with the backend.
+    Granting privileges to a group makes the association between the specific team
+    and its capabilities clear. When granting roles to individuals, it’s much harder
+    to clearly understand the appropriate (i.e., minimal) privileges required for
+    each team, especially when an individual may be part of multiple teams.
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用组是管理规模化访问的首选策略，原因有几点。首先，在任何大型组织中，对集群的访问是以某人所在团队为单位定义的，而不是他们的具体身份。例如，属于前端运营团队的人需要访问与前端相关的资源并具有编辑权限，而他们可能只需要对与后端相关的资源具有查看/读取权限。授予组权限使特定团队与其能力之间的关联清晰明了。当向个人授予角色时，很难清楚地了解每个团队所需的适当（即最小）权限，特别是当一个人可能属于多个团队时。
+- en: Additional benefits of binding roles to groups instead of individuals are simplicity
+    and consistency. When someone joins or leaves a team, it is straightforward to
+    simply add or remove them to or from a group in a single operation. If you instead
+    have to remove a number of different role bindings for their identity, you may
+    either remove too few or too many bindings, resulting in unnecessary access or
+    preventing them from being able to do necessary actions. Additionally, because
+    there is only a single set of group role bindings to maintain, you don’t have
+    to do lots of work to ensure that all team members have the same, consistent set
+    of permissions.
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将角色绑定到组而不是个人的额外好处是简单性和一致性。当有人加入或离开团队时，只需简单地将其添加到或从组中移除，而不是必须删除多个不同的角色绑定。如果您不得不为其身份删除多个角色绑定，可能会导致权限过多或过少，从而造成不必要的访问或阻止其执行必要操作。此外，由于只需维护单一组角色绑定集，因此无需大量工作来确保所有团队成员拥有相同且一致的权限集。
+- en: Note
+  id: totrans-83
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Many cloud providers support integrations onto their identity and access management
+    platforms so that users and groups from those platforms can be used in conjunction
+    with Kubernetes RBAC.
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 许多云服务提供商支持将其身份和访问管理平台集成到 Kubernetes RBAC 中，以便可以与 Kubernetes RBAC 一起使用这些平台的用户和组。
+- en: Many group systems enable “just in time” (JIT) access, such that people are
+    only temporarily added to a group in response to an event (say, a page in the
+    middle of the night) rather than having standing access. This means that you can
+    both audit who had access at any particular time and ensure that, in general,
+    even a compromised identity can’t have access to your production infrastructure.
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 许多组系统支持“即时”访问（JIT），即人们仅在响应事件时（例如半夜的警报页面）临时添加到组中，而不是保持持久访问权限。这意味着您可以审计任何特定时间谁有访问权限，并确保即使是受损身份也不能访问您的生产基础设施。
+- en: Finally, in many cases, these same groups are used to manage access to other
+    resources, from facilities to documents and machine logins. Thus, using the same
+    groups for access control to Kubernetes dramatically simplifies management.
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，在许多情况下，这些同样的组用于管理对其他资源（从设施到文档和机器登录）的访问权限。因此，将这些相同的组用于 Kubernetes 访问控制大大简化了管理工作。
+- en: 'To bind a group to a ClusterRole, use a Group kind for the `subject` in the
+    binding:'
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要将组绑定到 ClusterRole，使用 `subject` 绑定中的 Group 类型：
+- en: '[PRE7]'
+  id: totrans-88
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: In Kubernetes, groups are supplied by authentication providers. There is no
+    strong notion of a group within Kubernetes, only that an identity can be part
+    of one or more groups, and those groups can be associated with a Role or ClusterRole
+    via a binding.
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 中，组由身份验证提供程序提供。Kubernetes 内部没有强烈的组概念，只是一个身份可以是一个或多个组的一部分，并且这些组可以通过绑定与
+    Role 或 ClusterRole 关联。
+- en: Summary
+  id: totrans-90
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 摘要
+- en: When you begin with a small cluster and a small team, it is sufficient to have
+    every member of the team have equivalent access to the cluster. But as teams grow
+    and products become more mission critical, limiting access to parts of the cluster
+    is crucial. In a well-designed cluster, access is limited to the minimal set of
+    people and capabilities needed to efficiently manage the applications in the cluster.
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您从一个小团队和小集群开始时，每个团队成员拥有等效的集群访问权限就足够了。但随着团队的增长和产品变得更加关键，限制对集群部分区域的访问变得至关重要。在设计良好的集群中，访问权限被限制在最少的人员和能力集上，以便高效地管理集群中的应用程序。
+- en: Understanding how Kubernetes implements RBAC and how those capabilities can
+    be used to control access to your cluster is important for both developers and
+    cluster administrators. As with building out testing infrastructure, best practice
+    is to set up RBAC earlier rather than later. It’s far easier to start with the
+    right foundation than to try to retrofit it later on. Hopefully, the information
+    in this chapter has provided the necessary grounding for adding RBAC to your cluster.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 理解 Kubernetes 如何实现 RBAC 及其如何用于控制集群访问权限对于开发人员和集群管理员都非常重要。与构建测试基础设施一样，最佳实践是尽早设置
+    RBAC。从正确的基础开始要比后期尝试改装要容易得多。希望本章提供的信息为您在集群中添加 RBAC 提供了必要的基础。

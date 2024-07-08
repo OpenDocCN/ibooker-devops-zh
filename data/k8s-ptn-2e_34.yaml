@@ -1,0 +1,953 @@
+- en: Chapter 27\. Controller
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第27章 控制器
+- en: A controller actively monitors and maintains a set of Kubernetes resources in
+    a desired state. The heart of Kubernetes itself consists of a fleet of controllers
+    that regularly watch and reconcile the current state of applications with the
+    declared target state. In this chapter, we see how to leverage this *Controller*
+    pattern to extend the platform for our needs.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 控制器主动监视和维护一组 Kubernetes 资源，使其保持在所需状态。Kubernetes 的核心是一组控制器，它们定期监视和协调应用程序的当前状态与声明的目标状态。在本章中，我们将看到如何利用*控制器*模式来扩展平台以满足我们的需求。
+- en: Problem
+  id: totrans-2
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 问题
+- en: You’ve already seen that Kubernetes is a sophisticated and comprehensive platform
+    that provides many features out of the box. However, it is a general-purpose orchestration
+    platform that does not cover all application use cases. Luckily, it provides natural
+    extension points where specific use cases can be implemented elegantly on top
+    of proven Kubernetes building blocks.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你已经看到 Kubernetes 是一个复杂而全面的平台，它提供了许多开箱即用的功能。然而，它是一个通用的编排平台，不能涵盖所有应用用例。幸运的是，它提供了自然的扩展点，可以在经过验证的
+    Kubernetes 构建块之上优雅地实现特定用例。
+- en: The main questions that arise here are how to extend Kubernetes without changing
+    and breaking it and how to use its capabilities for custom use cases.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里主要涉及的主要问题是如何在不改变和破坏 Kubernetes 的情况下扩展它，以及如何利用其能力进行自定义用例的使用。
+- en: By design, Kubernetes is based on a declarative resource-centric API. What exactly
+    do we mean by *declarative*? As opposed to an *imperative* approach, a declarative
+    approach does not tell Kubernetes how it should act but instead describes how
+    the target state should look. For example, when we scale up a Deployment, we do
+    not actively create new Pods by telling Kubernetes to “create a new Pod.” Instead,
+    we change the Deployment resource’s `replicas` property via the Kubernetes API
+    to the desired number.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 的设计基于声明性资源中心 API。那么，什么是*声明式*？与*命令式*方法相对，声明式方法不是告诉 Kubernetes 如何行动，而是描述目标状态应该如何展示。例如，当我们扩展一个部署时，我们不会通过告诉
+    Kubernetes “创建一个新的 Pod” 来主动创建新的 Pod。相反，我们通过 Kubernetes API 修改部署资源的 `replicas`
+    属性来设定所需数量。
+- en: So, how are the new Pods created? This is done internally by the controllers.
+    For every change in the resource status (like changing the `replicas` property
+    value of a Deployment), Kubernetes creates an event and broadcasts it to all interested
+    listeners. These listeners can then react by modifying, deleting, or creating
+    new resources, which in turn creates other events, like Pod-created events. These
+    events are then potentially picked up again by other controllers, which perform
+    their specific actions.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 那么，新的 Pods 是如何创建的呢？这是由控制器在内部完成的。对资源状态进行任何更改（比如修改部署的 `replicas` 属性值）时，Kubernetes
+    会创建一个事件并广播给所有感兴趣的监听器。这些监听器可以通过修改、删除或创建新的资源来作出响应，从而创建其他事件，例如 Pod 创建事件。这些事件可能再次被其他控制器接收，执行它们特定的动作。
+- en: The whole process is also known as *state reconciliation*, where a target state
+    (the number of desired replicas) differs from the current state (the actual running
+    instances), and it is the task of a controller to reconcile and reach the desired
+    target state again. When looked at from this angle, Kubernetes essentially represents
+    a distributed state manager. You give it the desired state for a component instance,
+    and it attempts to maintain that state should anything change.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 整个过程也被称为*状态协调*，其中目标状态（所需副本数）与当前状态（实际运行实例）不同，控制器的任务是协调并再次达到所需的目标状态。从这个角度来看，Kubernetes
+    本质上是一个分布式状态管理器。你给它一个组件实例的期望状态，它会尽力维持该状态，以应对任何变化。
+- en: How can we now hook into this reconciliation process without modifying Kubernetes
+    code and create a controller customized for our specific needs?
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，我们如何在不修改 Kubernetes 代码的情况下，钩入这个协调过程并创建一个适合我们特定需求的控制器？
+- en: Solution
+  id: totrans-9
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 解决方案
+- en: Kubernetes comes with a collection of built-in controllers that manage standard
+    Kubernetes resources like ReplicaSets, DaemonSets, StatefulSets, Deployments,
+    or Services. These controllers run as part of the controller manager, which is
+    deployed (as a standalone process or a Pod) on the control plane node. These controllers
+    are not aware of one another. They run in an endless reconciliation loop, to monitor
+    their resources for the actual and desired state and to act accordingly to get
+    the actual state closer to the desired state.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 集成了一组内置控制器，用于管理标准 Kubernetes 资源，如 ReplicaSets、DaemonSets、StatefulSets、Deployments
+    或 Services。这些控制器作为控制器管理器的一部分运行，控制器管理器作为控制平面节点上的独立进程或 Pod 部署。这些控制器彼此之间并不知道对方。它们运行在无尽的对比循环中，监视它们的资源的实际状态和期望状态，并相应地采取行动，使实际状态接近期望状态。
+- en: 'However, in addition to these out-of-the-box controllers, the Kubernetes event-driven
+    architecture allows us to natively plug in other custom controllers. Custom controllers
+    can add extra functionality to the behavior by reacting to state-changing events,
+    the same way that internal controllers do. A common characteristic of controllers
+    is that they are reactive and react to events in the system to perform their specific
+    actions. At a high level, this reconciliation process consists of the following
+    main steps:'
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 但是，除了这些开箱即用的控制器外，Kubernetes 的事件驱动架构还允许我们本地插入其他自定义控制器。自定义控制器可以通过对状态变更事件做出响应来增加行为的额外功能，方式与内部控制器相同。控制器的一个共同特征是它们是响应式的，并且会对系统中的事件做出反应，以执行它们的特定操作。在高层次上，这个协调过程包括以下主要步骤：
+- en: Observe
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 观察
+- en: Discover the actual state by watching for events issued by Kubernetes when an
+    observed resource changes.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过观察 Kubernetes 在观察到资源变化时发出的事件，发现实际状态。
+- en: Analyze
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 分析
+- en: Determine the differences from the desired state.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 确定与期望状态的差异。
+- en: Act
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 行动
+- en: Perform operations to drive the actual state to the desired state.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 执行操作以将实际状态驱动到期望状态。
+- en: For example, the ReplicaSet controller watches for ReplicaSet resource changes,
+    analyzes how many Pods need to be running, and acts by submitting Pod definitions
+    to the API Server. The Kubernetes backend is then responsible for starting up
+    the requested Pod on a node.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，ReplicaSet 控制器会监视 ReplicaSet 资源的变化，分析需要运行多少个 Pod，并通过向 API 服务器提交 Pod 定义来执行操作。然后
+    Kubernetes 后端负责在节点上启动请求的 Pod。
+- en: '[Figure 27-1](#img-controller-controller) shows how a controller registers
+    itself as an event listener for detecting changes on the managed resources. It
+    observes the current state and changes it by calling out to the API Server to
+    get closer to the target state (if necessary).'
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 27-1](#img-controller-controller) 显示一个控制器如何注册自己作为事件监听器，以检测受管资源的变化。它观察当前状态，并通过调用
+    API 服务器来改变它，以接近目标状态（如果需要）。'
+- en: '![Observe-Analyse-Act cycle](assets/kup2_2701.png)'
+  id: totrans-20
+  prefs: []
+  type: TYPE_IMG
+  zh: '![观察-分析-行动循环](assets/kup2_2701.png)'
+- en: Figure 27-1\. Observe-Analyze-Act cycle
+  id: totrans-21
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 27-1\. 观察-分析-行动循环
+- en: 'Controllers are part of the Kubernetes control plane, and it became clear early
+    on that they would also allow you to extend the platform with custom behavior.
+    Moreover, they have become the standard mechanism for extending the platform and
+    enable complex application lifecycle management. And as a result, a new generation
+    of more sophisticated controllers was born, called *Operators*. From an evolutionary
+    and complexity point of view, we can classify the active reconciliation components
+    into two groups:'
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 控制器是 Kubernetes 控制平面的一部分，很早就清楚它们也允许您通过自定义行为扩展平台。此外，它们已成为扩展平台和启用复杂应用生命周期管理的标准机制。因此，诞生了一代新的更复杂的控制器，称为
+    *操作员*。从进化和复杂性的角度来看，我们可以将主动协调组件分为两组：
+- en: '*Controllers*'
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*控制器*'
+- en: A simple reconciliation process that monitors and acts on standard Kubernetes
+    resources. More often, these controllers enhance platform behavior and add new
+    platform features.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个简单的协调过程，监视和处理标准 Kubernetes 资源。通常，这些控制器增强平台行为并添加新的平台功能。
+- en: '*Operators*'
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*操作员*'
+- en: A sophisticated reconciliation process that interacts with CustomResourceDefinitions
+    (CRDs), which are at the heart of the *Operator* pattern. Typically, these operators
+    encapsulate complex application domain logic and manage the full application lifecycle.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个复杂的协调过程，与 CustomResourceDefinitions (CRDs) 交互，这些 CRDs 是 *操作员* 模式的核心。通常，这些操作员封装复杂的应用程序领域逻辑，并管理完整的应用程序生命周期。
+- en: As stated previously, these classifications help introduce new concepts gradually.
+    Here, we focus on the simpler controllers, and in [Chapter 28](ch28.html#Operator),
+    we introduce CRDs and build up to the *Operator* pattern.
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如前所述，这些分类有助于逐步引入新概念。在这里，我们关注更简单的控制器，在 [第28章](ch28.html#Operator) 中介绍 CRD 并逐步构建
+    *操作员* 模式。
+- en: To avoid having multiple controllers acting on the same resources simultaneously,
+    controllers use the *Singleton Service* pattern explained in [Chapter 10](ch10.html#SingletonService).
+    Most controllers are deployed just as Deployments but with one replica, as Kubernetes
+    uses optimistic locking at the resource level to prevent concurrency issues when
+    changing resource objects. In the end, a controller is nothing more than an application
+    that runs permanently in the background.
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了避免多个控制器同时作用于相同的资源，控制器使用在 [第10章](ch10.html#SingletonService) 中解释的 *单例服务* 模式。大多数控制器部署方式与
+    Deployment 类似，但只有一个副本，因为 Kubernetes 在资源级别使用乐观锁定来防止并发问题。最终，控制器只是在后台永久运行的应用程序。
+- en: Because Kubernetes itself is written in Go, and a complete client library for
+    accessing Kubernetes is also written in Go, many controllers are written in Go
+    too. However, you can write controllers in any programming language by sending
+    requests to the Kubernetes API Server. We see a controller written in a pure shell
+    script later in [Example 27-1](#ex-controller-config-map).
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于 Kubernetes 本身是用 Go 语言编写的，并且用于访问 Kubernetes 的完整客户端库也是用 Go 语言编写的，因此许多控制器也是用
+    Go 语言编写的。然而，您可以通过向 Kubernetes API Server 发送请求，用任何编程语言编写控制器。稍后我们将看到一个纯 shell 脚本编写的控制器示例，在
+    [示例27-1](#ex-controller-config-map) 中。
+- en: 'The most straightforward kind of controllers extend the way Kubernetes manages
+    its resources. They operate on the same standard resources and perform similar
+    tasks as the Kubernetes internal controllers operating on the standard Kubernetes
+    resources, but they are invisible to the user of the cluster. Controllers evaluate
+    resource definitions and conditionally perform some actions. Although they can
+    monitor and act upon any field in the resource definition, metadata and ConfigMaps
+    are most suitable for this purpose. The following are a few considerations to
+    keep in mind when choosing where to store controller data:'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最简单的控制器扩展了 Kubernetes 管理资源的方式。它们操作与 Kubernetes 内部控制器操作标准 Kubernetes 资源相同的标准资源，并执行类似的任务，但对集群的用户是不可见的。控制器评估资源定义并有条件地执行一些操作。尽管它们可以监视并针对资源定义中的任何字段执行操作，但元数据和
+    ConfigMaps 最适合这个目的。选择存储控制器数据的地方时需要考虑以下几点：
+- en: Labels
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 标签
+- en: Labels as part of a resource’s metadata can be watched by any controller. They
+    are indexed in the backend database and can be efficiently searched for in queries.
+    We should use labels when a selector-like functionality is required (e.g., to
+    match Pods of a Service or a Deployment). A limitation of labels is that only
+    alphanumeric names and values with restrictions can be used. See the Kubernetes
+    documentation for which syntax and character sets are allowed for labels.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为资源元数据的一部分，标签可以被任何控制器监视。它们在后端数据库中被索引，并且可以在查询中高效地搜索。当需要类似选择器的功能时（例如，匹配服务或部署的
+    Pod 时），应使用标签。标签的一个限制是只能使用带有限制的字母数字名称和值。请参阅 Kubernetes 文档，了解标签允许的语法和字符集。
+- en: Annotations
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注解
+- en: Annotations are an excellent alternative to labels. They have to be used instead
+    of labels if the values do not conform to the syntax restrictions of label values.
+    Annotations are not indexed, so we use annotations for nonidentifying information
+    not used as keys in controller queries. Preferring annotations over labels for
+    arbitrary metadata also has the advantage that it does not negatively impact the
+    internal Kubernetes performance.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注解是标签的一个很好的替代品。如果值不符合标签值的语法限制，则必须使用注解而不是标签。注解不被索引，因此我们将注解用于控制器查询中不用作键的非标识信息。相比于将任意元数据放入标签，偏好注解的另一个优点是它不会对内部
+    Kubernetes 性能产生负面影响。
+- en: ConfigMaps
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 配置映射
+- en: Sometimes controllers need additional information that does not fit well into
+    labels or annotations. In this case, ConfigMaps can be used to hold the target
+    state definition. These ConfigMaps are then watched and read by the controllers.
+    However, CRDs are much better suited for designing the custom target state specification
+    and are recommended over plain ConfigMaps. For registering CRDs, however, you
+    need elevated cluster-level permissions. If you don’t have these, ConfigMaps are
+    still the best alternative to CRDs. We will explain CRDs in detail in [Chapter 28,
+    “Operator”](ch28.html#Operator).
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有时控制器需要额外信息，这些信息无法很好地放在标签或注释中。在这种情况下，可以使用 ConfigMaps 来保存目标状态定义。这些 ConfigMaps
+    然后被控制器监视和读取。然而，CRDs 更适合设计定制目标状态规范，并且推荐使用而不是普通的 ConfigMaps。然而，要注册 CRDs，您需要提升的集群级权限。如果您没有这些权限，ConfigMaps
+    仍然是 CRDs 的最佳替代方案。我们将在 [第 28 章，“Operator”](ch28.html#Operator) 中详细解释 CRDs。
+- en: 'Here are a few reasonably simple example controllers you can study as a sample
+    implementation of this pattern:'
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里有几个相当简单的示例控制器，您可以作为此模式的样本实现进行学习：
+- en: jenkins-x/exposecontroller
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: jenkins-x/exposecontroller
+- en: '[This controller](https://oreil.ly/URMaE) watches Service definitions, and
+    if it detects an annotation named `expose` in the metadata, the controller automatically
+    exposes an Ingress object for external access of the Service. It also removes
+    the Ingress object when someone removes the Service. This project is now archived
+    but still serves as a good example of implementing a simple controller.'
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[这个控制器](https://oreil.ly/URMaE) 监视 Service 定义，如果检测到元数据中名为 `expose` 的注解，控制器会自动为
+    Service 提供外部访问的 Ingress 对象。当某人移除 Service 时，它还会移除 Ingress 对象。这个项目现在已存档，但仍然是实现简单控制器的良好示例。'
+- en: stakater/Reloader
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: stakater/Reloader
+- en: This is [a controller](https://oreil.ly/YUGPG) that watches ConfigMap and Secret
+    objects for changes and performs rolling upgrades of their associated workloads,
+    which can be Deployment, DaemonSet, StatefulSet and other workload resources.
+    We can use this controller with applications that are not capable of watching
+    the ConfigMap and updating themselves with new configurations dynamically. That
+    is particularly true when a Pod consumes this ConfigMap as environment variables
+    or when your application cannot quickly and reliably update itself on the fly
+    without a restart. As a proof of concept, we implement a similar controller with
+    a plain shell script in [Example 27-2](#ex-controller-script).
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是 [一个控制器](https://oreil.ly/YUGPG)，它监视 ConfigMap 和 Secret 对象的更改，并执行与它们关联的工作负载的滚动升级，这些工作负载可以是
+    Deployment、DaemonSet、StatefulSet 和其他工作负载资源。我们可以将此控制器用于那些不能够监视 ConfigMap 并动态更新自身配置的应用程序。尤其是当
+    Pod 将此 ConfigMap 作为环境变量使用，或者当您的应用程序无法快速可靠地在不重新启动的情况下即时更新自身时。作为概念验证，我们使用简单的 shell
+    脚本在 [示例 27-2](#ex-controller-script) 中实现了类似的控制器。
+- en: Flatcar Linux Update Operator
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Flatcar Linux Update Operator
+- en: This is a [controller](https://oreil.ly/f8_FY) that reboots a Kubernetes node
+    running on Flatcar Container Linux when it detects a particular annotation on
+    the Node resource object.
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是一个 [控制器](https://oreil.ly/f8_FY)，当检测到 Node 资源对象上特定注解时，它会重新启动运行在 Flatcar Container
+    Linux 上的 Kubernetes 节点。
+- en: 'Now let’s take a look at a concrete example: a controller that consists of
+    a single shell script and that watches the Kubernetes API for changes on ConfigMap
+    resources. If we annotate such a ConfigMap with `k8spatterns.io/podDeleteSelector`,
+    all Pods selected with the given label selector are deleted when the ConfigMap
+    changes. Assuming we back these Pods with a high-order resource like Deployment
+    or ReplicaSet, these Pods are restarted and pick up the changed configuration.'
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在让我们看一个具体的例子：一个由单个 shell 脚本组成的控制器，它监视 Kubernetes API 上 ConfigMap 资源的更改。如果我们在这样的
+    ConfigMap 上注释了 `k8spatterns.io/podDeleteSelector`，则选定的所有 Pod 在 ConfigMap 更改时都会被删除。假设我们使用高阶资源如
+    Deployment 或 ReplicaSet 支持这些 Pod，则这些 Pod 将重新启动并获取更改后的配置。
+- en: For example, the following ConfigMap would be monitored by our controller for
+    changes and would restart all Pods that have a label `app` with value `webapp`.
+    The ConfigMap in [Example 27-1](#ex-controller-config-map) is used in our web
+    application to provide a welcome message.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，下面的 ConfigMap 将由我们的控制器监视更改，并重新启动所有具有标签 `app` 值为 `webapp` 的 Pod。示例 27-1 中的
+    ConfigMap 在我们的 Web 应用程序中用于提供欢迎消息。
+- en: Example 27-1\. ConfigMap use by web application
+  id: totrans-46
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 27-1\. Web 应用程序使用的 ConfigMap
+- en: '[PRE0]'
+  id: totrans-47
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: '[![1](assets/1.png)](#co_controller_CO1-1)'
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_controller_CO1-1)'
+- en: Annotation used as selector for the controller in [Example 27-2](#ex-controller-script)
+    to find the application Pods to restart.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用作选择器的注解，用于在[示例 27-2](#ex-controller-script)中找到要重新启动的应用程序 Pod。
+- en: Our controller shell script now evaluates this ConfigMap. You can find the source
+    in its full glory in our Git repository. In short, the controller starts a *hanging
+    GET* HTTP request for opening an endless HTTP response stream to observe the lifecycle
+    events pushed by the API Server to us. These events are in the form of plain JSON
+    objects, which are then analyzed to detect whether a changed ConfigMap carries
+    our annotation. As events arrive, the controller acts by deleting all Pods matching
+    the selector provided as the value of the annotation. Let’s have a closer look
+    at how the controller works.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们的控制器 shell 脚本现在评估此 ConfigMap。您可以在我们的 Git 存储库中找到其完整源代码。简而言之，控制器启动了一个*挂起 GET*
+    HTTP 请求，以打开一个无限的 HTTP 响应流，以观察 API Server 推送给我们的生命周期事件。这些事件以简单的 JSON 对象形式存在，然后被分析以检测变更的
+    ConfigMap 是否带有我们的注解。随着事件的到达，控制器通过删除所有与注解值匹配的 Pod 来执行操作。让我们更详细地看看控制器是如何工作的。
+- en: The main part of this controller is the reconciliation loop, which listens on
+    ConfigMap lifecycle events, as shown in [Example 27-2](#ex-controller-script).
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此控制器的主要部分是协调循环，它侦听 ConfigMap 生命周期事件，如[示例 27-2](#ex-controller-script)所示。
+- en: Example 27-2\. Controller script
+  id: totrans-52
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 27-2\. 控制器脚本
+- en: '[PRE1]'
+  id: totrans-53
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: '[![1](assets/1.png)](#co_controller_CO2-1)'
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_controller_CO2-1)'
+- en: Namespace to watch (or *default* if not given).
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要监视的命名空间（如果未指定，则为*default*）。
+- en: '[![2](assets/2.png)](#co_controller_CO2-2)'
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_controller_CO2-2)'
+- en: Access to the Kubernetes API via a proxy running in the same Pod.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过在同一 Pod 中运行的代理访问 Kubernetes API。
+- en: '[![3](assets/3.png)](#co_controller_CO2-3)'
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_controller_CO2-3)'
+- en: Loop with watches for events on ConfigMaps.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 循环，监听 ConfigMaps 上的事件。
+- en: The environment variable `WATCH_NAMESPACE` specifies the namespace in which
+    the controller should watch for ConfigMap updates. We can set this variable in
+    the Deployment descriptor of the controller itself. In our example, we’re using
+    the Downward API described in [Chapter 14, “Self Awareness”](ch14.html#SelfAwareness),
+    to monitor the namespace in which we have deployed the controller as configured
+    in [Example 27-3](#ex-controller-downward-api) as part of the controller Deployment.
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 环境变量`WATCH_NAMESPACE`指定控制器应该监视的 ConfigMap 更新所在的命名空间。我们可以在控制器自身的部署描述符中设置此变量。在我们的示例中，我们使用[第
+    14 章，“自我感知”](ch14.html#SelfAwareness)中描述的 Downward API，监视我们部署控制器的命名空间，如[示例 27-3](#ex-controller-downward-api)中作为控制器部署的一部分的配置。
+- en: Example 27-3\. `WATCH_NAMESPACE` extracted from the current namespace
+  id: totrans-61
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 27-3\. 从当前命名空间中提取的`WATCH_NAMESPACE`。
+- en: '[PRE2]'
+  id: totrans-62
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: With this namespace, the controller script constructs the URL to the Kubernetes
+    API endpoint to watch the ConfigMaps.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用此命名空间，控制器脚本构建到 Kubernetes API 端点的 URL 来监视 ConfigMaps。
+- en: Note
+  id: totrans-64
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Note the `watch=true` query parameter in [Example 27-2](#ex-controller-script).
+    This parameter indicates to the API Server not to close the HTTP connection but
+    to send events along the response channel as soon as they happen (*hanging GET*
+    or *Comet* are other names for this kind of technique). The loop reads every individual
+    event as it arrives as a single item to process.
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注意，在[示例 27-2](#ex-controller-script)中的`watch=true`查询参数中。此参数指示 API Server 不关闭
+    HTTP 连接，而是立即将事件沿响应通道发送（*挂起 GET* 或 *Comet* 是此类技术的其他名称）。该循环读取每个到达的事件作为单个要处理的项目。
+- en: As you can see, our controller contacts the Kubernetes API Server via localhost.
+    We won’t deploy this script directly on the Kubernetes API control plane node,
+    but then how can we use localhost in the script? As you may have probably guessed,
+    another pattern kicks in here. We deploy this script in a Pod together with an
+    ambassador container that exposes port 8001 on localhost and proxies it to the
+    real Kubernetes Service. See [Chapter 18](ch18.html#Ambassador) for more details
+    on the *Ambassador* pattern. We see the actual Pod definition with this ambassador
+    in detail later in this chapter.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如你所看到的，我们的控制器通过 localhost 联系 Kubernetes API Server。我们不会直接在 Kubernetes API 控制平面节点上部署此脚本，但是脚本中如何使用
+    localhost 呢？你可能已经猜到，这里另一个模式发挥作用。我们将此脚本与一个大使容器一起部署在 Pod 中，该容器在 localhost 上公开端口
+    8001 并将其代理到真正的 Kubernetes 服务。有关*大使*模式的更多详细信息，请参见[第 18 章](ch18.html#Ambassador)。稍后在本章中，我们将详细查看带有此大使的实际
+    Pod 定义。
+- en: Watching events this way is not very robust, of course. The connection can stop
+    anytime, so there should be a way to restart the loop. Also, one could miss events,
+    so production-grade controllers should not only watch on events but from time
+    to time should also query the API Server for the entire current state and use
+    that as the new base. For the sake of demonstrating the pattern, this is good
+    enough.
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当然，这种方式监视事件并不十分健壮。连接随时可能停止，因此应该有一种方法重新启动循环。此外，可能会错过事件，因此生产级控制器不仅应该监视事件，而且不时应该查询API服务器以获取整个当前状态，并将其用作新的基础。出于展示模式的考虑，这已经足够好了。
+- en: Within the loop, the logic shown in [Example 27-4](#ex-controller-loop) is performed.
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在循环内，执行[示例 27-4](#ex-controller-loop)中显示的逻辑。
+- en: Example 27-4\. Controller reconciliation loop
+  id: totrans-69
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 27-4\. 控制器对账循环
+- en: '[PRE3]'
+  id: totrans-70
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: '[![1](assets/1.png)](#co_controller_CO3-1)'
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_controller_CO3-1)'
+- en: Extract the type and name of the ConfigMap from the event.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从事件中提取ConfigMap的类型和名称。
+- en: '[![2](assets/2.png)](#co_controller_CO3-2)'
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_controller_CO3-2)'
+- en: Extract all annotations on the ConfigMap with the key `k8spatterns.io/podDeleteSelector`.
+    See the following sidebar for an explanation of this `jq` expression.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 提取ConfigMap上所有带有`k8spatterns.io/podDeleteSelector`键的注解。有关此`jq`表达式的解释，请参见下面的侧边栏。
+- en: '[![3](assets/3.png)](#co_controller_CO3-3)'
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_controller_CO3-3)'
+- en: If the event indicates an update of the ConfigMap and our annotation is attached,
+    then find all Pods matching this label selector.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果事件指示ConfigMap的更新并且我们的注解已附加，则查找所有匹配此标签选择器的Pod。
+- en: '[![4](assets/4.png)](#co_controller_CO3-4)'
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_controller_CO3-4)'
+- en: Delete all Pods that match the selector.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 删除所有与选择器匹配的Pod。
+- en: First, the script extracts the event type that specifies what action happened
+    to the ConfigMap. Then, we derive the annotations with `jq`. [`jq`](https://oreil.ly/e57Xi)
+    is an excellent tool for parsing JSON documents from the command line, and the
+    script assumes it is available in the container the script is running in.
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，脚本提取指定ConfigMap操作的事件类型。然后，我们使用`jq`派生注解。[`jq`](https://oreil.ly/e57Xi)是一个从命令行解析JSON文档的优秀工具，并且该脚本假设它在运行脚本的容器中可用。
+- en: 'If the ConfigMap has annotations, we check for the annotation `k8spatterns.io/podDeleteSelector`
+    by using a more complex `jq` query. The purpose of this query is to convert the
+    annotation value to a Pod selector that can be used in an API query option in
+    the next step: an annotation `k8spatterns.io/podDeleteSelector: "app=webapp"`
+    is transformed to `app%3Dwebapp` that is used as a Pod selector. This conversion
+    is performed with `jq` and is explained next if you are interested in how this
+    extraction works.'
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '如果ConfigMap有注解，我们会检查`k8spatterns.io/podDeleteSelector`注解，使用更复杂的`jq`查询。此查询的目的是将注解值转换为可以在下一步API查询选项中使用的Pod选择器。例如，注解`k8spatterns.io/podDeleteSelector:
+    "app=webapp"`被转换为`app%3Dwebapp`，这个转换是通过`jq`执行的，如果您对此提取方式感兴趣，接下来会进行详细解释。'
+- en: If the script can extract a `selector`, we can now use it directly to select
+    the Pods to delete. First, we look up all Pods that match the selector, and then
+    we delete them one by one with direct API calls.
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果脚本可以提取`selector`，我们现在可以直接使用它来选择要删除的Pod。首先，我们查找所有与该选择器匹配的Pod，然后逐个使用直接的API调用进行删除。
+- en: This shell script-based controller is, of course, not production-grade (e.g.,
+    the event loop can stop any time), but it nicely reveals the base concepts without
+    too much boilerplate code for us.
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当然，这个基于Shell脚本的控制器不适用于生产环境（例如，事件循环可能随时停止），但它很好地展示了基本概念，没有过多的样板代码。
+- en: The remaining work is about creating resource objects and container images.
+    The controller script itself is stored in a ConfigMap `config-watcher-controller`,
+    and can be easily edited later if required.
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 剩下的工作是创建资源对象和容器映像。控制器脚本本身存储在一个名为`config-watcher-controller`的ConfigMap中，如果需要的话可以很容易地进行后续编辑。
+- en: 'We use a Deployment to create a Pod for our controller with two containers:'
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们使用Deployment来为我们的控制器创建一个包含两个容器的Pod：
+- en: One Kubernetes API ambassador container that exposes the Kubernetes API on localhost
+    on port 8001\. The image `k8spatterns/kubeapi-proxy` is an Alpine Linux with a
+    local `kubectl` installed and `kubectl proxy` started with the proper CA and token
+    mounted. The original version, kubectl-proxy, was written by Marko Lukša, who
+    introduced this proxy in *Kubernetes in Action*.
+  id: totrans-85
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一个Kubernetes API大使容器，在本地主机的8001端口上通过localhost公开Kubernetes API。镜像`k8spatterns/kubeapi-proxy`是一个带有本地`kubectl`安装的Alpine
+    Linux，并启动了带有正确CA和令牌挂载的`kubectl proxy`。最初的版本kubectl-proxy由Marko Lukša编写，他在《Kubernetes实战》中介绍了这个代理。
+- en: The main container that executes the script contained in the just-created ConfigMap.
+    Here, we use an Alpine base image with `curl` and `jq` installed.
+  id: totrans-86
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 执行刚创建的 ConfigMap 中脚本的主容器。在这里，我们使用一个带有 `curl` 和 `jq` 安装的 Alpine 基础镜像。
+- en: You can find the Dockerfiles for the `k8spatterns/kubeapi-proxy` and `k8spatterns/curl-jq`
+    images in the example [Git repository](https://oreil.ly/a0zZR).
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在示例 [Git 仓库](https://oreil.ly/a0zZR) 中找到 `k8spatterns/kubeapi-proxy` 和 `k8spatterns/curl-jq`
+    镜像的 Dockerfile。
+- en: Now that we have the images for our Pod, the final step is to deploy the controller
+    by using a Deployment. We can see the main parts of the Deployment in [Example 27-5](#ex-controller-deployment)
+    (the full version is available in our example repository).
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经有了我们 Pod 的镜像，最后一步是通过使用 Deployment 部署控制器。我们可以在 [示例 27-5](#ex-controller-deployment)
+    中看到 Deployment 的主要部分（完整版本可在我们的示例仓库中找到）。
+- en: Example 27-5\. Controller Deployment
+  id: totrans-89
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 27-5\. 控制器部署
+- en: '[PRE4]'
+  id: totrans-90
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: '[![1](assets/1.png)](#co_controller_CO4-1)'
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_controller_CO4-1)'
+- en: ServiceAccount with proper permissions for watching events and restarting Pods.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 具有适当权限以监视事件和重新启动 Pod 的 ServiceAccount。
+- en: '[![2](assets/2.png)](#co_controller_CO4-2)'
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_controller_CO4-2)'
+- en: Ambassador container for proxying localhost to the Kubeserver API.
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用于将本地主机代理到 Kubeserver API 的大使容器。
+- en: '[![3](assets/3.png)](#co_controller_CO4-3)'
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_controller_CO4-3)'
+- en: Main container holding all tools and mounting the controller script.
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 包含所有工具并挂载控制器脚本的主容器。
+- en: '[![4](assets/4.png)](#co_controller_CO4-4)'
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_controller_CO4-4)'
+- en: Startup command calling the controller script.
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 启动命令调用控制器脚本。
+- en: '[![5](assets/5.png)](#co_controller_CO4-5)'
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#co_controller_CO4-5)'
+- en: Volume mapped to the ConfigMap holding our script.
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 映射到保存我们脚本的 ConfigMap 的卷。
+- en: '[![6](assets/6.png)](#co_controller_CO4-6)'
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![6](assets/6.png)](#co_controller_CO4-6)'
+- en: Mount of the ConfigMap-backed volume into the main Pod.
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将 ConfigMap 支持的卷挂载到主 Pod 中。
+- en: As you can see, we mount the `config-watcher-controller-script` from the ConfigMap
+    we created previously and directly use it as the startup command for the primary
+    container. For simplicity, we omitted any liveness and readiness checks as well
+    as resource limit declarations. Also, we need a ServiceAccount `config-watcher-controller`
+    that is allowed to monitor ConfigMaps. Refer to the example repository for the
+    full security setup.
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如您所看到的，我们从先前创建的 ConfigMap 中挂载 `config-watcher-controller-script` 并直接将其用作主容器的启动命令。为简单起见，我们省略了任何活跃性和就绪性检查以及资源限制声明。此外，我们需要一个
+    ServiceAccount `config-watcher-controller`，允许其监视 ConfigMaps。有关完整的安全设置，请参阅示例仓库。
+- en: Let’s see the controller in action. For this, we are using a straightforward
+    web server, which serves the value of an environment variable as the only content.
+    The base image uses plain `nc` (netcat) for serving the content. You can find
+    the Dockerfile for this image in the example repository. We deploy the HTTP server
+    with a ConfigMap and Deployment, as is sketched in [Example 27-6](#ex-controller-webapp).
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们看看控制器的工作情况。为此，我们使用了一个简单的 Web 服务器，它将环境变量的值作为唯一的内容进行提供。基础镜像使用纯粹的 `nc`（netcat）来提供内容。您可以在示例仓库中找到此镜像的
+    Dockerfile。我们使用 ConfigMap 和 Deployment 部署 HTTP 服务器，如 [示例 27-6](#ex-controller-webapp)
+    中所示。
+- en: Example 27-6\. Sample web app with Deployment and ConfigMap
+  id: totrans-105
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 27-6\. 带有 Deployment 和 ConfigMap 的示例 Web 应用程序
+- en: '[PRE5]'
+  id: totrans-106
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: '[![1](assets/1.png)](#co_controller_CO5-1)'
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_controller_CO5-1)'
+- en: ConfigMap for holding the data to serve.
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用于保存提供数据的 ConfigMap。
+- en: '[![2](assets/2.png)](#co_controller_CO5-2)'
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_controller_CO5-2)'
+- en: Annotation that triggers a restart of the web app’s Pod.
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 触发重新启动 Web 应用程序 Pod 的注解。
+- en: '[![3](assets/3.png)](#co_controller_CO5-3)'
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_controller_CO5-3)'
+- en: Message used in web app in HTTP responses.
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 HTTP 响应中用于 Web 应用程序的消息。
+- en: '[![4](assets/4.png)](#co_controller_CO5-4)'
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_controller_CO5-4)'
+- en: Deployment for the web app.
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Web 应用程序的 Deployment。
+- en: '[![5](assets/5.png)](#co_controller_CO5-5)'
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#co_controller_CO5-5)'
+- en: Simplistic image for HTTP serving with netcat.
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 netcat 进行 HTTP 服务的简化镜像。
+- en: '[![6](assets/6.png)](#co_controller_CO5-6)'
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![6](assets/6.png)](#co_controller_CO5-6)'
+- en: Environment variable used as an HTTP response body and fetched from the watched
+    ConfigMap.
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用作 HTTP 响应正文并从所监视的 ConfigMap 中获取的环境变量。
+- en: This concludes our example of our ConfigMap controller implemented in a plain
+    shell script. Although this is probably the most complex example in this book,
+    it also shows that it does not take much to write a basic controller.
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这结束了我们在纯 shell 脚本中实现的 ConfigMap 控制器的示例。尽管这可能是本书中最复杂的示例，但它也显示出编写基本控制器并不需要太多工作。
+- en: Obviously, for real-world scenarios, you would write this sort of controller
+    in a real programming language that provides better error-handling capabilities
+    and other advanced features.
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 显然，对于真实场景，你会使用提供更好错误处理能力和其他高级特性的真实编程语言来编写这种类型的控制器。
+- en: Discussion
+  id: totrans-121
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 讨论
+- en: To sum up, a controller is an active reconciliation process that monitors objects
+    of interest for the world’s desired state and the world’s actual state. Then,
+    it sends instructions to try to change the world’s current state to be more like
+    the desired state. Kubernetes uses this mechanism with its internal controllers,
+    and you can also reuse the same mechanism with custom controllers. We demonstrated
+    what is involved in writing a custom controller and how it functions and extends
+    the Kubernetes platform.
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 总结一下，控制器是一个主动的协调过程，监视感兴趣对象的世界期望状态和实际状态。然后，它发送指令尝试改变世界的当前状态，使其更接近期望的状态。Kubernetes
+    使用这种机制来管理其内部控制器，并且你也可以通过自定义控制器重用相同的机制。我们演示了编写自定义控制器所涉及的内容，以及它如何功能和扩展 Kubernetes
+    平台。
+- en: Controllers are possible because of the highly modular and event-driven nature
+    of the Kubernetes architecture. This architecture naturally leads to a decoupled
+    and asynchronous approach for controllers as extension points. The significant
+    benefit here is that we have a precise technical boundary between Kubernetes itself
+    and any extensions. However, one issue with the asynchronous nature of controllers
+    is that they are often hard to debug because the flow of events is not always
+    straightforward. As a consequence, you can’t easily set breakpoints in your controller
+    to stop everything to examine a specific situation.
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 控制器之所以可能，是因为 Kubernetes 架构具有高度模块化和事件驱动的特性。这种架构自然地导致控制器作为扩展点采用解耦和异步的方法。这里的重大好处在于，我们在
+    Kubernetes 本身与任何扩展之间建立了精确的技术边界。然而，控制器异步性的一个问题是，由于事件流不总是直接的，它们通常很难进行调试。因此，你无法轻松地在控制器中设置断点来停止一切以检查特定情况。
+- en: In [Chapter 28](ch28.html#Operator), you’ll learn about the related *Operator*
+    pattern, which builds on this *Controller* pattern and provides an even more flexible
+    way to configure operations.
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[第28章](ch28.html#Operator)中，你将了解相关的*操作员*模式，它基于这种*控制器*模式，并提供了一种更加灵活的方式来配置操作。
+- en: More Information
+  id: totrans-125
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 更多信息
+- en: '[Controller Example](https://oreil.ly/qQcZM)'
+  id: totrans-126
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[控制器示例](https://oreil.ly/qQcZM)'
+- en: '[Writing Controllers](https://oreil.ly/3yuBU)'
+  id: totrans-127
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[编写控制器](https://oreil.ly/3yuBU)'
+- en: '[Writing a Kubernetes Controller](https://oreil.ly/mY5Dc)'
+  id: totrans-128
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[编写 Kubernetes 控制器](https://oreil.ly/mY5Dc)'
+- en: '[A Deep Dive into Kubernetes Controllers](https://oreil.ly/Qa2X4)'
+  id: totrans-129
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[深入了解 Kubernetes 控制器](https://oreil.ly/Qa2X4)'
+- en: '[Expose Controller](https://oreil.ly/Mq3GN)'
+  id: totrans-130
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[暴露控制器](https://oreil.ly/Mq3GN)'
+- en: '[Reloader: ConfigMap Controller](https://oreil.ly/bcTYK)'
+  id: totrans-131
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[重新加载器：ConfigMap 控制器](https://oreil.ly/bcTYK)'
+- en: '[Writing a Custom Controller: Extending the Functionality of Your Cluster](https://oreil.ly/yZdL3)'
+  id: totrans-132
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[编写自定义控制器：扩展集群功能](https://oreil.ly/yZdL3)'
+- en: '[Writing Kubernetes Custom Controllers](https://oreil.ly/0zM5X)'
+  id: totrans-133
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[编写 Kubernetes 自定义控制器](https://oreil.ly/0zM5X)'
+- en: '[Contour Ingress Controller](https://oreil.ly/19xfy)'
+  id: totrans-134
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Contour Ingress 控制器](https://oreil.ly/19xfy)'
+- en: '[Syntax and Character Set](https://oreil.ly/FTxze)'
+  id: totrans-135
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[语法和字符集](https://oreil.ly/FTxze)'
+- en: '[Kubectl-Proxy](https://oreil.ly/_g75A)'
+  id: totrans-136
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Kubectl-Proxy](https://oreil.ly/_g75A)'

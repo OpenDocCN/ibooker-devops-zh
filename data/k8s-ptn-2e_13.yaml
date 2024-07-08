@@ -1,0 +1,551 @@
+- en: Chapter 10\. Singleton Service
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第10章 单例服务
+- en: The *Singleton Service* pattern ensures that only one instance o an application
+    is active at a time and yet is highly available. This pattern can be implemented
+    from within the application or delegated fully to Kubernetes.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*单例服务*模式确保在任何时候只有一个应用实例处于活动状态，并且具有高可用性。该模式可以从应用程序内部实现，也可以完全委托给Kubernetes。'
+- en: Problem
+  id: totrans-2
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 问题
+- en: One of the main capabilities provided by Kubernetes is the ability to easily
+    and transparently scale applications. Pods can scale imperatively with a single
+    command such as `kubectl scale`, or declaratively through a controller definition
+    such as ReplicaSet, or even dynamically based on the application load, as we describe
+    in [Chapter 29, “Elastic Scale”](ch29.html#ElasticScale). By running multiple
+    instances of the same service (not a Kubernetes Service but a component of a distributed
+    application represented by a Pod), the system usually increases throughput and
+    availability. The availability increases because if one instance of a service
+    becomes unhealthy, the request dispatcher forwards future requests to other healthy
+    instances. In Kubernetes, multiple instances are the replicas of a Pod, and the
+    Service resource is responsible for the request distribution and load balancing.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 提供的主要功能之一是轻松和透明地扩展应用程序。Pod 可以通过诸如 `kubectl scale` 这样的单个命令或者通过像 ReplicaSet
+    这样的控制器定义声明式地扩展，甚至可以根据应用程序负载动态扩展，正如我们在[第29章 “弹性扩展”](ch29.html#ElasticScale)中描述的那样。通过运行多个相同服务的实例（不是
+    Kubernetes Service，而是由 Pod 表示的分布式应用程序的组件），系统通常会提高吞吐量和可用性。可用性提高是因为如果某个服务实例变得不健康，请求调度器将将未来的请求转发到其他健康的实例。在
+    Kubernetes 中，多个实例是 Pod 的副本，而 Service 资源负责请求分发和负载均衡。
+- en: However, in some cases, only one instance of a service is allowed to run at
+    a time. For example, if there is a periodically executed task in a service and
+    multiple instances of the same service, every instance will trigger the task at
+    the scheduled intervals, leading to duplicates rather than having only one task
+    fired as expected. Another example is a service that performs polling on specific
+    resources (a filesystem or database) and we want to ensure that only a single
+    instance and maybe even a single thread performs the polling and processing. A
+    third case occurs when we have to consume messages from a messages broker in an
+    order-preserving manner with a single-threaded consumer that is also a singleton
+    service.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，在某些情况下，只允许同时运行一个服务实例。例如，如果服务中有一个周期性执行的任务，并且有多个相同服务的实例，每个实例都会在预定间隔触发任务，导致重复执行，而不是按预期只触发一个任务。另一个例子是一个服务在特定资源（文件系统或数据库）上执行轮询，我们希望确保只有一个实例甚至一个线程执行轮询和处理。第三种情况发生在我们必须以保持顺序的方式从消息代理中消费消息，并且使用单线程消费者同时也是单例服务。
+- en: In all these and similar situations, we need some control over how many instances
+    \ of a service are active at a time (usually only one is required), while still
+    ensuring high availability, regardless of how many instances have been started
+    and kept running.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在所有这些类似情况中，我们需要控制同时处于活动状态的服务实例数量（通常只需要一个），同时确保高可用性，无论启动并保持运行的实例数量有多少。
+- en: Solution
+  id: totrans-6
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 解决方案
+- en: 'Running multiple replicas of the same Pod creates an *active-active* topology,
+    where all instances of a service are active. What we need is an *active-passive*
+    topology, where only one instance is active and all the other instances are passive.
+    Fundamentally, this can be achieved at two possible levels: out-of-application
+    and in-application locking.'
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运行多个相同 Pod 的副本创建了一个 *活跃-活跃* 的拓扑结构，其中所有服务实例都是活跃的。我们需要的是一个 *活跃-被动* 的拓扑结构，其中只有一个实例是活跃的，其他所有实例都是被动的。从根本上说，可以通过应用外和应用内的锁定在两个可能的层次上实现这一目标。
+- en: Out-of-Application Locking
+  id: totrans-8
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 应用外锁定
+- en: As the name suggests, this mechanism relies on a managing process that is outside
+    of the application to ensure that only a single instance of the application is
+    running. The application implementation itself is not aware of this constraint
+    and is run as a singleton instance. From this perspective, it is similar to having
+    a Java class that is instantiated only once by the managing runtime (such as the
+    Spring Framework). The class implementation is not aware that it is run as a singleton,
+    nor that it contains any code constructs to prevent instantiating multiple instances.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如其名称所示，这种机制依赖于一个管理进程，该进程位于应用程序外部，以确保应用程序只运行单个实例。应用程序本身对此约束并不知情，并且作为单例实例运行。从这个角度来看，它类似于由管理运行时（如
+    Spring 框架）仅实例化一次的 Java 类。类的实现不知道它是作为单例运行的，也不包含任何代码结构来防止多次实例化。
+- en: '[Figure 10-1](#img-out-of-app-locking) shows how to implement out-of-application
+    locking with the help of a StatefulSet or ReplicaSet controller with one replica.'
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 10-1](#img-out-of-app-locking) 展示了如何通过 StatefulSet 或 ReplicaSet 控制器实现应用程序外的锁定，其中只有一个副本。'
+- en: '![Out-of-application locking mechanism](assets/kup2_1001.png)'
+  id: totrans-11
+  prefs: []
+  type: TYPE_IMG
+  zh: '![应用程序外的锁定机制](assets/kup2_1001.png)'
+- en: Figure 10-1\. Out-of-application locking mechanism
+  id: totrans-12
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 10-1\. 应用程序外的锁定机制
+- en: The way to achieve this in Kubernetes is to start a single Pod. This activity
+    alone does not ensure the singleton Pod is highly available. What we have to do
+    is also back the Pod with a controller such as a ReplicaSet that turns the singleton
+    Pod into a highly available singleton. This topology is not exactly *active-passive*
+    (there is no passive instance), but it has the same effect, as Kubernetes ensures
+    that one instance of the Pod is running at all times. In addition, the single
+    Pod instance is highly available, thanks to the controller performing health checks
+    as described in [Chapter 4, “Health Probe”](ch04.html#HealthProbe), and healing
+    the Pod in case of failures.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 中实现这一点的方法是启动单个 Pod。仅此活动并不确保单例 Pod 具有高可用性。我们还必须通过诸如 ReplicaSet 的控制器将该单例
+    Pod 背后的实现转换为高可用单例。这种拓扑结构并非完全是 *主备模式*（没有备用实例），但效果相同，因为 Kubernetes 确保始终运行一个 Pod
+    实例。此外，由于控制器执行健康检查（如 [第 4 章，“健康探测”](ch04.html#HealthProbe) 中描述的方式）并在发生故障时修复 Pod，因此单个
+    Pod 实例具有高可用性。
+- en: The main thing to keep an eye on with this approach is the replica count, which
+    should not be changed accidentally. In this section, you will see how we can voluntarily
+    decrease the replica count through PodDisruptionBudget, but there is no platform-level
+    mechanism to prevent an increase of the replica count.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用这种方法需要特别关注副本数，不要因意外操作而改变它。在本节中，您将了解到我们如何通过 PodDisruptionBudget 自愿减少副本数，但没有平台级机制可以防止副本数的增加。
+- en: 'It’s not entirely true that only one instance is running at all times, especially
+    when things go wrong. Kubernetes primitives such as ReplicaSet favor availability
+    over consistency—a deliberate decision for achieving highly available and scalable
+    distributed systems. That means a ReplicaSet applies “at least” rather than “at
+    most” semantics for its replicas. If we configure a ReplicaSet to be a singleton
+    with `replicas: 1`, the controller makes sure at least one instance is always
+    running, but occasionally it can be more instances.'
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '并不完全准确地说一直只有一个实例在运行，特别是在出现问题时。Kubernetes 的原语如 ReplicaSet 更倾向于可用性而非一致性——这是实现高可用和可扩展分布式系统的有意决策。这意味着
+    ReplicaSet 应用的是“至少”而不是“至多”的语义来管理其副本。如果我们将 ReplicaSet 配置为单例模式，即 `replicas: 1`，控制器会确保始终至少运行一个实例，但偶尔可能会有更多实例存在。'
+- en: The most popular corner case here occurs when a node with a controller-managed
+    Pod becomes unhealthy and disconnects from the rest of the Kubernetes cluster.
+    In this scenario, a ReplicaSet controller starts another Pod instance on a healthy
+    node (assuming there is enough capacity), without ensuring the Pod on the disconnected
+    node is shut down. Similarly, when changing the number of replicas or relocating
+    Pods to different nodes, the number of Pods can temporarily go above the desired
+    number. That temporary increase is done with the intention of ensuring high availability
+    and avoiding disruption, as needed for stateless and scalable applications.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里最常见的边界情况是，一个具有控制器管理的 Pod 的节点变得不健康并与 Kubernetes 集群的其余部分断开连接。在这种情况下，ReplicaSet
+    控制器会在健康节点上启动另一个 Pod 实例（假设有足够的容量），而不确保断开连接节点上的 Pod 被关闭。同样地，当更改副本数或将 Pod 重新定位到不同节点时，Pod
+    数量可能会暂时超过所需数量。这种临时增加是为了确保高可用性并避免中断，这在无状态和可扩展的应用程序中是必要的。
+- en: Singletons can be resilient and recover, but by definition, they are not highly
+    available. Singletons typically favor consistency over availability. The Kubernetes
+    resource that also favors consistency over availability and provides the desired
+    strict singleton guarantees is the StatefulSet. If ReplicaSets do not provide
+    the desired guarantees for your application, and you have strict singleton requirements,
+    StatefulSets might be the answer. StatefulSets are intended for stateful applications
+    and offer many features, including stronger singleton guarantees, but they come
+    with increased complexity as well. We discuss concerns around singletons and cover
+    StatefulSets in more detail in [Chapter 12, “Stateful Service”](ch12.html#StatefulService).
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 单例（Singleton）虽然可以具备弹性和恢复能力，但从定义上来说，它们并不具备高可用性。单例通常更注重一致性而非可用性。在 Kubernetes 中，同样偏向一致性而提供严格单例保证的资源是
+    StatefulSet。如果 ReplicaSets 对你的应用程序未提供所需的保证，并且你有严格的单例要求，那么 StatefulSets 可能是答案。StatefulSets
+    专为有状态应用程序设计，提供许多功能，包括更强的单例保证，但也带来了更高的复杂性。我们在 [第12章，“有状态服务”](ch12.html#StatefulService)
+    中详细讨论了单例的相关问题并深入介绍了 StatefulSets。
+- en: Typically, singleton applications running in Pods on Kubernetes open outgoing
+    connections to message brokers, relational databases, file servers, or other systems
+    running on other Pods or external systems. However, occasionally, your singleton
+    Pod may need to accept incoming connections, and the way to enable that on Kubernetes
+    is through the Service resource.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常，在 Kubernetes 上运行的单例应用程序会在 Pod 中向消息代理、关系型数据库、文件服务器或其他运行在其他 Pod 或外部系统上的系统打开出站连接。然而，偶尔你的单例
+    Pod 可能需要接受传入连接，在 Kubernetes 上启用这一功能的方法是通过 Service 资源。
+- en: 'We cover Kubernetes Services in depth in [Chapter 13, “Service Discovery”](ch13.html#ServiceDiscovery),
+    but let’s discuss briefly the part that applies to singletons here. A regular
+    Service (with `type: ClusterIP`) creates a virtual IP and performs load balancing
+    among all the Pod instances that its selector matches. However, a singleton Pod
+    managed through a StatefulSet has only one Pod and a stable network identity.
+    In such a case, it is better to create a *headless Service* (by setting both `type:
+    ClusterIP` and `clusterIP: None`). It is called *headless* because such a Service
+    doesn’t have a virtual IP address, kube-proxy doesn’t handle these Services, and
+    the platform performs no proxying.'
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '我们在 [第13章，“服务发现”](ch13.html#ServiceDiscovery) 中深入探讨了 Kubernetes 服务，但在这里让我们简要讨论适用于单例的部分。一个常规的服务（使用
+    `type: ClusterIP`）会创建一个虚拟 IP，并在其选择器匹配的所有 Pod 实例之间进行负载均衡。然而，通过 StatefulSet 管理的单例
+    Pod 只有一个 Pod 和一个稳定的网络标识。在这种情况下，最好创建一个*无头服务*（通过设置 `type: ClusterIP` 和 `clusterIP:
+    None`）。它被称为*无头*，因为这样的服务没有虚拟 IP 地址，kube-proxy 不处理这些服务，并且平台不进行代理。'
+- en: However, such a Service is still useful because a headless Service with selectors
+    creates endpoint records in the API Server and generates DNS A records for the
+    matching Pod(s). With that, a DNS lookup for the Service does not return its virtual
+    IP but instead the IP address(es) of the backing Pod(s). That enables direct access
+    to the singleton Pod via the Service DNS record, and without going through the
+    Service virtual IP. For example, if we create a headless Service with the name
+    `my-singleton`, we can use it as `my-singleton.default.svc.cluster.local` to access
+    the Pod’s IP address directly.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，这样的 Service 仍然很有用，因为具有选择器的无头 Service 在 API 服务器中创建端点记录，并为匹配的 Pod(s) 生成 DNS
+    A 记录。因此，对 Service 的 DNS 查找不返回其虚拟 IP，而是返回与后端 Pod(s) 的 IP 地址。这使得可以通过 Service 的 DNS
+    记录直接访问单例 Pod，而无需通过 Service 的虚拟 IP。例如，如果我们创建一个名为 `my-singleton` 的无头 Service，则可以使用
+    `my-singleton.default.svc.cluster.local` 直接访问 Pod 的 IP 地址。
+- en: To sum up, for nonstrict singletons with at least one instance requirement,
+    defining a ReplicaSet with one replica would suffice. This configuration favors
+    availability and ensures there is at least one available instance, and possibly
+    more in some corner cases. For a strict singleton with an At-Most-One requirement
+    and better performant service discovery, a StatefulSet and a headless Service
+    would be preferred. Using StatefulSet will favor consistency and ensure there
+    is an At-Most-One instance and occasionally none in some corner cases. You can
+    find a complete example of this in [Chapter 12, “Stateful Service”](ch12.html#StatefulService),
+    where you have to change the number of replicas to one to make it a singleton.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 总之，对于至少需要一个实例的非严格单例，定义一个带有一个副本的 ReplicaSet 就足够了。这种配置有利于可用性，并确保至少有一个可用实例，有时在某些极端情况下可能会有更多。对于具有
+    At-Most-One 要求和更好性能的严格单例，推荐使用 StatefulSet 和无头 Service。使用 StatefulSet 将有利于一致性，并确保存在一个最多一个实例，有时在某些极端情况下可能一个实例都没有。您可以在[第
+    12 章，“Stateful Service”](ch12.html#StatefulService)中找到一个完整的示例，需要将副本数更改为一个以使其成为单例。
+- en: In-Application Locking
+  id: totrans-22
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 应用内锁定
+- en: In a distributed environment, one way to control the service instance count
+    is through a distributed lock, as shown in [Figure 10-2](#img-in-app-locking).
+    Whenever a service instance or a component inside the instance is activated, it
+    can try to acquire a lock, and if it succeeds, the service becomes active. Any
+    subsequent service instance that fails to acquire the lock waits and continuously
+    tries to get the lock in case the currently active service releases it.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在分布式环境中，控制服务实例数量的一种方法是通过分布式锁，如[图 10-2](#img-in-app-locking)所示。每当服务实例或实例内的组件被激活时，它可以尝试获取锁，如果成功，则服务变为活动状态。任何后续的服务实例如果无法获取锁，则等待并持续尝试获取锁，以防当前活动服务释放锁。
+- en: Many existing distributed frameworks use this mechanism for achieving high availability
+    and resiliency. For example, the message broker Apache ActiveMQ can run in a highly
+    available *active-passive* topology, where the data source provides the shared
+    lock. The first broker instance that starts up acquires the lock and becomes active,
+    and any other subsequently started instances become passive and wait for the lock
+    to be released. This strategy ensures there is a single active broker instance
+    that is also resilient to failures.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 许多现有的分布式框架使用此机制来实现高可用性和韧性。例如，消息代理 Apache ActiveMQ 可以在高可用的*主备*拓扑结构中运行，其中数据源提供了共享锁。第一个启动的代理实例会获取锁并成为活动实例，任何后续启动的实例则变为被动实例并等待锁释放。这种策略确保只有一个活动的代理实例，并且对故障具有韧性。
+- en: '![In-application locking mechanism](assets/kup2_1002.png)'
+  id: totrans-25
+  prefs: []
+  type: TYPE_IMG
+  zh: '![应用内锁定机制](assets/kup2_1002.png)'
+- en: Figure 10-2\. In-application locking mechanism
+  id: totrans-26
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 10-2\. 应用内锁定机制
+- en: 'We can compare this strategy to a classic Singleton, as it is known in the
+    object-oriented world: a *Singleton* is an object instance stored in a static
+    class variable. In this instance, the class is aware of being a singleton, and
+    it is written in a way that does not allow instantiation of multiple instances
+    for the same process. In distributed systems, this would mean the containerized
+    application itself has to be written in a way that does not allow more than one
+    active instance at a time, regardless of the number of Pod instances that are
+    started. To achieve this in a distributed environment, first we need a distributed
+    lock implementation such as the one provided by Apache ZooKeeper, HashiCorp’s
+    Consul, Redis, or etcd.'
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以将这种策略与面向对象世界中的经典Singleton进行比较：*Singleton*是存储在静态类变量中的对象实例。在此示例中，类知道自己是单例，并且编写方式不允许同一进程中实例化多个实例。在分布式系统中，这意味着容器化应用本身必须以一种方式编写，不允许同时存在多个活动实例，无论启动了多少个Pod实例。要在分布式环境中实现此目标，首先需要一个分布式锁实现，例如Apache
+    ZooKeeper、HashiCorp的Consul、Redis或etcd。
+- en: The typical implementation with ZooKeeper uses ephemeral nodes, which exist
+    as long as there is a client session and are deleted as soon as the session ends.
+    The first service instance that starts up initiates a session in the ZooKeeper
+    server and creates an ephemeral node to become active. All other service instances
+    from the same cluster become passive and have to wait for the ephemeral node to
+    be released. This is how a ZooKeeper-based implementation makes sure there is
+    only one active service instance in the whole cluster, ensuring an active-passive
+    failover behavior.
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在使用ZooKeeper的典型实现中，使用临时节点，只要客户端会话存在，节点就存在，并且在会话结束时删除。第一个启动的服务实例在ZooKeeper服务器上启动会话，并创建临时节点以成为活动节点。同一集群中的所有其他服务实例变为被动状态，并等待临时节点被释放。这是基于ZooKeeper的实现确保整个集群中只有一个活动服务实例，从而实现主备故障转移行为。
+- en: In the Kubernetes world, instead of managing a ZooKeeper cluster only for the
+    locking feature, a better option would be to use etcd capabilities exposed through
+    the Kubernetes API and running on the main nodes. etcd is a distributed key-value
+    store that uses the Raft protocol to maintain its replicated state and provides
+    the necessary building blocks for implementing leader election. For example, Kubernetes
+    offers the Lease object, which is used for node heartbeats and component-level
+    leader election. For every node, there is a Lease object with a matching name,
+    and the Kubelet on every node keeps running a heart beat by updating the Lease
+    object’s `renewTime` field. This information is used by the Kubernetes control
+    plane to determine the availability of the nodes. Kubernetes Leases are also used
+    in highly available cluster deployment scenarios for ensuring only single control
+    plane components such as kube-controller-manager and kube-scheduler are active
+    at a time and other instances remain on standby.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在Kubernetes世界中，与其仅管理用于锁定功能的ZooKeeper集群，更好的选择是利用通过Kubernetes API暴露的etcd功能，并在主节点上运行。etcd是一个分布式键值存储，使用Raft协议维护其复制状态，并提供实施领导者选举的必要构建块。例如，Kubernetes提供了Lease对象，用于节点心跳和组件级领导者选举。对于每个节点，都有一个匹配名称的Lease对象，并且每个节点上的Kubelet通过更新Lease对象的`renewTime`字段来保持心跳运行。Kubernetes控制平面使用此信息来确定节点的可用性。在高度可用的集群部署场景中，Kubernetes
+    Lease还用于确保仅有单个控制平面组件（如kube-controller-manager和kube-scheduler）处于活动状态，而其他实例保持待命。
+- en: 'Another example is in Apache Camel, which has a Kubernetes connector that also
+    provides leader election and singleton capabilities. This connector goes a step
+    further, and rather than accessing the etcd API directly, it uses Kubernetes APIs
+    to leverage ConfigMaps as a distributed lock. It relies on Kubernetes optimistic
+    locking guarantees for editing resources such as ConfigMaps, where only one Pod
+    can update a ConfigMap at a time. The Camel implementation uses this guarantee
+    to ensure only one Camel route instance is active, and any other instance has
+    to wait and acquire the lock before activating. It is a custom implementation
+    of a lock but achieves the same goal: when there are multiple Pods with the same
+    Camel application, only one of them becomes the active singleton, and the others
+    wait in passive mode.'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个例子是 Apache Camel，在其中具有 Kubernetes 连接器，还提供了领导者选举和单例能力。此连接器更进一步，而不是直接访问 etcd
+    API，而是使用 Kubernetes API 利用 ConfigMaps 作为分布式锁。它依赖于 Kubernetes 对编辑诸如 ConfigMaps
+    等资源的乐观锁定保证，其中只有一个 Pod 可以一次更新一个 ConfigMap。Camel 实现利用此保证确保只有一个 Camel 路由实例处于活动状态，任何其他实例必须等待并获取锁定才能激活。这是一个锁的自定义实现，但实现了相同的目标：当有多个具有相同
+    Camel 应用程序的 Pod 时，只有一个成为活动单例，其他的处于被动模式等待。
+- en: A more generic implementation of the *Singleton Service* pattern is provided
+    by the Dapr project. Dapr’s Distributed Lock building block provides APIs (HTTP
+    and gRPC) with swappable implementations for mutually exclusive access to shared
+    resources. The idea is that each application determines the resources the lock
+    grants access to. Then, multiple instances of the same application use a named
+    lock to exclusively access the shared resource. At any given moment, only one
+    instance of an application can hold a named lock. All other instances of the application
+    are unable to acquire the lock and therefore are not allowed to access the shared
+    resource until the lock is released through unlock or the lock times out. Thanks
+    to its lease-based locking mechanism, if an application acquires a lock, encounters
+    an exception, and cannot free the lock, the lock is automatically released after
+    a period of time using a lease. This prevents resource deadlocks in the event
+    of application failures. Behind this generic distributed lock API, Dapr will be
+    configured to use some kind of storage and lock implementation. This API can be
+    used by applications to implement access to shared resources or in-application
+    singletons.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Dapr 项目提供了更通用的*单例服务*模式实现。Dapr 的分布式锁构建模块提供了 API（HTTP 和 gRPC），可替换实现以实现对共享资源的互斥访问。其思想是每个应用程序确定锁授予访问权限的资源。然后，同一应用程序的多个实例使用命名锁来独占访问共享资源。在任何时刻，只有一个应用程序实例可以持有命名锁。所有其他应用程序实例无法获取该锁，因此不允许访问共享资源，直到通过解锁或锁超时释放该锁。由于其基于租约的锁定机制，如果应用程序获取锁定，遇到异常并且无法释放锁定，则在一定时间后使用租约自动释放锁定。这在应用程序故障时防止资源死锁。在这个通用的分布式锁
+    API 背后，Dapr 将配置为使用某种存储和锁实现。应用程序可以使用此 API 实现对共享资源或应用内单例的访问。
+- en: 'An implementation with Dapr, ZooKeeper, etcd, or any other distributed lock
+    implementation would be similar to the one described: only one instance of the
+    application becomes the leader and activates itself, and other instances are passive
+    and wait for the lock. This ensures that even if multiple Pod replicas are started
+    and all are healthy, up, and running, only one service is active and performs
+    the business functionality as a singleton, and other instances wait to acquire
+    the lock in case the leader fails or shuts down.'
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 Dapr、ZooKeeper、etcd 或任何其他分布式锁实现的实现类似于上述描述的实现：应用程序的一个实例成为领导者并激活自身，而其他实例则处于被动状态并等待锁定。这确保即使启动了多个
+    Pod 副本并且所有副本都健康、启动并运行，也只有一个服务是活动的并作为单例执行业务功能，其他实例则等待获取锁定，以防领导者失败或关闭。
+- en: Pod Disruption Budget
+  id: totrans-33
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Pod Disruption Budget
+- en: While singleton service and leader election try to limit the maximum number
+    of instances a service is running at a time, the PodDisruptionBudget functionality
+    of Kubernetes provides a complementary and somewhat opposite functionality—limiting
+    the number of instances that are simultaneously down for maintenance.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然单例服务和领导者选举试图限制同时运行的服务实例的最大数量，但 Kubernetes 的 PodDisruptionBudget 功能提供了一种互补且有些相反的功能——限制同时处于维护状态的实例数量。
+- en: At its core, PodDisruptionBudget ensures a certain number or percentage of Pods
+    will not voluntarily be evicted from a node at any one point in time. *Voluntarily*
+    here means an eviction that can be delayed for a particular time—for example,
+    when it is triggered by draining a node for maintenance or upgrade (`kubectl drain`),
+    or a cluster scaling down, rather than a node becoming unhealthy, which cannot
+    be predicted or controlled.
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在其核心，PodDisruptionBudget确保在任何时间点不会自愿从节点上驱逐一定数量或百分比的Pod。这里的“自愿”意味着可以延迟一段时间的驱逐，例如通过为维护或升级（`kubectl
+    drain`）而触发的驱逐，或者通过集群缩减，而不是节点变得不健康，这是无法预测或控制的。
+- en: The PodDisruptionBudget in [Example 10-1](#ex-pod-disruption-budget) applies
+    to Pods that match its selector and ensures two Pods must be available all the
+    time.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Example 10-1](#ex-pod-disruption-budget)中的PodDisruptionBudget适用于与其选择器匹配的Pod，并确保始终有两个Pod可用。'
+- en: Example 10-1\. PodDisruptionBudget
+  id: totrans-37
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 10-1\. PodDisruptionBudget
+- en: '[PRE0]'
+  id: totrans-38
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: '[![1](assets/1.png)](#co_singleton_service_CO1-1)'
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_singleton_service_CO1-1)'
+- en: Selector to count available Pods.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 选择器以计算可用Pod的数量。
+- en: '[![2](assets/2.png)](#co_singleton_service_CO1-2)'
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_singleton_service_CO1-2)'
+- en: At least two Pods have to be available. You can also specify a percentage, like
+    80%, to configure that only 20% of the matching Pods might be evicted.
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 必须至少有两个Pod可用。您还可以指定一个百分比，如80%，以配置只有匹配Pod的20%可能被驱逐。
+- en: In addition to `.spec.minAvailable`, there is also the option to use `.spec.maxUnavailable`,
+    which specifies the number of Pods from that set that can be unavailable after
+    the eviction. Similar to `.spec.minAvailable`, it can be either an absolute number
+    or a percentage, but it has a few additional limitations. You can specify only
+    either `.spec.minAvailable` or `.spec.maxUnavailable` in a single PodDisruptionBudget,
+    and then it can be used only to control the eviction of Pods that have an associated
+    controller such as ReplicaSet or StatefulSet. For Pods not managed by a controller
+    (also referred to as *bare* or *naked* Pods), other limitations around PodDisruptionBudget
+    should be considered.
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了`.spec.minAvailable`之外，还有使用`.spec.maxUnavailable`的选项，该选项指定驱逐后可以不可用的Pod数量。与`.spec.minAvailable`类似，它可以是绝对数量或百分比，但有一些额外的限制。在单个PodDisruptionBudget中只能指定`.spec.minAvailable`或`.spec.maxUnavailable`之一，然后它只能用于控制具有相关控制器（如ReplicaSet或StatefulSet）的Pod的驱逐。对于不由控制器管理的Pod（也称为*裸露*或*naked*
+    Pods），应考虑PodDisruptionBudget的其他限制。
+- en: PodDisruptionBudget is useful for quorum-based applications that require a minimum
+    number of replicas running at all times to ensure a quorum. Or maybe when an application
+    is serving critical traffic that should never go below a certain percentage of
+    the total number of instances.
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: PodDisruptionBudget对于需要始终运行最少副本以确保法定人数的基于法定人数的应用程序非常有用。或者当应用程序提供关键流量时，它永远不应低于总实例数的一定百分比。
+- en: PodDisruptionBudget is useful in the context of singletons too. For example,
+    setting `maxUnavailable` to `0` or setting `minAvailable` to `100%` will prevent
+    any voluntary eviction. Setting voluntary eviction to zero for a workload will
+    turn it into an unevictable Pod and will prevent draining the node forever. This
+    can be used as a step in the process where a cluster operator has to contact the
+    singleton workload owner for downtime before accidentally evicting a not highly
+    available Pod. StatefulSet, combined with PodDisruptionBudget, and headless Service
+    are Kubernetes primitives that control and help with the instance count at runtime
+    and are worth mentioning in this chapter.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在单例的上下文中，PodDisruptionBudget也很有用。例如，将`maxUnavailable`设置为`0`或将`minAvailable`设置为`100%`将防止任何自愿驱逐。将工作负载的自愿驱逐设置为零将其转变为不可驱逐的Pod，并将永远阻止节点的排空。这可以用作在集群操作员必须在意外驱逐非高可用性Pod之前与单例工作负载所有者联系停机的过程中的一步。StatefulSet与PodDisruptionBudget以及无头Service是在运行时控制和帮助实例计数的Kubernetes原语，并且在本章中值得一提。
+- en: Discussion
+  id: totrans-46
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 讨论
+- en: If your use case requires strong singleton guarantees, you cannot rely on the
+    out-of-application locking mechanisms of ReplicaSets. Kubernetes ReplicaSets are
+    designed to preserve the availability of their Pods rather than to ensure At-Most-One
+    semantics for Pods. As a consequence, there are many failure scenarios that have
+    two copies of a Pod running concurrently for a short period (efor example, when
+    a node that runs the singleton Pod is partitioned from the rest of the cluster—such
+    as when replacing a deleted Pod instance with a new one). If that is not acceptable,
+    use StatefulSets or investigate the in-application locking options that provide
+    you more control over the leader election process with stronger guarantees. The
+    latter also mitigates the risk of accidentally scaling Pods by changing the number
+    of replicas. You can combine this with PodDisruptionBudget and prevent voluntary
+    eviction and disruption of your singleton workloads.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您的使用场景需要强的单例保证，那么您无法依赖于副本集之外的锁定机制。Kubernetes 副本集旨在保持其 Pod 的可用性，而不是确保 Pod 的最多一次语义。因此，有许多故障场景下会出现短时间内两个
+    Pod 并发运行（例如，当运行单例 Pod 的节点与集群的其余部分断开连接时——例如，当替换已删除的 Pod 实例时）。如果这不可接受，请使用有状态集，或调查提供您更大控制权的应用内锁定选项，这些选项可以增强领导选举过程的保证。后者还减轻了由于更改副本数导致
+    Pod 不小心扩展的风险。您可以将其与 Pod中断预算结合使用，防止自愿驱逐和中断您的单例工作负载。
+- en: In other scenarios, only a part of a containerized application should be a singleton.
+    For example, there might be a containerized application that provides an HTTP
+    endpoint that is safe to scale to multiple instances, but also a polling component
+    that must be a singleton. Using the out-of-application locking approach would
+    prevent scaling the whole service. In such a situation, we either have to split
+    the singleton component in its deployment unit to keep it a singleton (good in
+    theory but not always practical or worth the overhead) or use the in-application
+    locking mechanism and lock only the component that has to be a singleton. This
+    would allow us to scale the whole application transparently, have HTTP endpoints
+    scaled, and have other parts as *active-passive* singletons.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在其他情况下，仅容器化应用程序的一部分应是单例。例如，有可能是一个提供 HTTP 端点的容器化应用程序，它是安全的，可以扩展为多个实例，但还有一个必须是单例的轮询组件。使用外部锁定方法将阻止整个服务的扩展。在这种情况下，我们要么必须拆分单例组件的部署单元，以保持其为单例（理论上很好，但不总是实际可行或值得付出额外的开销），要么使用应用内锁定机制，只锁定必须是单例的组件。这将允许我们透明地扩展整个应用程序，使
+    HTTP 端点被扩展，其他部分作为*活动-被动*的单例。
+- en: More Information
+  id: totrans-49
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 更多信息
+- en: '[Singleton Service Example](https://oreil.ly/aGoPv)'
+  id: totrans-50
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[单例服务示例](https://oreil.ly/aGoPv)'
+- en: '[Leases](https://oreil.ly/tb9aX)'
+  id: totrans-51
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[租约](https://oreil.ly/tb9aX)'
+- en: '[Specifying a Disruption Budget for Your Application](https://oreil.ly/W1ABD)'
+  id: totrans-52
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[为您的应用程序指定中断预算](https://oreil.ly/W1ABD)'
+- en: '[Leader Election in Go Client](https://oreil.ly/NU1aN)'
+  id: totrans-53
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Go 客户端中的领导选举](https://oreil.ly/NU1aN)'
+- en: '[Dapr: Distributed Lock Overview](https://oreil.ly/ES8Ve)'
+  id: totrans-54
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Dapr: 分布式锁概述](https://oreil.ly/ES8Ve)'
+- en: '[Creating Clustered Singleton Services on Kubernetes](https://oreil.ly/K8zI1)'
+  id: totrans-55
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[在 Kubernetes 上创建集群单例服务](https://oreil.ly/K8zI1)'
+- en: '[Akka: Kubernetes Lease](https://oreil.ly/tho5T)'
+  id: totrans-56
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Akka: Kubernetes 租约](https://oreil.ly/tho5T)'

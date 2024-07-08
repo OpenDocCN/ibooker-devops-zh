@@ -1,0 +1,842 @@
+- en: Chapter 8\. HTTP Load Balancing with Ingress
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第 8 章：使用 Ingress 进行 HTTP 负载均衡
+- en: A critical part of any application is getting network traffic to and from that
+    application. As described in [Chapter 7](ch07.xhtml#service_discovery), Kubernetes
+    has a set of capabilities to enable services to be exposed outside of the cluster.
+    For many users and simple use cases, these capabilities are sufficient.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 任何应用程序的关键部分是将网络流量发送和接收到该应用程序。正如在[第 7 章](ch07.xhtml#service_discovery)中描述的那样，Kubernetes
+    具有一套能力，使得服务能够在集群外部暴露。对于许多用户和简单的用例，这些能力是足够的。
+- en: 'But the Service object operates at Layer 4 (according to the OSI model).^([1](ch08.xhtml#idm45664078055792))
+    This means that it only forwards TCP and UDP connections and doesn’t look inside
+    of those connections. Because of this, hosting many applications on a cluster
+    uses many different exposed services. In the case where these services are `type:
+    NodePort`, you’ll have to have clients connect to a unique port per service. In
+    the case where these services are `type: LoadBalancer`, you’ll be allocating (often
+    expensive or scarce) cloud resources for each service. But for HTTP (Layer 7)-based
+    services, we can do better.'
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '但是 Service 对象在 OSI 模型中操作于第 4 层。^([1](ch08.xhtml#idm45664078055792)) 这意味着它仅转发
+    TCP 和 UDP 连接，并且不检查这些连接的内部内容。因此，在集群上托管多个应用程序时，会使用许多不同的暴露服务。对于那些`type: NodePort`的服务，您将不得不为每个服务连接到唯一端口。而对于那些`type:
+    LoadBalancer`的服务，您将为每个服务分配（通常昂贵或稀缺的）云资源。但是对于基于 HTTP（第 7 层）的服务，我们可以做得更好。'
+- en: When solving a similar problem in non-Kubernetes situations, users often turn
+    to the idea of “virtual hosting.” This is a mechanism to host many HTTP sites
+    on a single IP address. Typically, the user uses a load balancer or reverse proxy
+    to accept incoming connections on HTTP (80) and HTTPS (443) ports. That program
+    then parses the HTTP connection and, based on the `Host` header and the URL path
+    that is requested, proxies the HTTP call to some other program. In this way, that
+    load balancer or reverse proxy directs traffic for decoding and directing incoming
+    connections to the right “upstream” server.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当在非 Kubernetes 环境中解决类似问题时，用户通常会转向“虚拟主机”这一概念。这是一种在单个 IP 地址上托管多个 HTTP 站点的机制。通常，用户使用负载均衡器或反向代理接受
+    HTTP（80）和 HTTPS（443）端口的传入连接。该程序然后解析 HTTP 连接，并基于`Host`头和请求的 URL 路径，将 HTTP 调用代理到其他程序。通过这种方式，负载均衡器或反向代理将流量引导到正确的“上游”服务器进行解码和连接引导。
+- en: Kubernetes calls its HTTP-based load-balancing system *Ingress*. Ingress is
+    a Kubernetes-native way to implement the “virtual hosting” pattern we just discussed.
+    One of the more complex aspects of the pattern is that the user has to manage
+    the load balancer configuration file. In a dynamic environment and as the set
+    of virtual hosts expands, this can be very complex. The Kubernetes Ingress system
+    works to simplify this by (a) standardizing that configuration, (b) moving it
+    to a standard Kubernetes object, and (c) merging multiple Ingress objects into
+    a single config for the load balancer.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 将其基于 HTTP 的负载均衡系统称为*Ingress*。Ingress 是 Kubernetes 本地的一种实现“虚拟主机”模式的方式，正如我们刚刚讨论的那样。该模式的更复杂部分之一是用户必须管理负载均衡器配置文件。在动态环境中，并且随着虚拟主机集合的扩展，这可能会非常复杂。Kubernetes
+    Ingress 系统通过（a）标准化该配置，（b）将其移到标准 Kubernetes 对象，并且（c）将多个 Ingress 对象合并为负载均衡器的单一配置，来简化这一过程。
+- en: 'The typical software base implementation looks something like what is depicted
+    in [Figure 8-1](#figingressflow). The Ingress controller is a software system
+    made up of two parts. The first is the Ingress proxy, which is exposed outside
+    the cluster using a service of `type: LoadBalancer`. This proxy sends requests
+    to “upstream” servers. The other component is the Ingress reconciler, or operator.
+    The Ingress operator is responsible for reading and monitoring Ingress objects
+    in the Kubernetes API and reconfiguring the Ingress proxy to route traffic as
+    specified in the Ingress resource. There are many different Ingress implementations.
+    In some, these two components are combined in a single container; in others, they
+    are distinct components that are deployed separately in the Kubernetes cluster.
+    In [Figure 8-1](#figingressflow), we introduce one example of an Ingress controller.'
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '典型的软件基础实现看起来像 [图 8-1](#figingressflow) 所示。Ingress 控制器是由两部分组成的软件系统。第一部分是 Ingress
+    代理，使用 `type: LoadBalancer` 的服务在集群外部暴露此代理，将请求发送给“上游”服务器。另一部分是 Ingress 和解器或操作员。Ingress
+    操作员负责读取和监视 Kubernetes API 中的 Ingress 对象，并重新配置 Ingress 代理以按照 Ingress 资源中指定的方式路由流量。有许多不同的
+    Ingress 实现。在某些实现中，这两个组件合并到一个容器中；在其他情况下，它们是分开部署在 Kubernetes 集群中的不同组件。在 [图 8-1](#figingressflow)
+    中，我们介绍了一个 Ingress 控制器的示例。'
+- en: '![](assets/kur3_0801.png)'
+  id: totrans-6
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](assets/kur3_0801.png)'
+- en: Figure 8-1\. The typical software Ingress controller configuration
+  id: totrans-7
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 8-1\. 典型的软件 Ingress 控制器配置
+- en: Ingress Spec Versus Ingress Controllers
+  id: totrans-8
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Ingress 规范与 Ingress 控制器
+- en: While conceptually simple, at an implementation level, Ingress is very different
+    from pretty much every other regular resource object in Kubernetes. Specifically,
+    it is split into a common resource specification and a controller implementation.
+    There is no “standard” Ingress controller that is built into Kubernetes, so the
+    user must install one of many optional implementations.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然在概念上简单，但在实现级别上，Ingress 与 Kubernetes 中几乎所有其他常规资源对象都非常不同。具体来说，它分为一个常见的资源规范和一个控制器实现。没有一个内置到
+    Kubernetes 中的“标准”Ingress 控制器，因此用户必须安装众多可选的实现之一。
+- en: Users can create and modify Ingress objects just like every other object. But,
+    by default, there is no code running to actually act on those objects. It is up
+    to the users (or the distribution they are using) to install and manage an outside
+    controller. In this way, the controller is pluggable.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用户可以像创建和修改其他对象一样创建和修改 Ingress 对象。但默认情况下，并没有运行实际操作这些对象的代码。用户（或者他们正在使用的发行版）需要安装和管理一个外部控制器。这种方式下，控制器是可插拔的。
+- en: There are a couple of reasons that Ingress ended up like this. First of all,
+    there is no one single HTTP load balancer that can be used universally. In addition
+    to many software load balancers (both open source and proprietary), there are
+    also load-balancing capabilities provided by cloud providers (e.g., ELB on AWS),
+    and hardware-based load balancers. The second reason is that the Ingress object
+    was added to Kubernetes before any of the common extensibility capabilities were
+    added (see [Chapter 17](ch17.xhtml#extending_kubernetes)). As Ingress progresses,
+    it is likely that it will evolve to use these mechanisms.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Ingress 最终形成这样的原因有几点。首先，没有一个单一的 HTTP 负载均衡器可以普遍使用。除了许多软件负载均衡器（包括开源和专有的）外，云提供商（例如
+    AWS 上的 ELB）和基于硬件的负载均衡器也提供了负载均衡能力。其次，Ingress 对象是在任何常见的可扩展能力被添加之前就被添加到 Kubernetes
+    中的（参见 [第 17 章](ch17.xhtml#extending_kubernetes)）。随着 Ingress 的发展，它可能会演变以使用这些机制。
+- en: Installing Contour
+  id: totrans-12
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 安装 Contour
+- en: While there are many available Ingress controllers, for the examples here, we
+    use an Ingress controller called Contour. This is a controller built to configure
+    the open source (and CNCF project) load balancer called Envoy. Envoy is built
+    to be dynamically configured via an API. The Contour Ingress controller takes
+    care of translating the Ingress objects into something that Envoy can understand.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然有许多可用的入口控制器，但在这里的示例中，我们使用一个称为 Contour 的入口控制器。这是一个专为配置开源（以及 CNCF 项目）负载均衡器 Envoy
+    而构建的控制器。Envoy 是通过 API 动态配置的。Contour 入口控制器负责将 Ingress 对象转换为 Envoy 可以理解的内容。
+- en: Note
+  id: totrans-14
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The [Contour project](https://oreil.ly/5IHmq) was created by Heptio in collaboration
+    with real-world customers and is used in production settings but is now an independent
+    open source project.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Contour 项目](https://oreil.ly/5IHmq)由 Heptio 与实际客户合作创建，并用于生产环境，但现在是一个独立的开源项目。'
+- en: 'You can install Contour with a simple one-line invocation:'
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以通过简单的一行命令安装 Contour：
+- en: '[PRE0]'
+  id: totrans-17
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: Note that this requires execution by a user who has `cluster-admin` permissions.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注意，这需要由具有`cluster-admin`权限的用户执行。
+- en: 'This one line works for most configurations. It creates a namespace called
+    `projectcontour`. Inside of that namespace it creates a deployment (with two replicas)
+    and an external-facing service of `type: LoadBalancer`. In addition, it sets up
+    the correct permissions via a service account and installs a CustomResourceDefinition
+    (see [Chapter 17](ch17.xhtml#extending_kubernetes)) for some extended capabilities
+    discussed in [“The Future of Ingress”](#future_of_ingress).'
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '大多数情况下，这一行代码是有效的。它创建了一个名为`projectcontour`的命名空间。在该命名空间内，它创建了一个包含两个副本的部署，并创建了一个外部可访问的`type:
+    LoadBalancer`服务。此外，它通过一个服务账户设置了正确的权限，并安装了一个自定义资源定义（参见[第17章](ch17.xhtml#extending_kubernetes)）以支持一些在[“Ingress的未来”](#future_of_ingress)中讨论的扩展功能。'
+- en: 'Because it is a global install, you need to ensure that you have wide admin
+    permissions on the cluster you are installing into. After you install it, you
+    can fetch the external address of Contour via:'
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因为它是全局安装，所以您需要确保您在安装的集群上具有广泛的管理员权限。安装完成后，您可以通过以下方式获取Contour的外部地址：
+- en: '[PRE1]'
+  id: totrans-21
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: 'Look at the `EXTERNAL-IP` column. This can be either an IP address (for GCP
+    and Azure) or a hostname (for AWS). Other clouds and environments may differ.
+    If your Kubernetes cluster doesn’t support services of `type: LoadBalancer`, you’ll
+    have to change the YAML for installing Contour to use `type: NodePort` and route
+    traffic to machines on the cluster via a mechanism that works in your configuration.'
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '查看`EXTERNAL-IP`列。这可以是IP地址（适用于GCP和Azure）或主机名（适用于AWS）。其他云和环境可能会有所不同。如果您的Kubernetes集群不支持`type:
+    LoadBalancer`的服务，则必须更改用于安装Contour的YAML，以使用`type: NodePort`并通过适合您配置的机制将流量路由到集群中的机器。'
+- en: 'If you are using `minikube`, you probably won’t have anything listed for `EXTERNAL-IP`.
+    To fix this, you need to open a separate terminal window and run `minikube tunnel`.
+    This configures networking routes such that you have unique IP addresses assigned
+    to every service of `type: LoadBalancer`.'
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '如果您使用`minikube`，可能不会列出任何`EXTERNAL-IP`。要解决此问题，您需要打开一个单独的终端窗口并运行`minikube tunnel`命令。这将配置网络路由，使每个`type:
+    LoadBalancer`服务分配到唯一的IP地址。'
+- en: Configuring DNS
+  id: totrans-24
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 配置 DNS
+- en: To make Ingress work well, you need to configure DNS entries to the external
+    address for your load balancer. You can map multiple hostnames to a single external
+    endpoint and the Ingress controller will direct incoming requests to the appropriate
+    upstream service based on that hostname.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要使Ingress正常工作，您需要为负载均衡器的外部地址配置DNS条目。您可以将多个主机名映射到单个外部端点，并且Ingress控制器将根据主机名将传入的请求定向到适当的上游服务。
+- en: 'For this chapter, we assume that you have a domain called `example.com`. You
+    need to configure two DNS entries: `alpaca.example.com` and `bandicoot.example.com`.
+    If you have an IP address for your external load balancer, you’ll want to create
+    A records. If you have a hostname, you’ll want to configure CNAME records.'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于本章，我们假设您拥有一个名为`example.com`的域名。您需要配置两个DNS条目：`alpaca.example.com`和`bandicoot.example.com`。如果您有外部负载均衡器的IP地址，您将需要创建A记录。如果您有主机名，则需要配置CNAME记录。
+- en: The [ExternalDNS project](https://oreil.ly/ILdEj) is a cluster add-on that you
+    can use to manage DNS records for you. ExternalDNS monitors your Kubernetes cluster
+    and synchronizes IP addresses for Kubernetes Service resources with an external
+    DNS provider. ExternalDNS supports a wide variety of DNS providers including traditional
+    domain registrars as well as public cloud providers.
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[ExternalDNS项目](https://oreil.ly/ILdEj)是一个集群附加组件，您可以使用它来管理DNS记录。ExternalDNS监视您的Kubernetes集群，并将Kubernetes服务资源的IP地址与外部DNS提供程序同步。ExternalDNS支持各种DNS提供商，包括传统的域名注册商和公共云提供商。'
+- en: Configuring a Local hosts File
+  id: totrans-28
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 配置本地hosts文件
+- en: If you don’t have a domain or if you are using a local solution such as `minikube`,
+    you can set up a local configuration by editing your */etc/hosts* file to add
+    an IP address. You need admin/root privileges on your workstation. The location
+    of the file may differ on your platform, and making it take effect may require
+    extra steps. For example, on Windows the file is usually at *C:\Windows\System32\drivers\etc\hosts*,
+    and for recent versions of macOS, you need to run `sudo killall -HUP mDNSResponder`
+    after changing the file.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您没有域名，或者正在使用诸如`minikube`之类的本地解决方案，可以通过编辑您的*/etc/hosts*文件添加IP地址来设置本地配置。您需要在工作站上拥有管理员/根权限。文件的位置可能因您的平台而异，并且使其生效可能需要额外的步骤。例如，在Windows上，文件通常位于*C:\Windows\System32\drivers\etc\hosts*，对于较新版本的macOS，您需要在更改文件后运行`sudo
+    killall -HUP mDNSResponder`。
+- en: 'Edit the file to add a line like the following:'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 编辑文件，添加以下类似的行：
+- en: '[PRE2]'
+  id: totrans-31
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: For `<*ip-address*>`, fill in the external IP address for Contour. If all you
+    have is a hostname (like from AWS), you can get an IP address (that may change
+    in the future) by executing `host -t a *<address>*`.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于`<*ip-address*>`，请填写Contour的外部IP地址。如果您只有主机名（例如来自AWS），可以通过执行`host -t a *<address>*`获取一个IP地址（这可能会在将来更改）。
+- en: Don’t forget to undo these changes when you are done!
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在完成后不要忘记撤消这些更改！
+- en: Using Ingress
+  id: totrans-34
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用Ingress
+- en: 'Now that we have an Ingress controller configured, let’s put it through its
+    paces. First, we’ll create a few upstream (also sometimes referred to as “backend”)
+    services to play with by executing the following commands:'
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经配置了Ingress控制器，让我们来测试它。首先，我们将通过执行以下命令创建一些上游（有时也称为“后端”）服务进行测试：
+- en: '[PRE3]'
+  id: totrans-36
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: Simplest Usage
+  id: totrans-37
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 最简单的用法
+- en: The simplest way to use Ingress is to have it just blindly pass everything that
+    it sees through to an upstream service. There is limited support for imperative
+    commands to work with Ingress in `kubectl`, so we’ll start with a YAML file (see
+    [Example 8-1](#simple-ingress-ex)).
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用Ingress的最简单方式是让它盲目地将它看到的一切都传递给一个上游服务。在`kubectl`中，对于与Ingress一起工作的命令的支持有限，因此我们将从一个YAML文件开始（参见[示例 8-1](#simple-ingress-ex)）。
+- en: Example 8-1\. simple-ingress.yaml
+  id: totrans-39
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 8-1\. simple-ingress.yaml
+- en: '[PRE4]'
+  id: totrans-40
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: 'Create this Ingress with `kubectl apply`:'
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用`kubectl apply`创建此Ingress：
+- en: '[PRE5]'
+  id: totrans-42
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'You can verify that it was set up correctly using `kubectl get` and `kubectl
+    describe`:'
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用`kubectl get`和`kubectl describe`验证它是否设置正确：
+- en: '[PRE6]'
+  id: totrans-44
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: 'This sets things up so that *any* HTTP request that hits the Ingress controller
+    is forwarded on to the `alpaca` service. You can now access the `alpaca` instance
+    of `kuard` on any of the raw IPs/CNAMEs of the service; in this case, either `alpaca.example.com`
+    or `bandicoot.example.com`. This doesn’t, at this point, add much value over a
+    simple service of `type: LoadBalancer`. The following sections experiment with
+    more complex configurations.'
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '这样设置后，命中Ingress控制器的*任何*HTTP请求都将转发到`alpaca`服务。您现在可以通过服务的任何原始IP地址/CNAME访问`kuard`的`alpaca`实例；在这种情况下，要么是`alpaca.example.com`，要么是`bandicoot.example.com`。此时，与`type:
+    LoadBalancer`的简单服务相比，没有太多附加价值。接下来的部分将尝试更复杂的配置。'
+- en: Using Hostnames
+  id: totrans-46
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用主机名
+- en: Things start to get interesting when we direct traffic based on properties of
+    the request. The most common example of this is to have the Ingress system look
+    at the HTTP host header (which is set to the DNS domain in the original URL) and
+    direct traffic based on that header. Let’s add *another* Ingress object for directing
+    traffic to the `alpaca` service for any traffic directed to `alpaca.example.com`
+    (see [Example 8-2](#host-ingress)).
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当我们根据请求的属性引导流量时，事情开始变得有趣。最常见的示例是让Ingress系统查看HTTP主机头（设置为原始URL中的DNS域），并根据该头部引导流量。让我们为将流量引导到任何流向`alpaca.example.com`的流量添加*另一个*
+    Ingress对象（请参见[示例 8-2](#host-ingress)）。
+- en: Example 8-2\. host-ingress.yaml
+  id: totrans-48
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 8-2\. host-ingress.yaml
+- en: '[PRE7]'
+  id: totrans-49
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: 'Create this Ingress with `kubectl apply`:'
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用`kubectl apply`创建此Ingress：
+- en: '[PRE8]'
+  id: totrans-51
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: 'We can verify that things are set up correctly as follows:'
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以通过以下方式验证设置是否正确：
+- en: '[PRE9]'
+  id: totrans-53
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: There are a couple of confusing things here. First, there is a reference to
+    the `default-http-backend`. This is a convention that only some Ingress controllers
+    use to handle requests that aren’t handled in any other way. These controllers
+    send those requests to a service called `default-http-backend` in the `kube-system`
+    namespace. This convention is surfaced client-side in `kubectl`. Next, there are
+    no endpoints listed for the `alpaca` backend service. This is a bug in `kubectl`
+    that is fixed in Kubernetes v1.14.
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里有几件令人困惑的事情。首先，有一个对 `default-http-backend` 的引用。这是一种约定，只有一些 Ingress 控制器使用它来处理没有以其他方式处理的请求。这些控制器将这些请求发送到
+    `kube-system` 命名空间中名为 `default-http-backend` 的服务。这种约定在客户端中通过 `kubectl` 显示。接下来，`alpaca`
+    后端服务没有列出端点。这是 `kubectl` 中的一个错误，在 Kubernetes v1.14 中已修复。
+- en: Regardless, you should now be able to address the `alpaca` service via *http://alpaca.example.com*.
+    If instead you reach the service endpoint via other methods, you should get the
+    default service.
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 无论如何，现在你应该能够通过 *http://alpaca.example.com* 访问 `alpaca` 服务。如果你通过其他方法到达服务端点，你应该会得到默认服务。
+- en: Using Paths
+  id: totrans-56
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用路径
+- en: The next interesting scenario is to direct traffic based on not just the hostname,
+    but also the path in the HTTP request. We can do this easily by specifying a path
+    in the `paths` entry (see [Example 8-3](#path-ingress)). In this example, we direct
+    everything coming into *http://bandicoot.example.com* to the `bandicoot` service,
+    but we also send *http://bandicoot.example.com/a* to the `alpaca` service. This
+    type of scenario can be used to host multiple services on different paths of a
+    single domain.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下一个有趣的场景是根据 HTTP 请求中的主机名和路径来定向流量。我们可以通过在 `paths` 条目中指定路径来轻松实现这一点（参见 [示例 8-3](#path-ingress)）。在这个例子中，我们将所有进入
+    *http://bandicoot.example.com* 的流量定向到 `bandicoot` 服务，但我们也将 *http://bandicoot.example.com/a*
+    发送到 `alpaca` 服务。这种情况可以用来在单个域的不同路径上托管多个服务。
+- en: Example 8-3\. path-ingress.yaml
+  id: totrans-58
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 8-3\. path-ingress.yaml
+- en: '[PRE10]'
+  id: totrans-59
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: When there are multiple paths on the same host listed in the Ingress system,
+    the longest prefix matches. So, in this example, traffic starting with `/a/` is
+    forwarded to the `alpaca` service, while all other traffic (starting with `/`)
+    is directed to the `bandicoot` service.
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当在 Ingress 系统中列出同一主机上的多个路径时，最长前缀匹配。因此，在这个例子中，以 `/a/` 开头的流量被转发到 `alpaca` 服务，而所有其他流量（以
+    `/` 开头）被定向到 `bandicoot` 服务。
+- en: As requests get proxied to the upstream service, the path remains unmodified.
+    That means a request to `bandicoot.example.com/a/` shows up to the upstream server
+    that is configured for that request hostname and path. The upstream service needs
+    to be ready to serve traffic on that subpath. In this case, `kuard` has special
+    code for testing, where it responds on the root path (`/`) along with a predefined
+    set of subpaths (`/a/`, `/b/`, and `/c/`).
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当请求被代理到上游服务时，路径保持不变。这意味着对 `bandicoot.example.com/a/` 的请求显示为配置为该请求主机名和路径的上游服务器。上游服务需要准备好在该子路径上提供流量服务。在这种情况下，`kuard`
+    具有用于测试的特殊代码，它在根路径 (`/`) 以及一组预定义的子路径 (`/a/`, `/b/`, 和 `/c/`) 上响应。
+- en: Cleanup
+  id: totrans-62
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 清理
+- en: 'To clean up, execute the following:'
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 清理工作，执行以下操作：
+- en: '[PRE11]'
+  id: totrans-64
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: Advanced Ingress Topics and Gotchas
+  id: totrans-65
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 高级 Ingress 主题和常见问题
+- en: Ingress supports some other fancy features. The level of support for these features
+    differs based on the Ingress controller implementation, and two controllers may
+    implement a feature in slightly different ways.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Ingress 支持一些其他花哨的功能。这些功能的支持程度取决于 Ingress 控制器的实现，两个控制器可能以稍微不同的方式实现某个功能。
+- en: Many of the extended features are exposed via annotations on the Ingress object.
+    Be careful; these annotations can be hard to validate and are easy to get wrong.
+    Many of these annotations apply to the entire Ingress object and so can be more
+    general than you might like. To scope the annotations down, you can always split
+    a single Ingress object into multiple Ingress objects. The Ingress controller
+    should read them and merge them together.
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 许多扩展功能通过 Ingress 对象上的注释公开。要小心；这些注释很难验证，容易出错。许多这些注释适用于整个 Ingress 对象，因此可能比你想要的更一般。为了将注释范围缩小，你可以将单个
+    Ingress 对象拆分为多个 Ingress 对象。Ingress 控制器应该读取它们并将它们合并在一起。
+- en: Running Multiple Ingress Controllers
+  id: totrans-68
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 运行多个 Ingress 控制器
+- en: There are multiple Ingress controller implementations, and you may want to run
+    multiple Ingress controllers on a single cluster. To solve this case, the IngressClass
+    resource exists so that an Ingress resource can request a particular implementation.
+    When you create an Ingress resource, you use the `spec.ingressClassName` field
+    to specify the specific Ingress resource.
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 存在多个Ingress控制器实现，您可能希望在单个集群上运行多个Ingress控制器。为了解决这种情况，存在IngressClass资源，以便Ingress资源可以请求特定的实现。创建Ingress资源时，使用`spec.ingressClassName`字段来指定特定的Ingress资源。
+- en: Note
+  id: totrans-70
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: In Kubernetes prior to version 1.18, the `IngressClassName` field did not exist
+    and the `kubernetes.io/ingress.class` annotation was used instead. While this
+    is still supported by many controllers, it is recommended that people move away
+    from the annotation as it will likely be deprecated by controllers in the future.
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在Kubernetes 1.18版本之前，不存在`IngressClassName`字段，而是使用`kubernetes.io/ingress.class`注释。尽管许多控制器仍然支持此注释，但建议用户不再使用此注释，因为它可能会被控制器弃用。
+- en: If the `spec.ingressClassName` annotation is missing, a default Ingress controller
+    is used. It is specified by adding the `ingressclass.kubernetes.io/is-default-class`
+    annotation to the correct IngressClass resource.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果缺少`spec.ingressClassName`注释，则会使用默认的Ingress控制器。可以通过在正确的IngressClass资源上添加`ingressclass.kubernetes.io/is-default-class`注释来指定它。
+- en: Multiple Ingress Objects
+  id: totrans-73
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 多个Ingress对象
+- en: If you specify multiple Ingress objects, the Ingress controllers should read
+    them all and try to merge them into a coherent configuration. However, if you
+    specify duplicate and conflicting configurations, the behavior is undefined. It
+    is likely that different Ingress controllers will behave differently. Even a single
+    implementation may do different things depending on nonobvious factors.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果指定多个Ingress对象，则Ingress控制器应该读取它们所有并尝试将它们合并为一个连贯的配置。然而，如果指定重复和冲突的配置，则行为是未定义的。不同的Ingress控制器可能会有不同的行为。即使是单一实现也可能根据不明显的因素采取不同的行动。
+- en: Ingress and Namespaces
+  id: totrans-75
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Ingress与命名空间
+- en: Ingress interacts with namespaces in some nonobvious ways. First, due to an
+    abundance of security caution, an Ingress object can refer to only an upstream
+    service in the same namespace. This means that you can’t use an Ingress object
+    to point a subpath to a service in another namespace.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Ingress与命名空间有一些不明显的交互方式。首先，由于安全方面的过多警告，Ingress对象只能引用同一命名空间中的上游服务。这意味着您不能使用Ingress对象将子路径指向另一个命名空间中的服务。
+- en: However, multiple Ingress objects in different namespaces can specify subpaths
+    for the same host. These Ingress objects are then merged to come up with the final
+    config for the Ingress controller.
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，不同命名空间中的多个Ingress对象可以为相同的主机指定子路径。然后，这些Ingress对象被合并以生成Ingress控制器的最终配置。
+- en: This cross-namespace behavior means that coordinating Ingress globally across
+    the cluster is necessary. If not coordinated carefully, an Ingress object in one
+    namespace could cause problems (and undefined behavior) in other namespaces.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种跨命名空间的行为意味着在整个集群中协调Ingress是必要的。如果不仔细协调，一个命名空间中的Ingress对象可能会在其他命名空间中引起问题（和未定义的行为）。
+- en: Typically there are no restrictions built into the Ingress controller around
+    which namespaces are allowed to specify which hostnames and paths. Advanced users
+    may try to enforce a policy for this using a custom admission controller. There
+    are also evolutions of Ingress described in [“The Future of Ingress”](#future_of_ingress)
+    that address this problem.
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常，在Ingress控制器中没有限制哪些命名空间可以指定哪些主机名和路径。高级用户可以尝试使用自定义准入控制器来强制执行此策略。在[“Ingress的未来”](#future_of_ingress)中描述了Ingress的演进来解决这个问题。
+- en: Path Rewriting
+  id: totrans-80
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 路径重写
+- en: 'Some Ingress controller implementations support, optionally, doing path rewriting.
+    This can be used to modify the path in the HTTP request as it gets proxied. This
+    is usually specified by an annotation on the Ingress object and applies to all
+    requests that are specified by that object. For example, if we were using the
+    NGINX Ingress controller, we could specify an annotation of `nginx.ingress​.kuber⁠netes.io/rewrite-target:
+    /`. This can sometimes make upstream services work on a subpath even if they weren’t
+    built to do so.'
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '一些Ingress控制器实现支持可选的路径重写。这可以用来修改作为代理的HTTP请求中的路径。这通常通过Ingress对象上的注释指定，并适用于该对象指定的所有请求。例如，如果我们使用NGINX
+    Ingress控制器，我们可以指定一个注释`nginx.ingress​.kuber⁠netes.io/rewrite-target: /`。这有时可以使上游服务在没有专门设计的情况下在子路径上工作。'
+- en: There are multiple implementations that not only implement path rewriting, but
+    also support regular expressions when specifying the path. For example, the NGINX
+    controller allows regular expressions to capture parts of the path and then use
+    that captured content when doing rewriting. How this is done (and what variant
+    of regular expressions is used) is implementation-specific.
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有多个实现不仅实现了路径重写，还在指定路径时支持正则表达式。例如，NGINX 控制器允许使用正则表达式捕获路径的部分，然后在重写时使用捕获的内容。如何实现这一点（以及使用的正则表达式变体）取决于具体的实现。
+- en: Path rewriting isn’t a silver bullet, though, and can often lead to bugs. Many
+    web applications assume that they can link within themselves using absolute paths.
+    In that case, the app in question may be hosted on `/subpath` but have requests
+    show up to it on `/`. It may then send a user to `/app-path`. There is then the
+    question of whether that is an “internal” link for the app (in which case it should
+    instead be `/subpath/app-path`) or a link to some other app. For this reason,
+    it is probably best to avoid subpaths for any complicated applications if you
+    can help it.
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 路径重写并非万能解决方案，通常会导致错误。许多 Web 应用程序假定它们可以使用绝对路径在自身内部链接。在这种情况下，所讨论的应用程序可能托管在 `/subpath`
+    上，但请求却显示在 `/` 上。然后它可能将用户发送到 `/app-path`。然后就有了一个问题，即这是否是应用程序的“内部”链接（在这种情况下，它应该是
+    `/subpath/app-path`）还是指向其他应用程序的链接。因此，如果可能的话，最好避免对任何复杂应用程序使用子路径。
+- en: Serving TLS
+  id: totrans-84
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 提供 TLS
+- en: When serving websites, it is becoming increasingly necessary to do so securely
+    using TLS and HTTPS. Ingress supports this (as do most Ingress controllers).
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在提供网站时，使用 TLS 和 HTTPS 进行安全提供变得越来越必要。Ingress 支持这一点（大多数 Ingress 控制器也支持）。
+- en: First, users need to specify a Secret with their TLS certificate and keys⁠—something
+    like what is outlined in [Example 8-4](#tls-secret). You can also create a Secret
+    imperatively with `kubectl create secret tls <*secret-name*> --cert <*certificate-pem-file*>
+    --key <*private-key-pem-file*>`.
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，用户需要使用他们的 TLS 证书和密钥指定一个 Secret，类似于 [示例 8-4](#tls-secret) 中概述的内容。您还可以使用 `kubectl
+    create secret tls <*secret-name*> --cert <*certificate-pem-file*> --key <*private-key-pem-file*>`
+    命令创建一个 Secret。
+- en: Example 8-4\. tls-secret.yaml
+  id: totrans-87
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 8-4\. tls-secret.yaml
+- en: '[PRE12]'
+  id: totrans-88
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: Once you have the certificate uploaded, you can reference it in an Ingress object.
+    This specifies a list of certificates along with the hostnames that those certificates
+    should be used for (see [Example 8-5](#tls-ingress)). Again, if multiple Ingress
+    objects specify certificates for the same hostname, the behavior is undefined.
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦上传了证书，就可以在 Ingress 对象中引用它。这指定了一组证书以及应该为这些证书使用的主机名（参见 [示例 8-5](#tls-ingress)）。同样，如果多个
+    Ingress 对象为相同的主机名指定了证书，则行为是未定义的。
+- en: Example 8-5\. tls-ingress.yaml
+  id: totrans-90
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 8-5\. tls-ingress.yaml
+- en: '[PRE13]'
+  id: totrans-91
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: Uploading and managing TLS secrets can be difficult. In addition, certificates
+    can often come at a significant cost. To help solve this problem, there is a nonprofit
+    called [“Let’s Encrypt”](https://letsencrypt.org) running a free Certificate Authority
+    that is API-driven. Since it is API-driven, it is possible to set up a Kubernetes
+    cluster that automatically fetches and installs TLS certificates for you. It can
+    be tricky to set up, but when working, it’s very simple to use. The missing piece
+    is an open source project called [cert-manager](https://cert-manager.io) created
+    by Jetstack, a UK startup, onboarded to the CNCF. The *cert-manager.io* website
+    or [GitHub repository](https://oreil.ly/S0PU4) has details on how to install cert-manager
+    and get started.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 上传和管理 TLS 证书可能会很困难。此外，证书通常会带来相当大的成本。为了帮助解决这个问题，有一个名为 [“Let’s Encrypt”](https://letsencrypt.org)
+    的非营利组织运行一个免费的基于 API 的证书颁发机构。由于它是基于 API 的，因此可以设置一个 Kubernetes 集群，自动获取并安装 TLS 证书。设置可能有些棘手，但一旦运行，使用起来非常简单。缺失的部分是一个名为
+    [cert-manager](https://cert-manager.io) 的开源项目，由英国初创公司 Jetstack 创建，并加入了 CNCF。*cert-manager.io*
+    网站或 [GitHub 仓库](https://oreil.ly/S0PU4) 上有关于如何安装 cert-manager 并入门的详细信息。
+- en: Alternate Ingress Implementations
+  id: totrans-93
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 备用入口实现
+- en: There are many different implementations of Ingress controllers, each building
+    on the base Ingress object with unique features. It is a vibrant ecosystem.
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有许多不同的 Ingress 控制器实现，每个都在基本的 Ingress 对象上构建具有独特功能。这是一个充满活力的生态系统。
+- en: First, each cloud provider has an Ingress implementation that exposes the specific
+    cloud-based L7 load balancer for that cloud. Instead of configuring a software
+    load balancer running in a Pod, these controllers take Ingress objects and use
+    them to configure, via an API, the cloud-based load balancers. This reduces the
+    load on the cluster and the management burden for the operators, but can often
+    come at a cost.
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，每个云提供商都有一个 Ingress 实现，用于暴露特定的基于云的 L7 负载均衡器。与配置在 Pod 中运行的软件负载均衡器不同，这些控制器接收
+    Ingress 对象，并通过 API 配置基于云的负载均衡器。这减少了集群的负载和操作员的管理负担，但通常会带来一定的成本。
+- en: The most popular generic Ingress controller is probably the open source [NGINX
+    Ingress controller](https://oreil.ly/EstHX). Be aware that there is also a commercial
+    controller based on the proprietary NGINX Plus. The open source controller essentially
+    reads Ingress objects and merges them into an NGINX configuration file. It then
+    signals to the NGINX process to restart with the new configuration (while responsibly
+    serving existing in-flight connections). The open source NGINX controller has
+    an enormous number of features and options exposed via [annotations](https://oreil.ly/V8nM7).
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最流行的通用 Ingress 控制器可能是开源的 [NGINX Ingress 控制器](https://oreil.ly/EstHX)。请注意，还有一个基于专有
+    NGINX Plus 的商业控制器。开源控制器基本上会读取 Ingress 对象，并将它们合并到一个 NGINX 配置文件中。然后，它向 NGINX 进程发出信号，以使用新配置重新启动（同时负责处理正在进行中的连接）。开源
+    NGINX 控制器具有大量通过 [annotations](https://oreil.ly/V8nM7) 公开的功能和选项。
+- en: '[Emissary](https://oreil.ly/5HDun) and [Gloo](https://oreil.ly/rZDlX) are two
+    other Envoy-based Ingress controllers that are focused on being API gateways.'
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Emissary](https://oreil.ly/5HDun) 和 [Gloo](https://oreil.ly/rZDlX) 是另外两个基于
+    Envoy 的 Ingress 控制器，专注于成为 API 网关。'
+- en: '[Traefik](https://traefik.io) is a reverse proxy implemented in Go that also
+    can function as an Ingress controller. It has a set of features and dashboards
+    that are very developer-friendly.'
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Traefik](https://traefik.io) 是一个用 Go 实现的反向代理，也可以作为 Ingress 控制器运行。它具有一系列非常适合开发者的功能和仪表板。'
+- en: This just scratches the surface. The Ingress ecosystem is very active, and there
+    are many new projects and commercial offerings that build on the humble Ingress
+    object in unique ways.
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这只是冰山一角。Ingress 生态系统非常活跃，有许多新项目和商业产品以独特的方式构建在谦逊的 Ingress 对象之上。
+- en: The Future of Ingress
+  id: totrans-100
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Ingress 的未来
+- en: As you have seen, the Ingress object provides a very useful abstraction for
+    configuring L7 load balancers⁠—but it hasn’t scaled to all the features that users
+    want and various implementations are looking to offer. Many of the features in
+    Ingress are underdefined. Implementations can surface these features in different
+    ways, reducing the portability of configurations between implementations.
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如你所看到的，Ingress 对象提供了一个非常有用的抽象来配置 L7 负载均衡器，但它还没有扩展到用户需要的所有功能，并且各种实现正在寻求提供。许多
+    Ingress 中的功能定义不清晰。实现可以以不同的方式展示这些功能，从而降低配置在不同实现之间的可移植性。
+- en: Another problem is that it is easy to misconfigure Ingress. The way that multiple
+    objects compbine opens the door for conflicts that are resolved differently by
+    different implementations. In addition, the way that these are merged across namespaces
+    breaks the idea of namespace isolation.
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个问题是，容易配置错误的 Ingress。多个对象的组合方式为不同实现提供了解决冲突的机会。此外，这些对象在命名空间之间的合并方式破坏了命名空间隔离的理念。
+- en: Ingress was also created before the idea of a service mesh (exemplified by projects
+    such as Istio and Linkerd) was well known. The intersection of Ingress and service
+    meshes is still being defined. Service meshes are covered in greater detail in
+    [Chapter 15](ch15.xhtml#service_mesh).
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Ingress 的创建是在服务网格的概念（例如 Istio 和 Linkerd 这样的项目）被广泛认知之前。Ingress 和服务网格的交集仍在定义中。服务网格在[第
+    15 章](ch15.xhtml#service_mesh)中有更详细的介绍。
+- en: The future of HTTP load balancing for Kubernetes looks to be the *Gateway* API,
+    which is in the midst of development by the Kubernetes special interest group
+    (SIG) dedicated to networking. The Gateway API project is intended to develop
+    a more modern API for routing in Kubernetes. Though it is more focused on HTTP
+    balancing, Gateway also includes resources for controlling Layer 4 (TCP) balancing.
+    The Gateway APIs are still very much under development, so it is strongly recommended
+    that people stick to the existing Ingress and Service resources that are currently
+    present in Kubernetes. The current state of the [Gateway API can be found online](https://oreil.ly/zhlil).
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 的 HTTP 负载均衡未来看起来将是 *Gateway* API，这是由专注于网络的 Kubernetes 特别兴趣小组（SIG）正在开发中。Gateway
+    API 项目旨在为 Kubernetes 中的路由开发一个更现代化的 API。虽然它更专注于 HTTP 负载均衡，Gateway 也包括用于控制第四层（TCP）负载均衡的资源。Gateway
+    API 目前仍在积极开发中，因此强烈建议大家继续使用目前在 Kubernetes 中存在的 Ingress 和 Service 资源。关于 [Gateway
+    API 的当前状态可以在网上找到](https://oreil.ly/zhlil)。
+- en: Summary
+  id: totrans-105
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 摘要
+- en: Ingress is a unique system in Kubernetes. It is simply a schema, and the implementations
+    of a controller for that schema must be installed and managed separately. But
+    it is also a critical system for exposing services to users in a practical and
+    cost-efficient way. As Kubernetes continues to mature, expect to see Ingress become
+    more and more relevant.
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Ingress 是 Kubernetes 中独特的系统。它只是一个模式，该模式的控制器实现必须单独安装和管理。但它也是一种将服务以实用和经济高效的方式暴露给用户的关键系统。随着
+    Kubernetes 的不断成熟，预计 Ingress 将变得越来越重要。
+- en: ^([1](ch08.xhtml#idm45664078055792-marker)) The [Open Systems Interconnection
+    (OSI) model](https://oreil.ly/czfCd) is a standard way to describe how different
+    networking layers build on each other. TCP and UDP are considered to be Layer
+    4, while HTTP is Layer 7.
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([1](ch08.xhtml#idm45664078055792-marker)) [开放系统互联模型（OSI 模型）](https://oreil.ly/czfCd)
+    是描述不同网络层如何构建在一起的标准方式。TCP 和 UDP 被认为是第四层，而 HTTP 是第七层。

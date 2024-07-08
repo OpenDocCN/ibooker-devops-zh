@@ -1,0 +1,817 @@
+- en: Chapter 8\. The Output Framework
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第 8 章。输出框架
+- en: In previous chapters, you learned how Falco collects events (its input) and
+    how it processes them to allow you to receive important security notifications
+    (its output). At the end of this processing pipeline, a key piece of Falco—the
+    *output framework*—enables it to deliver those notifications (also called *alerts*)
+    to the right place. We call it a framework because its modular design provides
+    all you need to deliver notifications to any destination you wish. In this chapter,
+    you will learn how the output framework works and how you can configure and extend
+    it.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在前几章中，你学到了 Falco 如何收集事件（其输入）以及如何处理它们以使你能够接收重要的安全通知（其输出）。在这个处理管道的最后，Falco 的一个关键部分——*输出框架*——使其能够将这些通知（也称为*警报*）传递到正确的位置。我们将其称为框架，因为其模块化设计提供了你需要的一切，可以将通知传递到任何你希望的目的地。在本章中，你将学习输出框架的工作原理以及如何配置和扩展它。
+- en: Falco’s Output Architecture
+  id: totrans-2
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Falco 的输出架构
+- en: The output framework is the last piece of the event-processing pipeline that
+    we have been describing in this part of the book. Falco’s user-space program implements
+    the core mechanism internally, but external tools can extend it. Its job is to
+    deliver notifications to the correct destination on time. Whenever an upstream
+    event (produced by a driver, a plugin, or any other input source supported by
+    Falco) meets a rule’s condition, the rule engine asks the output framework to
+    send a notification to a downstream consumer, which could be any other program
+    or system in your environment (or simply you).
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 输出框架是本书这部分描述的事件处理管道的最后一部分。Falco 的用户空间程序在内部实现了核心机制，但外部工具可以扩展它。它的工作是及时将通知传递到正确的目的地。每当上游事件（由驱动程序、插件或任何
+    Falco 支持的其他输入源产生）满足规则条件时，规则引擎会要求输出框架向下游消费者发送通知，这可以是环境中的任何其他程序或系统（或仅仅是你自己）。
+- en: The process of delivering alerts involves two distinct stages, as pictured in
+    [Figure 8-1](#the_two_stages_of_delivering_notificati).
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 传送警报的过程涉及两个不同的阶段，如[图 8-1](#the_two_stages_of_delivering_notificati)所示。
+- en: In the first stage, a *handler* receives the event data and information about
+    the event-triggered rule. It prepares the notification using the provided information
+    and formats the textual representation according to the rule’s `output` key. Then,
+    to prevent the output destination from blocking the processing pipeline (which
+    runs in the main execution thread), the handler pushes the notification into a
+    concurrent queue.^([1](ch08.xhtml#ch01fn8)) The push operation is nonblocking,
+    so the processing pipeline does not need to wait for the notification consumer
+    to pull the notification; it can continue to do its job without interruption.
+    Indeed, Falco needs to perform this stage as quickly as possible so that the processing
+    pipeline can process the next event.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在第一阶段中，*处理程序*接收事件数据和事件触发规则的信息。它使用提供的信息准备通知，并根据规则的`output`键格式化文本表示。然后，为了防止输出目的地阻塞运行在主执行线程中的处理管道，处理程序将通知推入并发队列中^([1](ch08.xhtml#ch01fn8))。推送操作是非阻塞的，因此处理管道无需等待通知消费者拉取通知；它可以继续执行其工作而不受干扰。事实上，Falco
+    需要尽快执行这个阶段，以便处理管道可以处理下一个事件。
+- en: '![](Images/pcns_0801.png)'
+  id: totrans-6
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/pcns_0801.png)'
+- en: Figure 8-1\. The two stages of delivering notifications in Falco
+  id: totrans-7
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 8-1。Falco 中传送通知的两个阶段
+- en: At the other end of the queue, the *output worker* (which runs in a separate
+    execution thread) is waiting to pop notifications from the queue. This is when
+    the second stage begins. Once the output worker receives a notification, it immediately
+    fans that notification out to all configured output channels. An *output channel*
+    (or simply an *output*) is a part of the output framework that allows Falco to
+    forward alerts to a destination. Each output channel implements the actual logic
+    to notify a particular class of alert consumers. For instance, some consumers
+    want notifications written to a file, while others prefer them to be posted to
+    a web endpoint (see [Chapter 10](ch10.xhtml#configuring_and_running)).
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在队列的另一端，等待弹出通知的*输出工作者*（运行在单独的执行线程中）。这时第二阶段开始。一旦输出工作者收到通知，它立即将该通知扩散到所有配置的输出通道。*输出通道*（或简称*输出*）是输出框架的一部分，允许
+    Falco 将警报转发到目的地。每个输出通道实现了通知特定类别的警报消费者的实际逻辑。例如，一些消费者希望将通知写入文件，而其他人则更喜欢将其发布到 Web
+    终端点（参见[第 10 章](ch10.xhtml#configuring_and_running)）。
+- en: This two-stage approach allows the processing pipeline to run without interference
+    from the output delivery process. However, things can still go wrong with delivery.
+    In particular, when delivering a notification involves I/O operations, those may
+    block the caller temporarily (for example, in the event of a network slowdown)
+    or indefinitely (e.g., when there’s no space left on the disk). The queue in the
+    middle of the two stages works well at absorbing temporary slowdowns—so well that
+    you won’t even notice them (by default, Falco can accumulate pending notifications
+    in the queue for up to two seconds). But when the recipient of a notification
+    blocks for a long time (or indefinitely), there’s nothing that Falco can automatically
+    do. As a last resort, it will try to inform you about what happened by logging
+    to the [standard error stream (*stderr*)](https://oreil.ly/IbBik). When this happens,
+    it is usually a symptom of a misconfiguration (for example, the path to the destination
+    is wrong) or insufficient resources (no space left in the destination), which
+    the user is asked to manually fix.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种两阶段方法允许处理管道在不受输出传递过程干扰的情况下运行。但是，传递可能仍会出现问题。特别是，当传递通知涉及I/O操作时，这些操作可能会暂时阻塞调用者（例如，在网络减速时）或无限期阻塞（例如，在目标磁盘上没有剩余空间时）。两个阶段之间的队列非常擅长吸收临时减速，以至于您甚至都不会注意到（默认情况下，Falco可以在队列中积累未决通知达到两秒）。但是，当通知的接收者长时间（或无限期）阻塞时，Falco无法自动执行任何操作。作为最后的手段，它会尝试通过记录到[标准错误流（*stderr*）](https://oreil.ly/IbBik)通知您发生了什么。当这种情况发生时，通常是配置错误的症状（例如，目标路径错误）或资源不足（目标中没有剩余空间），用户需要手动修复。
+- en: Once the notification delivery process completes, Falco’s user-space program
+    has accomplished its purpose. It’s then up to the consumer to decide what to do
+    with the alert.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦通知传递过程完成，Falco的用户空间程序已经完成了其目的。接下来由消费者决定如何处理警报。
+- en: The output framework accommodates many different use cases and can take care
+    of many possible issues. It is also flexible enough to allow you to receive notifications
+    in various ways and at different destinations. The rest of this chapter will give
+    you details about all the available possibilities. We’ll also take a quick look
+    at some other tools that allow you to further extend output processing before
+    delivering the notifications to their final destination. (We’ll go deeper into
+    this in [Chapter 13](ch13.xhtml#writing_falco_rules).)
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 输出框架适用于许多不同的用例，并且可以处理许多可能的问题。它还足够灵活，可以让您以各种方式和到不同目的地接收通知。本章的其余部分将详细介绍所有可用的可能性。我们还将快速查看一些其他工具，这些工具允许您在将通知传递到最终目的地之前进一步扩展输出处理（我们将在[第13章](ch13.xhtml#writing_falco_rules)深入讨论这个问题）。
+- en: Output Formatting
+  id: totrans-12
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 输出格式化
+- en: In the first stage of notification delivery, Falco applies formatting to the
+    notification before forwarding it to the output channel. You can customize how
+    Falco presents notifications to its consumers so that you can easily integrate
+    them with your specific use case.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在通知传递的第一阶段，Falco会在转发到输出通道之前对通知应用格式化。您可以自定义Falco向其消费者呈现通知的方式，以便轻松集成到您的具体用例中。
+- en: 'Two options in the Falco configuration file (*/etc/falco/falco.yaml*) control
+    this operation. The first controls the formatting of the timestamp:'
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco配置文件（*/etc/falco/falco.yaml*）中有两个选项控制此操作。第一个控制时间戳的格式化：
+- en: '[PRE0]'
+  id: totrans-15
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: If this option is `false` (the default value), Falco will display dates and
+    times according to the */etc/localtime* settings. If it’s `true` (the default
+    value when Falco is running in a container), Falco will use the ISO 8601 standard
+    for representing dates and times. Note that this option controls not only output
+    notifications but also any other messages that Falco logs.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果此选项为`false`（默认值），Falco将根据*/etc/localtime*的设置显示日期和时间。如果为`true`（当Falco在容器中运行时的默认值），Falco将使用ISO
+    8601标准表示日期和时间。请注意，此选项不仅控制输出通知，还包括Falco记录的任何其他消息。
+- en: 'The second option is actually a set of options that enable JSON formatting
+    for the notifications. By default, JSON formatting is disabled:'
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 第二个选项实际上是一组选项，用于启用通知的JSON格式化。默认情况下，禁用了JSON格式化：
+- en: '[PRE1]'
+  id: totrans-18
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: 'With this setting, Falco formats the notification as a plain-text string (including
+    the timestamp, the severity, and the message). If it’s set to `true`, Falco encloses
+    the notification in a JSON-formatted string, including several fields. The following
+    two options allow you to include or exclude some of those fields from the output:'
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用此设置，Falco将通知格式化为纯文本字符串（包括时间戳、严重性和消息）。如果设置为`true`，Falco将通知封装在JSON格式的字符串中，包括多个字段。以下两个选项允许您包含或排除输出中的某些字段：
+- en: '`json_include_output_property: true`'
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`json_include_output_property: true`'
+- en: If this option is enabled (the default), you will still find the plain-text
+    representation of the notification in the `output` field of the JSON object. You
+    can disable this option to save a few bytes if you don’t need it.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果启用此选项（默认情况下是启用的），你仍然可以在JSON对象的`output`字段中找到通知的纯文本表示。如果不需要，可以禁用此选项以节省一些字节。
+- en: '`json_include_tags_property: true`'
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`json_include_tags_property: true`'
+- en: If this option is enabled, you will find a `tags` field in the JSON object containing
+    an array of tags specified in the matching rule. Rules with no tags defined will
+    have an empty array (`tags:[]`) in the output. If you disable this option, you
+    won’t get the `tags` field in the JSON object.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果启用此选项，您将在JSON对象中找到一个`tags`字段，其中包含匹配规则中指定的标签数组。未定义标签的规则在输出中将具有空数组（`tags:[]`）。如果禁用此选项，您将无法在JSON对象中获取`tags`字段。
+- en: Note
+  id: totrans-24
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Despite its name, `json_output` is not an output channel. The `json_output`
+    configuration controls the formatting applied to notifications in the first stage
+    of processing—thus, it affects the content of the notifications that channels
+    deliver. The next section describes the available output channels.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管名字是`json_output`，但它并不是一个输出通道。`json_output`配置控制处理第一阶段的通知格式化，因此它会影响通道传递的通知内容。接下来的部分描述了可用的输出通道。
+- en: Output Channels
+  id: totrans-26
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 输出通道
+- en: Falco comes with six built-in output channels, listed in [Table 8-1](#falcoapostrophes_built_in_output_channe).
+    We will describe each of them in more detail in the following subsections. By
+    default only two channels are enabled—[standard output](https://oreil.ly/kBm4I)
+    and syslog output—but Falco allows you to enable as many channels as you need
+    simultaneously.
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco提供了六种内置输出通道，列在[Table 8-1](#falcoapostrophes_built_in_output_channe)中。我们将在接下来的子章节中更详细地描述每一种。默认情况下仅启用了两个通道——[标准输出](https://oreil.ly/kBm4I)和syslog输出——但Falco允许您同时启用多个通道。
+- en: Table 8-1\. Falco’s built-in output channels
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Table 8-1\. Falco的内置输出通道
+- en: '| Channel | Description |'
+  id: totrans-29
+  prefs: []
+  type: TYPE_TB
+  zh: '| 通道 | 描述 |'
+- en: '| --- | --- |'
+  id: totrans-30
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| Standard output | Sends notifications to Falco’s standard output (stdout)
+    |'
+  id: totrans-31
+  prefs: []
+  type: TYPE_TB
+  zh: '| 标准输出 | 将通知发送到Falco的标准输出（stdout） |'
+- en: '| Syslog output | Sends notifications to the system via syslog |'
+  id: totrans-32
+  prefs: []
+  type: TYPE_TB
+  zh: '| Syslog输出 | 通过syslog发送通知到系统 |'
+- en: '| File output | Writes notifications to a file |'
+  id: totrans-33
+  prefs: []
+  type: TYPE_TB
+  zh: '| 文件输出 | 将通知写入文件 |'
+- en: '| Program output | Pipes notifications to a program’s standard input |'
+  id: totrans-34
+  prefs: []
+  type: TYPE_TB
+  zh: '| 程序输出 | 将通知发送到程序的标准输入 |'
+- en: '| HTTP output | Posts notifications to a URL |'
+  id: totrans-35
+  prefs: []
+  type: TYPE_TB
+  zh: '| HTTP输出 | 将通知发布到URL |'
+- en: '| gRPC output | Allows a client program to consume notifications via a gRPC
+    API |'
+  id: totrans-36
+  prefs: []
+  type: TYPE_TB
+  zh: '| gRPC输出 | 允许客户端程序通过gRPC API消费通知 |'
+- en: You configure these outputs in the Falco configuration file (*/etc/falco/falco.yaml*).
+    Note that all the configuration snippets in this section are part of this file.
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在Falco配置文件（*/etc/falco/falco.yaml*）中配置这些输出。请注意，本节中的所有配置片段都是该文件的一部分。
+- en: Each output channel has at least one option called `enabled`, which can be `true`
+    or `false`. Other options may be available for specific outputs (you will discover
+    them soon). Furthermore, there are some global options that can affect the functioning
+    of all or some output channels. One such option (which you saw in the previous
+    section) is `json_output`; when this is enabled, the alert messages will be JSON-formatted,
+    regardless of the output channel used. The other global options that can affect
+    the output channels’ behavior are listed in [Table 8-2](#global_options_for_output_channels).
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个输出通道至少有一个名为`enabled`的选项，可以是`true`或`false`。其他特定输出可能有其他选项（你很快会发现）。此外，还有一些全局选项可以影响所有或部分输出通道的功能。其中一个选项（你在上一节看到的）是`json_output`；当启用时，警报消息将以JSON格式呈现，无论使用的输出通道是哪种。可以影响输出通道行为的其他全局选项列在[Table 8-2](#global_options_for_output_channels)中。
+- en: Table 8-2\. Global options for output channels
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Table 8-2\. 输出通道的全局选项
+- en: '| Global option (with default) | Description |'
+  id: totrans-40
+  prefs: []
+  type: TYPE_TB
+  zh: '| 全局选项（带默认值） | 描述 |'
+- en: '| --- | --- |'
+  id: totrans-41
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| `buffered_outputs: false` | This option enables or disables full buffering
+    in output channels. When disabled, Falco immediately flushes the output buffer
+    on every alert, which may generate higher CPU usage but is useful when piping
+    outputs into another process or a script. Unless you encounter an issue with the
+    default value, you usually won’t need to enable this option. Note that Falco’s
+    `--unbuffered` command-line flag can override this option. Not all output channels
+    observe this global option. Some output channels may implement specific buffering
+    strategies that you cannot disable. |'
+  id: totrans-42
+  prefs: []
+  type: TYPE_TB
+  zh: '| `buffered_outputs: false` | 此选项启用或禁用输出通道的完全缓冲。当禁用时，Falco在每次警报时立即刷新输出缓冲区，这可能会导致更高的CPU使用率，但在将输出导入另一个进程或脚本时非常有用。除非您遇到默认值的问题，通常不需要启用此选项。请注意，Falco的`--unbuffered`命令行标志可以覆盖此选项。并非所有输出通道都遵循此全局选项。某些输出通道可能实现了您无法禁用的特定缓冲策略。
+    |'
+- en: '| `output_timeout: 2000` | The value of this option specifies the duration
+    to wait (in milliseconds) before considering the delivery notification deadline
+    exceeded. When the notification consumer blocks and the output channel cannot
+    deliver an alert within the given deadline, Falco reports an error indicating
+    which output is blocking the notifications. Such an error indicates a misconfiguration
+    issue or I/O problem in the consumer that Falco cannot recover. |'
+  id: totrans-43
+  prefs: []
+  type: TYPE_TB
+  zh: '| `output_timeout: 2000` | 此选项的值指定在超过传递通知截止时间之前等待的持续时间（以毫秒为单位）。当通知消费者阻塞且输出通道无法在给定的截止时间内传递警报时，Falco将报告一个错误，指示哪个输出正在阻止通知。这样的错误表明消费者中存在配置错误或I/O问题，Falco无法恢复。
+    |'
+- en: '| `outputs:` `rate: 1`'
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '| `outputs:` `rate: 1`'
+- en: '`max_burst: 1000` | These options control the notification rate limiter so
+    that output channels do not flood their destinations. The rate limiter implements
+    a token bucket algorithm. To send a notification, the system must remove a token
+    from the bucket. `rate` sets the number of tokens the system gains per second,
+    and `max_burst` sets the maximum number of tokens in the bucket. With the defaults,
+    Falco can send up to 1,000 notifications in a row; then it must wait for additional
+    tokens to be added to the bucket, which happens at the rate of 1 token per second.
+    In other words, once the bucket has been emptied, notifications are rate-limited
+    to one per second. |'
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`max_burst: 1000` | 这些选项控制通知速率限制器，以防止输出通道淹没其目标。速率限制器实现了令牌桶算法。要发送通知，系统必须从桶中移除一个令牌。`rate`设置系统每秒获取的令牌数，`max_burst`设置桶中的最大令牌数。使用默认设置，Falco可以连续发送高达1,000个通知；然后，必须等待将令牌添加到桶中，该过程以每秒1个令牌的速率进行。换句话说，一旦桶被清空，通知的发送速率限制为每秒一个。
+    |'
+- en: Tip
+  id: totrans-46
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: 'Although not strictly related to the output mechanism, other Falco settings
+    may affect what you will receive in the output. For example, the configuration
+    `priority: *<severity>*` controls the minimum rule priority level to load and
+    run, and the command-line option `-t *<tag>*` allows you to load only those rules
+    with a specific tag. In those cases, clearly, you won’t get any output regarding
+    rules that Falco does not load. In general, any rules-related option or configuration
+    could indirectly affect the output.'
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '尽管与输出机制不严格相关，Falco的其他设置可能会影响您在输出中收到的内容。例如，配置`priority: *<severity>*`控制要加载和运行的最小规则优先级级别，命令行选项`-t
+    *<tag>*`允许您仅加载具有特定标签的规则。在这些情况下，显然，您将不会收到Falco未加载规则相关的任何输出。一般来说，任何与规则相关的选项或配置都可能间接影响输出。'
+- en: Now that you’ve learned what the output channels are and what settings can change
+    their behavior, let’s go through each in turn.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在您已经了解了输出通道及其行为可能发生变化的设置，让我们依次进行详细说明。
+- en: Standard Output
+  id: totrans-49
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 标准输出
+- en: Standard output (`stdout_output` in the configuration file, enabled by default)
+    is Falco’s most straightforward output channel. When it is enabled, Falco will
+    print a line to standard output for each alert. This allows you to see alert notifications
+    when manually running Falco from a console or when looking at a container or Kubernetes
+    Pod log. The only option specifically available for this output channel is `enabled`
+    (which can be either `true` or `false`). However, it’s also affected by the global
+    buffering option, `buffered_outputs`. When the outputs are buffered, the stdout
+    stream will be fully buffered or line-buffered if the stream is an interactive
+    device (such as a TTY).
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 标准输出（配置文件中的`stdout_output`，默认情况下启用）是Falco最直接的输出通道。启用时，Falco将为每个警报在标准输出打印一行。这允许您在从控制台手动运行Falco或查看容器或Kubernetes
+    Pod日志时查看警报通知。此输出通道唯一的特定可用选项是`enabled`（可以是`true`或`false`）。但是，它也受全局缓冲选项`buffered_outputs`的影响。当输出被缓冲时，stdout流将完全缓冲或在流是交互设备（如TTY）时进行行缓冲。
+- en: Syslog Output
+  id: totrans-51
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Syslog输出
+- en: The syslog output channel (`syslog_output` in the configuration file, also enabled
+    by default) allows Falco to send a syslog message for each alert. As with standard
+    output, the only option specifically available for this output channel is `enabled`
+    (which can be either `true` or `false`). When enabled, Falco sends messages to
+    syslog with a facility of `LOG_USER`^([2](ch08.xhtml#ch01fn9)) and a severity
+    level equal to the priority value defined by the rule.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: syslog输出通道（配置文件中的`syslog_output`，默认情况下也启用）允许Falco为每个警报发送一个syslog消息。与标准输出类似，该输出通道唯一的可用选项是`enabled`（可以是`true`或`false`）。启用时，Falco会使用`LOG_USER`^([2](ch08.xhtml#ch01fn9))设施和由规则定义的优先级值作为严重级别发送消息到syslog。
+- en: Depending on the syslog daemon you are using, you can read those messages using
+    commands like `tail -f /var/log/syslog` or `journalctl -xe`. The actual message
+    format depends on the syslog daemon, too.
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 根据您使用的syslog守护程序，您可以使用类似于`tail -f /var/log/syslog`或`journalctl -xe`的命令读取这些消息。实际的消息格式也取决于syslog守护程序。
+- en: File Output
+  id: totrans-54
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 文件输出
+- en: 'If you enable file output, Falco will write each alert to a file. The default
+    configuration for this output channel is:'
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果启用文件输出，Falco将每个警报写入一个文件。此输出通道的默认配置为：
+- en: '[PRE2]'
+  id: totrans-56
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: The `filename` option allows you to specify the destination file to which Falco
+    will write. It will create the file if it does not yet exist and will not try
+    to truncate or rotate the file if it exists already.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`filename`选项允许您指定Falco将写入的目标文件。如果文件尚不存在，则会创建该文件，如果文件已存在，则不会尝试截断或旋转该文件。'
+- en: With `keep_alive` disabled (the default), Falco will open the file for appending,
+    write the message, and then close the file for each alert. If `keep_alive` is
+    set to `true`, Falco will only open the file once before the first alert and will
+    keep it open for all subsequent alerts. Whether `keep_alive` is enabled or not,
+    Falco closes and reopens the file when it receives a `SIGUSR1` signal. This feature
+    is handy if you’d like to use a program to rotate the output file (for example,
+    `logrotate`).
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果禁用`keep_alive`（默认情况），Falco将为每个警报打开文件进行追加写入，然后关闭文件。如果将`keep_alive`设置为`true`，Falco将仅在第一个警报之前打开文件一次，并将保持打开状态以处理所有后续警报。无论`keep_alive`是否启用，Falco在接收到`SIGUSR1`信号时关闭并重新打开文件。如果您想要使用程序来旋转输出文件（例如`logrotate`），这个特性非常方便。
+- en: Finally, writing to a file is generally buffered unless you disable the global
+    buffering option. Closing the file will flush the buffer.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，除非禁用全局缓冲选项，否则写入文件通常会进行缓冲。关闭文件将刷新缓冲区。
+- en: Program Output
+  id: totrans-60
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 程序输出
+- en: 'The program output is very similar to the file output, but in this case Falco
+    will write the content of each alert to the standard input of a program you specify
+    in the configuration file. The default configuration for this output channel is:'
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 程序输出与文件输出非常相似，但在这种情况下，Falco将每个警报的内容写入到配置文件中指定的程序的标准输入中。此输出通道的默认配置为：
+- en: '[PRE3]'
+  id: totrans-62
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'The `program` field allows you to specify the program the alerts will be sent
+    to. Falco runs the program via a shell, so you can specify a command pipeline
+    if you wish to add any processing steps before delivering the messages to the
+    program. This field’s default value shows a nice example of its usage: when executed,
+    that one-liner posts the alert to a Slack webhook endpoint. (However, using Falcosidekick
+    would be a better option; see [Chapter 12](ch12.xhtml#consuming_falco_events).)'
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`program`字段允许您指定将警报发送到的程序。Falco通过shell运行程序，因此您可以在将消息传递到程序之前指定任何处理步骤的命令管道。该字段的默认值显示了其用法的一个很好的例子：当执行时，这个单行程序将警报发布到Slack
+    webhook端点。（然而，使用Falcosidekick会是一个更好的选择；请参阅[第12章](ch12.xhtml#consuming_falco_events)。）'
+- en: If `keep_alive` is set to `false`, Falco restarts the program and writes the
+    content of the alert to its standard input each time it has a notification to
+    deliver. If `keep_alive` is set to `true`, Falco starts the program once (right
+    before sending the first alert) and keeps the program pipe open for delivering
+    subsequent alerts.
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果将`keep_alive`设置为`false`，Falco在每次有通知需要传递时都会重新启动程序，并将警报内容写入其标准输入。如果将`keep_alive`设置为`true`，Falco会在发送第一个警报之前启动程序一次，并保持程序管道开放以传递后续警报。
+- en: Falco closes and reopens the program when it receives a `SIGUSR1` signal. However,
+    the program runs in the same process group as Falco, so it gets all of the signals
+    that Falco receives. It’s up to you to override the program signal handler if
+    you need to.
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当接收到`SIGUSR1`信号时，Falco关闭并重新打开程序。然而，该程序与Falco运行在同一个进程组中，因此它会接收到Falco接收到的所有信号。如果需要，您可以覆盖程序信号处理程序。
+- en: Buffering is supported via the global option. When Falco closes the program,
+    it also flushes the buffer.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 缓冲通过全局选项支持。当Falco关闭程序时，它也会刷新缓冲区。
+- en: HTTP Output
+  id: totrans-67
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: HTTP输出
+- en: 'When you need to send alerts over an HTTP(S) connection, the best choice is
+    to use the HTTP output. Its default configuration is straightforward:'
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您需要通过HTTP(S)连接发送警报时，最好的选择是使用HTTP输出。其默认配置非常简单：
+- en: '[PRE4]'
+  id: totrans-69
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: Once enabled, the only other configuration you need to specify is the `url`
+    of your endpoint. Falco will make an HTTP POST request to the specified URL for
+    each alert. Both unencrypted HTTP and secure HTTPS endpoints are supported. Buffering
+    for this output channel is always enabled (even if you disable the global buffering
+    option).
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦启用，您需要指定的唯一其他配置是您端点的`url`。Falco将为每个警报向指定的URL发起HTTP POST请求。支持未加密的HTTP和安全的HTTPS端点。该输出通道始终启用缓冲（即使您禁用了全局缓冲选项）。
+- en: 'The HTTP output channel is preferred when you use Falcosidekick; it takes Falco’s
+    alerts and forwards them in fan-out style to many different destinations (more
+    than 50 are available at the time of writing). If you want Falco to forward alerts
+    to Falcosidekick, apply this Falco configuration:'
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您使用Falcosidekick时，首选HTTP输出通道；它以扇出方式将Falco的警报转发到许多不同的目的地（目前支持50多个）。如果您希望Falco将警报转发到Falcosidekick，请应用此Falco配置：
+- en: '[PRE5]'
+  id: totrans-72
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: Note that this configuration assumes you already have Falcosidekick running
+    and configured to listen to `localhost:2801`; change it accordingly if your setup
+    is different. You can find details about configuring Falcosidekick in [Chapter 12](ch12.xhtml#consuming_falco_events)
+    and in its [online documentation](https://oreil.ly/uUQBR).
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，此配置假定您已经运行并配置了Falcosidekick来监听`localhost:2801`；如果您的设置不同，请相应更改。您可以在[第12章](ch12.xhtml#consuming_falco_events)以及其[在线文档](https://oreil.ly/uUQBR)中找到有关配置Falcosidekick的详细信息。
+- en: gRPC Output
+  id: totrans-74
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: gRPC输出
+- en: 'The [gRPC](https://grpc.io) output is the most sophisticated output channel.
+    It allows greater control than the others over alert forwarding and full granularity
+    in the information received. This output channel is for you if you’d like to send
+    alerts to an external program connected via Falco’s gRCP API. Its default configuration
+    is:'
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[gRPC](https://grpc.io)输出是最复杂的输出通道。与其他通道相比，它允许更大的控制权，可以完全控制所接收的信息。如果您希望将警报发送到通过Falco的gRPC
+    API连接的外部程序，则可以选择此输出通道。其默认配置为：'
+- en: '[PRE6]'
+  id: totrans-76
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: As you can see, it’s disabled by default—and before you enable it, there’s something
+    you should consider. Falco comes with a gRPC server that exposes the API. You
+    will need to enable both the gRPC server and the gRPC output (we will show you
+    how to do that in a moment). The API provides several gRPC services, only some
+    of which are related to the gRPC output. One service allows you to pull all pending
+    alerts. Another allows you to subscribe to a stream of alerts. Client programs
+    can decide which implementations best fit their needs. In both cases, when the
+    gRPC output is enabled, Falco uses an internal queue to temporarily store alerts
+    until the client program consumes them. This means you should not enable the gRPC
+    output if there’s no client program set up to consume the alerts; otherwise, the
+    internal queue may grow indefinitely. The global buffering option does not affect
+    this output channel.
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如您所见，默认情况下它是禁用的——在您启用它之前，有一些事情您应该考虑。Falco 自带一个暴露 API 的 gRPC 服务器。您需要同时启用 gRPC
+    服务器和 gRPC 输出（我们稍后会向您展示如何操作）。该 API 提供了多个 gRPC 服务，其中只有一些与 gRPC 输出相关。一个服务允许您获取所有待处理的警报，另一个服务允许您订阅警报流。客户端程序可以决定哪种实现最适合其需求。在两种情况下，当启用
+    gRPC 输出时，Falco 使用内部队列暂时存储警报，直到客户端程序消费它们。这意味着如果没有设置好客户端程序来消费警报，则不应启用 gRPC 输出；否则，内部队列可能会无限增长。全局缓冲选项不会影响此输出通道。
+- en: 'With that in mind, to make this output channel work, the first thing you have
+    to do is to enable the gRPC server. It supports two binding types: over a Unix
+    socket and over the network with mandatory mutual TLS authentication.'
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有了这些，为了使此输出通道正常工作，您首先必须启用 gRPC 服务器。它支持两种绑定类型：在 Unix socket 上和在具有强制性双向 TLS 认证的网络上。
+- en: 'Here’s how to enable the gRPC server over a Unix socket:'
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下面是如何在 Unix socket 上启用 gRPC 服务器：
+- en: '[PRE7]'
+  id: totrans-80
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: 'And here’s how to enable the gRPC server over the network with mandatory mutual
+    TLS authentication:'
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以及如何在网络上启用具有强制性双向 TLS 认证的 gRPC 服务器：
+- en: '[PRE8]'
+  id: totrans-82
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: 'Both binding types offer the same gRPC functionalities, so you can choose the
+    one that satisfies your needs. Once you have enabled the gRPC server, the next
+    step is to enable the gRCP output:'
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 两种绑定类型都提供相同的 gRPC 功能，因此您可以选择满足您需求的那一种。一旦启用了 gRPC 服务器，下一步是启用 gRPC 输出：
+- en: '[PRE9]'
+  id: totrans-84
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: 'Finally, you will have to configure your client program to connect to the Falco
+    gRPC API. How this is done depends on the program you are using. The Falcosecurity
+    organization provides two programs that can connect to this output (see [Chapter 2](ch02.xhtml#getting_started_with_falco)):
+    [falco-exporter](https://oreil.ly/FN9gE), which connects to the Falco gRPC API
+    to export metrics consumable by Prometheus (more on this in [Chapter 12](ch12.xhtml#consuming_falco_events)),
+    and the [event-generator](https://oreil.ly/4MHw1), which can optionally connect
+    to the Falco gRPC API to test whether fake events are actually processed (helpful
+    when developing integration tests). You can also implement your own program. The
+    Falcosecurity organization provides SDKs that allow you to create gRPC client
+    programs for Falco easily in several programming languages—for example, [client-go
+    for Golang](https://oreil.ly/HXPKL), [client-rs for Rust](https://oreil.ly/XdgVp),
+    and [client-py for Python](https://oreil.ly/A64Dh). You can find more information
+    about developing with the Falco gRPC API in [Chapter 14](ch14.xhtml#falco_development).'
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，您将需要配置您的客户端程序以连接到 Falco gRPC API。如何完成这一步取决于您使用的程序。Falcosecurity 组织提供了两个可以连接到此输出的程序（参见
+    [第2章](ch02.xhtml#getting_started_with_falco)）：[falco-exporter](https://oreil.ly/FN9gE)，它连接到
+    Falco gRPC API 以导出 Prometheus 可消耗的指标（更多信息请参阅 [第12章](ch12.xhtml#consuming_falco_events)），以及
+    [event-generator](https://oreil.ly/4MHw1)，它可以选择连接到 Falco gRPC API，以测试是否实际处理了虚假事件（在开发集成测试时很有帮助）。您也可以实现自己的程序。Falcosecurity
+    组织提供了 SDK，允许您轻松地使用多种编程语言为 Falco 创建 gRPC 客户端程序，例如 [Golang 的 client-go](https://oreil.ly/HXPKL)，[Rust
+    的 client-rs](https://oreil.ly/XdgVp) 和 [Python 的 client-py](https://oreil.ly/A64Dh)。您可以在
+    [第14章](ch14.xhtml#falco_development) 中找到关于使用 Falco gRPC API 进行开发的更多信息。
+- en: 'Last but not least, here is an extract from the proto-definition of the message
+    that Falco sends via the gRCP API:'
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，这是 Falco 通过 gRCP API 发送的消息的 proto 定义摘录：
+- en: '[PRE10]'
+  id: totrans-87
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: The `response` message includes the already formatted alert string (which you
+    will find in the `output` field) as well as all the component pieces of information,
+    split across various fields. The client program can assemble and process them
+    in any way it needs, which is very useful if you want to build your own application
+    on top of Falco.
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`response` 消息包括已经格式化的警报字符串（您将在 `output` 字段中找到）以及所有组件信息，这些信息分布在各种字段中。客户端程序可以根据需要组装和处理它们，这在您希望在
+    Falco 之上构建自己的应用程序时非常有用。'
+- en: Other Logging Options
+  id: totrans-89
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 其他日志选项
+- en: So far we’ve described the core part of the output framework. Now let’s look
+    at a few options to help you in troubleshooting. Like most applications, Falco
+    can output debugging information and errors. Those informative messages are about
+    the functioning of Falco itself and are not its primary output.
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，我们已经描述了输出框架的核心部分。现在让我们看看一些帮助您进行故障排除的选项。与大多数应用程序一样，Falco 可以输出调试信息和错误。这些信息性的消息涉及到
+    Falco 本身的功能，而不是其主要输出。
+- en: 'Falco implements various logging messages internally. They can vary from one
+    release to another. A common example of this logging is the initial information
+    that Falco prints out when it starts. Another, less common case is when Falco
+    informs you that it was not able to load the driver:'
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco 在内部实现了各种日志消息。它们可能会随着不同的发布版本而有所变化。一个常见的例子是 Falco 启动时打印的初始信息。另一个不太常见的情况是当
+    Falco 通知您无法加载驱动时：
+- en: '[PRE11]'
+  id: totrans-92
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: Note
+  id: totrans-93
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注
+- en: The term *logging* does *not* refer to the process of outputting security notifications.
+    The log messages discussed in this section are not security alerts. Logging options
+    do not affect notification processing in any way. Also, since these log messages
+    are not notifications, Falco does not output them through the output channels.
+    Although you might see the usual notifications interleaved with log messages when
+    running Falco in a terminal, keep in mind that they are different.
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 术语 *logging* 不涉及输出安全通知的过程。本节讨论的日志消息不是安全警报。日志选项不以任何方式影响通知处理。此外，由于这些日志消息不是通知，因此
+    Falco 不会通过输出渠道输出它们。尽管在终端中运行 Falco 时可能会看到通常的通知与日志消息交织在一起，但请记住它们是不同的。
+- en: Falco outputs these messages via the [standard error stream](https://oreil.ly/yatpB)
+    and sends them to syslog. You can configure Falco to discard some messages based
+    on their severity level. [Table 8-3](#options_for_falcoapostrophes_internal_l)
+    lists the logging options you can configure in Falco’s configuration file (*/etc/falco/falco.yaml*).
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco 通过 [标准错误流](https://oreil.ly/yatpB) 输出这些消息，并将它们发送到 syslog。您可以配置 Falco 根据其严重性级别丢弃某些消息。[表
+    8-3](#options_for_falcoapostrophes_internal_l) 列出了您可以在 Falco 配置文件（*/etc/falco/falco.yaml*）中配置的日志选项。
+- en: Table 8-3\. Options for Falco’s internal logging
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 8-3\. Falco 内部日志选项
+- en: '| Logging option (with default) | Description |'
+  id: totrans-97
+  prefs: []
+  type: TYPE_TB
+  zh: '| 日志选项（带默认值） | 描述 |'
+- en: '| --- | --- |'
+  id: totrans-98
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| `log_stderr: true` | If enabled, Falco sends log messages to the stderr.
+    |'
+  id: totrans-99
+  prefs: []
+  type: TYPE_TB
+  zh: '| `log_stderr: true` | 如果启用，Falco 将日志消息发送到 stderr。 |'
+- en: '| `log_syslog: true` | If enabled, Falco sends log messages to syslog. Note
+    that this option is not related to the syslog output and does not affect it. |'
+  id: totrans-100
+  prefs: []
+  type: TYPE_TB
+  zh: '| `log_syslog: true` | 如果启用，Falco 将日志消息发送到 syslog。请注意，此选项与 syslog 输出无关，也不会影响它。
+    |'
+- en: '| `log_level: info` | This option defines the minimum log level to include
+    in logs: `emergency`, `alert`, `critical`, `error`, `warning`, `notice`, `info`,
+    or `debug`. Note that these values, although similar, are not rule priority levels.
+    |'
+  id: totrans-101
+  prefs: []
+  type: TYPE_TB
+  zh: '| `log_level: info` | 此选项定义要包含在日志中的最低日志级别：`emergency`、`alert`、`critical`、`error`、`warning`、`notice`、`info`
+    或 `debug`。请注意，尽管这些值相似，但它们不是规则优先级级别。 |'
+- en: Conclusion
+  id: totrans-102
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 结论
+- en: This chapter concludes [Part II](part02.xhtml#ii_the_architecture_of_falco)
+    of this book. At this point, you should have a solid understanding of Falco’s
+    architecture and its inner workings. Your familiarity with the processing pipeline’s
+    data flow, ending with the output framework, will allow you to use Falco in a
+    variety of ways. For example, you can view security notifications in your favorite
+    dashboard or even create a response engine (a mechanism that takes action when
+    a specific event occurs) on top of Falco. To discover more use cases, use your
+    imagination—and continue reading this book.
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本章结束了本书的 [第二部分](part02.xhtml#ii_the_architecture_of_falco)。在这一点上，您应该对 Falco
+    的架构及其内部工作原理有一个扎实的理解。您对处理管道数据流的熟悉，以输出框架结束，将允许您以多种方式使用 Falco。例如，您可以在喜爱的仪表板中查看安全通知，甚至在
+    Falco 之上创建响应引擎（在特定事件发生时采取行动的机制）。要发现更多用例，请发挥您的想象力，并继续阅读本书。
+- en: The next level up is real-world use cases, so [Part III](part03.xhtml#iii_running_falco_in_production)
+    is all about running Falco in production. As always, we will guide you through
+    each step.
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来是真实的使用案例，所以[第 III 部分](part03.xhtml#iii_running_falco_in_production) 是关于在生产环境中运行
+    Falco 的内容。像往常一样，我们会指导您完成每一步。
+- en: ^([1](ch08.xhtml#ch01fn8-marker)) A *concurrent queue* is a way of implementing
+    a [queue data structure](https://oreil.ly/NWtzd) that multiple running threads
+    can safely access in parallel. The *pop* and *push* operations are typical actions
+    that a queue supports (respectively, to enqueue and dequeue an item). Most implementations
+    allow performing those operations in either blocking or nonblocking fashions.
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([1](ch08.xhtml#ch01fn8-marker)) *并发队列* 是实现多个运行线程可以安全并行访问的一种 [队列数据结构](https://oreil.ly/NWtzd)。*pop*
+    和 *push* 操作是队列支持的典型操作（分别用于入队和出队）。大多数实现允许以阻塞或非阻塞方式执行这些操作。
+- en: ^([2](ch08.xhtml#ch01fn9-marker)) In the syslog protocol, the facility value
+    determines the function of the process that created the message. `LOG_USER` is
+    intended for messages generated by user-level applications.
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([2](ch08.xhtml#ch01fn9-marker)) 在 syslog 协议中，设施值确定创建消息的进程的功能。`LOG_USER` 用于用户级应用程序生成的消息。

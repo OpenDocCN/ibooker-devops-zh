@@ -1,0 +1,1013 @@
+- en: Chapter 22\. Organizing Your Application
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第 22 章。组织您的应用程序
+- en: Throughout this book we have described various components of an application
+    built on top of Kubernetes. We have described how to wrap programs up as containers,
+    place those containers in Pods, replicate those Pods with ReplicaSets, and roll
+    them out with Deployments. We have even described how to deploy stateful and real-world
+    applications that collect these objects into a single distributed system. But
+    we have not covered how to actually work with such an application in a practical
+    way. How can you lay out, share, manage, and update the various configurations
+    that make up your application? That is the topic of this chapter.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本书中，我们描述了构建在 Kubernetes 之上的应用程序的各种组件。我们描述了如何将程序封装为容器，将这些容器放置在 Pod 中，使用 ReplicaSets
+    复制这些 Pod，并使用 Deployments 进行部署。我们甚至描述了如何部署有状态和真实世界的应用程序，将这些对象收集到一个单一的分布式系统中。但是，我们并没有讨论如何实际操作这样的应用程序。您如何布置、共享、管理和更新构成您应用程序的各种配置？这就是本章的主题。
+- en: Principles to Guide Us
+  id: totrans-2
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 引导我们的原则
+- en: 'Before digging into the concrete details of how to structure your application,
+    it’s worth considering the goals that drive this structure. Obviously, reliability
+    and agility are the general goals of developing a cloud native application in
+    Kubernetes, but how does this relate to how you design your application’s maintenance
+    and deployment? The following sections describe three principles that can guide
+    you in designing a structure that best suits these goals. The principles are:'
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在深入探讨如何构建您的应用程序结构的具体细节之前，考虑一下驱动这种结构的目标是值得的。显然，可靠性和敏捷性是在 Kubernetes 中开发云原生应用程序的一般目标，但这与您如何设计应用程序的维护和部署有什么关系？以下部分描述了可以指导您设计最适合这些目标的结构的三个原则。这些原则是：
+- en: Treat filesystems as the source of truth
+  id: totrans-4
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 将文件系统视为真实性的源头
+- en: Conduct code review to ensure the quality of changes
+  id: totrans-5
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 进行代码审查以确保变更的质量
+- en: Use feature flags to stage rollouts and rollbacks
+  id: totrans-6
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用功能标志来分阶段部署和回滚
+- en: Filesystems as the Source of Truth
+  id: totrans-7
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 文件系统作为真相的源头
+- en: When you first begin to explore Kubernetes, as we did in the beginning of this
+    book, you generally interact with it imperatively. You run commands like `kubectl
+    run` or `kubectl edit` to create and modify Pods or other objects running in your
+    cluster. Even when we started exploring how to write and use YAML files, this
+    was presented in an ad-hoc manner, as if the file itself is just a way station
+    on the road to modifying the state of the cluster. In reality, in a true productionized
+    application the opposite should be true.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您开始探索 Kubernetes 时，就像我们在本书的开头所做的那样，通常会以命令式的方式与其进行交互。您会运行诸如 `kubectl run` 或
+    `kubectl edit` 的命令来创建和修改运行在集群中的 Pod 或其他对象。即使在我们开始探索如何编写和使用 YAML 文件时，这也是以一种临时的方式呈现的，好像文件本身只是修改集群状态道路上的一个途径。实际上，在一个真正生产化的应用程序中，相反的情况应该是真实的。
+- en: Rather than viewing the state of the cluster—the data in `etcd`—as the source
+    of truth, it is optimal to view the filesystem of YAML objects as the source of
+    truth for your application. The API objects deployed into your Kubernetes cluster(s)
+    are then a reflection of the truth stored in the filesystem.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与其将集群的状态——存储在 `etcd` 中的数据——视为真实性的源头，不如将 YAML 对象的文件系统视为应用程序的真实性的最佳源头。部署到您的 Kubernetes
+    集群中的 API 对象然后是文件系统中存储的真实性的反映。
+- en: There are numerous reasons why this is the right point of view. The first and
+    foremost is that it largely enables you to treat your cluster as if it is immutable
+    infrastructure. As we have moved into cloud native architectures, we have become
+    increasingly comfortable with the notion that our applications and their containers
+    are immutable infrastructure, but treating a cluster as such is less common. And
+    yet, the same reasons for moving our applications to immutable infrastructure
+    apply to our clusters. If your cluster is a snowflake you made by applying random
+    YAML files downloaded from the internet ad hoc, it is as dangerous as a virtual
+    machine built from imperative bash scripts.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是正确观点的众多理由。首要的是，它在很大程度上使您能够将您的集群视为不可变基础设施。随着我们进入云原生架构，我们越来越习惯于将我们的应用程序及其容器视为不可变基础设施，但将集群视为这样的基础设施则较少见。然而，将我们的应用程序迁移到不可变基础设施的相同理由也适用于我们的集群。如果您的集群是通过随意应用从互联网下载的随机
+    YAML 文件制造的雪花，那么它与通过命令式 bash 脚本构建的虚拟机一样危险。
+- en: Additionally, managing the cluster state via the filesystem makes it very easy
+    to collaborate with multiple team members. Source-control systems are well understood
+    and can easily enable multiple people to edit the state of the cluster simultaneously,
+    while making conflicts (and the resolution of those conflicts) clear to everyone.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此外，通过文件系统管理集群状态使得与多个团队成员协作变得非常容易。源代码控制系统被广泛理解，并且可以轻松地使多人同时编辑集群状态，同时使冲突（以及解决这些冲突）对每个人都清晰可见。
+- en: Note
+  id: totrans-12
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: It is absolutely a first principle that *all applications deployed to Kubernetes
+    should first be described in files stored in a filesystem*. The actual API objects
+    are then just a projection of this filesystem into a particular cluster.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有部署到 Kubernetes 的应用程序都应首先在文件系统中的文件中进行描述，这绝对是一个第一原则。然后，实际的 API 对象只是这个文件系统投射到特定集群的一部分。
+- en: The Role of Code Review
+  id: totrans-14
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 代码审查的作用
+- en: It wasn’t long ago that code review for application source code was a novel
+    idea. But it is clear now that multiple people looking at a piece of code before
+    it is committed to an application is a best practice for producing high-quality,
+    reliable code.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不久以前，对应用程序源代码进行代码审查还是一个新颖的想法。但现在很明显，在将代码提交到应用程序之前，多人审查代码是生产高质量、可靠代码的最佳实践。
+- en: It is therefore surprising that the same is somewhat less true for the configurations
+    used to deploy those applications. All of the same reasons for reviewing code
+    apply directly to application configurations. But when you think about it, it
+    is also obvious that code review of these configurations is critical to the reliable
+    deployment of services. In our experience, most service outages are self-inflicted
+    via unexpected consequences, typos, or other simple mistakes. Ensuring that at
+    least two people look at any configuration change significantly decreases the
+    probability of such errors.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此令人惊讶的是，对于用于部署这些应用程序的配置来说，同样的情况相对较少。代码审查的所有理由都直接适用于应用程序配置。但是当你考虑它时，审查这些配置对于可靠部署服务同样至关重要是显而易见的。根据我们的经验，大多数服务中断是自我造成的，由于意外后果、拼写错误或其他简单错误。确保至少有两个人查看任何配置更改，显著降低了此类错误发生的概率。
+- en: Note
+  id: totrans-17
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The second principle of our application layout is that it must facilitate the
+    review of every change merged into the set of files that represents the source
+    of truth for our cluster.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们应用程序布局的第二个原则是，它必须促进对合并到代表我们集群真实源的文件集的每个更改的审查。
+- en: Feature Gates
+  id: totrans-19
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 功能门
+- en: Once your application source code and your deployment configuration files are
+    in source control, one of the most common questions is how these repositories
+    relate to one another. Should you use the same repository for application source
+    code and configuration? This can work for small projects, but in larger projects
+    it often makes sense to separate the two. Even if the same people are responsible
+    for both building and deploying the application, the perspectives of the builder
+    versus those of the deployer are different enough that this separation of concerns
+    makes sense.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦你的应用源代码和部署配置文件都在源代码控制中，其中一个最常见的问题是这些仓库如何相互关联。你应该将应用程序源代码和配置文件放在同一个仓库中吗？对于小项目来说这可能行得通，但在大项目中通常更合理地将它们分开。即使是同一组人负责构建和部署应用程序，构建者和部署者的视角有足够大的不同，以至于这种关注点的分离是有道理的。
+- en: If that is the case, then how do you bridge the development of new features
+    in source control with the deployment of those features into a production environment?
+    This is where feature gates play an important role.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果是这种情况，那么如何在源代码控制中开发新功能并将这些功能部署到生产环境中呢？这就是功能门控的重要作用所在。
+- en: 'The idea is that when some new feature is developed, that development takes
+    place entirely behind a feature flag or *gate*. This gate looks something like:'
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 思想是，当开发某个新功能时，该开发完全在功能标志或门后进行。这个门看起来像这样：
+- en: '[PRE0]'
+  id: totrans-23
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: There are a variety of benefits to this approach. First, it lets the team commit
+    to the production branch long before the feature is ready to ship. This enables
+    feature development to stay much more closely aligned with the `HEAD` of a repository,
+    and thus you avoid the horrendous merge conflicts of a long-lived branch.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种方法有许多好处。首先，它允许团队在功能准备好发货之前长时间提交到生产分支。这使得功能开发能够与仓库的`HEAD`更紧密地对齐，因此可以避免长期分支的可怕合并冲突。
+- en: Working behind a feature flag also means that enabling a feature simply involves
+    making a configuration change to activate the flag. This makes it very clear what
+    changed in the production environment, and very simple to roll back the feature
+    activation if it causes problems.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在功能标志背后工作还意味着启用功能只需进行配置更改即可激活标志。这使得在生产环境中明确了哪些内容发生了变化，并且如果功能激活导致问题，回滚功能激活也非常简单。
+- en: Using feature flags thus both simplifies debugging and ensures that disabling
+    a feature doesn’t require a binary rollback to an older version of the code that
+    would remove all of the bug fixes and other improvements made by the newer version.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用功能标志既简化了调试，又确保禁用功能不需要二进制回滚到较旧版本的代码，从而删除所有由新版本带来的错误修复和其他改进。
+- en: Note
+  id: totrans-27
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The third principle of application layout is that code lands in source control,
+    by default off, behind a feature flag, and is only activated through a code-reviewed
+    change to configuration files.
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用程序布局的第三个原则是代码默认存储在源代码控制中，通过功能标志关闭，并且只能通过代码审查的配置文件更改来激活。
+- en: Managing Your Application in Source Control
+  id: totrans-29
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 在源代码控制中管理您的应用程序
+- en: Now that we have determined that the filesystem should represent the source
+    of truth for your cluster, the next important question is how to actually lay
+    out the files in the filesystem. Obviously, filesystems contain hierarchical directories,
+    and a source-control system adds concepts like tags and branches, so this section
+    describes how to put these together to represent and manage your application.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已确定文件系统应该代表集群的真实来源，下一个重要问题是如何实际布置文件系统中的文件。显然，文件系统包含层次目录，并且源代码控制系统添加了标签和分支等概念，因此本节描述如何将它们结合在一起以表示和管理您的应用程序。
+- en: Filesystem Layout
+  id: totrans-31
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 文件系统布局
+- en: This section describes how to lay out an instance of your application for a
+    single cluster. In later sections, we will describe how to parameterize this layout
+    for multiple instances. It’s worth getting this organization right when you begin.
+    Much like modifying the layout of packages in source control, modifying your deployment
+    configurations after the fact is a complicated and expensive refactor that you’ll
+    probably never get around to.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本节描述如何为单个集群设置应用程序实例的布局。在后续章节中，我们将描述如何为多个实例参数化此布局。在开始时正确地组织这一点非常重要。就像修改源代码控制中包的布局一样，修改部署配置后进行的复杂且昂贵的重构可能永远都不会完成。
+- en: The first cardinality on which you want to organize your application is the
+    semantic component or layer (for instance, *frontend* or *batch work queue*).
+    Though early on this might seem like overkill, since a single team manages all
+    of these components, it sets the stage for team scaling—eventually, different
+    teams (or subteams) may be responsible for each of these components.
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 组织应用程序的第一个基数是语义组件或层（例如*前端*或*批处理工作队列*）。尽管在早期可能看起来有些过度，因为一个团队管理所有这些组件，但这为团队扩展奠定了基础——最终，不同的团队（或子团队）可能负责每个组件。
+- en: 'Thus, for an application with a frontend that uses two services, the filesystem
+    might look like this:'
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，对于一个使用两个服务的前端的应用程序，文件系统可能如下所示：
+- en: '[PRE1]'
+  id: totrans-35
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: Within each of these directories, the configurations for each application are
+    stored. These are the YAML files that directly represent the current state of
+    the cluster. It’s generally useful to include both the service name and the object
+    type within the same file.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在每个目录中，存储每个应用程序的配置。这些是直接表示集群当前状态的 YAML 文件。通常将服务名称和对象类型包含在同一个文件中非常有用。
+- en: Note
+  id: totrans-37
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: While Kubernetes allows you to create YAML files with multiple objects in the
+    same file, this is generally an antipattern. The only good reason to group several
+    objects in the same file is if they are conceptually identical. When deciding
+    what to include in a single YAML file, consider design principles similar to those
+    for defining a class or struct. If grouping the objects together doesn’t form
+    a single concept, they probably shouldn’t be in a single file.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然 Kubernetes 允许你在同一个文件中创建多个对象的 YAML 文件，但这通常是一个反模式。将多个对象分组放在同一个文件中的唯一好理由是它们在概念上是相同的。在决定将什么内容放入单个
+    YAML 文件时，考虑类似于定义类或结构体的设计原则。如果将这些对象组合在一起不形成一个单一的概念，它们可能不应该在同一个文件中。
+- en: 'Thus, extending our previous example, the filesystem might look like:'
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，延伸我们之前的例子，文件系统可能如下所示：
+- en: '[PRE2]'
+  id: totrans-40
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: Managing Periodic Versions
+  id: totrans-41
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 管理周期版本
+- en: What about managing releases? It is very useful to be able to look back and
+    see what your application deployment previously looked like. Similarly, it is
+    very useful to be able to iterate a configuration forward while still deploying
+    a stable release configuration.
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 那么如何管理版本？能够回顾和查看应用程序之前的部署情况非常有用。同样，能够在保持稳定发布配置的同时将配置向前迭代也非常有用。
+- en: Consequently, it’s handy to be able to simultaneously store and maintain multiple
+    revisions of your configuration. There are two different approaches that you can
+    use with the file and version control systems we’ve outlined here. The first is
+    to use tags, branches, and source-control features. This is convenient because
+    it maps to the way people manage revisions in source control, and leads to a more
+    simplified directory structure. The other option is to clone the configuration
+    within the filesystem and use directories for different revisions. This makes
+    viewing the configurations simultaneously very straightforward.
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，能够同时存储和维护配置的多个修订版本非常方便。我们在这里列出的文件和版本控制系统有两种不同的方法可以使用。第一种是使用标签、分支和源控制功能。这种方法很方便，因为它与人们在源代码控制中管理修订版本的方式相匹配，并且导致更简化的目录结构。另一种选择是在文件系统内克隆配置，并使用不同修订版本的目录。这样可以非常直观地同时查看配置。
+- en: These approaches have the same capabilities in terms of managing different release
+    versions, so it is ultimately an aesthetic choice between the two. We will discuss
+    both approaches and let you or your team decide which you prefer.
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些方法在管理不同的发布版本方面具有相同的能力，因此最终是在两者之间的美学选择。我们将讨论这两种方法，让您或您的团队决定哪种更合适。
+- en: Versioning with branches and tags
+  id: totrans-45
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 使用分支和标签进行版本控制
+- en: When you use branches and tags to manage configuration revisions, the directory
+    structure does not change from the example in the previous section. When you are
+    ready for a release, you place a source-control tag (such as `git tag v1.0`) in
+    the configuration source-control system. The tag represents the configuration
+    used for that version, and the `HEAD` of source control continues to iterate forward.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您使用分支和标签管理配置修订版本时，目录结构不会与前一节中的示例不同。当您准备发布时，您会在配置源控制系统中放置一个源控制标签（例如`git tag
+    v1.0`）。该标签代表了该版本使用的配置，源控制的`HEAD`继续向前迭代。
+- en: Updating the release configuration is somewhat more complicated, but the approach
+    models what you would do in source control. First, you commit the change to the
+    `HEAD` of the repository. Then you create a new branch named `v1` at the `v1.0`
+    tag. You cherry-pick the desired change onto the release branch (`git cherry-pick
+    *<edit>*`), and finally, you tag this branch with the `v1.1` tag to indicate a
+    new point release. This approach is illustrated in [Figure 22-1](#fig2201).
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 更新发布配置略微复杂，但方法模拟了源控制中的操作。首先，您将更改提交到仓库的`HEAD`。然后，您在`v1.0`标签处创建一个名为`v1`的新分支。您将所需的更改挑选到发布分支上（`git
+    cherry-pick *<edit>*`），最后，您使用`v1.1`标签标记此分支以指示一个新的点发布。此方法在[图 22-1](#fig2201)中有所说明。
+- en: '![kur3 2201](assets/kur3_2201.png)'
+  id: totrans-48
+  prefs: []
+  type: TYPE_IMG
+  zh: '![kur3 2201](assets/kur3_2201.png)'
+- en: Figure 22-1\. Cherry-pick workflow
+  id: totrans-49
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 22-1\. 挑选工作流程
+- en: Note
+  id: totrans-50
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注
+- en: One common error when cherry-picking fixes into a release branch is to only
+    pick the change into the latest release. It’s a good idea to cherry-pick it into
+    all active releases, in case you need to roll back versions but the fix is still
+    needed.
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在将修复内容挑选到发布分支时，一个常见的错误是只将更改挑选到最新的发布中。最好将其挑选到所有活动的发布中，以防需要回滚版本但仍需要此修复。
+- en: Versioning with directories
+  id: totrans-52
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 版本控制与目录
+- en: 'An alternative to using source-control features is to use filesystem features.
+    In this approach, each versioned deployment exists within its own directory. For
+    example, the filesystem for your application might look like this:'
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用文件系统功能的另一种选择是使用源控制功能。在这种方法中，每个版本化的部署都存在于其自己的目录中。例如，您的应用程序文件系统可能如下所示：
+- en: '[PRE3]'
+  id: totrans-54
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: Thus, each revision exists in a parallel directory structure within a directory
+    associated with the release. All deployments occur from `HEAD` instead of from
+    specific revisions or tags. You would add a new configuration to the files in
+    the *current* directory.
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，每个修订版本存在于与发布关联的目录内的并行目录结构中。所有部署都来自`HEAD`，而不是特定的修订版本或标签。您将向*当前*目录中的文件添加新配置。
+- en: When creating a new release, you copy the *current* directory to create a new
+    directory associated with the new release.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在创建新版本时，您可以复制*当前*目录以创建与新版本关联的新目录。
+- en: When you’re performing a bug-fix change to a release, your pull request must
+    modify the YAML file in all the relevant release directories. This is a slightly
+    better experience than the cherry-picking approach described earlier, since it
+    is clear in a single change request that all of the relevant versions are being
+    updated with the same change, instead of requiring a cherry-pick per version.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您对发布进行错误修复时，您的拉取请求必须修改所有相关发布目录中的YAML文件。这比之前描述的挑选方法稍好，因为在单个更改请求中明确指出正在更新所有相关版本，而不是需要每个版本都进行挑选。
+- en: Structuring Your Application for Development, Testing, and Deployment
+  id: totrans-58
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 为开发、测试和部署结构化您的应用程序
+- en: In addition to structuring your application for a periodic release cadence,
+    you also want to structure your application to enable Agile development, quality
+    testing, and safe deployment. This allows developers to make and test changes
+    to the distributed application rapidly and roll those changes out to customers
+    safely.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了为周期性发布节奏构建应用程序外，您还希望为敏捷开发、质量测试和安全部署构建应用程序。这使得开发人员能够快速地对分布式应用程序进行更改和测试，并安全地将这些更改推向客户。
+- en: Goals
+  id: totrans-60
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 目标
+- en: There are two goals for your application with regard to development and testing.
+    The first is that each developer should be able to easily develop new features
+    for the application. In most cases, the developer is only working on a single
+    component, yet that component is interconnected to all of the other microservices
+    within the cluster. Thus, to facilitate development, it is essential that developers
+    be able to work in their own environment with all services available.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 关于开发和测试，您的应用程序有两个目标。首先，每个开发人员都应能轻松地为应用程序开发新功能。在大多数情况下，开发人员仅在一个组件上工作，但该组件与集群中的所有其他微服务都是相互连接的。因此，为了促进开发，开发人员能够在自己的环境中使用所有服务是至关重要的。
+- en: The other goal is to structure your application for easy and accurate testing
+    prior to deployment. This is essential for rolling out features quickly while
+    maintaining high reliability.
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个目标是为了在部署前轻松准确地为应用程序进行结构化测试。这对于快速推出功能同时保持高可靠性至关重要。
+- en: Progression of a Release
+  id: totrans-63
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 发布进程
+- en: 'To achieve both of these goals, it is important to relate the stages of development
+    to the release versions described earlier. The stages of a release are:'
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要实现这两个目标，将开发阶段与前述的发布版本阶段相关联是非常重要的。发布的阶段包括：
+- en: '`HEAD`'
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`HEAD`'
+- en: The bleeding edge of the configuration; the latest changes.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 配置的最前沿；最新的更改。
+- en: Development
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 开发
+- en: Largely stable, but not ready for deployment. Suitable for developers to use
+    for building features.
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 主要是稳定的，但尚未准备部署。适合开发人员用于构建功能。
+- en: Staging
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 预发布
+- en: The beginnings of testing, unlikely to change unless problems are found.
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 测试的开始，除非发现问题，否则不太可能更改。
+- en: Canary
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 金丝雀发布
+- en: The first real release to users, used to test for problems with real-world traffic
+    and likewise give users a chance to test what is coming next.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 面向用户的第一个真正发布版本，用于测试真实流量中的问题，并让用户有机会测试即将推出的内容。
+- en: Release
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 发布
+- en: The current production release.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当前的生产发布版本。
+- en: Introducing a development tag
+  id: totrans-75
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 引入开发标签
+- en: Regardless of whether you structure releases using the filesystem or version
+    control, the right way to model the development stage is via a source-control
+    tag. This is because development is necessarily fast moving as it tracks stability
+    only slightly behind `HEAD`.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 无论您是使用文件系统还是版本控制来构建发布版本，建模开发阶段的正确方式是通过源代码控制标签。这是因为开发必须跟踪稳定性，仅略微滞后于`HEAD`。
+- en: To introduce a development stage, you add a new `development` tag to the source-control
+    system and use an automated process to move this tag forward. On a periodic cadence,
+    you’ll test `HEAD` via automated integration testing. If these tests pass, you
+    move the `development` tag forward to `HEAD`. Thus, developers can track reasonably
+    close to the latest changes when deploying their own environments, but also be
+    assured that the deployed configurations have at least passed a limited smoke
+    test. This approach is illustrated in [Figure 22-2](#fig2202).
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要引入开发阶段，您需要向源代码控制系统添加一个新的`development`标签，并使用自动化流程将此标签向前推进。定期，您将通过自动化集成测试测试`HEAD`。如果这些测试通过，则将`development`标签向前推进到`HEAD`。因此，开发人员可以在部署其自己的环境时跟踪最新的更改，但同时可以确保已部署的配置至少通过了有限的冒烟测试。这种方法在[图22-2](#fig2202)中有所体现。
+- en: '![kur3 2202](assets/kur3_2202.png)'
+  id: totrans-78
+  prefs: []
+  type: TYPE_IMG
+  zh: '![kur3 2202](assets/kur3_2202.png)'
+- en: Figure 22-2\. Development tag workflow
+  id: totrans-79
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图22-2\. 开发标签工作流程
+- en: Mapping stages to revisions
+  id: totrans-80
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 将各个阶段映射到修订版
+- en: It might be tempting to introduce a new set of configurations for each of these
+    stages, but in reality, every combination of versions and stages would create
+    a mess that would be very difficult to reason about. Instead, the right practice
+    is to introduce a mapping between revisions and stages.
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 或许诱人的是为每个阶段引入一组新的配置，但实际上，每个版本和阶段的每种组合都会造成混乱，这将非常难以理解。相反，正确的做法是引入一个将修订版与阶段进行映射的方法。
+- en: 'Regardless of whether you are using the filesystem or source-control revisions
+    to represent different configuration versions, it is easy to implement a map from
+    stage to revision. In the filesystem case, you can use symbolic links to map a
+    stage name to a revision:'
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 无论您是使用文件系统还是源控制修订版来表示不同的配置版本，都可以轻松实现从阶段到修订版的映射。在文件系统情况下，可以使用符号链接将阶段名称映射到修订版：
+- en: '[PRE4]'
+  id: totrans-83
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: For version control, it is simply an additional tag at the same revision as
+    the appropriate version.
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于版本控制而言，它只是与适当版本相同修订版的附加标签。
+- en: 'In either case, versioning proceeds using the processes described previously,
+    and the stages are moved forward to new versions separately as appropriate. In
+    effect, this means that there are two simultaneous processes: the first for cutting
+    new release versions and the second for qualifying a release version for a particular
+    stage in the application life cycle.'
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在任一情况下，版本控制都是使用先前描述的过程进行的，并且根据需要将阶段移动到新版本。实际上，这意味着存在两个同时进行的过程：第一个用于生成新的发布版本，第二个用于将发布版本合格化为应用程序生命周期中特定阶段的版本。
+- en: Parameterizing Your Application with Templates
+  id: totrans-86
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用模板参数化您的应用程序
+- en: Once you have a Cartesian product of environments and stages, it becomes impractical
+    or impossible to keep them all entirely identical. And yet, it is important to
+    strive for the environments to be as identical as possible. Variance and drift
+    between different environments produces snowflakes and systems that are hard to
+    reason about. If your staging environment is different than your release environment,
+    can you really trust the load tests that you ran in the staging environment to
+    qualify a release? To ensure that your environments stay as similar as possible,
+    it is useful to use parameterized environments. Parameterized environments use
+    *templates* for the bulk of their configuration, but they mix in a limited set
+    of *parameters* to produce the final configuration. In this way, most of the configuration
+    is contained within a shared template, while the parameterization is limited in
+    scope and maintained in a small parameters file for easy visualization of differences
+    between environments.
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦您拥有环境和阶段的笛卡尔乘积，保持它们完全相同变得不切实际或不可能。然而，努力使环境尽可能相似是很重要的。在不同环境之间的变化和漂移会产生雪花和难以理解的系统。如果您的演示环境与发布环境不同，您真的能相信您在演示环境中运行的负载测试来验证发布吗？为了确保您的环境保持尽可能相似，使用参数化环境非常有用。参数化环境使用*模板*来处理大部分配置，但是混入一小部分*参数*以生成最终配置。这种方式，大部分配置包含在共享模板中，而参数化范围有限，并且在一个小的参数文件中维护，便于可视化不同环境之间的差异。
+- en: Parameterizing with Helm and Templates
+  id: totrans-88
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用Helm和模板进行参数化
+- en: There are a variety of different languages for creating parameterized configurations.
+    In general they all divide the files into a *template* file, which contains the
+    bulk of the configuration, and a *parameters* file, which can be combined with
+    the template to produce a complete configuration. In addition to parameters, most
+    templating languages allow parameters to have default values if no value is specified.
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有各种不同的语言用于创建参数化配置。通常它们将文件分为*模板*文件，其中包含大部分配置，以及*参数*文件，可以与模板结合以生成完整的配置。除了参数外，大多数模板语言允许参数具有默认值，如果未指定值，则使用默认值。
+- en: The following gives examples of how to parameterize configurations using [Helm](https://helm.sh),
+    a package manager for Kubernetes. Despite what devotees of various languages may
+    say, all parameterization languages are largely equivalent, and as with programming
+    languages, which one you prefer is largely a matter of personal or team style.
+    Thus, the patterns described here for Helm apply regardless of the templating
+    language you choose.
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下示例展示了如何使用[Helm](https://helm.sh)，这是 Kubernetes 的包管理器，来参数化配置。尽管各种语言的信徒可能会说些不同，但所有参数化语言在很大程度上是相等的，与编程语言一样，你偏爱哪一种很大程度上是个人或团队风格的问题。因此，这里描述的
+    Helm 模式适用于您选择的任何模板语言。
+- en: 'The Helm template language uses “mustache” syntax:'
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Helm 模板语言使用“mustache”语法：
+- en: '[PRE5]'
+  id: totrans-92
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: This indicates that `Release.Name` should be substituted with the name of a
+    deployment.
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这表明`Release.Name`应该用部署的名称替换。
+- en: 'To pass a parameter for this value, you use a *values.yaml* file with contents
+    like:'
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要为此值传递参数，您可以使用名为*values.yaml*的文件，其内容如下：
+- en: '[PRE6]'
+  id: totrans-95
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: 'After parameter substitution, this results in:'
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 参数替换后，结果如下：
+- en: '[PRE7]'
+  id: totrans-97
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: Filesystem Layout for Parameterization
+  id: totrans-98
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 参数化的文件系统布局
+- en: 'Now that you understand how to parameterize your configurations, how do you
+    apply that to the filesystem layouts? Instead of treating each deployment life
+    cycle stage as a pointer to a version, think of each deployment life cycle as
+    the combination of a parameters file and a pointer to a specific version. For
+    example, in a directory-based layout, it might look like this:'
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在你了解如何为你的配置参数化了，那么如何将其应用到文件系统布局中呢？不要将每个部署生命周期阶段都视为指向某个版本的指针，而是将每个部署生命周期阶段视为参数文件和指向特定版本的组合。例如，在基于目录的布局中，可能如下所示：
+- en: '[PRE8]'
+  id: totrans-100
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: 'Doing this with version control looks similar, except that the parameters for
+    each life cycle stage are kept at the root of the configuration directory tree:'
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用版本控制执行此操作看起来类似，只是每个生命周期阶段的参数保留在配置目录树的根目录下：
+- en: '[PRE9]'
+  id: totrans-102
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: Deploying Your Application Around the World
+  id: totrans-103
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 在全球范围内部署您的应用程序
+- en: Now that you have multiple versions of your application moving through multiple
+    stages of deployment, the final step in structuring your configurations is to
+    deploy your application around the world. But don’t think that these approaches
+    are only for large-scale applications. You can use them to scale from two different
+    regions to tens or hundreds around the world. In the cloud, where an entire region
+    can fail, deploying to multiple regions (and managing that deployment) is the
+    only way to achieve sufficient uptime for demanding users.
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，您的应用程序有多个版本在多个部署阶段中运行，配置结构化的最后一步是在全球范围内部署您的应用程序。但不要认为这些方法仅适用于大型应用程序。您可以使用它们从两个不同的区域扩展到全球范围内的十个或数百个区域。在云中，整个区域可能会失败，因此部署到多个区域（以及管理该部署）是满足要求用户需求的唯一方法。
+- en: Architectures for Worldwide Deployment
+  id: totrans-105
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 全球部署架构
+- en: Generally speaking, each Kubernetes cluster is intended to live in a single
+    region and to contain a single, complete deployment of your application. Consequently,
+    worldwide deployment of an application consists of multiple different Kubernetes
+    clusters, each with its own application configuration. Describing how to actually
+    build a worldwide application, especially with complex subjects like data replication,
+    is beyond the scope of this chapter, but we will describe how to arrange the application
+    configurations in the filesystem.
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常情况下，每个 Kubernetes 集群旨在位于单个区域，并包含应用程序的单个完整部署。因此，应用程序的全球部署由多个不同的 Kubernetes
+    集群组成，每个集群都有其自己的应用程序配置。描述如何实际构建全球应用程序，特别是涉及数据复制等复杂主题，超出了本章的范围，但我们将描述如何在文件系统中安排应用程序配置。
+- en: 'A particular region’s configuration is conceptually the same as a stage in
+    the deployment life cycle. Thus, adding multiple regions to your configuration
+    is identical to adding new life cycle stages. For example, instead of:'
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 特定区域的配置在概念上与部署生命周期中的阶段相同。因此，将多个区域添加到配置中等同于添加新的生命周期阶段。例如，不是：
+- en: Development
+  id: totrans-108
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 开发
+- en: Staging
+  id: totrans-109
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 演练
+- en: Canary
+  id: totrans-110
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 金丝雀
+- en: Production
+  id: totrans-111
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 生产
+- en: 'You might have:'
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可能会有：
+- en: Development
+  id: totrans-113
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 开发
+- en: Staging
+  id: totrans-114
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 演练
+- en: Canary
+  id: totrans-115
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 金丝雀
+- en: EastUS
+  id: totrans-116
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 东部美国
+- en: WestUS
+  id: totrans-117
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 西部美国
+- en: Europe
+  id: totrans-118
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 欧洲
+- en: Asia
+  id: totrans-119
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 亚洲
+- en: 'Modeling this in the filesystem for configuration looks like:'
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 配置文件系统中的建模看起来像：
+- en: '[PRE10]'
+  id: totrans-121
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: 'If you instead are using version control and tags, the filesystem would look
+    like:'
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你使用版本控制和标签，文件系统将如下所示：
+- en: '[PRE11]'
+  id: totrans-123
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: Using this structure, you would introduce a new tag for each region and use
+    the file contents at that tag to deploy to that region.
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用这种结构，您将为每个区域引入一个新标签，并使用该标签下的文件内容部署到该区域。
+- en: Implementing Worldwide Deployment
+  id: totrans-125
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 实施全球部署
+- en: Now that you have configurations for each region around the world, the question
+    becomes how to update those various regions. One of the primary goals of using
+    multiple regions is to ensure very high reliability and uptime. While it would
+    be tempting to assume that cloud and datacenter outages are the primary causes
+    of downtime, the truth is that outages are generally caused by new versions of
+    software rolling out. Because of this, the key to a highly available system is
+    limiting the effect, or “blast radius,” of any change that you might make. Thus,
+    as you roll out a version across a variety of regions, it makes sense to move
+    carefully from region to region, and to validate and gain confidence in one region
+    before moving on to the next.
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在您已经为世界各地的每个区域配置了配置，问题变成了如何更新这些不同的区域。使用多个区域的主要目标之一是确保非常高的可靠性和正常运行时间。虽然人们可能会认为云和数据中心的宕机是停机的主要原因，但事实上，宕机通常是由新版本的软件发布引起的。因此，构建高可用系统的关键是限制您可能进行的任何更改的影响，或者说“爆炸半径”。因此，在跨多个区域推出版本时，逐个区域谨慎移动、验证并确保信心，显得十分合理。
+- en: 'Rolling out software across the world generally looks more like a workflow
+    than a single declarative update: you begin by updating the version in staging
+    to the latest version and then proceed through all regions until it is rolled
+    out everywhere. But how should you structure the various regions, and how long
+    should you wait to validate between regions?'
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在全球范围内推出软件通常看起来更像是一个工作流程，而不是单一的声明性更新：您首先将版本更新到最新版本，并在所有区域中进行逐步推进，直到在所有地方都推出为止。但是，您应该如何结构化各个区域，以及在各区域之间进行验证之间应该等待多长时间呢？
+- en: Note
+  id: totrans-128
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: You can use tools such as [GitHub Actions](https://oreil.ly/BhWxi) to automate
+    the deployment workflow. They provide a declarative syntax to define your workflow
+    and are also stored in source control.
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用诸如[GitHub Actions](https://oreil.ly/BhWxi)之类的工具自动化部署工作流程。它们提供了一种声明性语法来定义您的工作流程，并且也存储在源代码控制中。
+- en: To determine the length of time between rollouts to regions, consider the “mean
+    time to smoke” for your software. This is the time it takes on average after a
+    new release is rolled out to a region for a problem (if it exists) to be discovered.
+    Obviously, each problem is unique and can take a varying amount of time to make
+    itself known, and that is why you want to understand the *average* time. Managing
+    software at scale is a business of probability, not certainty, so you want to
+    wait for a time that makes the probability of an error low enough that you are
+    comfortable moving on to the next region. Something like two to three times the
+    mean time to smoke is probably a reasonable place to start, but it is highly variable
+    depending on your application.
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要确定在各个区域之间推出的时间间隔，考虑软件的“烟雾平均时间”。这是一个新版本在推出到一个区域后，平均需要多长时间才能发现问题（如果存在问题）。显然，每个问题都是独特的，可能需要不同的时间才能被发现，这就是为什么您要了解*平均*时间。在规模化管理软件时，这是一种概率而非确定性的业务，因此您希望等待一个使错误概率低到足够让您放心继续向下一个区域推进的时间。例如，两到三倍的平均烟雾时间可能是一个合理的起点，但这取决于您的应用程序，因此会有很大的变化。
+- en: To determine the order of regions, it is important to consider the characteristics
+    of various regions. For example, you are likely to have high-traffic regions and
+    low-traffic regions. Depending on your application, you may have features that
+    are more popular in one geographic area than another. All of these characteristics
+    should be considered when putting together a release schedule. You likely want
+    to begin by rolling out to a low-traffic region. This ensures that any early problems
+    you catch are limited to an area of little impact. Though it is not a hard-and-fast
+    rule, early problems are often the most severe, since they manifest quickly enough
+    to be caught in the first region you roll out to. Thus, minimizing the impact
+    of such problems on your customers makes sense. Next, roll out to a high-traffic
+    region. Once you have successfully validated that your release works correctly
+    via the low-traffic region, validate that it works correctly at scale. The only
+    way to do this is to roll it out to a single high-traffic region. When you have
+    successfully rolled out to both a low- and a high-traffic region, you may have
+    confidence that your application can safely roll out everywhere. However, if there
+    are regional variations, you may want to also test slowly across a variety of
+    geographies before pushing your release more broadly.
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要确定各地区的顺序，重要的是考虑各个地区的特点。例如，您可能会有高流量地区和低流量地区。根据您的应用程序，某些功能在一个地理区域比另一个地方更受欢迎。在制定发布时间表时应考虑所有这些特征。您可能希望首先在低流量地区进行推出。这样可以确保您发现的早期问题仅限于影响不大的地区。尽管这不是一个硬性规则，但早期问题通常最为严重，因为它们会在您首次推出的地区迅速显现出来。因此，减少此类问题对客户的影响是有意义的。接下来，推出到高流量地区。一旦您通过低流量地区成功验证了发布的正确性，就要验证其在大规模上的正确性。唯一的方法是将其推出到单个高流量地区。当您成功推出到低流量和高流量地区时，您可以相信您的应用程序可以安全地在所有地方推出。然而，如果存在区域性差异，您可能还想在更广泛地推出发布之前在各种地理区域逐渐测试。
+- en: When you put your release schedule together, it is important to follow it completely
+    for every release, no matter how big or how small. Many outages have been caused
+    by people accelerating releases, either to fix some other problem or because they
+    believed it to be “safe.”
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 制定发布时间表时，重要的是无论发布的大小如何，都要完全遵循它。许多停机事件是因为人们加速发布，要么是为了解决其他问题，要么是因为他们认为是“安全”的。
+- en: Dashboards and Monitoring for Worldwide Deployments
+  id: totrans-133
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 全球部署的仪表板和监控
+- en: 'It may seem an odd concept when you are developing at a small scale, but one
+    significant problem that you will likely run into at a medium or large scale is
+    having different versions of your application deployed to different regions. This
+    can happen for a variety of reasons (such as, because a release has failed, been
+    aborted, or had problems in a particular region), and if you don’t track things
+    carefully you can rapidly end up with an unmanageable snowflake of different versions
+    deployed around the world. Furthermore, as customers inquire about fixes to bugs
+    they are experiencing, a common question will become: “Is it deployed yet?”'
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您在小规模开发时，这可能是一个奇怪的概念，但在中等或大规模时，您可能会遇到的一个重要问题是，不同版本的应用程序部署到不同的地区。这可能由于各种原因发生（例如，因为发布失败、被中止或在特定地区出现问题），如果您不仔细追踪，您可能会迅速遇到在全球各地部署不同版本的难以管理的问题。此外，随着客户询问他们正在经历的错误的修复情况，一个常见的问题将是：“它已经部署了吗？”
+- en: 'Thus, it is essential to develop dashboards, which can tell you at a glance
+    which version is running in which region, as well as alerting, which will fire
+    when too many versions of your application are deployed. A best practice is to
+    limit the number of active versions to no more than three: one testing, one rolling
+    out, and one being replaced by the rollout. Any more active versions than this
+    is asking for trouble.'
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，开发仪表板是至关重要的，它可以让您一眼看出各个地区运行的哪个版本，以及警报功能，当您的应用程序部署了太多版本时将触发警报。最佳实践是将活跃版本数量限制在不超过三个：一个用于测试，一个正在推出，一个正在被推出的版本所替代。如果活跃版本超过这个数量，将会带来麻烦。
+- en: Summary
+  id: totrans-136
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 总结
+- en: 'This chapter provides guidance on how to manage a Kubernetes application through
+    software versions, deployment stages, and regions around the world. It highlights
+    the principles at the foundation of organizing your application: relying on the
+    filesystem for organization, using code review to ensure quality changes, and
+    relying on feature flags, or gates, to make it easy to incrementally add and remove
+    functionality.'
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本章提供了关于如何通过软件版本、部署阶段和全球各地区来管理 Kubernetes 应用程序的指导。它强调了组织应用程序基础的原则：依赖文件系统进行组织、使用代码审查来确保质量变更，并依赖于功能标志或门控，以便逐步添加和删除功能。
+- en: As with everything, the recipes in this chapter should be taken as inspiration,
+    rather than absolute truth. Read the guidance, and find the mix of approaches
+    that works best for the particular circumstances of your application. But keep
+    in mind that in laying out your application for deployment, you are setting a
+    process that you will likely have to live with for years.
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 和其他所有内容一样，本章中的示例应视为灵感，而非绝对真理。阅读指南，找到最适合您应用程序特定情况的方法组合。但请记住，在部署应用程序时，您正在设定一个可能需要多年维护的过程。

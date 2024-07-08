@@ -1,0 +1,725 @@
+- en: Chapter 9\. ReplicaSets
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第9章 ReplicaSets
+- en: 'We have covered how to run individual containers as Pods, but these Pods are
+    essentially one-off singletons. More often than not, you want multiple replicas
+    of a container running at a particular time for a variety of reasons:'
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们已经讨论了如何将单个容器作为 Pods 运行，但这些 Pods 本质上是一次性单例。通常情况下，出于多种原因，您希望在特定时间运行多个容器的副本：
+- en: Redundancy
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 冗余性
+- en: Failure toleration by running multiple instances.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过运行多个实例来容忍故障。
+- en: Scale
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 规模
+- en: Higher request-processing capacity by running multiple instances.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过运行多个实例提高请求处理能力。
+- en: Sharding
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 分片
+- en: Different replicas can handle different parts of a computation in parallel.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不同的副本可以并行处理计算的不同部分。
+- en: Of course, you could manually create multiple copies of a Pod using multiple
+    different (though largely similar) Pod manifests, but doing so is both tedious
+    and error-prone. Logically, a user managing a replicated set of Pods considers
+    them as a single entity to be defined and managed—and that’s precisely what a
+    ReplicaSet is. A ReplicaSet acts as a cluster-wide Pod manager, ensuring that
+    the right types and numbers of Pods are running at all times.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当然，你可以手动使用多个不同的 Pod 清单创建多个 Pod 的副本，但这样做既繁琐又容易出错。从逻辑上讲，管理一组副本 Pods 的用户将其视为一个单一实体来定义和管理——这正是
+    ReplicaSet 的作用。ReplicaSet 充当集群范围的 Pod 管理器，确保正确类型和数量的 Pods 随时运行。
+- en: Because ReplicaSets make it easy to create and manage replicated sets of Pods,
+    they are the building blocks for common application deployment patterns and for
+    self-healing applications at the infrastructure level. Pods managed by ReplicaSets
+    are automatically rescheduled under certain failure conditions, such as node failures
+    and network partitions.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于 ReplicaSets 可以轻松创建和管理一组副本的 Pods，它们是常见应用部署模式和基础设施级自愈应用的基础模块。
+- en: The easiest way to think of a ReplicaSet is that it combines a cookie cutter
+    and a desired number of cookies into a single API object. When we define a ReplicaSet,
+    we define a specification for the Pods we want to create (the “cookie cutter”)
+    and a desired number of replicas. Additionally, we need to define a way of finding
+    Pods that the ReplicaSet should control. The actual act of managing the replicated
+    Pods is an example of a *reconciliation loop*. Such loops are fundamental to most
+    of the design and implementation of Kubernetes.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将 ReplicaSet 理解为将 cookie 切割机和所需数量的 cookie 结合成一个单一的 API 对象的最简单方法。当我们定义一个 ReplicaSet
+    时，我们定义了要创建的 Pods 的规范（“cookie 切割机”）和所需数量的副本。此外，我们需要定义一种查找 ReplicaSet 应控制的 Pods
+    的方法。管理复制 Pods 的实际行为是*协调循环*的一个示例。这样的循环是 Kubernetes 设计和实现的大部分基础。
+- en: Reconciliation Loops
+  id: totrans-11
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 协调循环
+- en: The central concept behind a reconciliation loop is the notion of *desired*
+    state versus *observed* or *current* state. Desired state is the state you want.
+    With a ReplicaSet, it is the desired number of replicas and the definition of
+    the Pod to replicate. For example, “the desired state is that there are three
+    replicas of a Pod running the `kuard` server.” In contrast, the current state
+    is the currently observed state of the system. For example, “there are only two
+    `kuard` Pods currently running.”
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 协调循环背后的核心概念是“期望”状态与“观察到”的或“当前”的状态的概念。期望状态是你想要的状态。在 ReplicaSet 中，它是副本的期望数量和要复制的
+    Pod 的定义。例如，“期望的状态是有三个 `kuard` 服务器的 Pod 副本正在运行”。相反，当前状态是系统当前观察到的状态。例如，“当前只有两个 `kuard`
+    Pod 正在运行”。
+- en: The reconciliation loop is constantly running, observing the current state of
+    the world and taking action to try to make the observed state match the desired
+    state. For instance, with the previous examples, the reconciliation loop would
+    create a new `kuard` Pod in an effort to make the observed state match the desired
+    state of three replicas.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 协调循环不断运行，观察世界的当前状态并采取行动，以尝试使观察到的状态与期望状态匹配。例如，在前面的例子中，协调循环将创建一个新的 `kuard` Pod，以使观察到的状态与期望的三个副本的状态匹配。
+- en: There are many benefits to the reconciliation-loop approach to managing state.
+    It is an inherently goal-driven, self-healing system, yet it can often be easily
+    expressed in a few lines of code. For example, the reconciliation loop for ReplicaSets
+    is a single loop, yet it handles user actions to scale up or scale down the ReplicaSet
+    as well as node failures or nodes rejoining the cluster after being absent.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 采用对和解调循环管理状态的方法有许多好处。它是一个本质上以目标驱动、自我修复的系统，但通常可以用几行代码轻松表达。例如，ReplicaSets 的解调循环是一个单一的循环，但它处理用户动作来扩展或缩减
+    ReplicaSet，以及节点故障或节点重新加入集群后的情况。
+- en: We’ll see numerous examples of reconciliation loops in action throughout the
+    rest of the book.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将在本书的其余部分中看到大量和解调循环相关的示例。
+- en: Relating Pods and ReplicaSets
+  id: totrans-16
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 关联 Pods 和 ReplicaSets
+- en: Decoupling is a key theme in Kubernetes. In particular, it’s important that
+    all of the core concepts of Kubernetes are modular with respect to each other
+    and that they are swappable and replaceable with other components. In this spirit,
+    the relationship between ReplicaSets and Pods is loosely coupled. Though ReplicaSets
+    create and manage Pods, they do not own the Pods they create. ReplicaSets use
+    label queries to identify the set of Pods they should be managing. They then use
+    the exact same Pod API that you used directly in [Chapter 5](ch05.xhtml#pods)
+    to create the Pods that they are managing. This notion of “coming in the front
+    door” is another central design concept in Kubernetes. In a similar decoupling,
+    ReplicaSets that create multiple Pods and the services that load balance to those
+    Pods are also totally separate, decoupled API objects. In addition to supporting
+    modularity, decoupling Pods and ReplicaSets enables several important behaviors,
+    discussed in the following sections.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 解耦是 Kubernetes 的一个关键主题。特别重要的是，Kubernetes 的所有核心概念在彼此之间都是模块化的，并且它们可以互换和替换为其他组件。在这种精神下，ReplicaSet
+    和 Pod 之间的关系是松散耦合的。虽然 ReplicaSet 创建和管理 Pods，但它们不拥有它们创建的 Pods。ReplicaSet 使用标签查询来标识它们应该管理的一组
+    Pods。然后，它们使用您在 [第5章](ch05.xhtml#pods) 中直接使用的完全相同的 Pod API 来创建它们正在管理的 Pods。这种“从前门进入”的概念是
+    Kubernetes 中的另一个核心设计概念。在类似的解耦中，创建多个 Pods 的 ReplicaSets 和负载均衡到这些 Pods 的服务也是完全分开的、解耦的
+    API 对象。除了支持模块化外，解耦 Pods 和 ReplicaSets 还启用了几个重要的行为，将在接下来的几节中讨论。
+- en: Adopting Existing Containers
+  id: totrans-18
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 采用现有的容器
+- en: Although declarative configuration is valuable, there are times when it is easier
+    to build something up imperatively. In particular, early on you may be simply
+    deploying a single Pod with a container image without a ReplicaSet managing it.
+    You might even define a load balancer to serve traffic to that single Pod.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管声明式配置很有价值，但有时以命令式方式构建某些东西会更容易。特别是在初期阶段，您可能只是部署一个带有容器镜像的单个 Pod，而不是由 ReplicaSet
+    进行管理。您甚至可以定义一个负载均衡器来为该单个 Pod 提供流量服务。
+- en: But at some point, you may want to expand your singleton container into a replicated
+    service and create and manage an array of similar containers. If ReplicaSets owned
+    the Pods they created, then the only way to start replicating your Pod would be
+    to delete it and relaunch it via a ReplicaSet. This might be disruptive, as there
+    would be a moment when there would be no copies of your container running. However,
+    because ReplicaSets are decoupled from the Pods they manage, you can simply create
+    a ReplicaSet that will “adopt” the existing Pod and scale out additional copies
+    of those containers. In this way, you can seamlessly move from a single imperative
+    Pod to a replicated set of Pods managed by a ReplicaSet.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 但是在某些时候，您可能希望将您的单例容器扩展为复制服务，并创建和管理一系列类似的容器。如果 ReplicaSets 拥有它们创建的 Pods，那么复制您的
+    Pod 的唯一方法将是删除它，并通过 ReplicaSet 重新启动它。这可能会造成干扰，因为在您的容器不运行的时候会有一段时间。然而，由于 ReplicaSets
+    与它们管理的 Pods 解耦，您可以简单地创建一个“采用”现有 Pod 的 ReplicaSet，并扩展这些容器的额外副本。通过这种方式，您可以从一个命令式的单一
+    Pod 无缝过渡到由 ReplicaSet 管理的复制 Pods 集合。
+- en: Quarantining Containers
+  id: totrans-21
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 隔离容器
+- en: Oftentimes, when a server misbehaves, Pod-level health checks will automatically
+    restart that Pod. But if your health checks are incomplete, a Pod can be misbehaving
+    but still be part of the replicated set. In these situations, while it would work
+    to simply kill the Pod, that would leave your developers with only logs to debug
+    the problem. Instead, you can modify the set of labels on the sick Pod. Doing
+    so will disassociate it from the ReplicaSet (and service) so that you can debug
+    the Pod. The ReplicaSet controller will notice that a Pod is missing and create
+    a new copy, but because the Pod is still running, it is available to developers
+    for interactive debugging, which is significantly more valuable than debugging
+    from logs.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常情况下，当服务器表现不佳时，Pod 级别的健康检查会自动重新启动该 Pod。但是如果您的健康检查不完整，一个 Pod 可能会表现不佳，但仍然是复制集的一部分。在这些情况下，简单地杀死
+    Pod 可以解决问题，但这样做会使开发人员只能依赖日志来调试问题。相反，您可以修改患病 Pod 上的标签集。这样做将使其与 ReplicaSet（和服务）解除关联，以便您可以调试该
+    Pod。ReplicaSet 控制器将注意到一个 Pod 缺失并创建一个新副本，但由于 Pod 仍在运行，开发人员可以进行交互式调试，这比仅仅依赖日志进行调试要有价值得多。
+- en: Designing with ReplicaSets
+  id: totrans-23
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用 ReplicaSets 进行设计
+- en: ReplicaSets are designed to represent a single, scalable microservice inside
+    your architecture. Their key characteristic is that every Pod the ReplicaSet controller
+    creates is entirely homogeneous. Typically, these Pods are then fronted by a Kubernetes
+    service load balancer, which spreads traffic across the Pods that make up the
+    service. Generally speaking, ReplicaSets are designed for stateless (or nearly
+    stateless) services. The elements they create are interchangeable; when a ReplicaSet
+    is scaled down, an arbitrary Pod is selected for deletion. Your application’s
+    behavior shouldn’t change because of such a scale-down operation.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ReplicaSets 的设计用于表示体系结构中的单个可扩展微服务。它们的关键特性是 ReplicaSet 控制器创建的每个 Pod 都是完全同质的。通常，这些
+    Pod 然后由 Kubernetes 服务负载均衡器前端化，该负载均衡器在服务中分发流量到组成服务的各个 Pod 上。一般来说，ReplicaSets 设计用于无状态（或几乎无状态）服务。它们创建的元素是可互换的；当缩减
+    ReplicaSet 时，会选择一个任意的 Pod 进行删除。由于这种缩减操作，你的应用行为不应该发生改变。
+- en: Note
+  id: totrans-25
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Typically you will see applications use the Deployment object because it allows
+    you to manage the release of new versions. Repli⁠ca​Sets power Deployments under
+    the hood, and it’s important to understand how they operate so that you can debug
+    them should you need to troubleshoot.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常，你会看到应用程序使用 Deployment 对象，因为它允许你管理新版本的发布。Repli⁠ca​Sets 在幕后支持 Deployments，了解它们的操作方式非常重要，以便在需要排除故障时进行调试。
+- en: ReplicaSet Spec
+  id: totrans-27
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: ReplicaSet 规范
+- en: Like all objects in Kubernetes, ReplicaSets are defined using a specification.
+    All ReplicaSets must have a unique name (defined using the `metadata.name` field),
+    a `spec` section that describes the number of Pods (replicas) that should be running
+    cluster-wide at any given time, and a Pod template that describes the Pod to be
+    created when the defined number of replicas is not met. [Example 9-1](#minimal_ReplicaSet)
+    shows a minimal ReplicaSet definition. Pay attention to the replicas, selector,
+    and template sections of the definition because they provide more insight into
+    how ReplicaSets operate.
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 就像 Kubernetes 中的所有对象一样，ReplicaSets 是使用规范定义的。所有的 ReplicaSets 必须有一个唯一的名称（使用 `metadata.name`
+    字段定义），一个 `spec` 部分来描述集群中任何给定时间应该运行的 Pod（副本）数量，以及一个 Pod 模板，描述当定义的副本数未达到时应创建的 Pod。
+    [示例 9-1](#minimal_ReplicaSet) 展示了一个最小化的 ReplicaSet 定义。注意规范中的 replicas、selector
+    和 template 部分，因为它们提供了关于 ReplicaSets 操作方式更深入的见解。
+- en: Example 9-1\. kuard-rs.yaml
+  id: totrans-29
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 9-1\. kuard-rs.yaml
+- en: '[PRE0]'
+  id: totrans-30
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: Pod Templates
+  id: totrans-31
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Pod 模板
+- en: 'As mentioned previously, when the number of Pods in the current state is less
+    than the number of Pods in the desired state, the ReplicaSet controller will create
+    new Pods using a template contained in the ReplicaSet specification. The Pods
+    are created in exactly the same manner as when you created a Pod from a YAML file
+    in previous chapters, but instead of using a file, the Kubernetes ReplicaSet controller
+    creates and submits a Pod manifest based on the Pod template directly to the API
+    server. Here is an example of a Pod template in a ReplicaSet:'
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如前面提到的，当当前状态中的 Pod 数量少于期望状态中的 Pod 数量时，ReplicaSet 控制器将使用 ReplicaSet 规范中包含的模板创建新的
+    Pod。这些 Pod 的创建方式与您在前几章中从 YAML 文件创建 Pod 的方式完全相同，但不是使用文件，而是直接基于 Pod 模板创建和提交 Pod
+    清单到 API 服务器。以下是 ReplicaSet 中的一个 Pod 模板示例：
+- en: '[PRE1]'
+  id: totrans-33
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: Labels
+  id: totrans-34
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 标签
+- en: In any reasonably sized cluster, many different Pods are running simultaneously—so
+    how does the ReplicaSet reconciliation loop discover the set of Pods for a particular
+    ReplicaSet? ReplicaSets monitor cluster state using a set of Pod labels to filter
+    Pod listings and track Pods running within a cluster. When initially created,
+    a ReplicaSet fetches a Pod listing from the Kubernetes API and filters the results
+    by labels. Based on the number of Pods the query returns, the ReplicaSet deletes
+    or creates Pods to meet the desired number of replicas. These filtering labels
+    are defined in the ReplicaSet `spec` section and are the key to understanding
+    how ReplicaSets work.
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在任何合理大小的集群中，许多不同的Pod同时运行—那么ReplicaSet协调循环如何发现特定ReplicaSet的一组Pod？ReplicaSets使用一组Pod标签来监视集群状态，以过滤Pod列表并跟踪集群中运行的Pods。初始创建时，ReplicaSet从Kubernetes
+    API获取一个Pod列表，并通过标签进行结果过滤。根据查询返回的Pod数量，ReplicaSet删除或创建Pods以满足所需的副本数量。这些过滤标签在ReplicaSet的`spec`部分中定义，并且是理解ReplicaSets工作原理的关键。
+- en: Note
+  id: totrans-36
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The selector in the ReplicaSet `spec` should be a proper subset of the labels
+    in the Pod template.
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ReplicaSet中的选择器`spec`应该是Pod模板中标签的一个合适的子集。
+- en: Creating a ReplicaSet
+  id: totrans-38
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 创建ReplicaSet
+- en: ReplicaSets are created by submitting a ReplicaSet object to the Kubernetes
+    API. In this section, we will create a ReplicaSet using a configuration file and
+    the `kubectl apply` command.
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ReplicaSets是通过向Kubernetes API提交一个ReplicaSet对象来创建的。在本节中，我们将使用配置文件和`kubectl apply`命令创建一个ReplicaSet。
+- en: 'The ReplicaSet configuration file in [Example 9-1](#minimal_ReplicaSet) will
+    ensure one copy of the `gcr.io/kuar-demo/kuard-amd64:green` container is running
+    at any given time. Use the `kubectl apply` command to submit the `kuard` ReplicaSet
+    to the Kubernetes API:'
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[示例 9-1](#minimal_ReplicaSet)中的ReplicaSet配置文件将确保`gcr.io/kuar-demo/kuard-amd64:green`容器的一个副本在任何给定时间内运行。使用`kubectl
+    apply`命令将`kuard` ReplicaSet提交到Kubernetes API：
+- en: '[PRE2]'
+  id: totrans-41
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'Once the `kuard` ReplicaSet has been accepted, the ReplicaSet controller will
+    detect that there are no `kuard` Pods running that match the desired state and
+    create a new `kuard` Pod based on the contents of the Pod template:'
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦接受了`kuard` ReplicaSet，ReplicaSet控制器将检测到没有符合所需状态的`kuard` Pods正在运行，并基于Pod模板的内容创建一个新的`kuard`
+    Pod：
+- en: '[PRE3]'
+  id: totrans-43
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: Inspecting a ReplicaSet
+  id: totrans-44
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 检查ReplicaSet
+- en: 'As with Pods and other Kubernetes API objects, if you are interested in further
+    details about a ReplicaSet, you can use the `describe` command to provide much
+    more information about its state. Here is an example of using `describe` to obtain
+    the details of the ReplicaSet we previously created:'
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与Pod和其他Kubernetes API对象一样，如果您对ReplicaSet的更多详细信息感兴趣，可以使用`describe`命令提供关于其状态的更多信息。以下是使用`describe`获取我们之前创建的ReplicaSet详细信息的示例：
+- en: '[PRE4]'
+  id: totrans-46
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: You can see the label selector for the ReplicaSet, as well as the state of all
+    of the replicas it manages.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以查看ReplicaSet的标签选择器，以及它管理的所有副本的状态。
+- en: Finding a ReplicaSet from a Pod
+  id: totrans-48
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 从Pod查找ReplicaSet
+- en: 'Sometimes you may wonder if a Pod is being managed by a ReplicaSet, and if
+    it is, which one. To enable this kind of discovery, the ReplicaSet controller
+    adds an `ownerReferences` section to every Pod that it creates. If you run the
+    following, look for the `ownerReferences` section:'
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有时您可能会想知道Pod是否由ReplicaSet管理，如果是，是哪一个。为了启用这种发现功能，ReplicaSet控制器会向它创建的每个Pod添加一个`ownerReferences`部分。如果您运行以下命令，请查找`ownerReferences`部分：
+- en: '[PRE5]'
+  id: totrans-50
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: If applicable, this will list the name of the ReplicaSet that is managing this
+    Pod.
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果适用，这将列出管理此Pod的ReplicaSet的名称。
+- en: Finding a Set of Pods for a ReplicaSet
+  id: totrans-52
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 查找ReplicaSet的一组Pods
+- en: 'You can also determine the set of Pods managed by a ReplicaSet. First, get
+    the set of labels using the `kubectl describe` command. In the previous example,
+    the label selector was `app=kuard,version=2`. To find the Pods that match this
+    selector, use the `--selector` flag or the shorthand `-l`:'
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您还可以确定由ReplicaSet管理的Pod集合。首先，使用`kubectl describe`命令获取标签集合。在前面的示例中，标签选择器是`app=kuard,version=2`。要查找与此选择器匹配的Pods，使用`--selector`标志或简写`-l`：
+- en: '[PRE6]'
+  id: totrans-54
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: This is exactly the same query that the ReplicaSet executes to determine the
+    current number of Pods.
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这与ReplicaSet执行以确定当前Pod数量完全相同的查询。
+- en: Scaling ReplicaSets
+  id: totrans-56
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 扩展ReplicaSets
+- en: You can scale ReplicaSets up or down by updating the `spec.replicas` key on
+    the ReplicaSet object stored in Kubernetes. When you scale up a ReplicaSet, it
+    submits new Pods to the Kubernetes API using the Pod template defined on the ReplicaSet.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过更新存储在Kubernetes中的ReplicaSet对象上的`spec.replicas`键，您可以将ReplicaSets进行缩放。当您扩展一个ReplicaSet时，它会使用ReplicaSet上定义的Pod模板向Kubernetes
+    API提交新的Pods。
+- en: Imperative Scaling with kubectl scale
+  id: totrans-58
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用kubectl scale进行命令式扩展
+- en: 'The easiest way to achieve this is using the `scale` command in `kubectl`.
+    For example, to scale up to four replicas, you could run:'
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用`kubectl`中的`scale`命令是实现这一点的最简单方法。例如，要扩展到四个副本，您可以运行：
+- en: '[PRE7]'
+  id: totrans-60
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: While such imperative commands are useful for demonstrations and quick reactions
+    to emergency situations (such as a sudden increase in load), it is important to
+    also update any text file configurations to match the number of replicas that
+    you set via the imperative `scale` command. The reason for this becomes obvious
+    when you consider the following scenario.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管这样的命令式命令对于演示和快速响应紧急情况（如负载突然增加）非常有用，但同样重要的是，更新任何文本文件配置以匹配通过命令式`scale`命令设置的副本数。当您考虑以下情景时，其重要性就变得明显起来。
+- en: Alice is on call, when suddenly there is a large increase in load on the service
+    she is managing. Alice uses the `scale` command to increase the number of servers
+    responding to requests to 10, and the situation is resolved. However, Alice forgets
+    to update the ReplicaSet configurations checked into source control.
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当Alice正在值班时，服务的负载突然增加。Alice使用`scale`命令将响应请求的服务器数量增加到10个，并解决了这种情况。然而，Alice忘记更新已经检入源代码控制的ReplicaSet配置。
+- en: Several days later, Bob is preparing the weekly rollouts. Bob edits the ReplicaSet
+    configurations stored in version control to use the new container image, but he
+    doesn’t notice that the number of replicas in the file is currently 5, not the
+    10 that Alice set in response to the increased load. Bob proceeds with the rollout,
+    which both updates the container image and reduces the number of replicas by half.
+    This causes an immediate overload, which leads to an outage.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 几天后，Bob正在准备每周的部署。Bob编辑存储在版本控制中的ReplicaSet配置，以使用新的容器映像，但他没有注意到文件中当前副本的数量是5，而不是Alice在响应增加负载时设置的10个。Bob继续进行部署，这既更新了容器映像，又将副本数量减半。这导致立即超载，进而导致停机。
+- en: This fictional case study illustrates the need to ensure that any imperative
+    changes are immediately followed by a declarative change in source control. Indeed,
+    if the need is not acute, we generally recommend only making declarative changes
+    as described in the following section.
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个虚构的案例研究说明了确保任何命令式更改立即后跟源代码控制中的声明式更改的必要性。确实，如果需求不紧急，我们通常建议只进行如下部分所述的声明性更改。
+- en: Declaratively Scaling with kubectl apply
+  id: totrans-65
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用kubectl apply进行声明性扩展
+- en: 'In a declarative world, you make changes by editing the configuration file
+    in version control and then applying those changes to your cluster. To scale the
+    `kuard` ReplicaSet, edit the *kuard-rs.yaml* configuration file and set the `replicas`
+    count to `3`:'
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在声明性世界中，您通过编辑版本控制中的配置文件进行更改，然后将这些更改应用于集群。要扩展`kuard` ReplicaSet，请编辑*kuard-rs.yaml*配置文件，并将`replicas`计数设置为`3`：
+- en: '[PRE8]'
+  id: totrans-67
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: 'In a multiuser setting, you would likely have a documented code review of this
+    change and eventually check the changes into version control. Either way, you
+    can then use the `kubectl apply` command to submit the updated `kuard` ReplicaSet
+    to the API server:'
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在多用户环境中，您可能会对此更改进行文档化的代码审查，并最终将更改检入版本控制。无论哪种方式，然后您可以使用`kubectl apply`命令将更新的`kuard`
+    ReplicaSet提交到API服务器：
+- en: '[PRE9]'
+  id: totrans-69
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: 'Now that the updated `kuard` ReplicaSet is in place, the ReplicaSet controller
+    will detect that the number of desired Pods has changed and that it needs to take
+    action to realize that desired state. If you used the imperative `scale` command
+    in the previous section, the ReplicaSet controller will destroy one Pod to get
+    the number to three. Otherwise, it will submit two new Pods to the Kubernetes
+    API using the Pod template defined on the `kuard` ReplicaSet. Regardless, use
+    the `kubectl get pods` command to list the running `kuard` Pods. You should see
+    output similar to the following with three Pods in running state; two will have
+    a smaller age because they were recently started:'
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在更新后的`kuard` ReplicaSet已经就位，ReplicaSet控制器将检测到期望的Pod数量已更改，并且需要采取措施来实现该期望状态。如果您在前一节中使用了命令式的`scale`命令，ReplicaSet控制器将销毁一个Pod，使数量变为三个。否则，它将使用在`kuard`
+    ReplicaSet上定义的Pod模板向Kubernetes API提交两个新的Pod。无论如何，请使用`kubectl get pods`命令列出正在运行的`kuard`
+    Pods。您应该会看到类似以下内容的输出，其中有三个处于运行状态的Pod；两个由于最近启动，其年龄较小：
+- en: '[PRE10]'
+  id: totrans-71
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: Autoscaling a ReplicaSet
+  id: totrans-72
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 自动缩放ReplicaSet
+- en: While there will be times when you want to have explicit control over the number
+    of replicas in a ReplicaSet, often you simply want to have “enough” replicas.
+    The definition varies depending on the needs of the containers in the ReplicaSet.
+    For example, with a web server like NGINX, you might want to scale due to CPU
+    usage. For an in-memory cache, you might want to scale with memory consumption.
+    In some cases, you might want to scale in response to custom application metrics.
+    Kubernetes can handle all of these scenarios via *Horizontal Pod Autoscaling*
+    (HPA).
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管有时您希望显式控制 ReplicaSet 中副本的数量，但通常您只需具有足够多的副本即可。定义的具体内容取决于 ReplicaSet 中容器的需求。例如，对于像
+    NGINX 这样的 Web 服务器，您可能会因 CPU 使用率而进行扩展。对于内存缓存，您可能会根据内存消耗进行扩展。在某些情况下，您可能希望根据自定义应用程序指标进行扩展。Kubernetes
+    可以通过 *Horizontal Pod Autoscaling*（HPA）处理所有这些情况。
+- en: “Horizontal Pod Autoscaling” is kind of a mouthful, and you might wonder why
+    it is not simply called “autoscaling.” Kubernetes makes a distinction between
+    *horizontal* scaling, which involves creating additional replicas of a Pod, and
+    *vertical* scaling, which involves increasing the resources required for a particular
+    Pod (such as increasing the CPU required for the Pod). Many solutions also enable
+    *cluster* autoscaling, where the number of machines in the cluster is scaled in
+    response to resource needs, but that solution is outside the scope of this chapter.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: “Horizontal Pod Autoscaling” 这个名字有点拗口，您可能会想为什么不直接叫 “autoscaling”。Kubernetes
+    区分了 *horizontal* 缩放（涉及创建 Pod 的额外副本）和 *vertical* 缩放（涉及增加特定 Pod 所需的资源，例如增加 Pod 所需的
+    CPU）。许多解决方案还支持 *cluster* 自动缩放，即根据资源需求调整集群中机器的数量，但这超出了本章的范围。
+- en: Note
+  id: totrans-75
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: 'Autoscaling requires the presence of the `metrics-server` in your cluster.
+    The `metrics-server` keeps track of metrics and provides an API for consuming
+    metrics that HPA uses when making scaling decisions. Most installations of Kubernetes
+    include `metrics-server` by default. You can validate its presence by listing
+    the Pods in the `kube-system` namespace:'
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 自动缩放需要在集群中存在 `metrics-server`。`metrics-server` 负责跟踪指标并提供一个 API 用于消耗 HPA 在制定缩放决策时使用的指标。大多数
+    Kubernetes 安装默认包含 `metrics-server`。您可以通过列出 `kube-system` 命名空间中的 Pods 来验证其存在：
+- en: '[PRE11]'
+  id: totrans-77
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: You should see a Pod with a name that starts with `metrics-server` somewhere
+    in that list. If you do not see it, autoscaling will not work correctly.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在列表中应该看到一个名称以 `metrics-server` 开头的 Pod。如果没有看到它，自动扩展将无法正常工作。
+- en: Scaling based on CPU usage is the most common use case for Pod autoscaling.
+    You can also scale based on memory usage. CPU-based autoscaling is most useful
+    for request-based systems that consume CPU proportionally to the number of requests
+    they are receiving, while using a relatively static amount of memory.
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 基于 CPU 使用率进行扩展是 Pod 自动缩放的最常见用例。您还可以基于内存使用情况进行扩展。基于 CPU 的自动缩放对于根据请求消耗 CPU 的请求式系统最为有用，而内存消耗相对静态的系统则不然。
+- en: 'To scale a ReplicaSet, you can run a command like the following:'
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要扩展 ReplicaSet，可以运行以下命令：
+- en: '[PRE12]'
+  id: totrans-81
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: 'This command creates an autoscaler that scales between two and five replicas
+    with a CPU threshold of 80%. To view, modify, or delete this resource, you can
+    use the standard `kubectl` commands and the `horizontalpodautoscalers` resource.
+    It is quite a bit to type `horizontalpodautoscalers`, but it can be shortened
+    to `hpa`:'
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 该命令创建一个自动缩放器，其在 CPU 利用率达到 80% 时在两个到五个副本之间进行缩放。要查看、修改或删除此资源，可以使用标准的 `kubectl`
+    命令和 `horizontalpodautoscalers` 资源。输入 `horizontalpodautoscalers` 这个词相当长，但可以缩写为
+    `hpa`：
+- en: '[PRE13]'
+  id: totrans-83
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: Warning
+  id: totrans-84
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Because of the decoupled nature of Kubernetes, there is no direct link between
+    the HPA and the ReplicaSet. While this is great for modularity and composition,
+    it also enables some antipatterns. In particular, it’s a bad idea to combine autoscaling
+    with imperative or declarative management of the number of replicas. If both you
+    and an autoscaler are attempting to modify the number of replicas, it’s highly
+    likely that you will clash, resulting in unexpected behavior.
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于 Kubernetes 的解耦特性，HPA 与 ReplicaSet 之间没有直接的链接。尽管这对于模块化和组合是很好的，但也会导致一些反模式。特别是，在命令式或声明式管理副本数量的同时与自动缩放器结合使用是一个坏主意。如果您和自动缩放器同时尝试修改副本数量，很可能会发生冲突，导致意外行为。
+- en: Deleting ReplicaSets
+  id: totrans-86
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 删除 ReplicaSets
+- en: 'When a ReplicaSet is no longer required, it can be deleted using the `kubectl
+    delete` command. By default, this also deletes the Pods that are managed by the
+    ReplicaSet:'
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当不再需要 ReplicaSet 时，可以使用`kubectl delete`命令删除它。默认情况下，这也会删除由 ReplicaSet 管理的 Pods：
+- en: '[PRE14]'
+  id: totrans-88
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: 'Running the `kubectl get pods` command shows that all the `kuard` Pods created
+    by the `kuard` ReplicaSet have also been deleted:'
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运行`kubectl get pods`命令显示，所有由`kuard` ReplicaSet 创建的`kuard` Pods 也已被删除：
+- en: '[PRE15]'
+  id: totrans-90
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: 'If you don’t want to delete the Pods that the ReplicaSet is managing, you can
+    set the `--cascade` flag to `false` to ensure only the ReplicaSet object is deleted
+    and not the Pods:'
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果不想删除 ReplicaSet 管理的 Pods，可以将`--cascade`标志设置为`false`，以确保仅删除 ReplicaSet 对象而不是
+    Pods：
+- en: '[PRE16]'
+  id: totrans-92
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: Summary
+  id: totrans-93
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 摘要
+- en: Composing Pods with ReplicaSets provides the foundation for building robust
+    applications with automatic failover, and makes deploying those applications a
+    breeze by enabling scalable and sane deployment patterns. Use ReplicaSets for
+    any Pod you care about, even if it is a single Pod! Some people even default to
+    using ReplicaSets instead of Pods. A typical cluster will have many ReplicaSets,
+    so apply them liberally to the affected area.
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 ReplicaSet 组合 Pods 为构建具有自动故障转移功能的健壮应用程序提供了基础，并通过启用可扩展和合理的部署模式使部署这些应用程序变得轻松。无论是单个
+    Pod，都可以使用 ReplicaSets 进行关注。有些人甚至默认使用 ReplicaSets 而不是 Pods。典型的集群将拥有许多 ReplicaSets，因此在受影响的区域大量应用它们。

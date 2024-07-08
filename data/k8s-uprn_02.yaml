@@ -1,0 +1,916 @@
+- en: Chapter 2\. Creating and Running Containers
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第二章 创建和运行容器
+- en: Kubernetes is a platform for creating, deploying, and managing distributed applications.
+    These applications come in many different shapes and sizes, but ultimately, they
+    are all comprised of one or more programs that run on individual machines. These
+    programs accept input, manipulate data, and then return the results. Before we
+    can even consider building a distributed system, we must first consider how to
+    build the *application container images* that contain these programs and make
+    up the pieces of our distributed system.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 是一个用于创建、部署和管理分布式应用的平台。这些应用有各种不同的形状和规模，但最终它们都由在各个单独的机器上运行的一个或多个程序组成。这些程序接受输入，处理数据，然后返回结果。在我们考虑构建分布式系统之前，我们必须首先考虑如何构建*应用程序容器镜像*，这些镜像包含这些程序并构成我们分布式系统的组成部分。
+- en: Application programs are typically comprised of a language runtime, libraries,
+    and your source code. In many cases, your application relies on external shared
+    libraries such as `libc` and `libssl`. These external libraries are generally
+    shipped as shared components in the OS that you have installed on a particular
+    machine.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用程序通常由语言运行时、库和您的源代码组成。在许多情况下，您的应用程序依赖于外部共享库，如`libc`和`libssl`。这些外部库通常作为操作系统的共享组件随特定机器上安装的操作系统一起提供。
+- en: This dependency on shared libraries causes problems when an application developed
+    on a programmer’s laptop has a dependency on a shared library that isn’t available
+    when the program is rolled out to the production OS. Even when the development
+    and production environments share the exact same version of the OS, problems can
+    occur when developers forget to include dependent asset files inside a package
+    that they deploy to production.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种对共享库的依赖性会在程序员的笔记本上开发的应用程序依赖于在将程序部署到生产操作系统时不可用的共享库时造成问题。即使开发和生产环境共享完全相同版本的操作系统，当开发人员忘记将依赖的资产文件包含在他们部署到生产环境的包中时，也可能会出现问题。
+- en: The traditional methods of running multiple programs on a single machine require
+    that all of these programs share the same versions of shared libraries on the
+    system. If the different programs are developed by different teams or organizations,
+    these shared dependencies add needless complexity and coupling between these teams.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在单个机器上运行多个程序的传统方法要求所有这些程序在系统上共享相同版本的共享库。如果不同的程序由不同的团队或组织开发，这些共享依赖性会增加不必要的复杂性和团队之间的耦合。
+- en: A program can only execute successfully if it can be reliably deployed onto
+    the machine where it should run. Too often the state of the art for deployment
+    involves running imperative scripts, which inevitably have twisty and byzantine
+    failure cases. This makes the task of rolling out a new version of all or parts
+    of a distributed system a labor-intensive and difficult task.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个程序只有在可以可靠地部署到应该运行的机器上时才能成功执行。部署的最新状态往往涉及运行命令式脚本，这些脚本不可避免地会有复杂和扭曲的失败情况。这使得部署分布式系统的新版本或部分版本成为一项费时且困难的任务。
+- en: In [Chapter 1](ch01.xhtml#introduction), we argued strongly for the value of
+    immutable images and infrastructure. This immutability is exactly what the container
+    image provides. As we will see, it easily solves all the problems of dependency
+    management and encapsulation just described.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[第一章](ch01.xhtml#introduction)中，我们强烈主张不可变映像和基础设施的价值。这种不可变性正是容器映像提供的。正如我们将看到的，它轻松解决了刚刚描述的所有依赖管理和封装问题。
+- en: When working with applications, it’s often helpful to package them in a way
+    that makes sharing them with others easy. Docker, the default tool most people
+    use for containers, makes it easy to package an executable and push it to a remote
+    registry where it can later be pulled by others. At the time of writing, container
+    registries are available in all of the major public clouds, and services to build
+    images in the cloud are also available in many of them. You can also run your
+    own registry using open source or commercial systems. These registries make it
+    easy for users to manage and deploy private images, while image-builder services
+    provide easy integration with continuous delivery systems.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在处理应用程序时，将其打包成便于与他人共享的方式通常是很有帮助的。Docker是大多数人用于容器的默认工具，它使得将可执行文件打包并推送到远程注册表变得很容易，以便其他人稍后可以拉取。在撰写本文时，容器注册表在所有主要公共云中都可用，并且在许多云中也提供构建镜像的服务。您还可以使用开源或商业系统运行自己的注册表。这些注册表使用户能够轻松管理和部署私有镜像，而镜像构建器服务则提供了与持续交付系统的简单集成。
+- en: For this chapter, and the remainder of the book, we are going to work with a
+    simple example application that we built to help show this workflow in action.
+    You can find the application [on GitHub](https://oreil.ly/unTLs).
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章以及本书的其余部分中，我们将使用一个简单的示例应用程序来演示这一工作流程。您可以在GitHub上找到该应用程序 [on GitHub](https://oreil.ly/unTLs)。
+- en: Container images bundle a program and its dependencies into a single artifact
+    under a root filesystem. The most popular container image format is the Docker
+    image format, which has been standardized by the Open Container Initiative to
+    the OCI image format. Kubernetes supports both Docker- and OCI-compatible images
+    via Docker and other runtimes. Docker images also include additional metadata
+    used by a container runtime to start a running application instance based on the
+    contents of the container image.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器镜像将程序及其依赖项捆绑到一个根文件系统下的单个构件中。最流行的容器镜像格式是Docker镜像格式，已由开放容器倡议标准化为OCI镜像格式。Kubernetes通过Docker和其他运行时同时支持Docker和OCI兼容镜像。Docker镜像还包括供容器运行时使用的附加元数据，以根据容器镜像的内容启动运行中的应用实例。
+- en: 'This chapter covers the following topics:'
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本章涵盖以下主题：
+- en: How to package an application using the Docker image format
+  id: totrans-11
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如何使用Docker镜像格式打包应用程序
+- en: How to start an application using the Docker container runtime
+  id: totrans-12
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如何使用Docker容器运行时启动应用程序
+- en: Container Images
+  id: totrans-13
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 容器镜像
+- en: For nearly everyone, their first interaction with any container technology is
+    with a container image. A *container image* is a binary package that encapsulates
+    all of the files necessary to run a program inside of an OS container. Depending
+    on how you first experiment with containers, you will either build a container
+    image from your local filesystem or download a preexisting image from a *container
+    registry*. In either case, once the container image is present on your computer,
+    you can run that image to produce a running application inside an OS container.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于几乎每个人来说，他们与任何容器技术的第一次互动都是通过容器镜像。*容器镜像*是一个二进制包，封装了在操作系统容器内运行程序所需的所有文件。根据您首次尝试容器的方式，您将从本地文件系统构建容器镜像，或者从*容器注册表*下载现有镜像。无论哪种情况，一旦容器镜像存在于您的计算机上，您就可以运行该镜像以在操作系统容器内生成运行中的应用程序。
+- en: The most popular and widespread container image format is the Docker image format,
+    which was developed by the Docker open source project for packaging, distributing,
+    and running containers using the `docker` command. Subsequently, work has begun
+    by Docker, Inc., and others to standardize the container image format via the
+    Open Container Initiative (OCI) project. While the OCI standard achieved a 1.0
+    release milestone in mid-2017, adoption of these standards is proceeding slowly.
+    The Docker image format continues to be the de facto standard and is made up of
+    a series of filesystem layers. Each layer adds, removes, or modifies files from
+    the preceding layer in the filesystem. This is an example of an *overlay* filesystem.
+    The overlay system is used both when packaging up the image and when the image
+    is actually being used. During runtime, there are a variety of different concrete
+    implementations of such filesystems, including `aufs`, `overlay`, and `overlay2`.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最流行和普遍的容器镜像格式是Docker镜像格式，由Docker开源项目开发，用于使用`docker`命令打包、分发和运行容器。随后，Docker公司及其他人员开始通过Open
+    Container Initiative（OCI）项目标准化容器镜像格式。虽然OCI标准在2017年中发布了1.0版本，但这些标准的采纳进展缓慢。Docker镜像格式仍然是事实上的标准，由一系列文件系统层组成。每个层在文件系统中添加、删除或修改前一层的文件。这是*覆盖*文件系统的一个例子。覆盖系统在打包图像时和实际使用图像时都会使用。在运行时，有多种不同的具体文件系统实现，包括`aufs`、`overlay`和`overlay2`。
+- en: Container images are typically combined with a container configuration file,
+    which provides instructions on how to set up the container environment and execute
+    an application entry point. The container configuration often includes information
+    on how to set up networking, namespace isolation, resource constraints (cgroups),
+    and what `syscall` restrictions should be placed on a running container instance.
+    The container root filesystem and configuration file are typically bundled using
+    the Docker image format.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器镜像通常与容器配置文件结合使用，该文件提供了如何设置容器环境并执行应用程序入口点的说明。容器配置通常包括如何设置网络、命名空间隔离、资源约束（cgroups）以及应该对运行中的容器实例施加什么样的`syscall`限制。容器根文件系统和配置文件通常使用Docker镜像格式捆绑在一起。
+- en: 'Containers fall into two main categories:'
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器主要分为两大类：
+- en: System containers
+  id: totrans-18
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 系统容器
+- en: Application containers
+  id: totrans-19
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 应用容器
+- en: System containers seek to mimic virtual machines and often run a full boot process.
+    They often include a set of system services typically found in a VM, such as `ssh`,
+    `cron`, and `syslog`. When Docker was new, these types of containers were much
+    more common. Over time, they have come to be seen as poor practice and application
+    containers have gained favor.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 系统容器旨在模仿虚拟机，并经常运行完整的启动过程。它们通常包含一组通常在虚拟机中找到的系统服务，例如`ssh`、`cron`和`syslog`。在Docker刚推出时，这些类型的容器非常常见。随着时间的推移，它们被认为是不良实践，应用容器逐渐受到青睐。
+- en: Application containers differ from system containers in that they commonly run
+    a single program. While running a single program per container might seem like
+    an unnecessary constraint, it provides the perfect level of granularity for composing
+    scalable applications and is a design philosophy that is leveraged heavily by
+    Pods. We will examine how Pods work in detail in [Chapter 5](ch05.xhtml#pods).
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用容器与系统容器不同之处在于，它们通常运行单个程序。虽然每个容器运行单个程序可能看起来是一个不必要的约束，但这提供了组合可扩展应用程序所需的理想粒度，并且是Pods大量利用的设计哲学。我们将详细查看Pods在[第5章](ch05.xhtml#pods)中的工作原理。
+- en: Building Application Images with Docker
+  id: totrans-22
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用Docker构建应用程序镜像
+- en: In general, container orchestration systems like Kubernetes are focused on building
+    and deploying distributed systems made up of application containers. Consequently,
+    we will focus on application containers for the remainder of this chapter.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 总的来说，像Kubernetes这样的容器编排系统专注于构建和部署由应用容器组成的分布式系统。因此，本章剩余部分将重点放在应用容器上。
+- en: Dockerfiles
+  id: totrans-24
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Dockerfile
+- en: A Dockerfile can be used to automate the creation of a Docker container image.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以使用Dockerfile自动创建Docker容器镜像。
+- en: Let’s start by building an application image for a simple Node.js program. This
+    example would be very similar for many other dynamic languages, like Python or
+    Ruby.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们从为一个简单的Node.js程序构建一个应用程序镜像开始。对于许多其他动态语言（如Python或Ruby），这个例子都非常类似。
+- en: 'The simplest of npm/Node/Express apps has two files: *package.json* ([Example 2-1](#package-json))
+    and *server.js* ([Example 2-2](#server-js)). Put these in a directory and then
+    run `npm install express --save` to establish a dependency on Express and install
+    it.'
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最简单的 npm/Node/Express 应用程序有两个文件：*package.json*（[示例 2-1](#package-json)）和 *server.js*（[示例 2-2](#server-js)）。将它们放入一个目录中，然后运行
+    `npm install express --save` 来建立对 Express 的依赖并安装它。
+- en: Example 2-1\. package.json
+  id: totrans-28
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 2-1\. package.json
+- en: '[PRE0]'
+  id: totrans-29
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: Example 2-2\. server.js
+  id: totrans-30
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 2-2\. server.js
+- en: '[PRE1]'
+  id: totrans-31
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: 'To package this up as a Docker image, create two additional files: *.dockerignore*
+    ([Example 2-3](#dockerignore)) and the Dockerfile ([Example 2-4](#dockerfile-node)).
+    The Dockerfile is a recipe for how to build the container image, while *.dockerignore*
+    defines the set of files that should be ignored when copying files into the image.
+    A full description of the syntax of the Dockerfile is available on the [Docker
+    website](https://dockr.ly/2XUanvl).'
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要将其打包为 Docker 映像，创建两个额外的文件：*.dockerignore*（[示例 2-3](#dockerignore)）和 Dockerfile（[示例 2-4](#dockerfile-node)）。Dockerfile
+    是构建容器映像的配方，而 *.dockerignore* 定义了在将文件复制到映像中时应忽略的文件集。有关 Dockerfile 语法的完整描述，请访问[Docker
+    网站](https://dockr.ly/2XUanvl)。
+- en: Example 2-3\. .dockerignore
+  id: totrans-33
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 2-3\. .dockerignore
+- en: '[PRE2]'
+  id: totrans-34
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: Example 2-4\. Dockerfile
+  id: totrans-35
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 2-4\. Dockerfile
+- en: '[PRE3]'
+  id: totrans-36
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: '[![1](assets/1.png)](#co_creating_and_running_containers_CO1-1)'
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_creating_and_running_containers_CO1-1)'
+- en: Every Dockerfile builds on other container images. This line specifies that
+    we are starting from the `node:16` image on the Docker Hub. This is a preconfigured
+    image with Node.js 16.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个 Dockerfile 都基于其他容器映像构建。此行指定我们从 Docker Hub 上的`node:16`映像开始。这是一个预配置的带有 Node.js
+    16 的映像。
+- en: '[![2](assets/2.png)](#co_creating_and_running_containers_CO1-2)'
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_creating_and_running_containers_CO1-2)'
+- en: This line sets the work directory in the container image for all following commands.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此行设置容器映像中所有后续命令的工作目录。
+- en: '[![3](assets/3.png)](#co_creating_and_running_containers_CO1-3)'
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_creating_and_running_containers_CO1-3)'
+- en: These three lines initialize the dependencies for Node.js. First, we copy the
+    package files into the image. This will include *package.json* and *package-lock.json*.
+    The `RUN` command then runs the correct command *in the container* to install
+    the necessary dependencies.
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这三行初始化了 Node.js 的依赖关系。首先，我们将包文件复制到映像中。这将包括 *package.json* 和 *package-lock.json*。然后，`RUN`
+    命令在容器中运行正确的命令以安装必要的依赖项。
+- en: '[![4](assets/4.png)](#co_creating_and_running_containers_CO1-4)'
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_creating_and_running_containers_CO1-4)'
+- en: Now we copy the rest of the program files into the image. This will include
+    everything except *node_modules*, as that is excluded via the *.dockerignore*
+    file.
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，我们将其余的程序文件复制到映像中。这将包括除了 *node_modules* 之外的所有内容，因为 *.dockerignore* 文件排除了它。
+- en: '[![5](assets/5.png)](#co_creating_and_running_containers_CO1-5)'
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#co_creating_and_running_containers_CO1-5)'
+- en: Finally, we specify the command that should be run when the container is run.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，我们指定了容器运行时应运行的命令。
+- en: 'Run the following command to create the `simple-node` Docker image:'
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运行以下命令以创建 `simple-node` Docker 映像：
+- en: '[PRE4]'
+  id: totrans-48
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: 'When you want to run this image, you can do it with the following command.
+    Navigate to *http://localhost:3000* to access the program running in the container:'
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您想要运行此映像时，可以使用以下命令。导航至 *http://localhost:3000* 以访问在容器中运行的程序：
+- en: '[PRE5]'
+  id: totrans-50
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: At this point, our `simple-node` image lives in the local Docker registry where
+    the image was built and is only accessible to a single machine. The true power
+    of Docker comes from the ability to share images across thousands of machines
+    and the broader Docker community.
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此时，我们的`simple-node`映像存储在本地 Docker 注册表中，该映像是在构建时创建的，并且只能被单台机器访问。Docker 的真正强大之处在于能够在成千上万台机器和更广泛的
+    Docker 社区之间共享映像。
+- en: Optimizing Image Sizes
+  id: totrans-52
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 优化映像大小
+- en: 'There are several gotchas people encounter when they begin to experiment with
+    container images that lead to overly large images. The first thing to remember
+    is that files that are removed by subsequent layers in the system are actually
+    still present in the images; they’re just inaccessible. Consider the following
+    situation:'
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当人们开始尝试使用容器映像进行实验时，会遇到几个容易导致映像过大的问题。首先要记住的是，系统中后续层次删除的文件实际上仍然存在于映像中；它们只是不可访问。考虑以下情况：
+- en: '[PRE6]'
+  id: totrans-54
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: You might think that *BigFile* is no longer present in this image. After all,
+    when you run the image, it is no longer accessible. But in fact it is still present
+    in layer A, which means that whenever you push or pull the image, *BigFile* is
+    still transmitted through the network, even if you can no longer access it.
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可能认为*BigFile*不再存在于这个图像中。毕竟，当您运行图像时，它是不可访问的。但事实上，它仍然存在于层A中，这意味着每当您推送或拉取图像时，*BigFile*仍然通过网络传输，即使您无法再访问它。
+- en: Another pitfall revolves around image caching and building. Remember that each
+    layer is an independent delta from the layer below it. Every time you change a
+    layer, it changes every layer that comes after it. Changing the preceding layers
+    means that they need to be rebuilt, repushed, and repulled to deploy your image
+    to development.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个陷阱围绕图像缓存和构建。请记住，每一层都是独立于其下层的增量。每当您更改一层时，它会改变其后的每一层。更改前面的层意味着它们需要重新构建、重新推送和重新拉取，以便将您的图像部署到开发环境。
+- en: 'To understand this more fully, consider two images:'
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要更全面地理解这一点，请考虑两个图像：
+- en: '[PRE7]'
+  id: totrans-58
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: 'versus:'
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对比：
+- en: '[PRE8]'
+  id: totrans-60
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: It seems obvious that both of these images will behave identically, and indeed
+    the first time they are pulled, they do. However, consider what happens when *server.js*
+    changes. In the second case, it is only that change that needs to be pulled or
+    pushed, but in the first case, both *server.js* and the layer providing the `node`
+    package need to be pulled and pushed, since the `node` layer is dependent on the
+    *server.js* layer. In general, you want to order your layers from least likely
+    to change to most likely to change in order to optimize the image size for pushing
+    and pulling. This is why, in [Example 2-4](#dockerfile-node), we copy the *package*.json*
+    files and install dependencies before copying the rest of the program files. A
+    developer is going to update and change the program files much more often than
+    the dependencies.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 看起来显而易见，这两个图像的行为将是相同的，确实在它们第一次被拉取时是这样。然而，考虑一下*server.js*发生变化后会发生什么。在第二种情况下，只需要拉取或推送这个变化，但在第一种情况下，需要拉取和推送*server.js*和提供`node`包的层，因为`node`层依赖于*server.js*层。一般来说，您希望将图像层按从最不可能改变到最可能改变的顺序排列，以优化推送和拉取的图像大小。这就是为什么在[示例
+    2-4](#dockerfile-node)中，我们首先复制*package.json*文件并安装依赖项，然后再复制其余的程序文件。开发人员更频繁地会更新和改变程序文件，而不是依赖项。
+- en: Image Security
+  id: totrans-62
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 图像安全性
+- en: When it comes to security, there are no shortcuts. When building images that
+    will ultimately run in a production Kubernetes cluster, be sure to follow best
+    practices for packaging and distributing applications. For example, don’t build
+    containers with passwords baked in—and this includes not just in the final layer,
+    but any layers in the image. One of the counterintuitive problems introduced by
+    container layers is that deleting a file in one layer doesn’t delete that file
+    from preceding layers. It still takes up space, and it can be accessed by anyone
+    with the right tools—an enterprising attacker can simply create an image that
+    only consists of the layers that contain the password.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在安全性方面，没有捷径可走。在构建最终将在生产Kubernetes集群中运行的图像时，请务必遵循最佳实践来打包和分发应用程序。例如，不要在容器中嵌入密码——这不仅限于最终层，还包括图像中的任何层。容器层引入的一个违反直觉的问题之一是，在一个层中删除文件并不会从前面的层中删除该文件。它仍然占用空间，并且可以被具备正确工具的任何人访问——一位有进取心的攻击者可以简单地创建一个仅包含包含密码的层的图像。
+- en: Secrets and images should *never* be mixed. If you do so, you will be hacked,
+    and you will bring shame to your entire company or department. We all want to
+    be on TV someday, but there are better ways to go about that.
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 机密和图像*绝对不能*混合在一起。如果这样做，您将会被黑客攻击，并给整个公司或部门带来耻辱。我们都希望有朝一日能上电视，但有更好的方法去做这件事。
+- en: Additionally, because container images are narrowly focused on running individual
+    applications, a best practice is to minimize the files within the container image.
+    Every additional library in an image provides a potential vector for vulnerabilities
+    to appear in your application. Depending on the language, you can achieve very
+    small images with a very tight set of dependencies. This smaller set ensures that
+    your image isn’t exposed to vulnerabilities in libraries it would never use.
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另外，由于容器图像专注于运行单个应用程序，最佳实践是尽量减少容器图像中的文件。图像中每增加一个库都会为您的应用程序提供一个潜在的漏洞向量。根据语言的不同，您可以通过非常严格的依赖关系实现非常小的图像。这个较小的集合确保您的图像不会受到它永远不会使用的库的漏洞的影响。
+- en: Multistage Image Builds
+  id: totrans-66
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 多阶段图像构建
+- en: One of the most common ways to accidentally build large images is to do the
+    actual program compilation as part of the construction of the application container
+    image. Compiling code as part of the image build feels natural, and it is the
+    easiest way to build a container image from your program. The trouble with doing
+    this is that it leaves all of the unnecessary development tools, which are usually
+    quite large, lying around inside your image and slowing down your deployments.
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 意外构建大型镜像的最常见方法之一是将实际的程序编译作为构建应用程序容器镜像的一部分。作为镜像构建的一部分进行代码编译看起来很自然，也是从程序构建容器镜像的最简单方式。但这样做的问题在于，会留下所有不必要的开发工具，这些工具通常非常庞大，仍然保存在镜像内部，从而减慢部署速度。
+- en: To resolve this problem, Docker introduced *multistage builds*. With multistage
+    builds, rather than producing a single image, a Docker file can actually produce
+    multiple images. Each image is considered a stage. Artifacts can be copied from
+    preceding stages to the current stage.
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了解决这个问题，Docker 引入了 *多阶段构建*。使用多阶段构建，Docker 文件不再只生成一个镜像，实际上可以生成多个镜像。每个镜像被视为一个阶段。可以从前面的阶段复制构件到当前阶段。
+- en: To illustrate this concretely, we will look at how to build our example application,
+    `kuard`. This is a somewhat complicated application that involves a React.js frontend
+    (with its own build process) that then gets embedded into a Go program. The Go
+    program runs a backend API server that the *React.js* frontend interacts with.
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了具体说明这一点，我们将看一下如何构建我们的示例应用程序 `kuard`。这是一个稍微复杂的应用程序，涉及到一个有自己构建过程的 *React.js*
+    前端，然后嵌入到一个 Go 程序中。该 Go 程序运行一个后端 API 服务器，*React.js* 前端与其交互。
+- en: 'A simple Dockerfile might look like this:'
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个简单的 Dockerfile 可能看起来像这样：
+- en: '[PRE9]'
+  id: totrans-71
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: This Dockerfile produces a container image containing a static executable, but
+    it also contains all of the Go development tools and the tools to build the *React.js*
+    frontend and the source code for the application, neither of which are needed
+    by the final application. The image, across all layers, adds up to over 500 MB.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个 Dockerfile 生成一个包含静态可执行文件的容器镜像，但它还包含所有的 Go 开发工具以及构建 *React.js* 前端和应用程序源代码的工具，这两者对最终应用程序都不是必需的。整个镜像，包括所有层，总共超过
+    500 MB。
+- en: 'To see how we would do this with multistage builds, examine the following multistage
+    Dockerfile:'
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要查看如何使用多阶段构建来做到这一点，请查看以下多阶段 Dockerfile：
+- en: '[PRE10]'
+  id: totrans-74
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: This Dockerfile produces two images. The first is the *build* image, which contains
+    the Go compiler, *React.js* toolchain, and source code for the program. The second
+    is the *deployment* image, which simply contains the compiled binary. Building
+    a container image using multistage builds can reduce your final container image
+    size by hundreds of megabytes and thus dramatically speed up your deployment times,
+    since generally, deployment latency is gated on network performance. The final
+    image produced from this Dockerfile is somewhere around 20 MB.
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个 Dockerfile 生成两个镜像。第一个是 *构建* 镜像，其中包含 Go 编译器、*React.js* 工具链和程序源代码。第二个是 *部署*
+    镜像，只包含编译后的二进制文件。使用多阶段构建构建容器镜像可以将最终镜像大小减少数百兆字节，从而显著加快部署时间，因为通常情况下，部署延迟取决于网络性能。从这个
+    Dockerfile 生成的最终镜像大约为 20 MB。
+- en: 'These scripts are present in the `kuard` repository on [GitHub](https://oreil.ly/6c9MX)
+    and you can build and run this image with the following commands:'
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些脚本位于 [GitHub](https://oreil.ly/6c9MX) 上 `kuard` 仓库中，您可以使用以下命令构建和运行此镜像：
+- en: '[PRE11]'
+  id: totrans-77
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: Storing Images in a Remote Registry
+  id: totrans-78
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 在远程注册表中存储镜像
+- en: What good is a container image if it’s only available on a single machine?
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果一个容器镜像只能在单台机器上使用，那有什么用呢？
+- en: Kubernetes relies on the fact that images described in a Pod manifest are available
+    across every machine in the cluster. One option for getting this image to all
+    machines in the cluster would be to export the `kuard` image and import it on
+    each of them. We can’t think of anything more tedious than managing Docker images
+    this way. The process of manually importing and exporting Docker images has human
+    error written all over it. Just say no!
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 依赖于 Pod 清单中描述的镜像在集群中的每台机器上都可用的事实。将此镜像传输到集群中每台机器的一种选项是在每台机器上导出 `kuard`
+    镜像并导入它们。我们认为没有比这种方式更烦人的事情了。手动导入和导出 Docker 镜像过程中充满了人为错误。坚决不要这样做！
+- en: The standard within the Docker community is to store Docker images in a remote
+    registry. There are tons of options when it comes to Docker registries, and what
+    you choose will be largely based on your needs in terms of security and collaboration
+    features.
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Docker社区的标准是将Docker镜像存储在远程注册表中。在选择Docker注册表时，有大量选项，您的选择将主要基于安全性和协作功能的需求。
+- en: Generally speaking, the first choice you need to make regarding a registry is
+    whether to use a private or a public registry. Public registries allow anyone
+    to download images stored in the registry, while private registries require authentication
+    to download images. In choosing public versus private, it’s helpful to consider
+    your use case.
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一般来说，关于注册表，您需要做出的第一个选择是使用私有注册表还是公共注册表。公共注册表允许任何人下载存储在注册表中的镜像，而私有注册表则需要身份验证才能下载镜像。在选择公共还是私有注册表时，考虑您的用例是很有帮助的。
+- en: Public registries are great for sharing images with the world because they allow
+    for easy, unauthenticated use of the container images. You can easily distribute
+    your software as a container image and have confidence that users everywhere will
+    have the exact same experience.
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 公共注册表非常适合与世界分享镜像，因为它们允许轻松、无需身份验证地使用容器镜像。您可以将软件作为容器镜像分发，并确信用户在任何地方都会有完全相同的体验。
+- en: In contrast, a private registry is best for storing applications that are private
+    to your service and that you don’t want the world to use. Additionally, private
+    registries often provide better availability and security guarantees because they
+    are specific to you and your images rather than serving the world.
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 相比之下，私有注册表最适合存储您服务中私有的并且您不希望外界使用的应用程序。此外，私有注册表通常提供更好的可用性和安全性保证，因为它们专门为您和您的镜像而设计，而不是全球服务。
+- en: Regardless, to push an image, you need to authenticate to the registry. You
+    can generally do this with the `docker login` command, though there are some differences
+    for certain registries. In the examples in this book we are pushing to the Google
+    Cloud Platform registry, called the Google Container Registry (GCR); other clouds,
+    including Azure and Amazon Web Services (AWS), also have hosted container registries.
+    For new users hosting publicly readable images, the [Docker Hub](https://hub.docker.com)
+    is a great place to start.
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 无论如何，要推送镜像，您需要对注册表进行身份验证。通常可以使用`docker login`命令完成这一操作，尽管对于某些注册表可能有一些差异。在本书的示例中，我们将推送到Google
+    Cloud Platform注册表，称为Google Container Registry（GCR）；其他云服务商，包括Azure和Amazon Web Services（AWS），也有托管的容器注册表。对于托管公开可读镜像的新用户，[Docker
+    Hub](https://hub.docker.com)是一个很好的起点。
+- en: 'Once you are logged in, you can tag the `kuard` image by prepending the target
+    Docker registry. You can also append an identifier that is usually used for the
+    version or variant of that image, separated by a colon (`:`):'
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 登录后，您可以通过在目标Docker注册表前置标签化`kuard`镜像。您还可以附加一个标识符，通常用于该镜像的版本或变体，用冒号（`:`）分隔：
+- en: '[PRE12]'
+  id: totrans-87
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: 'Then you can push the `kuard` image:'
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后您可以推送`kuard`镜像：
+- en: '[PRE13]'
+  id: totrans-89
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: Now that the `kuard` image is available on a remote registry, it’s time to deploy
+    it using Docker. When we pushed the image to GCR, it was marked as public, so
+    it will be available everywhere without authentication.
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在`kuard`镜像已经在远程注册表上可用，是时候使用Docker部署它了。当我们将镜像推送到GCR时，它被标记为公共，因此无需身份验证即可在任何地方使用。
+- en: The Container Runtime Interface
+  id: totrans-91
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 容器运行时接口
+- en: Kubernetes provides an API for describing an application deployment, but relies
+    on a container runtime to set up an application container using the container-specific
+    APIs native to the target OS. On a Linux system that means configuring cgroups
+    and namespaces. The interface to this container runtime is defined by the Container
+    Runtime Interface (CRI) standard. The CRI API is implemented by a number of different
+    programs, including the `containerd-cri` built by Docker and the `cri-o` implementation
+    contributed by Red Hat. When you install the Docker tooling, the `containerd`
+    runtime is also installed and used by the Docker daemon.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes提供了描述应用部署的API，但依赖于容器运行时使用目标操作系统的特定容器API来设置应用程序容器。在Linux系统上，这意味着配置cgroups和命名空间。这种容器运行时的接口由容器运行时接口（Container
+    Runtime Interface，CRI）标准定义。CRI API由许多不同的程序实现，包括Docker构建的`containerd-cri`和Red Hat贡献的`cri-o`实现。安装Docker工具时，也会安装并使用`containerd`运行时由Docker守护进程使用。
+- en: Starting with release 1.25 of Kubernetes, only container runtimes that support
+    the CRI will work with Kubernetes. Fortunately, managed Kubernetes providers have
+    made this transition nearly automatic for users of managed Kubernetes.
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从 Kubernetes 1.25 版本开始，只有支持 CRI 的容器运行时才能与 Kubernetes 兼容。幸运的是，托管 Kubernetes 提供商已经使用户在托管
+    Kubernetes 上的过渡几乎自动化。
+- en: Running Containers with Docker
+  id: totrans-94
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用 Docker 运行容器
+- en: 'In Kubernetes, containers are usually launched by a daemon on each node called
+    the *kubelet*; however, it’s easier to get started with containers using the Docker
+    command-line tool. The Docker CLI tool can be used to deploy containers. To deploy
+    a container from the `gcr.io/kuar-demo/kuard-amd64:blue` image, run the following
+    command:'
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 中，通常通过每个节点上的一个叫做 *kubelet* 的守护进程启动容器；然而，使用 Docker 命令行工具更容易开始使用容器。Docker
+    CLI 工具可用于部署容器。要从 `gcr.io/kuar-demo/kuard-amd64:blue` 镜像部署容器，请运行以下命令：
+- en: '[PRE14]'
+  id: totrans-96
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: This command starts the `kuard` container and maps ports 8080 on your local
+    machine to 8080 in the container. The `--publish` option can be shortened to `-p`.
+    This forwarding is necessary because each container gets its own IP address, so
+    listening on *localhost* inside the container doesn’t cause you to listen on your
+    machine. Without the port forwarding, connections will be inaccessible to your
+    machine. The `-d` option specifies that this should run in the background (daemon),
+    while `--name kuard` gives the container a friendly name.
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此命令启动 `kuard` 容器，并将本地机器上的端口 8080 映射到容器中的 8080 端口。`--publish` 选项可以缩写为 `-p`。这种转发是必要的，因为每个容器都有自己的
+    IP 地址，所以在容器内部监听 *localhost* 不会导致您在本机上监听。如果没有端口转发，连接将无法访问您的机器。`-d` 选项指定此操作应在后台（守护进程）运行，而
+    `--name kuard` 给容器一个友好的名称。
+- en: Exploring the kuard Application
+  id: totrans-98
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 探索 kuard 应用程序
+- en: '`kuard` exposes a simple web interface, which you can load by pointing your
+    browser at *http://localhost:3000* or via the command line:'
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kuard` 提供了一个简单的 Web 接口，您可以通过浏览器加载 *http://localhost:3000* 或通过命令行来访问：'
+- en: '[PRE15]'
+  id: totrans-100
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: '`kuard` also exposes a number of interesting functions that we will explore
+    later on in this book.'
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kuard` 还暴露了许多我们将在本书后续部分探索的有趣功能。'
+- en: Limiting Resource Usage
+  id: totrans-102
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 限制资源使用
+- en: Docker enables applications to use fewer resources by exposing the underlying
+    cgroup technology provided by the Linux kernel. These capabilities are likewise
+    used by Kubernetes to limit the resources each Pod uses.
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Docker 通过暴露 Linux 内核提供的底层 cgroup 技术，使应用程序能够使用更少的资源。Kubernetes 也利用这些能力来限制每个 Pod
+    使用的资源。
+- en: Limiting memory resources
+  id: totrans-104
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 限制内存资源
+- en: One of the key benefits to running applications within a container is the ability
+    to restrict resource utilization. This allows multiple applications to coexist
+    on the same hardware and ensures fair usage.
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在容器内运行应用程序的一个关键好处是能够限制资源利用。这允许多个应用程序在同一台硬件上共存，并确保公平使用。
+- en: To limit `kuard` to 200 MB of memory and 1 GB of swap space, use the `--memory`
+    and `--memory-swap` flags with the `docker run` command.
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要限制 `kuard` 的内存为 200 MB 和交换空间为 1 GB，请使用 `docker run` 命令的 `--memory` 和 `--memory-swap`
+    标志。
+- en: 'Stop and remove the current `kuard` container:'
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 停止并删除当前的 `kuard` 容器：
+- en: '[PRE16]'
+  id: totrans-108
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: 'Then start another `kuard` container using the appropriate flags to limit memory
+    usage:'
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后，使用适当的标志启动另一个 `kuard` 容器以限制内存使用：
+- en: '[PRE17]'
+  id: totrans-110
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: If the program in the container uses too much memory, it will be terminated.
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果容器中的程序使用了过多的内存，它将被终止。
+- en: Limiting CPU resources
+  id: totrans-112
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 限制 CPU 资源
+- en: 'Another critical resource on a machine is the CPU. Restrict CPU utilization
+    using the `--cpu-shares` flag with the `docker run` command:'
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 机器上的另一个关键资源是 CPU。使用 `docker run` 命令的 `--cpu-shares` 标志来限制 CPU 利用率：
+- en: '[PRE18]'
+  id: totrans-114
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: Cleanup
+  id: totrans-115
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 清理
+- en: 'Once you are done building an image, you can delete it with the `docker rmi`
+    command:'
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 构建镜像完成后，您可以使用 `docker rmi` 命令删除它：
+- en: '[PRE19]'
+  id: totrans-117
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: 'or:'
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 或者：
+- en: '[PRE20]'
+  id: totrans-119
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: Images can either be deleted via their tag name (e.g., `gcr.io/kuar-demo/kuard-amd64:blue`)
+    or via their image ID. As with all ID values in the `docker` tool, the image ID
+    can be shortened as long as it remains unique. Generally only three or four characters
+    of the ID are necessary.
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 镜像可以通过它们的标签名称（例如 `gcr.io/kuar-demo/kuard-amd64:blue`）或它们的镜像 ID 来删除。与 `docker`
+    工具中的所有 ID 值一样，只要保持唯一性，镜像 ID 可以缩短。通常只需要三到四个字符的 ID。
+- en: It’s important to note that unless you explicitly delete an image, it will live
+    on your system forever, *even* if you build a new image with an identical name.
+    Building this new image simply moves the tag to the new image; it doesn’t delete
+    or replace the old image.
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 需要注意的是，除非您明确删除镜像，否则它将永远存在于您的系统中，*即使*您使用相同名称构建新镜像。构建此新镜像仅将标签移至新镜像；它不会删除或替换旧镜像。
+- en: Consequently, as you iterate while you are creating a new image, you will often
+    create many, many different images that take up unnecessary space on your computer.
+    To see the images currently on your machine, you can use the `docker images` command.
+    You can then delete tags you are no longer using.
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，在创建新镜像时进行迭代时，您通常会创建许多不必要占用计算机空间的不同镜像。要查看当前计算机上的镜像，可以使用`docker images`命令。然后可以删除不再使用的标签。
+- en: Docker provides a tool called `docker system prune` for doing general cleanup.
+    This will remove all stopped containers, all untagged images, and all unused image
+    layers cached as part of the build process. Use it carefully.
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Docker 提供了一个名为`docker system prune`的工具用于进行一般清理。这将删除所有停止的容器、所有未标记的镜像以及作为构建过程的一部分缓存的所有未使用的镜像层。请谨慎使用。
+- en: A slightly more sophisticated approach is to set up a `cron` job to run an image
+    garbage collector. For example, you can easily run `docker system prune` as a
+    recurring `cron` job, once per day or once per hour, depending on how many images
+    you are creating.
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 更复杂一点的方法是设置一个`cron`任务来运行镜像垃圾收集器。例如，您可以轻松地将`docker system prune`设置为定期的`cron`任务，每天一次或每次，具体取决于您创建的图像数量。
+- en: Summary
+  id: totrans-125
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 概要
+- en: Application containers provide a clean abstraction for applications, and when
+    packaged in the Docker image format, applications become easy to build, deploy,
+    and distribute. Containers also provide isolation between applications running
+    on the same machine, which helps avoid dependency conflicts.
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用程序容器为应用程序提供了一个清晰的抽象，并且当打包为 Docker 镜像格式时，应用程序变得易于构建、部署和分发。容器还在同一台机器上运行的应用程序之间提供隔离，有助于避免依赖冲突。
+- en: In future chapters, we’ll see how the ability to mount external directories
+    means we can run not only stateless applications in a container, but also applications
+    like MySQL and others that generate lots of data.
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在接下来的章节中，我们将看到挂载外部目录的能力意味着我们不仅可以在容器中运行无状态应用程序，还可以运行生成大量数据的应用程序，例如 MySQL 和其他应用。

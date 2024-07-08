@@ -1,0 +1,387 @@
+- en: Chapter 10\. Encryption of Data in Transit
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第10章。数据在传输中的加密
+- en: As you move mission-critical workloads to production, it is very likely that
+    you will need to encrypt data in transit. It is a very important requirement for
+    certain types of data to meet compliance requirements and also a good security
+    practice.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 随着将关键任务工作负载转移到生产环境，您很可能需要加密传输中的数据。这对于满足某些类型数据的合规要求以及良好的安全实践非常重要。
+- en: Encryption of data in transit is a requirement defined by many compliance standards,
+    such as HIPAA, GDPR, and PCI. The specific requirements vary somewhat; for example,
+    PCI DSS (Payment Card Industry Data Security Standard) has rules around encryption
+    of cardholder data while in transit. Depending on the specific compliance standard,
+    you may need to ensure data in transit between the applications or microservices
+    hosted in Kubernetes is encrypted using a recognized strong encryption algorithm.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 数据在传输中的加密是许多合规标准（如HIPAA、GDPR和PCI）规定的要求。具体要求略有不同；例如，PCI DSS（支付卡行业数据安全标准）有关在传输过程中加密持卡人数据的规定。根据具体的合规标准，您可能需要确保在Kubernetes中托管的应用程序或微服务之间传输的数据使用认可的强加密算法进行加密。
+- en: And depending on the architecture of your application or microservices, it may
+    be that not all data being sent over the network is classified as sensitive, so
+    theoretically you might strictly only need to encrypt a subset of the data in
+    transit. However, from the perspective of operational simplicity and ease of compliance
+    auditing, it often makes sense to encrypt all data in transit between your microservices,
+    rather than trying to do it selectively.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 根据应用程序或微服务的架构，可能并非所有通过网络发送的数据都被分类为敏感数据，因此从理论上讲，您可能只需对传输中的数据子集进行严格加密。然而，从操作简易性和合规审计的角度来看，通常对微服务之间的所有数据进行加密是合理的选择，而不是尝试选择性加密。
+- en: Even if you do not have strong requirements imposed by external compliance standards,
+    it can still be a very good practice to encrypt data in transit. Without encryption,
+    malicious actors with network access could see sensitive information. How you
+    assess this risk may vary depending on whether you are using public cloud or on-prem/private
+    cloud infrastructure, and the internal security processes you have in place as
+    an organization. In most cases, if you are handling sensitive data, then you should
+    really be encrypting data in transit.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 即使您没有外部合规标准强制的强制要求，加密数据在传输中仍然可以是一种非常好的做法。没有加密，拥有网络访问权限的恶意行为者可以看到敏感信息。您如何评估这种风险可能会因您使用的是公共云还是本地/私有云基础架构以及您作为组织的内部安全流程而异。在大多数情况下，如果您处理敏感数据，那么您真的应该加密传输中的数据。
+- en: If you are providing services that are accessed by clients on the public internet,
+    then the standard practice of using HTTPS applies to Kubernetes. Depending on
+    your microservice architecture, these HTTPS connections can be terminated on the
+    destination microservice, or they may be terminated by a Kubernetes Ingress solution,
+    either as in-cluster Ingress pods (e.g., when using the NGINX Ingress Controller)
+    or out-of-cluster application load balancers (e.g., when using the AWS Load Balancer
+    Controller). Note that if using an out-of-cluster application load balancer, it’s
+    important to still make sure that the connection from the load balancer to the
+    destination microservice uses HTTPS to avoid an unencrypted network hop.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您提供的服务是由公共互联网上的客户访问的，则Kubernetes适用HTTPS的标准做法。根据您的微服务架构，这些HTTPS连接可以在目标微服务上终止，也可以由Kubernetes
+    Ingress解决方案终止，无论是作为集群内Ingress pods（例如使用NGINX Ingress Controller时）还是作为集群外应用程序负载均衡器（例如使用AWS负载均衡器控制器时）。请注意，如果使用集群外应用程序负载均衡器，则仍然需要确保从负载均衡器到目标微服务的连接使用HTTPS，以避免未加密的网络跳跃。
+- en: 'Within the cluster itself, there are three broad approaches to encrypting data
+    in transit:'
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在集群内部，有三种广泛的方法来加密传输中的数据：
+- en: Build encryption capabilities into your application/microservices code.
+  id: totrans-7
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在您的应用程序/微服务代码中构建加密功能。
+- en: Use sidecar- or service mesh–based encryption to encrypt at the application
+    layer without needing code changes to your applications/microservices.
+  id: totrans-8
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用基于sidecar或服务网格的加密，在无需对您的应用程序/微服务进行代码更改的情况下，在应用程序层加密。
+- en: Use network-level encryption, again without the need for code changes to your
+    applications/microservices.
+  id: totrans-9
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用网络级加密，无需对您的应用程序/微服务进行代码更改。
+- en: We will now explore the pros and cons of each approach.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们将探讨每种方法的利弊。
+- en: Building Encryption into Your Code
+  id: totrans-11
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 将加密集成到您的代码中
+- en: There are libraries to encrypt network connections for most programming languages,
+    so in theory you could choose to build encryption into your microservices as you
+    build them. For example, you could use HTTPS SSL/TLS or even mTLS (mutual TLS)
+    to validate the identity of both ends of the connection.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大多数编程语言都有用于加密网络连接的库，因此理论上您可以选择在构建微服务时将加密集成到其中。例如，您可以使用HTTPS SSL/TLS甚至mTLS（双向TLS）来验证连接两端的身份。
+- en: 'However, this approach has a number of drawbacks:'
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，这种方法有许多缺点：
+- en: In many organizations, different microservices are built using different programming
+    languages, with each microservice development team using the language that is
+    most suited for that particular microservice and team’s expertise. For example,
+    a frontend web UI microservice might be written using Node.js, and a middle-layer
+    microservice might be written in Python or Golang. As each programming language
+    has its own set of libraries available for encryption, this means that the implementation
+    effort increases, potentially with each microservices team having to implement
+    encryption for their microservice rather than being able to leverage a single
+    shared implementation across all microservices.
+  id: totrans-14
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在许多组织中，不同的微服务使用不同的编程语言构建，每个微服务开发团队都使用最适合其特定微服务和团队专长的语言。例如，前端Web UI微服务可能使用Node.js编写，中间层微服务可能使用Python或Golang编写。由于每种编程语言都有其可用于加密的库集合，这意味着实施工作量增加，可能需要每个微服务团队为其微服务实施加密，而不是能够跨所有微服务共享单一实现。
+- en: Building on this idea of not having a single shared implementation for encryption,
+    the same applies to configuration of the microservices, in particular, how the
+    microservice reads its credentials required for encryption.
+  id: totrans-15
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 建立在不使用单一共享加密实现的理念基础上，微服务的配置也是如此，特别是微服务读取用于加密所需凭证的方式。
+- en: In addition to the effort involved in developing and maintaining all this code,
+    the more implementations you have, the more likely it is that one of the implementations
+    will have bugs in it that lead to security flaws.
+  id: totrans-16
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 除了开发和维护所有这些代码所需的工作量之外，您拥有的实现越多，某个实现中存在导致安全漏洞的错误可能性就越大。
+- en: It is not uncommon for older versions of encryption libraries to have known
+    vulnerabilities that are fixed in new versions. By the time a new version is released
+    to address any newly discovered vulnerability, the vulnerability is public knowledge.
+    This in turn increases the number of attacks targeted at exploiting the vulnerability.
+    To mitigate against this, it is essential to update any microservices that use
+    the library as soon as possible. If you are running many microservices, this may
+    represent a significant development and test effort, since the code for each microservice
+    needs to be updated and tested individually. On top of that, if you don’t have
+    a lot of automation built into your CI/CD process, then there may also be the
+    operational headache of updating each microservice version with the live cluster.
+  id: totrans-17
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 旧版加密库通常存在已知的漏洞，在新版本中得到修复。一旦发布新版本以解决任何新发现的漏洞，这些漏洞就会变为公开知识。这进一步增加了针对利用漏洞的攻击数量。为了减少风险，尽快更新使用该库的任何微服务至关重要。如果运行多个微服务，这可能代表显著的开发和测试工作量，因为每个微服务的代码都需要单独更新和测试。此外，如果您的CI/CD过程中缺乏大量自动化，那么更新每个微服务版本到生产集群中可能会增加操作上的头疼。
+- en: Many microservices are based on third-party open source code (either in part
+    or for the whole of the microservice). Often this means you are limited to the
+    specific encryption options supported by the third-party code, and in many cases
+    the specific configuration mechanisms that the third-party code supports. You
+    also become dependent on the upstream maintainers of the third-party code to keep
+    the open source project up to date and address vulnerabilities as they are discovered.
+  id: totrans-18
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 许多微服务基于第三方开源代码（部分或整体）。这通常意味着您只能使用第三方代码支持的特定加密选项，并且在许多情况下，您还会依赖于第三方代码支持的特定配置机制。您还会依赖于第三方代码的上游维护者，以确保开源项目保持更新，并在发现漏洞时进行修复。
+- en: Finally, it is important to note that there is often operational overhead when
+    it comes to provisioning encryption settings and credentials across disparate
+    implementations and their various configuration paradigms.
+  id: totrans-19
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 最后，重要的是要注意，在配置不同实现及其各种配置范例时，通常存在操作开销，特别是在提供加密设置和凭据时。
+- en: The bottom line, then, is that while it is possible to build encryption into
+    each of your microservices, the effort involved and the risk of unknowingly introducing
+    security flaws (due to code or design issues or outdated encryption libraries)
+    can make this approach feel pretty daunting and unattractive.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，总的来说，虽然可以在每个微服务中构建加密功能，但涉及的工作量以及由于代码或设计问题或过时的加密库而不知不觉地引入安全漏洞的风险，可能会使这种方法显得相当令人望而却步。
+- en: Sidecar or Service Mesh Encryption
+  id: totrans-21
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 边车或服务网格加密
+- en: An alternative architectural approach to encrypting traffic between microservices
+    at the application layer is to use the sidecar design pattern. The sidecar is
+    a container that can be included in every Kubernetes pod alongside the main container(s)
+    that implement the microservice. The sidecar intercepts connections being made
+    to/from the microservice and performs the encryption on behalf of the microservice,
+    without any code changes in the microservice itself. The sidecar can either be
+    explicitly included in the pod specification or it can be injected into the pod
+    specification using an admission controller at creation time.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在应用层面对微服务之间的流量进行加密的另一种架构方法是使用边车设计模式。边车是一个容器，可以与实现微服务的主要容器一起包含在每个 Kubernetes
+    Pod 中。边车拦截与微服务进行的连接，并代表微服务执行加密，而无需对微服务本身进行任何代码更改。边车可以显式地包含在 Pod 规范中，也可以在创建时通过准入控制器注入到
+    Pod 规范中。
+- en: Compared to building encryption into each microservice, the sidecar approach
+    has the advantage that a single implementation of encryption can be used across
+    all microservices, independent of the programming language the microservice might
+    have been written in. It means there is a single implementation to keep up to
+    date, which in turn makes it easier to roll out vulnerability fixes or security
+    improvements across all microservices with minimal effort.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 相较于在每个微服务中构建加密功能，边车（sidecar）方法的优势在于可以在所有微服务中使用单一的加密实现，独立于微服务可能使用的编程语言。这意味着只需维护一个实现，就可以轻松更新漏洞修复或安全改进，从而在所有微服务中进行推广。
+- en: You could in theory develop such a sidecar yourself. But unless you have some
+    niche requirement, it would usually be better to use one of the many existing
+    free open source implementations already available, which have had a significant
+    amount of security review and in-field hardening.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 理论上，您可以开发自己的边车。但除非您有某些特定需求，通常最好使用已经可用的众多免费开源实现之一，这些实现经过了大量的安全审查和现场强化。
+- en: One popular example is the Envoy proxy, originally developed by the team at
+    Lyft, which is often used to encrypt microservice traffic using mTLS (mutual TLS).
+    Mutual TLS means that both the source and destination microservices provide credentials
+    as part of setting up the connection, so each microservice can be sure it is talking
+    to the other intended microservice. Envoy has a rich configuration model, but
+    does not itself provide a control or management plane, so you would need to write
+    your own automation processes to configure Envoy to work in the way you want it
+    to.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个广受欢迎的例子是由 Lyft 团队最初开发的 Envoy 代理，通常用于使用 mTLS（双向 TLS）加密微服务流量。双向 TLS 意味着源和目标微服务在建立连接时都提供凭据，因此每个微服务都可以确保与预期的其他微服务进行通信。Envoy
+    拥有丰富的配置模型，但本身不提供控制或管理平面，因此您需要编写自己的自动化流程来配置 Envoy 以按照您希望的方式工作。
+- en: Rather than writing this automation yourself, an alternative approach is to
+    use one of the many service mesh solutions that follow a sidecar model. For example,
+    the Istio service mesh provides a packaged solution using Envoy as the sidecar
+    integrated with the Istio control and management plane. Service meshes provide
+    many features beyond encryption, including service routing and visibility. While
+    service meshes are becoming increasingly popular, a widely acknowledged potential
+    downside of their richer feature set is it can introduce operational complexity,
+    or make the service mesh harder to understand at a nuts-and-bolts level with a
+    greater number of moving parts. Another downside is the security risk associated
+    with the sidecar design pattern where the sidecar is part of every application
+    pod and there is additional complexity of managing sidecars (for example, a CVE
+    may require you to update sidecars, and this is not a trivial update as it impacts
+    all applications).
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与其自己编写此自动化，另一种方法是使用遵循旁路模式的许多服务网格解决方案之一。例如，Istio服务网格提供了一个打包解决方案，使用Envoy作为集成到Istio控制和管理平面的旁路。服务网格除了加密外，还提供许多功能，包括服务路由和可见性。虽然服务网格越来越受欢迎，但其更丰富的功能集被普遍认为可能引入操作复杂性，或者使得服务网格在螺丝和螺母层面更难理解，因为涉及更多运行部件。另一个缺点是与旁路设计模式相关的安全风险，其中旁路是每个应用程序Pod的一部分，管理旁路的复杂性增加（例如，一个CVE可能需要您更新旁路，这并非简单更新，因为它会影响所有应用程序）。
+- en: Network-Layer Encryption
+  id: totrans-27
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 网络层加密
+- en: Implementing encryption with the microservice or using a sidecar model is often
+    referred to as *application-layer encryption*. Essentially, the application (microservice
+    or sidecar) handles all of the encryption, and the network is just responsible
+    for sending and receiving packets, without being aware the encryption is happening
+    at all.
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 实现微服务中的加密或使用旁路模式通常被称为*应用层加密*。本质上，应用程序（微服务或旁路）处理所有加密，而网络只负责发送和接收数据包，完全不知道加密正在进行。
+- en: An alternative to application-layer encryption is to implement encryption within
+    the network layer. From the application’s perspective, it is sending unencrypted
+    data, and it is the network layer that takes responsibility for encrypting the
+    packets before they are transmitted across the network.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 实施加密的另一种选择是在网络层内部实现加密。从应用程序的角度来看，它发送的是未加密数据，而网络层负责在数据传输到网络之前对数据包进行加密。
+- en: One of the main standards for network-layer encryption that has been widely
+    used throughout the industry for many years is IPsec. Most IPsec implementations
+    support a broad range of encryption algorithms, such as AES encryption, with varying
+    key lengths. IPsec is often paired with IKE (Internet Key Exchange) as a mechanism
+    for managing and communicating the host credentials (certificates and keys) that
+    IPsec needs to work. There are a number of open source projects, such as the popular
+    strongSwan solution, that provide IKE implementations and make creating and managing
+    IPsec networks easier.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 多年来在行业中广泛使用的网络层加密的主要标准之一是IPsec。大多数IPsec实现支持广泛的加密算法，如具有不同密钥长度的AES加密。IPsec通常与IKE（Internet
+    Key Exchange）配对，作为管理和传输IPsec所需的主机凭证（证书和密钥）的机制。有许多开源项目，如流行的强Swan解决方案，提供IKE实现，简化创建和管理IPsec网络。
+- en: Some enterprises choose to use solutions such as strongSwan as their preferred
+    solution for managing IPsec, which they then run Kubernetes on top of. In this
+    case Kubernetes is not really aware of IPsec. Even with projects such as strongSwan
+    helping to make IPsec easier to set up and manage, many regard IPsec as being
+    quite heavyweight and tricky to manage from an overall operational perspective.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一些企业选择使用强Swan等解决方案作为其首选的IPsec管理解决方案，然后在其上运行Kubernetes。在这种情况下，Kubernetes并不真正了解IPsec。即使像强Swan这样的项目帮助简化和管理IPsec设置，许多人仍认为IPsec在整体运营角度上相当笨重且难以管理。
+- en: One alternative to IPsec is WireGuard. WireGuard is a newer encryption implementation
+    designed to be extremely simple yet fast, using state-of-the-art cryptography.
+    Architecturally, it is simpler, and initial testing indicates that it does outperform
+    IPsec in various circumstances. It should be noted though that development continues
+    on both WireGuard and IPsec, and in particular as advances are made to cryptographic
+    algorithms, the comparative performance of both will likely evolve.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: IPsec 的一个替代方案是 WireGuard。WireGuard 是一种较新的加密实现，旨在极其简单且快速，采用最先进的密码学。在架构上，它更为简单，初步测试表明，在各种情况下，它确实优于
+    IPsec。但需要注意的是，WireGuard 和 IPsec 都在继续开发中，尤其是随着加密算法的进展，它们的比较性能可能会发生变化。
+- en: Rather than setting up and managing IPsec or WireGuard yourself, an operationally
+    easier approach for most organizations is to use a Kubernetes network plug-in
+    with built-in support for encryption. There are a variety of Kubernetes network
+    plug-ins that support different types of encryption, with varying performance
+    characteristics.
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于大多数组织而言，与其自行设置和管理 IPsec 或 WireGuard，更为操作简单的方法是使用内置支持加密的 Kubernetes 网络插件。有各种
+    Kubernetes 网络插件支持不同类型的加密，具有不同的性能特征。
+- en: If you are running network-intensive workloads, then it is important to consider
+    the performance cost of encryption. This cost applies whether you are encrypting
+    at the application layer or at the network layer, but the choice of encryption
+    technology can make a significant difference to performance. For example, [Figure 10-1](#benchmark_results_for_encryption_in_kub)
+    shows independent benchmark results for four popular Kubernetes network plug-ins
+    (the most recent benchmarks available at the time of writing, published in 2020).
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您运行网络密集型工作负载，则考虑加密的性能成本至关重要。无论您是在应用层还是在网络层进行加密，这个成本都会存在，但加密技术的选择对性能可能会产生显著影响。例如，[图
+    10-1](#benchmark_results_for_encryption_in_kub) 显示了四种流行的 Kubernetes 网络插件的独立基准结果（这是在撰写本文时最新的基准测试结果，发布于2020年）。
+- en: Using a Kubernetes network plug-in that supports encryption is typically significantly
+    simpler from an operational standpoint, with many fewer moving parts than adopting
+    a service mesh, and significantly less effort than building encryption into your
+    application/microservice code. If your primary motivation for adopting a service
+    mesh is security through encryption, then using a Kubernetes network plug-in that
+    supports network-layer encryption along with Kubernetes network policies is likely
+    to be significantly easier to manage and maintain. Please note that we cover other
+    aspects of service mesh like observability in [Chapter 5](ch05.xhtml#observability-id000002).
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用支持加密的 Kubernetes 网络插件，通常在操作上要简单得多，动态部署的组件也更少，比采用服务网格要简单得多，并且比将加密集成到应用程序/微服务代码中所需的工作量也少得多。如果您采用服务网格的主要动机是通过加密来确保安全性，那么使用支持网络层加密的
+    Kubernetes 网络插件以及 Kubernetes 网络策略可能更容易管理和维护。请注意，我们在[第5章](ch05.xhtml#observability-id000002)中还涵盖了服务网格的其他方面，如可观察性。
+- en: '![](Images/ksao_1001.png)'
+  id: totrans-36
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/ksao_1001.png)'
+- en: Figure 10-1\. Benchmark results for encryption in Kubernetes
+  id: totrans-37
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 10-1\. Kubernetes 中加密的基准结果
+- en: Conclusion
+  id: totrans-38
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 结论
+- en: 'In this chapter we presented various options to implement encryption of data
+    in transit and various approaches to implement encryption in a Kubernetes cluster.
+    We hope this enables you to pick the option most suited for your use case. Here
+    are a few things to remember:'
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们介绍了实现数据传输加密的各种选项，以及在 Kubernetes 集群中实现加密的各种方法。我们希望这能帮助您选择最适合您用例的选项。以下是一些需要记住的事项：
+- en: As you move mission-critical workloads to production, for certain types of data,
+    you will need to implement encryption for data in transit. We recommend implementing
+    encryption of data in transit even if compliance requirements do not require you
+    to encrypt all data.
+  id: totrans-40
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 随着您将关键工作负载转移到生产环境，对于某些类型的数据，您需要实现数据传输加密。即使合规要求不要求对所有数据进行加密，我们也建议实现数据传输加密。
+- en: 'We covered the well-known methods of how you can implement encryption: application-layer
+    encryption, sidecar-based encryption using a service mesh, and network-layer encryption.'
+  id: totrans-41
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 我们介绍了实施加密的常见方法：应用层加密、基于 sidecar 的服务网格加密以及网络层加密。
+- en: Based on operational simplicity and better performance, we recommend network-layer
+    encryption.
+  id: totrans-42
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 基于操作简易性和更好的性能，我们推荐网络层加密。

@@ -1,0 +1,1176 @@
+- en: Chapter 9\. Exposing Services to External Clients
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第9章 将服务暴露给外部客户端
+- en: 'In earlier chapters we explored how network policy is one of the primary tools
+    for securing Kubernetes. This is true for both pod-to-pod traffic within the cluster
+    (east-west traffic) and for traffic between pods and external entities outside
+    of the cluster (north-south traffic). For all of these traffic types, the best
+    practice is the same: Use network policy to limit which network connections are
+    allowed to the narrowest scope needed, so the only connections that are allowed
+    are the ones you expect and need for your specific applications or microservices
+    to work.'
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在早期的章节中，我们探讨了网络策略是保护 Kubernetes 的主要工具之一。这适用于集群内部的 pod-to-pod 流量（东西向流量）以及 pod
+    与集群外部实体（南北向流量）之间的流量。对于所有这些流量类型，最佳实践都是相同的：使用网络策略来限制允许的网络连接到最窄的需要范围，因此只有您期望和需要的特定应用程序或微服务的连接才被允许。
+- en: 'In the case of pods that need to be accessed by external clients outside of
+    the cluster, this means restricting connections:'
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于需要由集群外部客户端访问的 pods，这意味着限制连接：
+- en: To the specific port(s) that the corresponding microservice is expecting incoming
+    connections to
+  id: totrans-3
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 与相应微服务期望接收传入连接的特定端口(s)。
+- en: From the specific clients that need to connect to the microservice
+  id: totrans-4
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 从需要连接到微服务的特定客户端。
+- en: It’s not uncommon for a particular microservice to be consumed just within the
+    enterprise (whether on-prem or in a public cloud) by a limited number of clients.
+    In this case the Kubernetes network policy rules ideally should limit incoming
+    connections to just the IP addresses, or IP address range, associated with the
+    clients. Even if a microservice is being exposed to the public internet (for example,
+    exposing the frontend microservices for a publicly accessible SaaS or website),
+    there are still cases where access may need to be restricted to some extent. For
+    example, it may be a requirement to block access from certain geographies for
+    compliance reasons, or it may be desirable to block access from known bad actors
+    or threat feeds.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 特定的微服务通常只在企业内部（无论是本地还是公共云）被有限数量的客户端消耗是常见的。在这种情况下，理想情况下 Kubernetes 网络策略规则应该限制传入连接到与客户端相关的
+    IP 地址或 IP 地址范围。即使微服务暴露给公共互联网（例如，为公共可访问的 SaaS 或网站暴露前端微服务），仍然有一些情况需要在一定程度上限制访问。例如，基于合规性原因可能需要阻止某些地理位置的访问，或者可能希望阻止已知的不良行为者或威胁源的访问。
+- en: Unfortunately, how you go about implementing this best practice needs to include
+    the consideration of which network plug-ins and Kubernetes primitives are used
+    to expose the microservice outside the cluster. In particular, in some cases the
+    original client source IP address is preserved all the way to the pod, which allows
+    Kubernetes network policies to easily limit access to specific clients. In other
+    cases the client source IP gets obscured by network address translation (NAT)
+    associated with network load balancing, or by connection termination associated
+    with application layer load balancing.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不幸的是，实施这一最佳实践的方式需要考虑使用哪些网络插件和 Kubernetes 原语来将微服务暴露在集群外部。特别是，在某些情况下，原始客户端源 IP
+    地址会被保留到达 pod，这使得 Kubernetes 网络策略能够轻松地限制对特定客户端的访问。在其他情况下，客户端源 IP 地址可能会被与网络负载平衡相关的网络地址转换（NAT）或与应用层负载平衡相关的连接终止所模糊。
+- en: 'In this chapter we will explore different client source IP behaviors available
+    across the three main options for exposing an application or microservice outside
+    of the cluster: direct pod connections, Kubernetes services, and Kubernetes Ingress.'
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们将探讨在三种主要选项中暴露应用程序或微服务到集群外部时可用的不同客户端源 IP 行为：直接 pod 连接、Kubernetes 服务和 Kubernetes
+    Ingress。
+- en: Understanding Direct Pod Connections
+  id: totrans-8
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 了解直接 pod 连接
+- en: It’s relatively uncommon for pods to be directly accessed by clients outside
+    of the cluster rather than being accessed via a Kubernetes service or Kubernetes
+    Ingress. However, there are scenarios where this may be desired or required. For
+    example, some types of distributed data stores may require multiple pods, each
+    with specific IP addresses that can be configured for data distribution or clients
+    to peer with.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pods 直接被集群外的客户端访问而不是通过 Kubernetes 服务或 Kubernetes Ingress 访问相对较少见。然而，在某些场景下可能希望或需要这样做。例如，某些类型的分布式数据存储可能需要多个
+    pod，每个 pod 都有特定的 IP 地址，可以配置用于数据分发或客户端对等连接。
+- en: 'Supporting direct connections to pod IP addresses from outside of the cluster
+    requires a pod network that makes pod IP addresses routable beyond the boundary
+    of the cluster. This typically means using one of the following:'
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 支持从集群外部直接连接到pod IP地址需要使用使pod IP地址在集群边界之外可路由的pod网络。通常意味着使用以下之一：
+- en: A cloud provider network plug-in in public cloud clusters (e.g., the Amazon
+    VPC CNI plug-in, as used by default in EKS)
+  id: totrans-11
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 公共云集群中的云提供者网络插件（例如，默认在EKS中使用的Amazon VPC CNI插件）
+- en: A network plug-in that can use BGP to integrate with an on-prem enterprise network
+    (e.g., Kube-router, Calico CNI plug-in).
+  id: totrans-12
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 可以使用BGP与本地企业网络集成的网络插件（例如，Kube-router、Calico CNI插件）。
+- en: In addition to the underlying networking supporting the connectivity, the clients
+    need a way of finding out the pod IP addresses. This may be done via DNS, explicit
+    configuration of the client, or some other third-party service discovery mechanism.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了底层网络支持的连接性之外，客户端还需要一种方法来找出pod IP地址。这可以通过DNS、客户端的显式配置或其他第三方服务发现机制来完成。
+- en: 'From a security point of view, connections from clients directly to pods are
+    straightforward: They have the original client source IP address in place all
+    the way to the pod, which means network policy can easily be used to restrict
+    access to clients with particular IP addresses or from particular IP address ranges.'
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从安全角度来看，客户端直接到pod的连接非常简单：它们在整个过程中都保留着原始客户端源IP地址，这意味着可以轻松使用网络策略来限制特定IP地址的客户端访问或特定IP地址范围的访问。
+- en: Note though that in any cluster where pod IP addresses are routable beyond the
+    boundary of the cluster, it becomes even more important to ensure network policy
+    best practices are followed. Without network policy in place, pods that should
+    only be receiving east-west connections could be accessed from outside of the
+    cluster without the need for configuring a corresponding externally accessible
+    Kubernetes service type or Kubernetes Ingress.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，在任何pod IP地址在集群边界之外可路由的集群中，确保遵循网络策略的最佳实践变得更为重要。如果没有网络策略，本应仅接收东西向连接的pod可能会被从集群外访问，而无需配置相应的可外部访问的Kubernetes服务类型或Kubernetes
+    Ingress。
+- en: Understanding Kubernetes Services
+  id: totrans-16
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 理解Kubernetes服务
+- en: Kubernetes services provide a convenient mechanism for accessing pods from outside
+    of the cluster using services of type NodePort or LoadBalancer or by explicitly
+    configuring an External IP for the service. By default, Kubernetes services are
+    implemented by kube-proxy. Kube-proxy runs on every node in the cluster and is
+    responsible for intercepting connections to Kubernetes services and load-balancing
+    them across the pods backing the corresponding service. This connection handling
+    has a well-defined behavior for when source IP addresses are preserved and when
+    they are not, which we will look at now for each service type.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes服务通过NodePort或LoadBalancer类型的服务或通过显式配置服务的外部IP，为从集群外部访问pod提供了一种便捷的机制。默认情况下，Kubernetes服务由kube-proxy实现。kube-proxy在集群中的每个节点上运行，并负责拦截到Kubernetes服务的连接，并跨支持相应服务的pod进行负载平衡。这种连接处理具有对源IP地址保留和不保留的明确定义行为，我们将在每种服务类型中进行详细讨论。
+- en: Cluster IP Services
+  id: totrans-18
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Cluster IP服务
+- en: Before we dig into exposing pods to external clients using Kubernetes services,
+    it is worth understanding how Kubernetes services behave for connections originating
+    from inside the cluster. The primary mechanism for service discovery and load
+    balancing of these connections within the cluster (i.e., pod-to-pod connectivity)
+    makes use of Kubernetes services of type Cluster IP. For Cluster IP services,
+    kube-proxy is able to use destination network address translation (DNAT) to map
+    connections to the service’s Cluster IP to the pods backing the service. This
+    mapping is reversed for any return packets on the connection. The mapping is done
+    without changing the source IP address, as illustrated in [Figure 9-1](#network_path_for_a_kubernetes_service).
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在我们探讨如何使用Kubernetes服务将pod暴露给外部客户端之前，值得了解的是，为集群内部发起的连接（即pod到pod的连接）提供服务发现和负载平衡的主要机制使用的是Cluster
+    IP类型的Kubernetes服务。对于Cluster IP服务，kube-proxy能够使用目标网络地址转换（DNAT）将连接映射到服务的Cluster
+    IP到支持相应服务的pod。连接返回数据包时会反向映射此映射。此映射不会更改源IP地址，如[图9-1](#network_path_for_a_kubernetes_service)中所示。
+- en: '![](Images/ksao_0901.png)'
+  id: totrans-20
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/ksao_0901.png)'
+- en: Figure 9-1\. Network path for a Kubernetes service advertising Cluster IP
+  id: totrans-21
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图9-1. Kubernetes服务广告集群IP的网络路径
+- en: Importantly, the destination pod sees the connection has originated from the
+    IP address of the client pod. This means that any network policy applied to the
+    destination pod behaves as expected and is not impacted by the fact that the connection
+    was load balanced via the service’s Cluster IP. In addition, any network policy
+    egress rules that apply to the client pod are evaluated after the mapping from
+    Cluster IP to destination pod has happened. This means that network policy applied
+    to the client pod also behaves as expected, independent of the fact that the connection
+    was load balanced via the service’s cluster IP. (As a reminder, network policy
+    rules match on pod labels, not on service labels.)
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 重要的是，目标Pod看到连接是从客户端Pod的IP地址发起的。这意味着适用于目标Pod的任何网络策略都按预期行为，不受连接通过服务的集群IP进行负载平衡的影响。此外，适用于客户端Pod的任何网络策略出口规则在从集群IP映射到目标Pod后进行评估。这意味着适用于客户端Pod的网络策略也按预期行为，与连接通过服务的集群IP进行负载平衡无关。（作为提醒，网络策略规则匹配Pod标签，而不是服务标签。）
+- en: Node Port Services
+  id: totrans-23
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 节点端口服务
+- en: The most basic way to access a service from outside the cluster is to use a
+    Kubernetes service of type NodePort. A node port is a port reserved on each node
+    in the cluster through which the service can be accessed. In a typical Kubernetes
+    deployment, kube-proxy is responsible for intercepting connections to node ports
+    and load-balancing them across the pods backing each service.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从集群外部访问服务的最基本方法是使用类型为NodePort的Kubernetes服务。节点端口是集群中每个节点上保留的端口，通过它可以访问每个服务支持的Pod。在典型的Kubernetes部署中，kube-proxy负责拦截对节点端口的连接，并在支持每个服务的Pod之间进行负载平衡。
+- en: As part of this process, NAT is used to map the destination IP address and port
+    from the node IP and node port to the chosen backing pod and service port. However,
+    unlike connections to cluster IPs, where the NAT maps only the destination IP
+    address, in the case of node ports the source IP address is also mapped from the
+    client IP to the node IP.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在此过程的一部分中，NAT用于将节点IP和节点端口的目标IP地址和端口映射到所选的后备Pod和服务端口。然而，与连接到集群IP不同，其中NAT仅映射目标IP地址，对于节点端口而言，源IP地址也从客户端IP映射到节点IP。
+- en: If the source IP address was not mapped in this way, then any response packets
+    on the connection would flow directly back to the external client, bypassing the
+    ability for kube-proxy on the original ingress node to reverse the mapping of
+    the destination IP address. (It’s the node that performed the NAT that has the
+    connection tracking state needed to reverse the NAT.) As a result, the external
+    client would drop the packets because it would not recognize them as being part
+    of the connection it made to the node port on the original ingress node.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果源IP地址没有以这种方式映射，那么连接上的任何响应数据包都将直接流回到外部客户端，绕过原始入口节点上kube-proxy反向映射目标IP地址的能力。（执行NAT的节点具有反向NAT所需的连接跟踪状态。）结果，外部客户端将丢弃数据包，因为它无法识别这些数据包是否属于其与原始入口节点上节点端口建立的连接。
+- en: The process is illustrated in [Figure 9-2](#network_path_for_a_kubernetes_service_u).
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个过程在[图9-2](#network_path_for_a_kubernetes_service_u)中有所说明。
+- en: '![](Images/ksao_0902.png)'
+  id: totrans-28
+  prefs: []
+  type: TYPE_IMG
+  zh: '![ksao_0902.png](Images/ksao_0902.png)'
+- en: Figure 9-2\. Network path for a Kubernetes service using node ports
+  id: totrans-29
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图9-2. 使用节点端口的Kubernetes服务的网络路径
+- en: Since the NAT changes the source IP address, any network policy that applies
+    to the destination pod cannot match on the original client IP address. Typically
+    this means that any such policy is limited to restricting the destination protocol
+    and port and cannot restrict based on the external client’s IP address. This in
+    turn means the best practice of limiting access to the specific clients that need
+    to connect to the microservice cannot easily be implemented with Kubernetes network
+    policy in this configuration.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于NAT更改了源IP地址，适用于目标Pod的任何网络策略都不能匹配原始客户端IP地址。通常这意味着任何此类策略仅限于限制目标协议和端口，并且无法基于外部客户端的IP地址进行限制。这反过来意味着在这种配置下，很难像最佳实践那样限制需要连接到微服务的特定客户端的访问，无法轻松地通过Kubernetes网络策略来实现。
+- en: 'Fortunately, there are a number of solutions that can be used to circumvent
+    the limitations of this default behavior of node ports:'
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 幸运的是，有多种解决方案可用于规避节点端口默认行为的限制：
+- en: Configuring the service with `externalTrafficPolicy:local`
+  id: totrans-32
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 配置服务使用 `externalTrafficPolicy:local`
+- en: Using a network plug-in that supports node-port-aware network policy extensions
+  id: totrans-33
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用支持节点端口感知网络策略扩展的网络插件
+- en: Using an alternative implementation for service load balancing in place of kube-proxy
+    that preserves client source IP addresses
+  id: totrans-34
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用替代实现的服务负载均衡，取代保留客户端源 IP 地址的 kube-proxy
+- en: We will cover each of these later in this chapter. But before that, to complete
+    our picture of how the default behavior of mainline Kubernetes services work,
+    let’s look at services of type LoadBalancer.
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将在本章后面详细介绍这些内容。但在此之前，为了完整地了解主流 Kubernetes 服务默认行为的情况，让我们看看类型为 LoadBalancer
+    的服务。
+- en: Load Balancer Services
+  id: totrans-36
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 负载均衡器服务
+- en: Services of type LoadBalancer build on the behavior of node ports by integrating
+    with external network load balancers. The exact type of network load balancer
+    depends on which public cloud provider, or if on-prem, which specific hardware
+    load balancer integration, is integrated with your cluster.
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 类型为 LoadBalancer 的服务基于节点端口的行为，与外部网络负载均衡器集成。具体的网络负载均衡器类型取决于与您的集群集成的公共云提供商，或者在本地情况下，取决于集成的特定硬件负载均衡器。
+- en: The service can be accessed from outside of the cluster via a specific IP address
+    on the network load balancer, which by default will load-balance evenly across
+    the nodes to the service’s node port.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，可以通过网络负载均衡器上的特定 IP 地址从集群外部访问服务，该负载均衡器将默认均衡负载到服务的节点端口上的所有节点。
+- en: Most network load balancers are located at a point in the network where return
+    traffic on a connection will always be routed via the network load balancer, and
+    therefore they can implement their load balancing using only DNAT, leaving the
+    client source IP address unaltered by the network load balancer, as illustrated
+    in [Figure 9-3](#network_path_for_a_kubernetes_service_o).
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大多数网络负载均衡器位于网络中的某个点，连接的返回流量始终通过网络负载均衡器路由，因此它们可以仅使用 DNAT 实施负载均衡，网络负载均衡器不会改变客户端源
+    IP 地址，如 [图 9-3](#network_path_for_a_kubernetes_service_o) 所示。
+- en: '![](Images/ksao_0903.png)'
+  id: totrans-40
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/ksao_0903.png)'
+- en: Figure 9-3\. Network path for a Kubernetes service of type LoadBalancer
+  id: totrans-41
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 9-3\. 类型为 LoadBalancer 的 Kubernetes 服务的网络路径
+- en: However, because the network load balancer is load-balancing to the service’s
+    node port, and kube-proxy’s default node port behavior changes the source IP address
+    as part of its load balancing implementation, the destination pod still cannot
+    match on the original client source IP address. Just like with vanilla node port
+    services, this in turn means the best practice of limiting access to the specific
+    clients that need to connect to the microservice cannot easily be implemented
+    with Kubernetes network policy in this configuration.
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，由于网络负载均衡器正在负载均衡到服务的节点端口，并且 kube-proxy 的默认节点端口行为在其负载均衡实现中更改了源 IP 地址，目标 Pod
+    仍然无法匹配原始客户端源 IP 地址。就像使用原始节点端口服务一样，这反过来意味着在这种配置中很难通过 Kubernetes 网络策略实施限制连接到微服务的特定客户端的最佳做法。
+- en: 'Fortunately, the same solutions that can be used to circumvent the limitations
+    of the default behavior of services of type NodePort can be used in conjunction
+    with services of type LoadBalancer:'
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 幸运的是，可以与 NodePort 类型服务的默认行为限制相同的解决方案一起使用，与 LoadBalancer 类型服务一起使用：
+- en: Configuring the service with `externalTrafficPolicy:local`
+  id: totrans-44
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 配置服务为 `externalTrafficPolicy:local`
+- en: Using a network plug-in that supports node-port-aware network policy extensions
+  id: totrans-45
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用支持节点端口感知网络策略扩展的网络插件
+- en: Using an alternative implementation for service load balancing in place of kube-proxy
+    that preserves client source IP addresses
+  id: totrans-46
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用替代实现的服务负载均衡，取代保留客户端源 IP 地址的 kube-proxy
+- en: Let’s look at each of those now.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在让我们分别看看这些。
+- en: externalTrafficPolicy:local
+  id: totrans-48
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: externalTrafficPolicy:local
+- en: By default, the node port associated with a service is available on every node
+    in the cluster, and services of type LoadBalancer load-balance to the service’s
+    node port evenly across all of the nodes, independent of which nodes may actually
+    be hosting backing pods for the service. This behavior can be changed by configuring
+    the service with `externalTrafficPolicy:local`, which specifies that connections
+    should only be load balanced to pods backing the service on the local node.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，与服务关联的节点端口在集群中的每个节点上都可用，并且类型为 LoadBalancer 的服务将负载均衡到服务的节点端口，独立于实际托管服务的节点。可以通过配置服务为
+    `externalTrafficPolicy:local` 来更改此行为，该配置指定连接应仅负载均衡到本地节点上支持服务的 Pod。
+- en: When combined with services of type LoadBalancer, connections to the service
+    are only directed to nodes that host at least one pod backing the service. This
+    reduces the potential extra network hop between nodes associated with kube-proxy’s
+    normal node port handling. Perhaps more importantly, since each node’s kube-proxy
+    is only load-balancing to pods on the same node, kube-proxy does not need to perform
+    source network address translation as part of the load balancing, meaning that
+    the client source IP address is preserved all the way to the pod. (As a reminder,
+    kube-proxy’s default handling of node ports on the ingress node normally needs
+    to NAT the source IP address so that return traffic flows back via the original
+    ingress node, since that is the node that has the required traffic state to reverse
+    the NAT.)
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当与负载均衡器类型的服务结合使用时，连接将仅定向到至少托管一个支持该服务的 pod 的节点。这样可以减少与 kube-proxy 正常节点端口处理相关的节点之间的潜在额外网络跳数。更重要的是，由于每个节点的
+    kube-proxy 仅对同一节点上的 pod 进行负载均衡，所以 kube-proxy 在负载均衡时无需执行源网络地址转换，这意味着客户端源 IP 地址可以一直保留到
+    pod。
+- en: Network flow is illustrated in [Figure 9-4](#network_path_for_a_kubernetes_service_l).
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 网络流程示例见 [图 9-4](#network_path_for_a_kubernetes_service_l)。
+- en: '![](Images/ksao_0904.png)'
+  id: totrans-52
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/ksao_0904.png)'
+- en: Figure 9-4\. Network path for a Kubernetes service leveraging the optimization
+    to route to the node backing the pod
+  id: totrans-53
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 9-4. 利用优化路由到支持 pod 的节点的 Kubernetes 服务的网络路径
+- en: As the original client source IP address is preserved all the way to the backing
+    pod, network policy applied to the backing pod is now able to restrict access
+    to the service to only the specific client IP addresses or address ranges that
+    need to be able to access the service.
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于原始客户端源 IP 地址一直保留到支持的 pod，因此现在可以将应用于支持的 pod 的网络策略限制为仅允许访问服务的特定客户端 IP 地址或地址范围。
+- en: Note that not all load balancers support this mode of operation. So it is important
+    to check whether this is supported by the specific public cloud provider, or if
+    on-prem, the specific hardware load balancer integration, that is integrated with
+    your cluster. The good news is that most of the large public providers do support
+    this mode. Some load balancers can even go a step further, bypassing kube-proxy
+    and load-balancing directly to the backing pods without using the node port.
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注意，并非所有负载均衡器都支持此操作模式。因此，重要的是检查特定公共云提供商是否支持此功能，或者如果在本地部署，检查与集群集成的特定硬件负载均衡器是否支持此功能。好消息是，大多数大型公共提供商都支持此模式。一些负载均衡器甚至可以更进一步，跳过
+    kube-proxy，直接向支持的 pod 进行负载均衡，而不使用节点端口。
+- en: Network Policy Extensions
+  id: totrans-56
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 网络策略扩展
+- en: Some Kubernetes network plug-ins provide extensions to the standard Kubernetes
+    network policy capabilities, which can be used to help secure access to services
+    from outside of the cluster.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一些 Kubernetes 网络插件提供了标准 Kubernetes 网络策略能力的扩展，可用于帮助安全地访问集群外的服务。
+- en: There are many solutions that provide network policy extensions (e.g., Weave
+    Net, Kuberouter, Calico). Let’s look at Calico once again, as it’s our area of
+    expertise. Calico includes support for host endpoints, which allow network policies
+    to be applied to the nodes within a cluster, not just pods within the cluster.
+    Whereas standard Kubernetes network policy can be thought of as providing a virtual
+    firewall within the pod network in front of every pod, Calico’s host endpoint
+    extensions can be thought of as providing a virtual firewall in front of every
+    node/host, as illustrated in [Figure 9-5](#virtual_firewall_using_host_endpoint_pr).
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 存在许多解决方案提供网络策略扩展（例如 Weave Net、Kuberouter、Calico）。让我们再次关注 Calico，因为这是我们的专业领域。Calico
+    支持主机端点，允许将网络策略应用于集群内的节点，而不仅仅是集群内的 pod。标准 Kubernetes 网络策略可以被认为是在每个 pod 网络前面提供虚拟防火墙，而
+    Calico 的主机端点扩展可以被认为是在每个节点/主机前面提供虚拟防火墙，如 [图 9-5](#virtual_firewall_using_host_endpoint_pr)
+    所示。
+- en: In addition, Calico’s network policy extensions support the ability to specify
+    whether the policy rules applied to host endpoints apply before or after the NAT
+    associated with kube-proxy’s load balancing. This means that they can be used
+    to limit which clients can connect to specific node ports, unencumbered by whatever
+    load-balancing decisions kube-proxy may be about to make.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此外，Calico 的网络策略扩展支持指定主机端点应用的策略规则是在 kube-proxy 负载均衡相关的 NAT 之前还是之后。这意味着它们可以用于限制哪些客户端能够连接到特定的节点端口，不受
+    kube-proxy 可能即将做出的负载均衡决策的影响。
+- en: '![](Images/ksao_0905.png)'
+  id: totrans-60
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/ksao_0905.png)'
+- en: Figure 9-5\. Virtual firewall using host endpoint protection
+  id: totrans-61
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 9-5\. 使用主机端点保护的虚拟防火墙
+- en: Alternatives to kube-proxy
+  id: totrans-62
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 替代 kube-proxy
+- en: Kube-proxy provides the default implementation for Kubernetes services and is
+    included as standard in most clusters. However, some network plug-ins provide
+    alternative implementations of Kubernetes services to replace kube-proxy.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kube-proxy 提供了 Kubernetes 服务的默认实现，并且在大多数集群中作为标准包含。然而，一些网络插件提供了替代的 Kubernetes
+    服务实现来取代 kube-proxy。
+- en: For some network plug-ins, this alternative implementation is necessary because
+    the particular way the plug-in implements pod networking is not compatible with
+    kube-proxy’s dataplane (which uses the standard Linux networking pipeline controlled
+    by iptables and/or IPVS). For other network plug-ins, the alternative implementation
+    is optional. For example, a CNI that implements a Linux eBPF dataplane will choose
+    to replace kube-proxy in favor of its native service implementation.
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于某些网络插件，由于插件实现的 pod 网络方式与 kube-proxy 的数据平面不兼容（kube-proxy 使用由 iptables 和/或 IPVS
+    控制的标准 Linux 网络管道），因此需要进行这种替代实现。对于其他网络插件，替代实现是可选的。例如，实现了 Linux eBPF 数据平面的 CNI 将选择替换
+    kube-proxy，采用其本地服务实现。
+- en: Some of these alternative implementations provide additional capabilities beyond
+    kube-proxy’s behavior. One such additional capability that is relevant from a
+    security perspective is the ability to preserve the client source IP address all
+    the way to the back pods when load-balancing from external clients.
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些替代实现中的一些提供了超出 kube-proxy 行为的额外功能。从安全角度来看，其中一个相关的附加功能是在从外部客户端进行负载均衡时保留客户端源
+    IP 地址直到后端 pod。
+- en: For example, [Figure 9-6](#network_path_for_a_kubernetes_servic) illustrates
+    how an eBPF-based dataplane implements this behavior.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，[图 9-6](#network_path_for_a_kubernetes_servic) 展示了基于 eBPF 的数据平面如何实现这种行为。
+- en: '![](Images/ksao_0906.png)'
+  id: totrans-67
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/ksao_0906.png)'
+- en: Figure 9-6\. Network path for a Kubernetes service with an eBPF-based implementation
+  id: totrans-68
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 9-6\. 基于 eBPF 实现的 Kubernetes 服务的网络路径
+- en: This allows the original client source IP address to be preserved all the way
+    to the packing pod for services of type NodePort or LoadBalancer, without requiring
+    support for `externalTrafficPolicy:local` in network load balancers or node selection
+    for node ports. This in turn means that network policy applied to the backing
+    pod is able to restrict access to the service to only the specific clients, IP
+    addresses, or address ranges that need to be able to access the service.
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这允许原始客户端源 IP 地址一直保留到服务的打包 pod，适用于类型为 NodePort 或 LoadBalancer 的服务，无需网络负载均衡器支持
+    `externalTrafficPolicy:local` 或节点端口的节点选择。这反过来意味着应用于支持 pod 的网络策略能够限制只有特定客户端、IP
+    地址或地址范围能够访问服务。
+- en: 'Beyond the security considerations, these alternative Kubernetes services implementations
+    (e.g., eBPF-based dataplanes) provide other advantages over kube-proxy’s implementation,
+    such as:'
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了安全考虑，这些替代的 Kubernetes 服务实现（如基于 eBPF 的数据平面）相比于 kube-proxy 的实现还提供其他优势，例如：
+- en: Improved performance when running with very high numbers of services, including
+    reduced first packet latencies and reduced control plane CPU usage
+  id: totrans-71
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在运行非常多服务时提升了性能，包括减少了首个数据包的延迟和减少了控制平面的 CPU 使用率
+- en: Direct server return (DSR), which reduces the number of network hops for return
+    traffic
+  id: totrans-72
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 直接服务器返回（DSR），用于减少返回流量的网络跳数
+- en: We will look at DSR more closely next, since it does have some security implications.
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将更详细地查看 DSR，因为它确实具有一些安全方面的影响。
+- en: Direct Server Return
+  id: totrans-74
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 直接服务器返回
+- en: DSR allows the return traffic from the destination pod to flow directly back
+    to the client rather than going via the original ingress node. There are several
+    network plug-ins that are able to replace kube-proxy’s service handling with their
+    own implementations that support DSR. For example, a eBPF dataplane that includes
+    native service handling and (optionally) can use DSR for return traffic is illustrated
+    in [Figure 9-7](#network_path_for_a_kubernetes_service_w).
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: DSR 允许目标 Pod 的返回流量直接流回客户端，而不必经过原始入口节点。有几种网络插件可以用它们自己的实现替换 kube-proxy 的服务处理，支持
+    DSR。例如，包括本地服务处理的 eBPF 数据平面（可选地）可以使用 DSR 处理返回流量，如图 9-7 所示。
+- en: '![](Images/ksao_0907.png)'
+  id: totrans-76
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/ksao_0907.png)'
+- en: Figure 9-7\. Network path for a Kubernetes service with direct server return
+  id: totrans-77
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 9-7\. Kubernetes 服务的网络路径，具有直接服务器返回
+- en: 'Eliminating one network hop for the return traffic reduces:'
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 消除返回流量的一个网络跳跃会减少：
+- en: The overall latency for the service (since every network hop introduces latency)
+  id: totrans-79
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 服务的整体延迟（因为每个网络跳跃都会引入延迟）
+- en: The CPU load on the original ingress node (since it is no longer dealing with
+    return traffic)
+  id: totrans-80
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 原始入口节点的 CPU 负载（因为它不再处理返回流量）
+- en: The east-west network traffic within the cluster
+  id: totrans-81
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 集群内部的东西向网络流量
+- en: For particularly network-intensive or latency-sensitive applications, this can
+    be a big win. However, there are also security implications of DSR. In particular,
+    the underlying network may need to be configured with fairly relaxed reverse path
+    filtering (RPF) settings.
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于特别网络密集或延迟敏感的应用程序，这可能是一个巨大的优势。然而，DSR 也有安全影响。特别是，底层网络可能需要配置相对放宽的反向路径过滤（RPF）设置。
+- en: RPF is a network routing mechanism that blocks any traffic from a particular
+    source IP address where there is not a corresponding route to that IP address
+    over the same link. That is, if the router doesn’t have a route that says it can
+    send traffic to a particular IP address over the network link, then it will not
+    allow traffic from that IP address over the network link. RPF makes it harder
+    for attackers to “spoof” IP addresses—i.e., pretend to be a different IP address
+    than what the device has been allocated.
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: RPF 是一种网络路由机制，阻止来自特定源 IP 地址的任何流量，如果没有相应的路由可以通过同一链路发送到该 IP 地址，则会阻止该流量。也就是说，如果路由器没有一条路由表明可以通过网络链路发送到特定的
+    IP 地址，则它不会允许来自该 IP 地址的流量通过网络链路。RPF 使攻击者更难“欺骗”IP 地址，即假装成不同于设备分配的 IP 地址。
+- en: 'In the context of DSR and Kubernetes services, [Figure 9-7](#network_path_for_a_kubernetes_service_w)
+    illustrates a few key points:'
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 DSR 和 Kubernetes 服务的背景下，[图 9-7](#network_path_for_a_kubernetes_service_w)
+    展示了几个关键点：
+- en: If the service is being accessed via a node port on Node 1, then the return
+    traffic from Node 2 will have the source IP address of Node 1\. So the underlying
+    network must be configured with relaxed RPF settings, otherwise the network will
+    filter out the return traffic because the network would not normally route traffic
+    to Node 1 via the network link to Node 2.
+  id: totrans-85
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如果通过节点 1 上的节点端口访问服务，则来自节点 2 的返回流量将具有节点 1 的源 IP 地址。因此，底层网络必须配置放宽的 RPF 设置，否则网络将过滤返回流量，因为网络通常不会通过节点
+    2 的网络链路路由到节点 1。
+- en: If the service is being accessed via service IP advertisement (e.g., sending
+    traffic directly to a service’s cluster IP, external IP, or load balancer IP),
+    then the return traffic from Node 2 will have the source IP address of the service
+    IP. In this case, no relaxation of RPF is required, since the service IP should
+    be advertised from all nodes in the cluster, meaning the network will have routes
+    to the service IP via all nodes. We’ll cover service IP advertising in more detail
+    later in this chapter.
+  id: totrans-86
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如果通过服务 IP 广告（例如，直接发送流量到服务的集群 IP、外部 IP 或负载均衡器 IP）访问服务，则来自节点 2 的返回流量将具有服务 IP 的源
+    IP 地址。在这种情况下，不需要放宽反向路径过滤（RPF），因为服务 IP 应该从集群中的所有节点广告，意味着网络将通过所有节点路由到服务 IP。我们将在本章后面更详细地讨论服务
+    IP 广告。
+- en: As explained earlier, DSR is an excellent optimization that you can use, but
+    you need to review your use case and ensure that you are comfortable with disabling
+    the RPF check.
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如前面所解释的，DSR 是一种优秀的优化技术，您可以使用它，但需要审查您的用例，并确保您能够禁用 RPF 检查而感到舒适。
+- en: Limiting Service External IPs
+  id: totrans-88
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 限制服务的外部 IP
+- en: So far in this chapter we have focused on how service types and implementations
+    impact how network policy can be used to restrict access to services to only the
+    specific client IP addresses or address ranges that need to be able to access
+    each service.
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，在本章中，我们专注于服务类型和实现方式如何影响网络策略的使用，以限制只有特定的客户端IP地址或地址范围可以访问每个服务。
+- en: Another important security consideration is the power associated with users
+    who have permissions to create or configure Kubernetes services. In particular,
+    any user who has RBAC permissions to modify a Kubernetes service effectively has
+    control over which pods that service is load balanced to. If used maliciously,
+    this could mean the user is able to divert traffic that was intended for a particular
+    microservice to their own malicious pods.
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个重要的安全考虑是具有权限创建或配置Kubernetes服务的用户所拥有的权力。特别是，任何具有RBAC权限修改Kubernetes服务的用户实际上控制着该服务负载平衡到哪些Pod。如果恶意使用，这可能意味着用户能够将本应发送到特定微服务的流量重定向到他们自己的恶意Pod。
+- en: As Kubernetes services are namespaces resources, this rarely equates to a genuine
+    security issue for mainline service capabilities. For example, a user who has
+    been granted permissions to define services in a particular namespace will typically
+    also have permission to modify pods in that namespace. So for standard service
+    capabilities such as handling of cluster IPs, node ports, or load balancers, the
+    permissions to define and modify services in the namespace doesn’t really represent
+    any more trust than having permissions to define or modify pods in the namespace.
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于Kubernetes服务是命名空间资源，这很少会成为主流服务功能的真正安全问题。例如，已被授予在特定命名空间中定义服务权限的用户通常也有权限修改该命名空间中的Pod。因此，对于标准服务功能（如处理集群IP、节点端口或负载均衡器），在命名空间中定义和修改服务的权限实际上并不表示比在命名空间中定义或修改Pod的更高信任级别。
+- en: There is one notable exception, though, which is the ability to specify external
+    IPs for services. The externalIP field in a service definition allows the user
+    to associate an arbitrary IP address with the service. Connections to this IP
+    address received on any node in the cluster are load balanced to the pods backing
+    the service.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，还有一个显著的例外，即能够为服务指定外部IP的能力。服务定义中的externalIP字段允许用户将任意IP地址与服务关联起来。在集群中的任何节点上接收到对此IP地址的连接将被负载平衡到支持该服务的Pod。
+- en: The normal use case is to provide an IP-oriented alternative to node ports that
+    can be used by external clients to connect to a service. This use case usually
+    requires special handling within the underlying network in order to route connections
+    to the external IP to the nodes in the cluster. This may be achieved by programming
+    static routes into the underlying network, or in a BGP-capable network, using
+    BGP to dynamically advertise the external IP. (See the next section for more details
+    on advertising service IP addresses.)
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正常使用情况是提供一个面向IP的替代方案，用于外部客户端连接到服务。此用例通常需要在底层网络中进行特殊处理，以便将连接路由到集群中的节点上。这可以通过在底层网络中编程静态路由来实现，或者在支持BGP的网络中，使用BGP动态广播外部IP。
+    （有关广告服务IP地址的更多详细信息，请参阅下一节。）
+- en: Like the mainline service capabilities, this use case is relatively benign in
+    terms of the level of trust for users. It allows them to offer an additional way
+    to reach the pods in the namespaces they have permission to manage, but does not
+    interfere with traffic destined to pods in other namespaces.
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与主流服务功能类似，此用例在用户信任级别上相对温和。它允许用户为管理权限的命名空间中的Pod提供一种额外的访问方式，但不会干扰流向其他命名空间中的Pod的流量。
+- en: However, just like with node ports, connections from pods to external IPs are
+    also intercepted and load balanced to the service backing pods. As Kubernetes
+    does not police or attempt to provide any level of validation on external IP addresses,
+    this means a malicious user can effectively intercept traffic to any IP address,
+    without any namespace or other scope restrictions. This is an extremely powerful
+    tool for a malicious user and represents a correspondingly large security risk.
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，与节点端口一样，从Pod到外部IP的连接也会被拦截并负载平衡到支持该服务的Pod。由于Kubernetes不会对外部IP地址进行监控或尝试提供任何级别的验证，这意味着恶意用户实际上可以截取到任何IP地址的流量，而无需任何命名空间或其他范围限制。这对于恶意用户来说是一个极为强大的工具，同时也代表着相应的巨大安全风险。
+- en: If you are following the best practice of having default deny–style policies
+    for both ingress and egress traffic that apply across all pods in the cluster,
+    then this significantly hampers the malicious user’s attempt to get access to
+    traffic that should have been between two other pods. However, although the network
+    policy will stop them from accessing the traffic, it doesn’t stop the service
+    load balancing from diverting the traffic from its intended destination, which
+    means that the malicious user can effectively block traffic between any two pods
+    even though they cannot receive the traffic themselves.
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您遵循最佳实践，即在整个集群中为入站和出站流量都采用默认拒绝的策略，那么这将极大地阻碍恶意用户试图访问应该在两个其他Pod之间的流量。然而，虽然网络策略将阻止它们访问流量，但服务负载平衡不会阻止将流量从其预期的目的地转移，这意味着恶意用户可以有效地阻止任何两个Pod之间的流量，即使他们自己无法接收到流量。
+- en: So in addition to following network policy best practices, it is recommended
+    to use an admission controller to restrict which users can specify or modify the
+    externalIP field. For users who are allowed to specify external IP addresses,
+    it may also be desirable to restrict the IP address values to a specific IP address
+    range that is deemed safe (i.e., a range that is not being used for any other
+    purpose). For more discussion of admission controllers, see [Chapter 8](ch08.xhtml#managing_trust_across_teams).
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，除了遵循网络策略的最佳实践外，建议使用准入控制器来限制可以指定或修改外部IP字段的用户。对于允许指定外部IP地址的用户，还可能希望将IP地址值限制在被认为安全的特定IP地址范围内（即未用于任何其他目的的范围）。有关准入控制器的更多讨论，请参见[第8章](ch08.xhtml#managing_trust_across_teams)。
+- en: Advertising Service IPs
+  id: totrans-98
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 广告服务IP
+- en: One alternative to using node ports or network load balancers is to advertise
+    service IP addresses over BGP. This requires the cluster to be running on an underlying
+    network that supports BGP, which typically means an on-prem deployment with standard
+    top-of-rack routers.
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用节点端口或网络负载均衡器的一种替代方法是通过BGP广告服务IP地址。这需要集群在支持BGP的底层网络上运行，通常意味着使用标准顶部机架路由器的本地部署。
+- en: For example, Calico supports advertising the service clusterIP, loadBalancerIP,
+    or externalIP for services configured with one. If you are not using Calico as
+    your network plug-in, then MetalLB provides similar capabilities that work with
+    a variety of different network plug-ins.
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，Calico支持广告服务集群IP、负载均衡器IP或配置了一个外部IP的服务。如果您不使用Calico作为您的网络插件，那么MetalLB提供了类似的功能，可以与各种不同的网络插件一起使用。
+- en: Advertising service IPs effectively allows the underlying network routers to
+    act as load balancers, without the need for an actual network load balancer.
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 广告服务IP有效地允许底层网络路由器充当负载均衡器，而无需实际的网络负载均衡器。
+- en: The security considerations for advertising service IPs are equivalent to those
+    of normal node port– or load balancer–based services discussed earlier in this
+    chapter. When using kube-proxy, the original client IP address is obscured by
+    default, as illustrated in [Figure 9-8](#network_path_for_a_kubernetes_servi).
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 广告服务IP的安全考虑与本章前面讨论的基于节点端口或负载均衡器的服务相当。在使用kube-proxy时，默认情况下会通过模糊示原始客户端IP地址，如[图 9-8](#network_path_for_a_kubernetes_servi)所示。
+- en: '![](Images/ksao_0908.png)'
+  id: totrans-103
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/ksao_0908.png)'
+- en: Figure 9-8\. Network path for a Kubernetes service advertising Cluster IP via
+    BGP
+  id: totrans-104
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 9-8\. 通过BGP广告集群IP的Kubernetes服务的网络路径
+- en: This behavior can be changed using `externalTrafficPolicy:local`, which (at
+    the time of writing) is supported by kube-proxy for both loadBalancerIP and externalIP
+    addresses but not clusterIP addresses. However, it should be noted that when using
+    `externalTrafficPolicy:local`, the evenness of the load balancing becomes topology-dependent.
+    To circumvent this, pod anti-affinity rules can be used to ensure even distribution
+    of backing pods across your topology, but this does add some complexity to deploying
+    the service.
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种行为可以通过使用`externalTrafficPolicy:local`来更改，该选项（截至撰写本文时）由kube-proxy支持，适用于负载均衡器IP和外部IP地址，但不适用于集群IP地址。然而，应注意，当使用`externalTrafficPolicy:local`时，负载均衡的均匀性变为依赖于拓扑结构。为了规避这一问题，可以使用Pod反亲和性规则，以确保在拓扑结构中均匀分布支持Pod，但这确实增加了部署服务的复杂性。
+- en: Alternatively, a network plug-in with native service handling (replacing kube-proxy)
+    that supports source IP address preservation can be used. This combination can
+    be very appealing for on-prem deployments due to its operational simplicity and
+    removal of the need to build network load balancer appliances into the network
+    topology.
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 或者，可以使用具有本地服务处理的网络插件（替换 kube-proxy），支持源 IP 地址保留。由于其操作简单性和无需在网络拓扑中构建网络负载均衡器设备，这种组合对于本地部署非常有吸引力。
+- en: Understanding Kubernetes Ingress
+  id: totrans-107
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 理解 Kubernetes Ingress
+- en: Kubernetes Ingress builds on top of Kubernetes services to provide load balancing
+    at the application layer, mapping HTTP and HTTPS requests with particular domains
+    or URLs to Kubernetes services. Kubernetes Ingress can be a convenient way of
+    exposing multiple microservices via a single external point of contact, if for
+    example multiple microservices make up a single web application. In addition,
+    they can be used to terminate SSL/TLS (for receiving HTTPS encrypted connections
+    from external clients) before load balancing to the backing microservices.
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes Ingress 构建在 Kubernetes 服务之上，提供应用层负载均衡，将特定域名或 URL 的 HTTP 和 HTTPS 请求映射到
+    Kubernetes 服务。如果多个微服务组成单个 Web 应用程序，Kubernetes Ingress 可以是一种方便的方式来通过单个外部接入点公开多个微服务。此外，它们可以用于在将流量负载均衡到后端微服务之前终止
+    SSL/TLS（用于接收来自外部客户端的 HTTPS 加密连接）。
+- en: The details of how Kubernetes Ingress is implemented depend on which Ingress
+    Controller you are using. The Ingress Controller is responsible for monitoring
+    Kubernetes Ingress resources and provisioning/configuring one or more ingress
+    load balancers to implement the desired load balancing behavior.
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes Ingress 的实现细节取决于您使用的入口控制器。入口控制器负责监视 Kubernetes Ingress 资源，并配置一个或多个入口负载均衡器以实现所需的负载均衡行为。
+- en: Unlike Kubernetes services, which are handled at the network layer (L3–L4),
+    ingress load balancers operate at the application layer (L5–L7). Incoming connections
+    are terminated at the load balancer so it can inspect the individual HTTP/HTTPS
+    requests. The requests are then forwarded via separate connections from the load
+    balancer to the chosen service. As a result, network policy applied to the pods
+    backing a service sees the ingress load balancer as the client source IP address,
+    rather than the original external client IP address. This means they can restrict
+    access to only allow connections from the load balancer, but cannot restrict access
+    to specific external clients.
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与 Kubernetes 服务不同，后者在网络层（L3-L4）处理，入口负载均衡器在应用层（L5-L7）操作。入站连接在负载均衡器处终止，以便检查单独的
+    HTTP/HTTPS 请求。然后，请求通过从负载均衡器到选择的服务的分开连接进行转发。因此，应用于支持服务的 Pod 的网络策略将入口负载均衡器视为客户端源
+    IP 地址，而不是原始外部客户端 IP 地址。这意味着它们可以限制仅允许来自负载均衡器的连接，但不能限制对特定外部客户端的访问。
+- en: To restrict access to specific external clients, the access control needs to
+    be enforced either within the application load balancer or in front of the application
+    load balancer. In case you choose an IP-based access control, it needs to happen
+    before the traffic is forwarded to the backing services. How you do this depends
+    on the specific Ingress Controller you are using.
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了限制对特定外部客户端的访问，需要在应用负载均衡器内或应用负载均衡器前强制执行访问控制。如果选择基于IP的访问控制，则需要在流量转发到后端服务之前执行。如何执行这一点取决于您使用的具体入口控制器。
+- en: 'Broadly speaking, there are two types of ingress solutions:'
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 广义上说，有两种类型的入口解决方案：
+- en: In-cluster ingress
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: In-cluster ingress
+- en: Ingress load balancing is performed by pods within the cluster itself.
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 入口负载均衡由集群内的 Pod 执行。
+- en: External ingress
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 外部入口
+- en: Ingress load balancing is implemented outside of the cluster by appliances or
+    cloud provider capabilities.
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 入口负载均衡由设备或云提供商的功能在集群外实现。
+- en: Now that we have covered Kubernetes Ingress, let’s review ingress solutions.
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经介绍了 Kubernetes Ingress，让我们来回顾一下入口解决方案。
+- en: In-cluster ingress solutions
+  id: totrans-118
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 集群内入口解决方案
+- en: In-cluster ingress solutions use software application load balancers running
+    in pods within the cluster itself. There are many different Ingress Controllers
+    that follow this pattern. For example, the NGINX Ingress Controller instantiates
+    and configures NGINX pods to act as application load balancers.
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 集群内入口解决方案使用运行在集群内部 Pod 中的软件应用负载均衡器。有许多不同的入口控制器遵循此模式。例如，NGINX 入口控制器实例化和配置 NGINX
+    Pod 以充当应用程序负载均衡器。
+- en: 'The advantages of in-cluster ingress solutions are that:'
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 集群内 Ingress 解决方案的优势在于：
+- en: You can horizontally scale your Ingress solution up to the limits of Kubernetes.
+  id: totrans-121
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 您可以水平扩展您的 Ingress 解决方案，直至达到 Kubernetes 的极限。
+- en: There are many different in-cluster Ingress Controller solutions, so you can
+    choose the Ingress Controller that best suits your specific needs— for example,
+    with particular load balancing algorithms, security options, or observability
+    capabilities.
+  id: totrans-122
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 有许多不同的集群内 Ingress 控制器解决方案，因此您可以选择最适合您特定需求的 Ingress 控制器 — 例如，具有特定负载均衡算法、安全选项或可观测性功能。
+- en: To get your ingress traffic to the in-cluster Ingress pods, the Ingress pods
+    are normally exposed externally as a Kubernetes service, as illustrated in [Figure 9-9](#an_example_of_an_in_cluster_ingress_imp).
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要将您的 Ingress 流量发送到集群内的 Ingress Pod，通常将 Ingress Pod 作为 Kubernetes 服务外部公开，如 [图 9-9](#an_example_of_an_in_cluster_ingress_imp)
+    所示。
+- en: '![](Images/ksao_0909.png)'
+  id: totrans-124
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/ksao_0909.png)'
+- en: Figure 9-9\. An example of an in-cluster ingress implementation in a Kubernetes
+    cluster
+  id: totrans-125
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 9-9\. Kubernetes 集群中内部 Ingress 实现的示例
+- en: 'This means you can use any of the standard ways of accessing the service from
+    outside of the cluster. One common approach is to use an external network load
+    balancer or service IP advertisement, along with one of the following:'
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这意味着您可以使用任何标准的方式从集群外部访问服务。一个常见的方法是使用外部网络负载均衡器或服务 IP 广告，以及以下方法之一：
+- en: A network plug-in with native Kubernetes service handling that always preserves
+    the original client source IP
+  id: totrans-127
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一个具有本地 Kubernetes 服务处理的网络插件，始终保留原始客户端源 IP
+- en: '`externalTrafficPolicy:local` (and pod anti-affinity rules to ensure even load
+    balancing across the ingress pods) to preserve the original client source IP'
+  id: totrans-128
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`externalTrafficPolicy:local`（和 Pod 反亲和规则以确保在 Ingress Pod 之间均衡负载）以保留原始客户端源
+    IP'
+- en: Network policy applied to the ingress pods can then restrict access to specific
+    external clients as described earlier in this chapter, and the pods backing any
+    microservices being exposed via Ingress can restrict connections to just those
+    from the ingress pods.
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用于入口 Pod 的网络策略可以像本章前面描述的那样限制对特定外部客户端的访问，并且支持通过 Ingress 暴露的任何微服务的 Pod 可以限制连接仅限于来自入口
+    Pod 的连接。
+- en: External ingress solutions
+  id: totrans-130
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 外部 Ingress 解决方案
+- en: External ingress solutions use application load balancers outside of the cluster,
+    as illustrated in [Figure 9-10](#an_example_of_an_external_ingress_in_a).
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 外部 Ingress 解决方案使用集群外的应用程序负载均衡器，如 [图 9-10](#an_example_of_an_external_ingress_in_a)
+    所示。
+- en: '![](Images/ksao_0910.png)'
+  id: totrans-132
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/ksao_0910.png)'
+- en: Figure 9-10\. An example of an external ingress in a Kubernetes cluster
+  id: totrans-133
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 9-10\. Kubernetes 集群中外部 Ingress 的示例
+- en: The exact details and features depend on which Ingress Controller you are using.
+    Most public cloud providers have their own Ingress Controllers that automate the
+    provisioning and management of the cloud provider’s application load balancers
+    to provide ingress.
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 具体的细节和功能取决于您使用的 Ingress 控制器。大多数公共云提供商都有自己的 Ingress 控制器，可以自动化云提供商的应用程序负载均衡器的配置和管理，以提供
+    Ingress。
+- en: Most application load balancers support a basic operation mode of forwarding
+    traffic to the chosen service backing pods via the node port of the corresponding
+    service. In addition to this basic approach of load balancing to service node
+    ports, some cloud providers support a second mode of application load balancing
+    that load-balances directly to the pods backing each service, without going via
+    node ports or other kube-proxy service handling. This has the advantage of eliminating
+    the potential second network hop associated with node ports load-balancing to
+    a pod on a different node.
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大多数应用程序负载均衡器支持将流量转发到所选服务后端 Pod 的基本操作模式，通过相应服务的节点端口。除了负载均衡到服务节点端口的基本方法外，一些云提供商支持应用程序负载均衡的第二模式，直接负载均衡到每个服务后端的
+    Pod，而不经过节点端口或其他 kube-proxy 服务处理，这样做的优势是消除了与节点端口负载均衡到不同节点上的 Pod 相关的潜在第二个网络跳转。
+- en: 'The main advantage of an external ingress solution is that the cloud provider
+    handles the operational complexity of the ingress for you. The potential downsides
+    are as follows:'
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 外部 Ingress 解决方案的主要优势是云提供商为您处理 Ingress 的操作复杂性。潜在的缺点如下：
+- en: The set of features available is usually more limited, compared with the rich
+    range of available in-cluster ingress solutions. For example, if you require a
+    specific load balancing algorithm, security controls, or observability capabilities,
+    these may or may not be supported by the cloud provider’s implementation.
+  id: totrans-137
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 可用的功能集通常比集群内 Ingress 解决方案的丰富范围更有限。例如，如果您需要特定的负载均衡算法、安全控制或可观察性功能，则云服务提供商的实现可能或可能不支持这些功能。
+- en: The maximum supported number of services (and potentially the number of pods
+    backing the services) is constrained by cloud provider–specific limits. For example,
+    if you are operating at very high scales, with hundreds of pods backing a service,
+    you may exceed the application layer load balancer’s maximum limit of IPs it can
+    load balance to in this mode. In this case switching to an in-cluster ingress
+    solution is likely the better fit for you.
+  id: totrans-138
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 支持的服务最大数量（以及可能支持的服务后端的 Pod 数量）受限于特定云服务提供商的限制。例如，如果您在非常高的规模下运行，每个服务后端支持数百个 Pod，您可能会超出应用层负载均衡器在此模式下能够负载均衡的最大
+    IP 数量限制。在这种情况下，切换到集群内的 Ingress 解决方案可能更适合您。
+- en: Since the application load balancer is not hosted within the Kubernetes cluster,
+    if you need to restrict access to specific external clients, you cannot use Kubernetes
+    network policy and instead must use the cloud provider’s specific mechanisms.
+    It is still possible to follow the best practices laid out at the start of this
+    chapter, but doing so will be cloud provider–specific and will likely introduce
+    a little additional operational complexity, compared with being able to use native
+    Kubernetes capabilities independent of the cloud provider’s capabilities and APIs.
+  id: totrans-139
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 由于应用负载均衡器不托管在 Kubernetes 集群内，如果您需要限制对特定外部客户端的访问，则无法使用 Kubernetes 网络策略，而必须使用云服务提供商的特定机制。仍然可以按照本章开头提出的最佳实践进行，但这将依赖于云服务提供商的具体能力和
+    API，可能会引入一些额外的运维复杂性。
+- en: In this section we covered how Kubernetes ingress works and the solutions available.
+    We recommend you review the sections and decide if the in-cluster ingress solution
+    works for you or if you should go with an external ingress solution.
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这一节中，我们讨论了 Kubernetes Ingress 的工作原理以及现有的解决方案。我们建议您仔细查看这些部分，并决定是否适合您使用集群内的 Ingress
+    解决方案，或者应该选择外部的 Ingress 解决方案。
+- en: Conclusion
+  id: totrans-141
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 结论
+- en: 'In this chapter, we covered the topic of exposing Kubernetes services outside
+    the cluster. The following are the key concepts covered:'
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们讨论了将 Kubernetes 服务暴露到集群外部的主题。以下是涵盖的关键概念：
+- en: Kubernetes services concepts like direct pod connections, advertising service
+    IPs, and node ports are techniques you can leverage to expose Kubernetes services
+    outside the cluster.
+  id: totrans-143
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Kubernetes 服务的概念，如直接 Pod 连接、广告服务 IP 和节点端口，是您可以利用的技术，以将 Kubernetes 服务暴露到集群外部。
+- en: We recommend using an eBPF-based dataplane to optimize the ingress path to route
+    traffic to the pods hosting the service backend.
+  id: totrans-144
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 我们建议使用基于 eBPF 的数据平面来优化 Ingress 路径，将流量路由到托管服务后端的 Pod。
+- en: An eBPF dataplane is an excellent alternative to the default Kubernetes services
+    implementation, kube-proxy, due to its ability to preserve source IP to the pod.
+  id: totrans-145
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 由于其能够保留源 IP 到 Pod 的能力，eBPF 数据平面是默认 Kubernetes 服务实现 kube-proxy 的一个优秀替代方案。
+- en: The choice of a Kubernetes ingress implementation will depend on your use case.
+    We recommend that you consider an in-cluster ingress solution as it is more native
+    to Kubernetes and will give you more control than using an external ingress solution.
+  id: totrans-146
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Kubernetes Ingress 实现的选择将取决于您的用例。我们建议您考虑集群内的 Ingress 解决方案，因为它更符合 Kubernetes
+    的本地化特性，比使用外部 Ingress 解决方案更具控制性。
+- en: We hope you are able to leverage these concepts based on your use case as you
+    implement Kubernetes services.
+  id: totrans-147
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们希望您能根据自己的用例利用这些概念，实施 Kubernetes 服务。

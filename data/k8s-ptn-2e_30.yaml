@@ -1,0 +1,1171 @@
+- en: Chapter 24\. Network Segmentation
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第24章. 网络分割
+- en: Kubernetes is a great platform for running distributed applications that communicate
+    with one another over the network. By default, the network space within Kubernetes
+    is flat, which means that every Pod can connect to every other Pod in the cluster.
+    In this chapter, we will explore how to structure this network space for improved
+    security and a lightweight multitenancy model.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 是一个很好的平台，用于运行通过网络相互通信的分布式应用程序。默认情况下，Kubernetes 中的网络空间是平面的，这意味着集群中的每个
+    Pod 都可以连接到其他任何 Pod。在本章中，我们将探讨如何为提升安全性和轻量级多租户模型而结构化这个网络空间。
+- en: Problem
+  id: totrans-2
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 问题
+- en: Namespaces are a crucial part of Kubernetes, allowing you to group your workloads
+    together. However, they only provide a grouping concept, imposing isolation constraints
+    on the containers associated with specific namespaces. In Kubernetes, every Pod
+    can talk to every other Pod, regardless of their namespace. This default behavior
+    has security implications, particularly when multiple independent applications
+    operated by different teams run in the same cluster.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Namespace 是 Kubernetes 的一个关键部分，允许您将工作负载分组在一起。然而，它们只提供了一个分组概念，对与特定 Namespace
+    关联的容器施加了隔离约束。在 Kubernetes 中，每个 Pod 都可以与集群中的任何其他 Pod 进行通信，无论它们的 Namespace 如何。这种默认行为具有安全性影响，特别是当由不同团队运行的多个独立应用程序在同一个集群中时。
+- en: Restricting network access to and from Pods is essential for enhancing the security
+    of your application because not everyone may be allowed to access your application
+    via an ingress. Outgoing egress network traffic for Pods should also be limited
+    to what is necessary to minimize the blast radius of a security breach.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 限制从 Pod 到网络的访问对增强应用程序安全至关重要，因为不是每个人都可以通过入口访问您的应用程序。对于 Pod 的出站 egress 网络流量也应该限制在必需的范围内，以减小安全漏洞的影响范围。
+- en: Network segmentation plays a vital role in multitenancy setups where multiple
+    parties share the same cluster. For example, the following sidebar addresses some
+    of the challenges of multitenancy on Kubernetes, such as creating network boundaries
+    for applications.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 网络分割在多租户设置中扮演着重要角色，多个方进行在同一集群中共享。例如，下面的侧边栏讨论了 Kubernetes 上多租户的一些挑战，比如为应用程序创建网络边界。
+- en: In the past, shaping the network topology was primarily the responsibility of
+    administrators who managed firewalls and iptable rules. The challenge with this
+    model is that administrators need to understand the networking requirements of
+    the applications. In addition, the network graph can get very complex in a microservices
+    world with many dependencies, requiring deep domain knowledge about the application.
+    In this sense, the developer must communicate and sync information about dependencies
+    with administrators. A DevOps setup can help, but the definition of network topologies
+    is still far away from the application itself and can change dynamically over
+    time.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 过去，塑造网络拓扑主要是由管理人员负责，他们管理防火墙和 iptable 规则。这种模型的挑战在于管理人员需要理解应用程序的网络需求。此外，在具有许多依赖关系的微服务世界中，网络图可能变得非常复杂，需要深入了解应用程序的领域知识。在这方面，开发人员必须与管理员沟通并同步依赖关系的信息。DevOps
+    设置可以帮助，但网络拓扑的定义仍然远离应用程序本身，并且随时间动态变化。
+- en: So, what does defining and establishing a network segmentation look like in
+    a Kubernetes world?
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 那么，在 Kubernetes 世界中定义和建立网络分割是什么样子的呢？
+- en: Solution
+  id: totrans-8
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 解决方案
+- en: The good news is that Kubernetes shifts left these networking tasks so that
+    developers using Kubernetes fully define their applications’ networking topology.
+    You have already seen this process model described briefly in [Chapter 23](ch23.html#ProcessContainment),
+    when we discussed the *Process Containment* pattern.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 好消息是，Kubernetes 左移了这些网络任务，使得使用 Kubernetes 的开发者可以完全定义他们应用程序的网络拓扑。您已经在 [第23章](ch23.html#ProcessContainment)
+    简要描述了这个过程模型，当时我们讨论了 *进程容器化* 模式。
+- en: The essence of this *Network Segmentation* pattern is how we, as developers,
+    can define the network segmentation for our applications by creating “application
+    firewalls.”
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*网络分割* 模式的核心是我们作为开发人员如何通过创建 "应用防火墙" 来定义我们应用程序的网络分割。'
+- en: There are two ways to implement this feature that are complementary and can
+    be applied together. The first is through the use of core Kubernetes features
+    that operate on the L3/L4 networking layers.^([1](ch24.html#idm45902087907696))
+    By defining resources of the type NetworkPolicy, developers can create ingress
+    and egress firewall rules for workload Pods.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有两种方法可以实现这一功能，它们是互补的并可以一起应用。第一种方法是通过使用操作 L3/L4 网络层的核心 Kubernetes 特性来实现。通过定义
+    NetworkPolicy 类型的资源，开发人员可以为工作负载 Pod 创建入站和出站防火墙规则。
+- en: The other method involves the use of a service mesh and targets the L7 protocol
+    layer, specifically HTTP-based communication. This allows for filtering based
+    on HTTP verbs and other L7 protocol parameters. We will explore Istio’s AuthenticationPolicy
+    later in this chapter.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一种方法涉及使用服务网格，目标是 L7 协议层，特别是基于 HTTP 的通信。这允许基于 HTTP 动词和其他 L7 协议参数进行过滤。我们将在本章后面探讨
+    Istio 的 AuthenticationPolicy。
+- en: To start, let’s focus on how to use NetworkPolicies to define the network boundaries
+    for your application.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，让我们专注于如何使用 NetworkPolicies 来定义应用程序的网络边界。
+- en: Network Policies
+  id: totrans-14
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 网络策略
+- en: NetworkPolicy is a Kubernetes resource type that allows users to define rules
+    for inbound and outbound network connections for Pods. These rules act like a
+    custom firewall and determine which Pods can be accessed and which destinations
+    they can connect to. The user-defined rules are picked up by the Container Network
+    Interface (CNI) add-on used by Kubernetes for its internal networking. However,
+    not all CNI plugins support NetworkPolicies; for example, the popular Flannel
+    CNI plugin does not support it, but many others, like Calico, do. All hosted Kubernetes
+    cloud offerings support NetworkPolicy (either directly or by configuring an add-on)
+    as well as other distributions like Minikube.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: NetworkPolicy 是 Kubernetes 的一种资源类型，允许用户为 Pod 定义入站和出站网络连接的规则。这些规则就像是自定义防火墙，确定哪些
+    Pod 可以访问以及它们可以连接到哪些目的地。用户定义的规则由 Kubernetes 内部网络使用的容器网络接口（CNI）插件捡起。然而，并非所有 CNI
+    插件都支持 NetworkPolicies；例如，流行的 Flannel CNI 插件不支持它，但像 Calico 这样的其他插件支持。所有托管的 Kubernetes
+    云服务提供商都支持 NetworkPolicy（直接或通过配置插件），以及像 Minikube 这样的其他发行版。
+- en: The NetworkPolicy definition consists of a selector for Pods and lists of inbound
+    (ingress) or outbound (egress) rules.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: NetworkPolicy 的定义包括对 Pod 的选择器以及入站（ingress）或出站（egress）规则列表。
+- en: The *Pod selector* is used to match the Pods to which the NetworkPolicy should
+    be applied. This selection is done by using labels, which are metadata attached
+    to Pods. The labels allow for a flexible and dynamic grouping of Pods, meaning
+    that the same NetworkPolicy can be applied to multiple Pods that share the same
+    labels and are running in the same namespace as the NetworkPolicy. Pod selectors
+    are described in detail in [“Labels”](ch01.html#intro-labels).
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*Pod 选择器* 用于匹配应用 NetworkPolicy 的 Pod。这种选择通过使用标签完成，标签是附加到 Pod 的元数据。标签允许对 Pod
+    进行灵活和动态的分组，这意味着可以将相同的 NetworkPolicy 应用于共享相同标签且在同一命名空间内运行的多个 Pod。Pod 选择器在 [“标签”](ch01.html#intro-labels)
+    中有详细描述。'
+- en: The list of *ingress* and *egress* rules defines which inbound and outbound
+    connections are allowed for the Pods matched by the Pod selector. These rules
+    specify which sources and destinations are allowed to connect to and from the
+    Pods. For example, a rule could allow connections from a specific IP address or
+    range of addresses, or it could block connections to a specific destination.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*入站* 和 *出站* 规则列表定义了允许与匹配 Pod 进行连接的入站和出站连接。这些规则指定了允许从哪些源和目的地连接到 Pod，以及从 Pod
+    连接到哪里。例如，一条规则可以允许来自特定 IP 地址或地址范围的连接，或者阻止连接到特定目的地。'
+- en: Let’s start with the simple example in [Example 24-1](#ex-network-segmentation-simple)
+    that allows access to all database Pods only from backend Pods and nothing else.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们从 [示例 24-1](#ex-network-segmentation-simple) 中的简单示例开始，该示例仅允许从后端 Pod 访问所有数据库
+    Pod，而不允许其他内容。
+- en: Example 24-1\. Simple NetworkPolicy allowing ingress traffic
+  id: totrans-20
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 24-1\. 简单的 NetworkPolicy 允许入站流量
+- en: '[PRE0]'
+  id: totrans-21
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: '[![1](assets/1.png)](#co_network_segmentation_CO1-1)'
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_network_segmentation_CO1-1)'
+- en: 'Selector matching all Pods with the label `id: database` and `app: chili-shop`.
+    All those Pods are affected by this NetworkPolicy.'
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '匹配所有具有标签 `id: database` 和 `app: chili-shop` 的 Pod 选择器。所有这些 Pod 都受到此 NetworkPolicy
+    的影响。'
+- en: '[![2](assets/2.png)](#co_network_segmentation_CO1-2)'
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_network_segmentation_CO1-2)'
+- en: List of sources that are allowed for incoming traffic.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 允许入站流量的源列表。
+- en: '[![3](assets/3.png)](#co_network_segmentation_CO1-3)'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_network_segmentation_CO1-3)'
+- en: Pod selector that will allow all Pods of the type `backend` to access the selected
+    database Pods.
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 允许所有 `backend` 类型的 Pod 访问所选数据库 Pod 的 Pod 选择器。
+- en: '[Figure 24-1](#img-network-segmentation-ingress) shows how the backend Pods
+    can access the database Pods but frontend Pods can’t.'
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 24-1](#img-network-segmentation-ingress) 展示了后端 Pod 如何访问数据库 Pod，但前端 Pod 不能。'
+- en: '![Stages that need to be passed by a request to the Kubernetes API server](assets/kup2_2401.png)'
+  id: totrans-29
+  prefs: []
+  type: TYPE_IMG
+  zh: '![需要通过请求传递到 Kubernetes API 服务器的阶段](assets/kup2_2401.png)'
+- en: Figure 24-1\. NetworkPolicy for ingress traffic
+  id: totrans-30
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 24-1\. 入口流量的 NetworkPolicy
+- en: NetworkPolicy objects are namespace-scoped and match only Pods from within the
+    NetworkPolicy’s namespace. Unfortunately, there is no way to define cluster-wide
+    defaults for all namespaces. However, some CNI plugins like Calico support customer
+    extensions for defining cluster-wide behavior.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: NetworkPolicy 对象是命名空间范围的，并且仅匹配来自 NetworkPolicy 所在命名空间的 Pod。不幸的是，目前没有办法为所有命名空间定义集群范围的默认值。然而，像
+    Calico 这样的一些 CNI 插件支持用于定义集群范围行为的客户扩展。
+- en: Network segment definition with labels
+  id: totrans-32
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 使用标签进行网络段定义
+- en: In [Example 24-1](#ex-network-segmentation-simple), we can see how label selectors
+    are used to dynamically define groups of Pods. This is a powerful concept in Kubernetes
+    that allows users to easily create distinct networking segments.
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 [示例 24-1](#ex-network-segmentation-simple) 中，我们可以看到如何使用标签选择器动态定义 Pod 的组。这是
+    Kubernetes 中的一个强大概念，允许用户轻松创建不同的网络段。
+- en: Developers are typically the best ones to know which Pods belong to a specific
+    application and how they communicate with one another. By carefully labeling the
+    Pods, users can directly translate the dependency graphs of distributed applications
+    into NetworkPolicies. These policies can then be used to define the network boundaries
+    for an application, with well-defined entry and exit points.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 开发人员通常是最了解哪些 Pod 属于特定应用程序以及它们如何相互通信的人。通过精心打标签，用户可以直接将分布式应用程序的依赖图转换为 NetworkPolicies。这些策略可以用来定义应用程序的网络边界，具有明确定义的入口和出口点。
+- en: To create network segmentation using labels, it’s common to label all Pods in
+    the application with a unique `app` label. The `app` label can be used in the
+    selector of the NetworkPolicy to ensure that all Pods belonging to the application
+    are covered by the policy. For example, in [Example 24-1](#ex-network-segmentation-simple),
+    the network segment is defined using an `app` label with the value `chili-shop`.
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用标签创建网络分割时，通常会为应用程序中的所有 Pod 打上唯一的 `app` 标签。可以在 NetworkPolicy 的选择器中使用 `app`
+    标签来确保覆盖应用程序的所有 Pod。例如，在 [示例 24-1](#ex-network-segmentation-simple) 中，使用 `app`
+    标签和值 `chili-shop` 定义了网络段。
+- en: 'There are two common ways to consistently label workloads:'
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有两种常见的方法可以一致地标记工作负载：
+- en: 'Using workload-unique labels, you can directly model the dependency graph between
+    application components such as other microservices or a database. These workloads
+    can consist of multiple Pods, for example, when deployed in high availability.
+    This technique is used to model the permission graph in [Example 24-1](#ex-network-segmentation-simple),
+    where we use a label `type` to identify the application component. Only one type
+    of workload (e.g., Deployment or StatefulSet) is expected to carry the label `type:
+    database`.'
+  id: totrans-37
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '使用工作负载唯一标签，可以直接建模应用程序组件之间的依赖关系图，例如其他微服务或数据库。例如，在 [示例 24-1](#ex-network-segmentation-simple)
+    中，使用标签 `type` 来识别应用程序组件。只有一种类型的工作负载（例如 Deployment 或 StatefulSet）预计会携带标签 `type:
+    database`。'
+- en: In a more loosely coupled approach, you can define specific `role` or `permissions`
+    labels that need to be attached to every workload that plays a certain role. [Example 24-2](#ex-network-segmentation-simple-role)
+    shows an example of this setup. This approach is more flexible and allows for
+    new workloads to be added without updating the NetworkPolicy. However, the more
+    straightforward approach of directly connecting workloads is often easier to understand
+    by simply looking at the NetworkPolicy without having to look up all workloads
+    that apply to a role.
+  id: totrans-38
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在更松散的方法中，您可以定义需要附加到扮演特定角色的每个工作负载的特定`角色`或`权限`标签。 [示例 24-2](#ex-network-segmentation-simple-role)
+    展示了这种设置的示例。这种方法更灵活，允许添加新的工作负载而无需更新 NetworkPolicy。然而，直接连接工作负载的更直接方法通常更容易理解，只需查看
+    NetworkPolicy 而无需查找适用于角色的所有工作负载。
+- en: Example 24-2\. Role-based network segment definition
+  id: totrans-39
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 24-2\. 基于角色的网络段定义
+- en: '[PRE1]'
+  id: totrans-40
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: '[![1](assets/1.png)](#co_network_segmentation_CO2-1)'
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_network_segmentation_CO2-1)'
+- en: Add all roles that enable this backend Pod to access the requested services.
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 添加所有使得此后端Pod能够访问请求服务的角色。
+- en: '[![2](assets/2.png)](#co_network_segmentation_CO2-2)'
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_network_segmentation_CO2-2)'
+- en: 'Selector matching the database Pods—i.e., Pods with the label `id: database`.'
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '选择器匹配数据库Pod，即带有标签`id: database`的Pod。'
+- en: '[![3](assets/3.png)](#co_network_segmentation_CO2-3)'
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_network_segmentation_CO2-3)'
+- en: 'Every Pod that is a database client (`role-database-client: ''true''`) is allowed
+    to send traffic to the backend Pod.'
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '每个作为数据库客户端（`role-database-client: ''true''`）的Pod都被允许向后端Pod发送流量。'
+- en: Deny-all as default policy
+  id: totrans-47
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 默认的拒绝所有策略
+- en: In Examples [24-1](#ex-network-segmentation-simple) and [24-2](#ex-network-segmentation-simple-role),
+    we have seen how to individually configure the allowed incoming connections for
+    a selected set of Pods. This setup works fine as long as you don’t forget to configure
+    one Pod, since the default mode, when NetworkPolicy is not configured in the namespace,
+    does not restrict incoming and outgoing traffic (allow-all). Also, for Pods that
+    we might create in the future, it is problematic that it might be necessary to
+    remember to add the respective NetworkPolicy.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在示例[24-1](#ex-network-segmentation-simple)和[24-2](#ex-network-segmentation-simple-role)中，我们已经看到如何为一组选定的Pod单独配置允许的传入连接。只要不要忘记配置一个Pod，这种设置就可以正常工作，因为当命名空间中未配置NetworkPolicy时，默认模式不限制传入和传出流量（允许所有）。此外，对于将来可能创建的Pod，需要记住添加相应的NetworkPolicy可能会有问题。
+- en: Therefore, it is highly recommended to start with a deny-all policy, as shown
+    in [Example 24-3](#ex-network-segmentation-deny-all).
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，强烈建议从拒绝所有的策略开始，如[示例 24-3](#ex-network-segmentation-deny-all)所示。
+- en: Example 24-3\. Deny-all policy for incoming traffic
+  id: totrans-50
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 24-3\. 拒绝所有入口流量的策略
+- en: '[PRE2]'
+  id: totrans-51
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: '[![1](assets/1.png)](#co_network_segmentation_CO3-1)'
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_network_segmentation_CO3-1)'
+- en: An empty selector matches every Pod.
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 空选择器匹配每个Pod。
+- en: '[![2](assets/2.png)](#co_network_segmentation_CO3-2)'
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_network_segmentation_CO3-2)'
+- en: An empty list of ingress rules implies that all incoming traffic gets dropped.
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 空的入口规则列表意味着所有传入流量被丢弃。
+- en: The list of allowed ingresses is set to an empty list (`[]`), which implies
+    there is no ingress rule that allows incoming traffic. Note that an empty list
+    `[]` is different from a list with a single empty element `[ {} ]`, which achieves
+    the exact opposite since the single empty rule matches everything.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 允许入口的列表设置为空列表（`[]`），这意味着没有入口规则允许传入流量。请注意，空列表`[]`与具有单个空元素的列表`[ {} ]`不同，后者实现了完全相反的效果，因为单个空规则匹配所有内容。
+- en: Ingress
+  id: totrans-57
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: Ingress
+- en: '[Example 24-1](#ex-network-segmentation-simple) covers the primary use case
+    of a policy that covers ingress traffic. We have already explained the `podSelector`
+    field and given an example of an `ingress` list that matches Pods that are allowed
+    to send traffic to the Pod under configuration. The selected Pod can receive traffic
+    if any of the configured ingress rules in the list are matched.'
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[示例 24-1](#ex-network-segmentation-simple)覆盖了覆盖入口流量的策略的主要用例。我们已经解释了`podSelector`字段，并且给出了一个匹配允许发送流量到配置下的Pod的`ingress`列表的示例。只要列表中的任何配置的入口规则匹配，选定的Pod就可以接收流量。'
+- en: Besides selecting Pods, you have additional options to configure the ingress
+    rules. We already saw the `from` field for an ingress rule that can contain a
+    `podSelector` for selecting all Pods that pass this rule. In addition, a `namespaceSelector`
+    can be given to choose the namespaces in which the `podSelector` should be applied
+    to identify the Pods that can send traffic.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了选择Pod外，您还有其他选项来配置入口规则。我们已经看到了`from`字段用于可以包含`podSelector`以选择通过此规则的所有Pod的入口规则。此外，可以提供`namespaceSelector`来选择应该应用`podSelector`以识别可以发送流量的Pod的命名空间。
+- en: '[Table 24-1](#table-network-segmentation-ingress-rules) shows the effect of
+    the various combinations of `podSelector` and `name​sp⁠aceSelector`. Combining
+    both fields allows for very flexible setups.'
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[表 24-1](#table-network-segmentation-ingress-rules)显示了`podSelector`和`namespaceSelector`各种组合的效果。结合这两个字段允许非常灵活的设置。'
+- en: 'Table 24-1\. Combinations of setting `podSelector` and `namespaceSelector`
+    `({}: empty`, `{...}: non-empty`, `---: unset`)'
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '表 24-1\. 设置`podSelector`和`namespaceSelector`的组合`({}: 空`, `{...}: 非空`, `---:
+    未设置`)'
+- en: '| podSelector | namespaceSelector | Behavior |'
+  id: totrans-62
+  prefs: []
+  type: TYPE_TB
+  zh: '| podSelector | namespaceSelector | 行为 |'
+- en: '| --- | --- | --- |'
+  id: totrans-63
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- |'
+- en: '| {} | {} | Every Pod in every namespace |'
+  id: totrans-64
+  prefs: []
+  type: TYPE_TB
+  zh: '| {} | {} | 每个命名空间中的每个Pod |'
+- en: '| {} | { …​ } | Every Pod in the matched namespaces |'
+  id: totrans-65
+  prefs: []
+  type: TYPE_TB
+  zh: '| {} | { …​ } | 匹配命名空间中的每个Pod |'
+- en: '| { …​ } | { } | Every matching Pod in all namespaces |'
+  id: totrans-66
+  prefs: []
+  type: TYPE_TB
+  zh: '| { …​ } | { } | 所有命名空间中的每个匹配的Pod |'
+- en: '| { …​ } | { …​ } | Every matching Pod in the matching namespaces |'
+  id: totrans-67
+  prefs: []
+  type: TYPE_TB
+  zh: '| { …​ } | { …​ } | 匹配命名空间中的每个匹配 Pod |'
+- en: '| --- | { …​ } / {} | Every Pod in the matching namespace/all namespaces |'
+  id: totrans-68
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | { …​ } / {} | 匹配命名空间/所有命名空间中的每个 Pod |'
+- en: '| { …​ } / {} | --- | Matching Pods/every Pod in the NetworkPolicy’s namespace
+    |'
+  id: totrans-69
+  prefs: []
+  type: TYPE_TB
+  zh: '| { …​ } / {} | --- | NetworkPolicy 的命名空间中的匹配 Pod/每个 Pod |'
+- en: As an alternative for selecting Pods from the cluster, a range of IP addresses
+    can be specified with a field `ipBlock`. We show IP ranges in [Example 24-5](#ex-network-segmentation-egress-ipblock).
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为从集群中选择 Pods 的替代方法，可以使用 `ipBlock` 字段指定一系列 IP 地址。我们在 [Example 24-5](#ex-network-segmentation-egress-ipblock)
+    中展示 IP 范围。
+- en: Another option is to restrict the traffic to specific ports to the selected
+    Pod. We can specify this list with a `ports` field that contains all allowed ports.
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一种选择是将流量限制为仅限于选定 Pod 的特定端口。我们可以使用包含所有允许端口的 `ports` 字段来指定此列表。
+- en: Egress
+  id: totrans-72
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 出口
+- en: Not only can incoming traffic be regulated, but so can any request that a Pod
+    sends in the outgoing direction. Egress rules are configured precisely with the
+    same options as ingress rules. And as with ingress rules, starting with a very
+    restrictive policy is recommended. However, denying all outgoing traffic is not
+    practical. Every Pod needs interaction with Pods from the system namespace for
+    DNS lookups. Also, if we use ingress rules to restrict incoming traffic, we would
+    have to add mirrored egress rules for the source Pods. So let’s be pragmatic and
+    allow all egress within the cluster, forbid everything outside the cluster, and
+    let ingress rules define the network boundaries.
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不仅可以管理传入流量，还可以管理 Pod 发送的任何请求的出站流量。出口规则与入口规则具有相同的选项。与入口规则一样，建议从非常严格的策略开始。然而，拒绝所有出站流量并不实际。每个
+    Pod 需要与系统命名空间中的 Pods 进行交互以进行 DNS 查找。此外，如果我们使用入口规则限制入站流量，我们将不得不为源 Pods 添加镜像出站规则。因此，让我们务实地允许集群内的所有出口，禁止集群外的所有内容，并让入口规则定义网络边界。
+- en: '[Example 24-4](#ex-network-segmentation-internal-egress) shows the definition
+    of such a rule.'
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Example 24-4](#ex-network-segmentation-internal-egress) 显示了此类规则的定义。'
+- en: Example 24-4\. Allow all internal egress traffic
+  id: totrans-75
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 24-4\. 允许所有内部出口流量
+- en: '[PRE3]'
+  id: totrans-76
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: '[![1](assets/1.png)](#co_network_segmentation_CO4-1)'
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_network_segmentation_CO4-1)'
+- en: Add only `Egress` as policy type; otherwise, Kubernetes assumes that you want
+    to specify ingress and egress.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 仅将 `Egress` 添加为策略类型；否则，Kubernetes 将假定您要指定入站和出站。
+- en: '[![2](assets/2.png)](#co_network_segmentation_CO4-2)'
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_network_segmentation_CO4-2)'
+- en: Apply NetworkPolicy to all Pods in the NetworkPolicy’s namespace.
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将 NetworkPolicy 应用于 NetworkPolicy 的命名空间中的所有 Pods。
+- en: '[![3](assets/3.png)](#co_network_segmentation_CO4-3)'
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_network_segmentation_CO4-3)'
+- en: Allow egress to every Pod in every other namespace.
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 允许每个其他命名空间中的每个 Pod 出口。
+- en: '[Figure 24-2](#img-network-segmentation-egress) illustrates the effect of this
+    NetworkPolicy and how it prevents Pods from connecting to external services.'
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Figure 24-2](#img-network-segmentation-egress) 说明了此 NetworkPolicy 的影响，以及它如何阻止
+    Pods 连接到外部服务。'
+- en: '![NetworkPolicy that allows only internal egress traffic](assets/kup2_2402.png)'
+  id: totrans-84
+  prefs: []
+  type: TYPE_IMG
+  zh: '![仅允许内部出口流量的 NetworkPolicy](assets/kup2_2402.png)'
+- en: Figure 24-2\. NetworkPolicy that allows only internal egress traffic
+  id: totrans-85
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 24-2\. 仅允许内部出口流量的 NetworkPolicy
+- en: 'The `policyTypes` field in a NetworkPolicy determines the type of traffic the
+    policy affects. It is a list that can contain the elements `Egress` and/or `Ingress`,
+    and it specifies which rules are included in the policy. If the field is omitted,
+    the default value is determined based on the presence of the `ingress` and `egress`
+    rule sections:'
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: NetworkPolicy 中的 `policyTypes` 字段确定策略影响的流量类型。它是一个列表，可以包含 `Egress` 和/或 `Ingress`
+    元素，并指定策略中包含的规则。如果省略该字段，则根据 `ingress` 和 `egress` 规则部分的存在确定默认值：
+- en: If an `ingress` section is present, the default value of `policyTypes` is `[Ingress]`.
+  id: totrans-87
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如果存在 `ingress` 部分，则 `policyTypes` 的默认值为 `[Ingress]`。
+- en: If an `egress` section is provided, the default value of `policyTypes` is `[Ingress,
+    Egress]` regardless of whether ingress rules are provided.
+  id: totrans-88
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如果提供了 `egress` 部分，则 `policyTypes` 的默认值为 `[Ingress, Egress]`，无论是否提供了 `ingress`
+    规则。
+- en: This default behavior implies that to define an egress-only policy, you must
+    explicitly set `policyTypes` to `[Egress]`, as in [Example 24-4](#ex-network-segmentation-internal-egress).
+    Failing to do so would imply an empty `ingress` rules set, effectively forbidding
+    all incoming traffic.
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种默认行为意味着，要定义仅出口的策略，必须显式将 `policyTypes` 设置为 `[Egress]`，如 [Example 24-4](#ex-network-segmentation-internal-egress)。如果未这样做，将意味着空的
+    `ingress` 规则集，实际上禁止所有入站流量。
+- en: With this restriction for cluster-internal egress traffic in place, we can selectively
+    activate access to external IP addresses for certain Pods that might require cluster-external
+    network access. In [Example 24-5](#ex-network-segmentation-egress-ipblock), such
+    an IP range block for allowing external egress access is defined.
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在对集群内部出口流量施加此限制后，我们可以选择性地激活某些可能需要集群外部网络访问的 Pod 对外部 IP 地址的访问。在 [示例 24-5](#ex-network-segmentation-egress-ipblock)
+    中定义了一个允许外部出口访问的 IP 范围块。
+- en: Example 24-5\. NetworkPolicy that allows access to all IP addresses, with some
+    exceptions
+  id: totrans-91
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 24-5\. NetworkPolicy 允许访问所有 IP 地址，但有一些例外。
+- en: '[PRE4]'
+  id: totrans-92
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: '[![1](assets/1.png)](#co_network_segmentation_CO5-1)'
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_network_segmentation_CO5-1)'
+- en: Allow access to all IP addresses…​
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 允许访问所有 IP 地址…​
+- en: '[![2](assets/2.png)](#co_network_segmentation_CO5-2)'
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_network_segmentation_CO5-2)'
+- en: …​except IP addresses that belong to these subnets.
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: …​除了属于这些子网的 IP 地址。
+- en: Some care must be taken if you decide to choose more strict egress rules and
+    also want to restrict the cluster’s internal egress traffic. First, it is essential
+    to always allow access to the DNS server in the kube-system namespace. This configuration
+    is best done by allowing access to port 53 for UDP and TCP to all ports in the
+    system namespace.
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果决定选择更严格的出口规则，并且还想限制集群的内部出口流量，则需要注意一些问题。首先，始终允许对 kube-system 命名空间中的 DNS 服务器访问至关重要。最佳配置是允许
+    UDP 和 TCP 的端口 53 对系统命名空间中的所有端口进行访问。
+- en: For operators and controllers, the Kubernetes API server needs to be accessible.
+    Unfortunately, no unique label would select the API server in the kube-system
+    namespace, so the filtering should happen on the API server’s IP address. The
+    IP address can best be fetched from the `kubernetes` endpoints in the default
+    namespace with `kubectl get endpoints -n default kubernetes`.
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于运算符和控制器，Kubernetes API 服务器需要是可访问的。不幸的是，在 kube-system 命名空间中没有唯一的标签可以选择 API
+    服务器，因此应在 API 服务器的 IP 地址上进行过滤。最佳方法是从默认命名空间中的 `kubectl get endpoints -n default
+    kubernetes` 获取 `kubernetes` 端点中获取 IP 地址。
+- en: Tooling
+  id: totrans-99
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 工具
+- en: Setting up the network topology with NetworkPolicies gets complex quickly since
+    it involves creating many NetworkPolicy resources. It is best to start with some
+    simple use cases that you can adapt to your specific needs. [Kubernetes Network
+    Policy Recipes](https://oreil.ly/NvQFm) is a good starting point.
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 设置网络拓扑结构时，由于涉及创建许多 NetworkPolicy 资源，情况会迅速变得复杂。最好从一些简单的用例开始，然后根据特定需求进行调整。[Kubernetes
+    网络策略配方](https://oreil.ly/NvQFm) 是一个很好的起点。
+- en: Commonly, NetworkPolicies are defined along with the application’s architecture.
+    However, sometimes you must retrofit the policy schemas to an existing solution.
+    In this case, policy advisor tools can be beneficial. They work by recording the
+    network activity when playing through typical use cases. A comprehensive integration
+    test suite with good test coverage pays off to catch all corner cases involving
+    network connections. As of 2023, several tools can help you audit network traffic
+    to create network policies.
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常，NetworkPolicy 与应用程序架构一起定义。然而，有时候必须将策略模式适应现有解决方案。在这种情况下，策略顾问工具可能会很有帮助。它们通过记录播放典型用例时的网络活动来工作。具备良好测试覆盖率的全面集成测试套件有助于捕捉涉及网络连接的所有边缘情况。截至
+    2023 年，有几种工具可以帮助您审核网络流量以创建网络策略。
+- en: '[Inspektor Gadget](https://oreil.ly/nlVOx) is a great tool suite for debugging
+    and inspecting Kubernetes resources. It is entirely based on eBPF programs that
+    enable kernel-level observability and provides a bridge from kernel features to
+    high-level Kubernetes resources. One of Inspektor Gadget’s features is to monitor
+    network activity and record all UDP and TCP traffic for generating Kubernetes
+    network policies. This technique works well but depends on the quality and depth
+    of covered use cases.'
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Inspektor Gadget](https://oreil.ly/nlVOx) 是一个出色的工具套件，用于调试和检查 Kubernetes 资源。它完全基于
+    eBPF 程序，支持内核级别的可观测性，并提供了从内核特性到高级 Kubernetes 资源的桥梁。Inspektor Gadget 的一个特性是监视网络活动，并记录生成
+    Kubernetes 网络策略所需的所有 UDP 和 TCP 流量。这种技术效果很好，但取决于覆盖用例的质量和深度。'
+- en: Another great eBPF-based platform is [Cilium](https://cilium.io), which has
+    a dedicated audit mode that tracks all network traffic and matches it against
+    a given network policy. By starting with a deny-all policy and audit mode enabled,
+    Cilium will record all policy violations but will not block the traffic otherwise.
+    The audit report helps create the proper NetworkPolicy to fit the traffic patterns
+    exercised.
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个基于 eBPF 的优秀平台是 [Cilium](https://cilium.io)，它具有专用的审计模式，可跟踪所有网络流量并与给定的网络策略匹配。通过启用拒绝所有策略并启用审计模式，Cilium
+    将记录所有策略违规情况，但不会否则阻止流量。审计报告有助于创建适合所执行流量模式的适当 NetworkPolicy。
+- en: These are only two examples of the rich and growing landscape of tools for policy
+    recommendation, simulations, and auditing.
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些只是关于策略推荐、仿真和审计工具丰富且日益增长的景观的两个例子。
+- en: Now that you have seen how we can model the network boundaries for our application
+    on the TCP/UDP and IP levels, let’s move up some levels in the OSI stack.
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在你已经看到我们如何在 TCP/UDP 和 IP 层面为应用程序建模网络边界，让我们在 OSI 栈的一些更高层次上移动。
+- en: Authentication Policies
+  id: totrans-106
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 认证策略
+- en: 'Until now, we looked at how we can control the network traffic between Pods
+    on the TCP/IP level. However, it is sometimes beneficial to base the network restrictions
+    on filtering on higher-level protocol parameters. This advanced network control
+    requires knowledge of higher-level protocols like HTTP and the ability to inspect
+    incoming and outgoing traffic. Kubernetes does not support this out of the box.
+    Luckily, a whole family of add-ons extends Kubernetes to provide this functionality:
+    service meshes.'
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 目前为止，我们看到了如何在 TCP/IP 层面控制 Pod 之间的网络流量。然而，基于更高级别协议参数的网络限制有时是有益的。这种高级网络控制需要了解像
+    HTTP 这样的更高级别协议，并具备检查进出流量的能力。Kubernetes 并未在开箱即用中支持此功能。幸运的是，一个完整的插件家族扩展了 Kubernetes
+    以提供这种功能：服务网格。
+- en: We chose Istio as our example service mesh, but you will find similar functionalities
+    in other service meshes. We won’t go into much detail about service meshes or
+    Istio. Instead, we’ll focus on a particular custom resource of Istio that helps
+    us shape the networking segments on the HTTP protocol level.
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们选择 Istio 作为我们示例的服务网格，但你会发现其他服务网格中类似的功能。我们不会深入讨论服务网格或 Istio，而是专注于 Istio 的一个特定自定义资源，帮助我们在
+    HTTP 协议级别上塑造网络段。
+- en: Istio has a rich feature set for enabling authentication, transport security
+    via mTLS, identity management with CERT rotations, and authorization.
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '**Istio** 具有丰富的功能集，用于启用身份验证、通过 mTLS 进行传输安全、通过 CERT 旋转进行身份管理以及授权。'
+- en: As with other Kubernetes extensions, Istio leverages the Kubernetes API machinery
+    by introducing its own CustomResourceDefinitions (CRDs) that are explained in
+    detail in [Chapter 28, “Operator”](ch28.html#Operator). Authorization in Istio
+    is configured with the AuthorizationPolicy resource. While AuthorizationPolicy
+    is only one component in Istio’s security model, it can be used alone and allows
+    for partitioning the network space based on HTTP.
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与其他 Kubernetes 扩展一样，Istio 通过引入自己的 CustomResourceDefinitions (CRDs) 利用 Kubernetes
+    API 机制，这在 [第 28 章，“Operator”](ch28.html#Operator) 中有详细解释。在 Istio 中，授权是通过 AuthorizationPolicy
+    资源配置的。虽然 AuthorizationPolicy 只是 Istio 安全模型中的一个组件，但它可以单独使用，并允许基于 HTTP 对网络空间进行分区。
+- en: The schema of AuthorizationPolicy is very similar to NetworkPolicy but is more
+    flexible and includes HTTP-specific filters. NetworkPolicy and AuthorizationPolicy
+    should be used together. This can lead to a tricky debugging setup when two configurations
+    must be checked and verified in parallel. Traffic will pass through to a Pod only
+    if the two user-defined firewalls spanned by NetworkPolicy and AuthorizationPolicy
+    definition will allow it.
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: AuthorizationPolicy 的架构与 NetworkPolicy 非常相似，但更灵活，并包括 HTTP 特定的过滤器。NetworkPolicy
+    和 AuthorizationPolicy 应该一起使用。当必须同时检查和验证两个配置时，这可能会导致一个棘手的调试设置。只有当 NetworkPolicy
+    和 AuthorizationPolicy 定义所跨越的两个用户定义的防火墙允许时，流量才会通过到一个 Pod。
+- en: 'An AuthorizationPolicy is a namespaced resource and contains a set of rules
+    that control whether or not traffic is allowed or denied to a particular set of
+    Pods in a Kubernetes cluster. The policy consists of the following three parts:'
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个 **AuthorizationPolicy** 是一个命名空间资源，包含一组规则，用于控制是否允许或拒绝在 Kubernetes 集群中特定一组
+    Pods 的流量。该策略由以下三个部分组成：
+- en: Selector
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 选择器
+- en: Specifies which Pods the policy applies to. If no selector is specified, the
+    policy applies to all Pods in the same namespace as the policy. If the policy
+    is created in Istio’s root namespace (`istio-system`), it applies to all matching
+    Pods in all namespaces.
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 指定策略适用于哪些Pod。如果未指定选择器，则策略适用于同一命名空间中的所有Pod。如果策略在Istio的根命名空间（`istio-system`）中创建，则适用于所有命名空间中的所有匹配Pod。
+- en: Action
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 操作
+- en: Defines what should be done with the traffic that matches the rules. The possible
+    actions are `ALLOW`, `DENY`, `AUDIT` (for logging only), and `CUSTOM` (for user-defined
+    actions).
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 定义与符合规则的流量应执行的操作。可能的操作包括`ALLOW`、`DENY`、`AUDIT`（仅用于日志记录）和`CUSTOM`（用于用户定义的操作）。
+- en: List of rules
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 规则列表
+- en: 'These are evaluated for incoming traffic. All of the rules must be satisfied
+    for the action to be taken. Each rule has three components: a `from` field that
+    specifies the source of the request, a `to` field that specifies the HTTP operation
+    that the request must match, and an optional `when` field for additional conditions
+    (e.g., the identity associated with the request must match a particular value).'
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些规则用于评估传入的流量。必须满足所有规则才能执行操作。每个规则有三个组成部分：一个`from`字段，指定请求的来源；一个`to`字段，指定请求必须匹配的HTTP操作；以及一个可选的`when`字段，用于附加条件（例如，与请求关联的身份必须匹配特定值）。
+- en: '[Example 24-6](#ex-network-segmentation-authorization-policy) shows a typical
+    example that allows the monitoring operator access to application endpoints for
+    collecting metric data.'
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[示例 24-6](#ex-network-segmentation-authorization-policy)展示了一个典型的例子，允许监控运算符访问应用程序端点以收集度量数据。'
+- en: Example 24-6\. Authorization for a Prometheus setup
+  id: totrans-120
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 24-6\. 用于Prometheus设置的授权
+- en: '[PRE5]'
+  id: totrans-121
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: '[![1](assets/1.png)](#co_network_segmentation_CO6-1)'
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_network_segmentation_CO6-1)'
+- en: When created in the namespace `istio-system`, the policy applies to all matching
+    Pods in all namespaces.
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当在命名空间`istio-system`中创建时，策略适用于所有命名空间中的所有匹配Pod。
+- en: '[![2](assets/2.png)](#co_network_segmentation_CO6-2)'
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_network_segmentation_CO6-2)'
+- en: The policy is applied to all Pods with a `has-metrics` label set to `true`.
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 该策略适用于所有带有`has-metrics`标签设置为`true`的Pod。
+- en: '[![3](assets/3.png)](#co_network_segmentation_CO6-3)'
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_network_segmentation_CO6-3)'
+- en: The action should allow the request to pass if the rules match.
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果规则匹配，则操作应允许请求通过。
+- en: '[![4](assets/4.png)](#co_network_segmentation_CO6-4)'
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_network_segmentation_CO6-4)'
+- en: Every request coming from a Pod from the `prometheus` namespace…​
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 来自`prometheus`命名空间的每个请求…​
+- en: '[![5](assets/5.png)](#co_network_segmentation_CO6-5)'
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#co_network_segmentation_CO6-5)'
+- en: …​can perform a GET request on the `/metrics` endpoint.
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: …​可以对`/metrics`端点执行GET请求。
+- en: 'In [Example 24-6](#ex-network-segmentation-authorization-policy), every Pod
+    that carries the label `has-metrics: "true"` allows traffic to its `/metrics`
+    endpoint from each Pod of the `prometheus` namespace.'
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '在[示例 24-6](#ex-network-segmentation-authorization-policy)中，每个带有标签`has-metrics:
+    "true"`的Pod允许从`prometheus`命名空间的每个Pod到其`/metrics`端点的流量。'
+- en: This policy has an effect only if, by default, all requests are denied. As for
+    NetworkPolicy, the best starting point is to define a deny-all policy, as shown
+    in [Example 24-7](#ex-network-segmentation-istio-deny-all), and then selectively
+    build up the network topology by allowing dedicated routes.
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 仅当默认情况下拒绝所有请求时，此策略才会生效。对于NetworkPolicy来说，最佳的起点是定义一个拒绝所有策略，如[示例 24-7](#ex-network-segmentation-istio-deny-all)所示，然后有选择性地构建网络拓扑以允许专用路由。
+- en: Example 24-7\. Deny-all policy as the default
+  id: totrans-134
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 24-7\. 拒绝所有策略作为默认设置
+- en: '[PRE6]'
+  id: totrans-135
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: '[![1](assets/1.png)](#co_network_segmentation_CO7-1)'
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_network_segmentation_CO7-1)'
+- en: The policy applies to all namespaces since it is created in `istio-system`.
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 该策略适用于所有命名空间，因为它是在`istio-system`中创建的。
+- en: '[![2](assets/2.png)](#co_network_segmentation_CO7-2)'
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_network_segmentation_CO7-2)'
+- en: An empty selector always matches.
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 空选择器始终匹配。
+- en: '[![3](assets/3.png)](#co_network_segmentation_CO7-3)'
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_network_segmentation_CO7-3)'
+- en: Deny access for all Pods that match the selector.
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 拒绝所有匹配选择器的Pod的访问。
+- en: '[![4](assets/4.png)](#co_network_segmentation_CO7-4)'
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_network_segmentation_CO7-4)'
+- en: An empty rule that will always match.
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个始终匹配的空规则。
+- en: Note
+  id: totrans-144
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Istio follows NetworkPolicy’s semantics that an empty rule list [] never matches.
+    In contrast, a list with a single empty rule [{}] always matches.
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Istio遵循NetworkPolicy的语义，空规则列表[]永远不匹配。相反，只有一个空规则的列表[{}]总是匹配。
+- en: With the help of the proper labeling schema, AuthorizationPolicy helps define
+    the application’s network segments that are independent and isolated from one
+    another. All that we said in [“Network segment definition with labels”](#network-segmentation-labeling)
+    also applies here.
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 借助适当的标记方案的帮助，AuthorizationPolicy 帮助定义了应用程序的网络段，这些网络段彼此独立且隔离。我们在 [“带标签的网络段定义”](#network-segmentation-labeling)
+    中所说的一切也同样适用于此处。
+- en: However, AuthorizationPolicy can also be used for application-level authorization
+    when we add an identity check to the rules. One crucial difference to the authorization
+    that we describe in [Chapter 26, “Access Control”](ch26.html#AccessControl), is
+    that AuthorizationPolicy is about *application authorization*, while the Kubernetes
+    RBAC model is about securing the access to the Kubernetes API server. Access control
+    is primarily helpful for operators monitoring their custom resources.
+  id: totrans-147
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，当我们向规则添加身份检查时，AuthorizationPolicy 也可以用于应用程序级授权。与我们在 [第 26 章 “访问控制”](ch26.html#AccessControl)
+    中描述的授权的一个关键区别在于，AuthorizationPolicy 关注的是*应用程序授权*，而 Kubernetes RBAC 模型则关注保护对 Kubernetes
+    API 服务器的访问。访问控制主要有助于操作员监视其自定义资源。
+- en: Discussion
+  id: totrans-148
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 讨论
+- en: In the early days of computing, network topologies were defined by physical
+    wiring and devices like switches. This approach is secure but not very flexible.
+    With the advent of virtualization, these devices were replaced by software-backed
+    constructs to provide network security. *Software-defined networking* (SDN) is
+    a type of computer networking architecture that allows network administrators
+    to manage network services through abstraction of lower-level functionality. This
+    abstraction is typically achieved by separating the control plane, which makes
+    decisions about how data should be transmitted, from the data plane, which actually
+    sends the data. Even with the use of SDN, administrators are still needed to set
+    up and rearrange networking boundaries to effectively manage the network.
+  id: totrans-149
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在计算机早期，网络拓扑是由物理布线和交换机等设备定义的。这种方法安全但不太灵活。随着虚拟化的出现，这些设备被软件支持的构造物所取代，以提供网络安全性。*软件定义网络*（SDN）是一种允许网络管理员通过抽象化低级功能来管理网络服务的计算机网络架构类型。通常通过分离控制平面（负责如何传输数据的决策）和数据平面（实际发送数据）来实现这种抽象化。即使使用了
+    SDN，管理员仍然需要设置和重新安排网络边界以有效管理网络。
+- en: Kubernetes has the ability to overlay its flat cluster-internal network with
+    network segments defined by users through the Kubernetes API. This is the next
+    step in the evolution of network user interfaces. It shifts the responsibility
+    to developers who understand the security requirements of their applications.
+    This shift-left approach is beneficial in a world of microservices with many distributed
+    dependencies and a complex network of connections. NetworkPolicies for L3/L4 network
+    segmentation and AuthenticationPolicies for more granular control of network boundaries
+    are essential for implementing this *Network Segmentation* pattern.
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 通过 Kubernetes API 将其扁平的集群内部网络覆盖与用户定义的网络段进行了重叠。这是网络用户界面演变的下一步。它将责任转移给了了解其应用程序安全要求的开发人员。这种左移的方法在微服务世界中尤其有益，该世界中存在许多分布式依赖和复杂的连接网络。用于
+    L3/L4 网络分段的 NetworkPolicies 和用于更精细控制网络边界的 AuthenticationPolicies 是实施此*网络分段*模式所必需的。
+- en: With the advent of eBPF-based platforms on top of Kubernetes, there is additional
+    support for finding suitable network models. Cilium is an example of a platform
+    that combines L3/L4 and L7 firewalling into a single API, making it easier to
+    implement the pattern described in this chapter in future versions of Kubernetes.
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 随着基于 eBPF 的平台在 Kubernetes 之上的出现，支持寻找合适的网络模型得到了额外的支持。Cilium 是将 L3/L4 和 L7 防火墙结合到单一
+    API 中的一个例子，使得在未来版本的 Kubernetes 中更容易实现本章描述的模式。
+- en: More Information
+  id: totrans-152
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 更多信息
+- en: '[Network Segmentation Example](https://oreil.ly/gwU-y)'
+  id: totrans-153
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[网络分段示例](https://oreil.ly/gwU-y)'
+- en: '[Network Policies](https://oreil.ly/P5r0X)'
+  id: totrans-154
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[网络策略](https://oreil.ly/P5r0X)'
+- en: '[The Kubernetes Network Model](https://oreil.ly/qR0O9)'
+  id: totrans-155
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Kubernetes 网络模型](https://oreil.ly/qR0O9)'
+- en: '[Kubernetes Network Policy Recipes](https://oreil.ly/NhrWK)'
+  id: totrans-156
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Kubernetes 网络策略示例](https://oreil.ly/NhrWK)'
+- en: '[Using Network Policies](https://oreil.ly/BzlSd)'
+  id: totrans-157
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[使用网络策略](https://oreil.ly/BzlSd)'
+- en: '[Why You Should Test Your Kubernetes Network Policies](https://oreil.ly/r-dn7)'
+  id: totrans-158
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[为什么应该测试您的 Kubernetes 网络策略](https://oreil.ly/r-dn7)'
+- en: '[Using the eBPF Superpowers to Generate Kubernetes Security Policies](https://oreil.ly/_5cWc)'
+  id: totrans-159
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[利用 eBPF 超能力生成 Kubernetes 安全策略](https://oreil.ly/_5cWc)'
+- en: '[Using Advise Network-Policy](https://oreil.ly/5VbP4) with Inspektor Gadget'
+  id: totrans-160
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[使用 Inspektor Gadget 的 Advise 网络策略](https://oreil.ly/5VbP4)'
+- en: '[You and Your Security Profiles; Generating Security Policies with the Help
+    of eBPF](https://oreil.ly/-jKvO)'
+  id: totrans-161
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[您和您的安全配置文件；利用 eBPF 生成安全策略的帮助](https://oreil.ly/-jKvO)'
+- en: '[kube-iptables-tailer](https://oreil.ly/r-4pI)'
+  id: totrans-162
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[kube-iptables-tailer](https://oreil.ly/r-4pI)'
+- en: '[Creating Policies from Verdicts](https://oreil.ly/9lqlu)'
+  id: totrans-163
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[从裁决创建策略](https://oreil.ly/9lqlu)'
+- en: '[Istio: Authorization Policy](https://oreil.ly/69M7s)'
+  id: totrans-164
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Istio：授权策略](https://oreil.ly/69M7s)'
+- en: '[Istio: Authentication Policies](https://oreil.ly/bLq35)'
+  id: totrans-165
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Istio：认证策略](https://oreil.ly/bLq35)'
+- en: '[SIG Multitenancy Working Group](https://oreil.ly/X00FG)'
+  id: totrans-166
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[SIG 多租户工作组](https://oreil.ly/X00FG)'
+- en: ^([1](ch24.html#idm45902087907696-marker)) Level 3 and Level 4 of the OSI Network
+    stack are mostly about IP and TCP/UDP, respectively.
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([1](ch24.html#idm45902087907696-marker)) OSI 网络栈的第三级和第四级主要涉及 IP 和 TCP/UDP。
+- en: ^([2](ch24.html#idm45902087228288-marker)) eBPF was originally an acronym for
+    “extended Berkeley Packet Filter” but is nowadays used as an independent term
+    on its own.
+  id: totrans-168
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([2](ch24.html#idm45902087228288-marker)) eBPF 最初是“扩展伯克利数据包过滤器”的缩写，但现在已经成为一个独立的术语。

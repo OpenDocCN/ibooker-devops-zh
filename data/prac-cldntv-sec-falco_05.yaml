@@ -1,0 +1,819 @@
+- en: Chapter 3\. Understanding Falco’s Architecture
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第 3 章。理解 Falco 的架构
+- en: Welcome to [Part II](part02.xhtml#ii_the_architecture_of_falco) of the book!
+    In [Part I](part01.xhtml#i_the_basics), you learned what Falco is and what it
+    does. You also took a high-level look at its architecture, installed it on your
+    machine, and took it for a spin. Now it’s time to step up your game!
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 欢迎来到本书的 [Part II](part02.xhtml#ii_the_architecture_of_falco)！在 [Part I](part01.xhtml#i_the_basics)
+    中，您了解了 Falco 的定义及其功能。您还高层次地了解了其架构，将其安装在您的计算机上，并进行了试用。现在是时候提升您的水平了！
+- en: In this part of the book (Chapters [3](#understanding_falcoapostr) through [8](ch08.xhtml#the_output_framework)),
+    we’ll get into the inner workings of Falco. You will learn about its architecture
+    in more detail, including its main components and how data flows across them.
+    We’ll show you how Falco interfaces with the kernel of the operating system and
+    with the cloud logs to collect data, and how this data is enriched with context
+    and metadata. [Chapter 6](ch06.xhtml#fields_and_filters) will then introduce you
+    to the important topic of fields and filters, while [Chapter 7](ch07.xhtml#falco_rules)
+    will get you more familiar with Falco rules. We’ll conclude [Part II](part02.xhtml#ii_the_architecture_of_falco)
+    by talking about the outputs framework, a key piece of Falco.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本书的这一部分（从第 [3](#understanding_falcoapostr) 章到第 [8](ch08.xhtml#the_output_framework)
+    章），我们将深入探讨 Falco 的内部工作原理。您将更详细地了解其架构，包括其主要组件以及数据在这些组件之间的流动方式。我们将展示 Falco 如何与操作系统的内核和云日志接口以收集数据，并且如何通过上下文和元数据丰富这些数据。第
+    [6 章](ch06.xhtml#fields_and_filters) 将介绍字段和过滤器这一重要主题，而第 [7 章](ch07.xhtml#falco_rules)
+    将让您更加熟悉 Falco 规则。我们将通过讨论输出框架，Falco 的关键部分，来结束 [Part II](part02.xhtml#ii_the_architecture_of_falco)。
+- en: 'Do you really need to learn about the internals of Falco in order to operate
+    it? The answer, as it is so often in life, is “it depends.” If your goal is simply
+    to deploy Falco in its default configuration and show your boss that it’s up and
+    working, then you’re probably fine skipping this part of the book. However, doing
+    so will make some things hard, and others impossible. For example, in Parts [III](part03.xhtml#iii_running_falco_in_production)
+    and [IV](part04.xhtml#iv_extending_falco) we’ll cover:'
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您真的需要了解 Falco 的内部结构才能操作它吗？答案通常是人生中常见的“这要看情况”。如果您的目标只是在其默认配置下部署 Falco 并向老板展示它正在运行，那么您可能可以跳过本书的这一部分。然而，这样做会使某些事情变得困难，而其他事情则变得不可能。例如，在第
+    [III](part03.xhtml#iii_running_falco_in_production) 和 [IV](part04.xhtml#iv_extending_falco)
+    部分中，我们将讨论：
+- en: Interpreting Falco’s output
+  id: totrans-4
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 解读 Falco 的输出
+- en: Determining if an alert could be a false positive
+  id: totrans-5
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 确定警报是否可能是误报
+- en: Fine-tuning Falco to privilege accuracy over noise
+  id: totrans-6
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 优化 Falco 以优先考虑准确性而不是噪音
+- en: Precisely adapting Falco to your environment
+  id: totrans-7
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 精确地调整 Falco 以适应您的环境
+- en: Customizing and extending Falco
+  id: totrans-8
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 自定义和扩展 Falco
+- en: All of these tasks require you to truly understand the core concepts behind
+    Falco and its architecture, and that’s what we’ll help you accomplish here.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有这些任务都要求您真正理解 Falco 及其架构背后的核心概念，这正是我们在这里要帮助您实现的。
+- en: True security is never trivial. It requires an investment that goes beyond a
+    superficial understanding. But that investment is typically paid back in spades,
+    because it can make the difference in whether your software gets compromised and
+    your company ends up in the news for all the wrong reasons.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 真正的安全从不是琐碎的。它需要一种超越表面理解的投入。但是这种投入通常会百倍回报，因为它可能决定了您的软件是否会受到攻击，以及您的公司是否因错误的原因出现在新闻中。
+- en: Assuming we’ve convinced you, let’s get started. [Figure 3-1](#the_high_level_architecture_of_a_typica)
+    depicts the main components of a typical Falco sensor deployment.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设我们已经说服了您，让我们开始吧。[图 3-1](#the_high_level_architecture_of_a_typica) 描述了典型 Falco
+    传感器部署的主要组件。
+- en: '![](Images/pcns_0301.png)'
+  id: totrans-12
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/pcns_0301.png)'
+- en: Figure 3-1\. The high-level architecture of a typical Falco sensor deployment
+  id: totrans-13
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-1。典型 Falco 传感器部署的高级架构
+- en: 'The architecture depicted in [Figure 3-1](#the_high_level_architecture_of_a_typica)
+    reflects the components as they are organized at the code level in the [Falcosecurity
+    organization on GitHub](https://oreil.ly/ClRJj). At this level of granularity,
+    the main components are:'
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 [GitHub 上的 Falcosecurity 组织](https://oreil.ly/ClRJj) 中，代码级别组织的架构反映在 [图 3-1](#the_high_level_architecture_of_a_typica)
+    中。在这个粒度级别上，主要组件包括：
+- en: Falco libraries
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco 库
+- en: The [Falco libraries](https://oreil.ly/6CbQH), or “libs,” are responsible for
+    collecting the data the sensor will process. They also manage state and provide
+    multiple layers of enrichment for the collected data.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Falco libraries](https://oreil.ly/6CbQH)，或“libs”，负责收集传感器将处理的数据。它们还管理状态并为收集的数据提供多层次的丰富化。'
+- en: Plugins
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 插件
+- en: The [plugins](https://oreil.ly/9Jyi8) extend the sensor with additional data
+    sources. For example, plugins make it possible for Falco to use AWS CloudTrail
+    and Kubernetes audit logs as data sources.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[插件](https://oreil.ly/9Jyi8)通过额外的数据源扩展了传感器的功能。例如，插件使得Falco能够使用AWS CloudTrail和Kubernetes审计日志作为数据源。'
+- en: Falco
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco
+- en: This is the [main sensor executable](https://oreil.ly/2IQkj), including the
+    rule engine.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是包括规则引擎在内的[主传感器可执行文件](https://oreil.ly/2IQkj)。
+- en: Falcosidekick
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falcosidekick
+- en: '[Falcosidekick](https://oreil.ly/lmOie) is responsible for routing the notifications
+    and connecting the sensor to the external world.'
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Falcosidekick](https://oreil.ly/lmOie)负责路由通知并连接传感器与外部世界。'
+- en: Of the components in [Figure 3-1](#the_high_level_architecture_of_a_typica),
+    Falco and the Falco libs are required and always installed, while Falcosidekick
+    and the plugins are optional; you can install them based on your deployment strategy
+    and needs.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[图 3-1](#the_high_level_architecture_of_a_typica)中的组件中，Falco和Falco libs是必需的并且始终安装，而Falcosidekick和插件是可选的；您可以根据部署策略和需求进行安装。
+- en: 'Falco and the Falco Libraries: A Data-Flow View'
+  id: totrans-24
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Falco和Falco Libraries：数据流视图
+- en: Let’s take the two most important of the components we just described, the Falco
+    libraries and Falco, and explore their data flows and critical modules.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们来看看刚才描述的两个最重要的组件，即Falco库和Falco，并探索它们的数据流和关键模块。
+- en: 'As [Figure 3-2](#sensor_data_flow_and_main_modules) shows, system calls are
+    one of the core sources of data. These are captured in the kernel of the operating
+    system by one of Falco’s two drivers: the *kernel module* and the *eBPF (extended
+    Berkeley Packet Filter) probe*.'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如[图 3-2](#sensor_data_flow_and_main_modules)所示，系统调用是数据的核心来源之一。这些由Falco的两个驱动程序之一在操作系统的内核中捕获：*内核模块*和*eBPF（扩展伯克利数据包过滤器）探针*。
+- en: '![](Images/pcns_0302.png)'
+  id: totrans-27
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/pcns_0302.png)'
+- en: Figure 3-2\. Sensor data flow and main modules
+  id: totrans-28
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-2\. 传感器数据流和主要模块
+- en: The collected system calls flow into the first of the Falco core libraries,
+    *libscap*, which can also receive data from the plugins and exposes a common interface
+    to the upper layers. Data is then passed to the other key library, *libsinsp*,
+    to be parsed and enriched. Next, the data is fed to the rule engine for evaluation.
+    Falco receives the output of the rule engine and emits the resulting notifications,
+    which can optionally go to Falcosidekick.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 收集的系统调用流入Falco核心库的第一个库*libscap*，该库还可以接收来自插件的数据，并为上层提供一个通用接口。数据然后传递到另一个关键库*libsinsp*进行解析和增强。接下来，数据传递给规则引擎进行评估。Falco接收规则引擎的输出并生成相应的通知，可以选择性地发送到Falcosidekick。
+- en: Pretty straightforward, right? [Figure 3-3](#key_roles_of_the_sensorapostrophes_main)
+    gives further details about what each of these modules does, and in the following
+    sections we’ll explore them in more depth.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 相当直接了，对吧？[图 3-3](#key_roles_of_the_sensorapostrophes_main) 提供了关于每个模块功能的更多细节，在接下来的章节中，我们将更深入地探讨它们。
+- en: '![](Images/pcns_0303.png)'
+  id: totrans-31
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/pcns_0303.png)'
+- en: Figure 3-3\. Key roles of the sensor’s main modules
+  id: totrans-32
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-3\. 传感器主要模块的关键角色
+- en: Drivers
+  id: totrans-33
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 驱动程序
+- en: 'System calls are Falco’s original data source, and to this day they remain
+    the most important. Collecting system calls is at the core of Falco’s ability
+    to trace the behavior of processes, containers, and users in a very granular way
+    and with high efficiency. Reliable and efficient system call collection needs
+    to be performed from inside the kernel of the operating system, so it requires
+    a driver that runs inside the OS itself. As mentioned in the previous section,
+    Falco offers two such drivers: the kernel module and the eBPF probe.'
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 系统调用是Falco的原始数据源，直到今天它们仍然是最重要的。收集系统调用是Falco能够以非常精细和高效的方式跟踪进程、容器和用户行为核心。可靠和高效的系统调用收集需要在操作系统内核内部执行驱动程序，因此需要一个在操作系统内部运行的驱动程序。如前所述，Falco提供了两种这样的驱动程序：内核模块和eBPF探针。
+- en: 'These two components offer identical functionality and are deployed in a mutually
+    exclusive way: if you deploy the kernel module, you can’t run the eBPF probe,
+    and vice versa. So what distinguishes them?'
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这两个组件提供相同的功能，并以互斥的方式部署：如果部署了内核模块，则无法运行eBPF探针，反之亦然。那么它们有什么区别呢？
+- en: The kernel module works with any version of the Linux kernel, including older
+    ones. Also, it requires somewhat fewer resources to run, so you should use it
+    when you care about Falco having the smallest possible overhead.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 内核模块与Linux内核的任何版本兼容，包括较旧的版本。此外，它需要更少的资源来运行，因此在关心Falco尽可能小的开销时应使用它。
+- en: The eBPF probe, on the other hand, runs only on more recent versions of Linux,
+    starting at kernel 4.11\. Its advantage is that it’s safer, because its code is
+    strictly validated by the operating system before it is executed. This means that
+    even if it contains a bug, it is (in theory) guaranteed not to crash your machine.
+    Compared to the kernel module, it is also much better protected from security
+    flaws that could compromise the machine where you run it. Therefore, in most cases,
+    the eBPF probe is the option you should go with. Note also that some environments—in
+    particular, cloud-based managed containerized environments—prevent kernel modules
+    from being loaded in the operating system kernel. In such environments, the eBPF
+    probe is your only option.
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一方面，eBPF探针仅在Linux的较新版本上运行，从内核版本4.11开始。其优势在于更安全，因为其代码在执行之前会严格由操作系统验证。这意味着即使它包含错误，理论上也不会导致系统崩溃。与内核模块相比，它还能更好地防止可能危及你运行它的机器的安全漏洞。因此，在大多数情况下，eBPF探针是你应该选择的选项。还要注意，某些环境——特别是基于云的托管容器化环境——禁止加载操作系统内核中的内核模块。在这种环境中，eBPF探针是你唯一的选择。
+- en: 'Both the kernel module and the eBPF probe are entrusted with a set of very
+    important tasks:'
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 内核模块和eBPF探针都承担一组非常重要的任务：
+- en: Capturing system calls
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 捕获系统调用
+- en: The driver’s first responsibility is capturing system calls. This happens through
+    a kernel facility called [tracepoints](https://oreil.ly/tEYsq) and is heavily
+    optimized to minimize the performance impact on the monitored applications.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 驱动程序的首要责任是捕获系统调用。这是通过一个称为[tracepoints](https://oreil.ly/tEYsq)的内核设施完成的，并且经过了大量优化，以最小化对被监视应用程序性能的影响。
+- en: System call packing
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 系统调用打包
+- en: The driver then encodes the system call information into a transfer buffer,
+    using a format that the rest of the Falco stack can parse easily and efficiently.
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后，驱动程序将系统调用信息编码到一个传输缓冲区中，使用一种Falco堆栈其余部分可以轻松高效解析的格式。
+- en: Zero-copy data transfer
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 零拷贝数据传输
+- en: Finally, the driver is responsible for efficiently transferring this data from
+    the kernel to the user level, where *libscap* will receive it. We should really
+    call this efficiently *not* transferring the data, since both the kernel module
+    and the eBPF probe are designed around a zero-copy architecture that maps the
+    data buffers into user-level memory so that *libscap* can access the original
+    data without needing to copy or transfer it.
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，驱动程序负责将这些数据高效地从内核传输到用户级，*libscap*将在那里接收它。事实上，我们应该称这种方式为高效地*不*传输数据，因为内核模块和eBPF探针都设计成零拷贝架构，将数据缓冲区映射到用户级内存，使*libscap*能够访问原始数据，而无需复制或传输它。
+- en: In [Chapter 4](ch04.xhtml#data_source) you will learn all you need to know about
+    drivers, including their architecture, functionality, and usage scenarios.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[第4章](ch04.xhtml#data_source)中，你将学习有关驱动程序的所有必要知识，包括它们的架构、功能和使用场景。
+- en: Plugins
+  id: totrans-46
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 插件
+- en: 'Plugins are a way to add additional data sources to Falco simply and without
+    the need to rebuild it. Plugins implement an interface that feeds events into
+    Falco, similar to what the kernel module and eBPF probe do. However, plugins are
+    not limited to capturing system calls: they can feed Falco any kind of data, including
+    logs and API events.'
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 插件是一种简单地向Falco添加额外数据源而无需重新构建它的方法。插件实现了一个接口，将事件馈送到Falco，类似于内核模块和eBPF探针所做的事情。然而，插件不仅限于捕获系统调用：它们可以向Falco馈送任何类型的数据，包括日志和API事件。
+- en: Falco has several powerful plugins that extend its scope. For example, the CloudTrail
+    plugin ingests JSON logs from AWS CloudTrail and allows Falco to alert you when
+    something dangerous happens in your cloud infrastructure. Plugins can be written
+    in any language, but there are Go and C++ software development kits (SDKs) available
+    that make it easier to write them in those languages. We will talk more about
+    plugins in Chapters [4](ch04.xhtml#data_source) and [11](ch11.xhtml#using_falco_for_cloud_se).
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco拥有几个强大的插件，扩展了其范围。例如，CloudTrail插件从AWS CloudTrail中摄取JSON日志，并允许Falco在你的云基础设施中发生危险事件时向你发出警报。插件可以用任何语言编写，但有Go和C++的软件开发工具包（SDK）可用，这使得用这些语言编写插件更容易。我们将在第[4章](ch04.xhtml#data_source)和第[11章](ch11.xhtml#using_falco_for_cloud_se)中更详细地讨论插件。
+- en: libscap
+  id: totrans-49
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: libscap
+- en: The name *libscap* stands for “library for system capture,” a clear hint about
+    its purpose. *libscap* is the gateway through which the input data passes before
+    getting into the Falco processing pipeline. Let’s take a look at the main things
+    *libscap* does for us.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 名称*libscap*代表“系统捕获库”，清楚地提示了它的目的。*libscap*是数据进入Falco处理流水线之前经过的门户。让我们看看*libscap*为我们做了哪些主要工作。
+- en: Managing Data Sources
+  id: totrans-51
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 管理数据源
+- en: The *libscap* library contains the logic to control both the kernel module and
+    the eBPF probe, including loading them, starting and stopping captures, and reading
+    the data they produce. It also includes the logic to load, manage, and run plugins.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*libscap* 库包含了控制内核模块和eBPF探针的逻辑，包括它们的加载、启动和停止捕获，以及读取它们生成的数据。它还包括加载、管理和运行插件的逻辑。'
+- en: '*libscap* is designed to export a generic capture source abstraction to the
+    upper layers of the stack. This means that no matter how you collect data (kernel
+    module, eBPF probe, a plugin), programs that use *libscap* will have a consistent
+    way to enumerate and control data sources, start and stop captures, and receive
+    captured events, and you won’t have to worry about the nuances of interfacing
+    with these disparate input sources.'
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*libscap* 的设计旨在向堆栈的上层导出通用的捕获源抽象。这意味着无论您如何收集数据（内核模块、eBPF探针、插件），使用*libscap*的程序都将拥有一致的方式来枚举和控制数据源，启动和停止捕获，并接收捕获的事件，而不必担心与这些不同输入源进行接口的细微差别。'
+- en: Supporting Trace Files
+  id: totrans-54
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 支持跟踪文件
+- en: Another extremely important piece of functionality in *libscap* is support for
+    trace files. If you’ve ever created or opened a PCAP file with Wireshark or tcpdump,
+    we’re sure you understand how useful (and powerful!) the concept of trace files
+    is. If not, allow us to explain.
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*libscap* 中另一个极为重要的功能是支持跟踪文件。如果您曾经使用Wireshark或tcpdump创建或打开过PCAP文件，我们相信您一定了解跟踪文件的概念是多么有用（和强大！）。如果还不了解，请允许我们解释。'
+- en: In addition to capturing and decoding network traffic, protocol analyzers (like
+    Wireshark and tcpdump) let you “dump” the captured network packets into a *trace
+    file*. The trace file contains a copy of each packet so that later you can open
+    it to analyze the activity of that network segment. You can also share it with
+    other people or filter its contents to isolate relevant information.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了捕获和解码网络流量外，协议分析器（如Wireshark和tcpdump）允许您将捕获的网络数据包“转储”到*跟踪文件*中。跟踪文件包含每个数据包的副本，以便稍后分析该网络段的活动。您还可以与他人共享它或过滤其内容以隔离相关信息。
+- en: Trace files are often referred to as PCAP *files*, a name that originates from
+    the *.pcap* file format used to encode the data inside them (an open, standardized
+    format understood by every networking tool in the universe). This enables an endless
+    list of the capture now, analyze later workflows that are critical in computer
+    networks.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 跟踪文件通常被称为PCAP *文件*，这个名称源自用于编码其中数据的*.pcap*文件格式（这是一种开放、标准化的格式，全球所有网络工具都能理解）。这使得在计算机网络中关键的“现在捕获，以后分析”的工作流程变得无穷无尽。
+- en: Many Falco users don’t realize that Falco supports trace files using the *.pcap*
+    format. This feature is extremely powerful and should definitely be part of your
+    arsenal as you gain more experience. For example, trace files are invaluable when
+    it comes to writing new rules.
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 许多Falco用户并不了解，Falco支持使用*.pcap*格式的跟踪文件。这个功能非常强大，并且在您积累更多经验时，绝对应该成为您工具库的一部分。例如，当您撰写新规则时，跟踪文件无价。
+- en: We’ll talk extensively about how to leverage trace files, for example in Chapters
+    [4](ch04.xhtml#data_source) and [13](ch13.xhtml#writing_falco_rules), but for
+    now let’s whet your appetite by teaching you how to create a trace file and have
+    Falco read it, in two simple steps. To do that, we need to introduce a command-line
+    tool called sysdig. You’ll learn more about sysdig in [Chapter 4](ch04.xhtml#data_source),
+    but for the moment we’ll just use it as a simple trace file generator.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将详细讨论如何利用跟踪文件，例如在第[4](ch04.xhtml#data_source)章和第[13](ch13.xhtml#writing_falco_rules)章，但现在让我们通过两个简单的步骤来激发您的兴趣，教您如何创建跟踪文件并让Falco读取它。为此，我们需要介绍一个名为sysdig的命令行工具。您将在第[4](ch04.xhtml#data_source)章更多地了解sysdig，但现在我们将它作为一个简单的跟踪文件生成器使用。
+- en: 'Step 1: Create the trace file'
+  id: totrans-60
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 步骤1：创建跟踪文件
+- en: 'Install sysdig on your Linux host by following the [installation instructions](https://oreil.ly/Rmkxr).
+    After finishing the installation, run the following on your command line, which
+    instructs sysdig to capture all of the system calls generated by the host and
+    write them to a file called *testfile.scap*:'
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 按照[安装说明](https://oreil.ly/Rmkxr)在您的Linux主机上安装sysdig。安装完成后，在命令行上运行以下命令，指示sysdig捕获主机生成的所有系统调用，并将它们写入名为*testfile.scap*的文件：
+- en: '[PRE0]'
+  id: totrans-62
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: Wait a few seconds to make sure your machine is working on it, then press Ctrl-C
+    to stop sysdig.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 等待几秒钟，确保您的机器正在工作，然后按Ctrl-C停止sysdig。
+- en: 'Now you have a snapshot of a few seconds’ worth of your host’s activity. Let’s
+    take a look at what it contains:'
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，您拥有了主机活动几秒钟快照的快照。让我们看看它包含了什么：
+- en: '[PRE1]'
+  id: totrans-65
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: We’ll go through the format of this output in detail later, but you can probably
+    tell that this is a bunch of background input/output (I/O) activity performed
+    by system tools like Xorg, gmain, and prlcp, which are running on this machine
+    while it’s idle.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们稍后会详细介绍此输出的格式，但您可能已经注意到，这是由像Xorg、gmain和prlcp这样的系统工具在空闲时在此计算机上运行的大量后台输入/输出（I/O）活动。
+- en: 'Step 2: Process the trace file with Falco'
+  id: totrans-67
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 第2步：使用Falco处理跟踪文件
+- en: 'Think of the trace file as taking us back in time: you took a snapshot of your
+    host at a specific point in time, and now you can trace the system calls generated
+    on the host around that time, observing every process in detail. Processing the
+    trace file with Falco is easy and lets you see quickly if any security violations
+    happened during that time. Here’s a sample of its output:'
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 把跟踪文件想象成带我们回到过去：您在特定时间点拍摄了主机的快照，现在可以跟踪在该时间周围生成的主机系统调用，详细观察每个进程。使用Falco处理跟踪文件很容易，让您快速查看在那段时间内是否发生了任何安全违规。以下是其输出的示例：
+- en: '[PRE2]'
+  id: totrans-69
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: Fortunately, it looks like we’re safe. This consistent, back-in-time way of
+    running Falco is useful when writing or unit-testing rules. We’ll talk more about
+    it when we deep dive into rules in [Chapter 13](ch13.xhtml#writing_falco_rules).
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 幸运的是，看起来我们很安全。当编写或单元测试规则时，这种一致且回溯式的Falco运行方式非常有用。我们将在第13章详细讨论它，那时我们将深入研究编写Falco规则的内容。
+- en: Collecting System State
+  id: totrans-71
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 收集系统状态
+- en: System state collection is an important task that’s specifically related to
+    capturing system calls. The kernel module and the eBPF probe produce raw system
+    calls, which lack some important context Falco needs.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 系统状态收集是一个与捕获系统调用密切相关的重要任务。内核模块和eBPF探针产生原始系统调用，缺少Falco所需的一些重要上下文。
+- en: 'Let’s take a look at an example. A very common system call is `read`, which,
+    as the name implies, reads a buffer of data from a file descriptor. Here is the
+    prototype of `read`:'
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们来看一个例子。一个非常常见的系统调用是`read`，顾名思义，它从文件描述符中读取数据到缓冲区中。这是`read`的原型：
+- en: '[PRE3]'
+  id: totrans-74
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'It has three inputs: the numeric file descriptor identifier, a buffer to fill,
+    and the buffer size. It returns the amount of data that was written in the buffer.'
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 它有三个输入：数字文件描述符标识符、要填充的缓冲区和缓冲区大小。它返回在缓冲区中写入的数据量。
+- en: 'A *file descriptor* is like the ID of an object inside the operating system
+    kernel: it can indicate a file, a network connection (specifically, a socket),
+    the endpoint of a pipe, a mutex (used for process synchronization), a timer, or
+    several other types of objects.'
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*文件描述符*类似于操作系统内核中对象的ID：它可以指示文件、网络连接（具体来说是套接字）、管道的端点、互斥量（用于进程同步）、定时器或其他几种类型的对象。'
+- en: Knowing the file descriptor number is not very useful when crafting a Falco
+    rule. As users, we prefer to think about a file or directory name, or maybe a
+    connection’s IP addresses and ports, than a file descriptor number. *libscap*
+    helps us do that. When Falco starts, *libscap* fetches a bunch of data from a
+    diverse set of sources within the operating system (for example, the */proc* Linux
+    filesystem). It uses this data to construct a set of tables that can be used to
+    resolve cryptic numbers—file descriptors, process IDs, and so forth—into logical
+    entities and their details, which are much easier for humans to use.
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当编写Falco规则时，知道文件描述符编号并不是很有用。作为用户，我们更喜欢考虑文件或目录名称，或者可能是连接的IP地址和端口，而不是文件描述符编号。*libscap*帮助我们做到这一点。当Falco启动时，*libscap*从操作系统内部的多种来源（例如*/proc*
+    Linux文件系统）获取大量数据。它使用这些数据构建一组表，可以将加密的数字（例如文件描述符、进程ID等）解析为逻辑实体及其详细信息，这对人类来说更容易使用。
+- en: 'This functionality is part of why Falco’s syntax is so much more expressive
+    and usable than that of most comparable tools. One theme that you will be hearing
+    often in this book is that *granular data is useless without context*. This gives
+    you a hint of what that means. Next we’ll dive into the other important Falco
+    library: *libsinsp*.'
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个功能是为什么Falco的语法比大多数类似工具更具表现力和可用性的一部分。本书中你会经常听到一个主题，即*没有上下文的粒度数据是无用的*。这为你提供了这个意思的一个提示。接下来我们将深入探讨另一个重要的Falco库：*libsinsp*。
+- en: libsinsp
+  id: totrans-79
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: libsinsp
+- en: '*libsinsp* stands for “library for system inspection.” This library taps into
+    the stream of data *libscap* produces, enriches it, and provides a number of higher-level
+    primitives to work with it. Let’s start by exploring its most important functionality,
+    the state engine.'
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*libsinsp*代表“系统检查库”。这个库利用*libscap*生成的数据流，对其进行丰富，并提供了许多高级原语来处理它。让我们首先探索它最重要的功能，即状态引擎。'
+- en: State Engine
+  id: totrans-81
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 状态引擎
+- en: 'As we noted in the previous section, when Falco starts, *libscap* constructs
+    a set of tables to convert low-level identifiers, like file descriptor numbers,
+    into high-level, actionable information, like IP addresses and filenames. This
+    is great, but what if a program opens a file *after* Falco starts? For example,
+    a very common system call in Unix is `open`, which takes two input arguments,
+    the filename and some flags, and returns a file descriptor identifying the newly
+    opened file:'
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如我们在前一节中所指出的，当Falco启动时，*libscap*构建了一组表，用于将低级标识符（如文件描述符号）转换为高级可操作信息，如IP地址和文件名。这很棒，但如果一个程序在Falco启动后打开一个文件会怎么样呢？例如，在Unix中一个非常常见的系统调用是`open`，它接受两个输入参数，文件名和一些标志，并返回一个标识新打开文件的文件描述符：
+- en: '[PRE4]'
+  id: totrans-83
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: 'In practice, `open`, like many other system calls, creates a new file descriptor,
+    effectively changing the state of the process that called it. If a process invokes
+    `open` after Falco has been launched, its new file descriptor will not be part
+    of the state table, and Falco won’t know what to do with that descriptor. However,
+    consider this: `open` is a system call. More generally, system calls are always
+    used to create, destroy, or modify file descriptors. Recall, too, that the Falco
+    libs capture *all* system calls from *every* process.'
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在实践中，`open`像许多其他系统调用一样，会创建一个新的文件描述符，有效地改变调用它的进程的状态。如果一个进程在Falco启动后调用`open`，它的新文件描述符将不会出现在状态表中，Falco也不会知道如何处理该描述符。然而，请考虑这一点：`open`是一个系统调用。更普遍地说，系统调用总是用于创建、销毁或修改文件描述符。还要记住，Falco
+    libs捕获*每个*进程的*所有*系统调用。
+- en: '*libsinsp*, in particular, has logic to inspect every state-changing system
+    call and, based on the system call arguments, update the state tables. In other
+    words, it tracks the activity of the whole machine to keep the state in sync with
+    the underlying operating system. Further, it does so in a way that accurately
+    supports containers. *libsinsp* keeps this constantly updated information in a
+    hierarchical structure. This structure ([Figure 3-4](#the_libsinsp_state_hierarchy))
+    starts with a process table, each entry of which contains a file descriptor table,
+    among other information.'
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 特别是*libsinsp*有逻辑来检查每个改变状态的系统调用，并根据系统调用的参数更新状态表。换句话说，它跟踪整个机器的活动，以保持状态与底层操作系统同步。此外，它以一种准确地支持容器的方式进行操作。*libsinsp*将这些不断更新的信息保存在分层结构中。这个结构（[图 3-4](#the_libsinsp_state_hierarchy)）从进程表开始，每个条目包含文件描述符表等信息。
+- en: These accurate, constantly updated state tables are at the core of Falco’s data
+    enrichment, which in turn is a key building block of the rule engine.
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些准确的、不断更新的状态表是Falco数据增强的核心，进而是规则引擎的关键构建块。
+- en: '![](Images/pcns_0304.png)'
+  id: totrans-87
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/pcns_0304.png)'
+- en: Figure 3-4\. The libsinsp state hierarchy
+  id: totrans-88
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-4\. libsinsp状态层次结构
+- en: Event Parsing
+  id: totrans-89
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 事件解析
+- en: The state engine requires a substantial amount of logic to understand system
+    calls and parse their arguments. This is what *libsinsp*’s *event parser* does.
+    State tracking leverages event parsing, but it’s used for other purposes as well.
+    For example, it extracts useful arguments from system calls or other data sources,
+    making them available to the rule engine. It also collates and reconstructs buffers
+    that can be spread across multiple collected messages, making it easier to decode
+    their content from Falco rules.
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 状态引擎需要大量的逻辑来理解系统调用并解析其参数。这正是 *libsinsp* 的 *事件解析器* 所做的。状态跟踪利用事件解析，但也用于其他目的。例如，它从系统调用或其他数据源中提取有用的参数，使它们可供规则引擎使用。它还整理和重构可以分布在多个收集消息中的缓冲区，从而更容易地从
+    Falco 规则中解码其内容。
+- en: Filtering
+  id: totrans-91
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 过滤器
+- en: 'Filtering is one of the most important concepts in Falco, and it’s fully implemented
+    in *libsinsp*. A *filter* is a Boolean expression that ties together multiple
+    *checks*, each of which compares a filter field with a constant value. The importance
+    of filters is obvious when we look at rules. (Indeed, it’s so important that we
+    dedicate all of [Chapter 6](ch06.xhtml#fields_and_filters) to it.) Let’s take
+    the simple rule shown here:'
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 过滤是 Falco 中最重要的概念之一，而且它在 *libsinsp* 中得到了完全实现。*过滤器* 是一个布尔表达式，它将多个*检查*联系在一起，每个检查都将一个过滤字段与常量值进行比较。当我们查看规则时，过滤器的重要性显而易见。（事实上，它如此重要，以至于我们专门在
+    [第6章](ch06.xhtml#fields_and_filters) 中全面讨论了它。）让我们看一下这里显示的简单规则：
+- en: '[PRE5]'
+  id: totrans-93
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: The `condition` section of the rule is a *libsinsp* filter. The condition in
+    our example checks that the container ID is not `host` and that the name of the
+    process is `bash`. Every captured system call that meets both criteria will trigger
+    the rule.
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 规则中的 `condition` 部分是 *libsinsp* 的过滤器。我们的示例中的条件检查容器 ID 不是 `host`，并且进程名称是 `bash`。每个满足这两个条件的捕获系统调用都将触发该规则。
+- en: '*libsinsp* is responsible for defining and implementing system call–related
+    filter fields. It also contains the engine that evaluates filters and tells us
+    if the rule should trigger, so it’s not an exaggeration to say that *libsinsp*
+    is the heart of Falco.'
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*libsinsp* 负责定义和实现与系统调用相关的过滤字段。它还包含评估过滤器并告诉我们是否应触发规则的引擎，因此可以说 *libsinsp* 是
+    Falco 的核心，这一点并非言过其实。'
+- en: Output Formatting
+  id: totrans-96
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 输出格式化
+- en: 'If we take another look at the example rule, we can see that the `output` section
+    makes use of a syntax similar to that of the `condition` section:'
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果我们再次看一下示例规则，我们可以看到 `output` 部分使用了类似于 `condition` 部分的语法：
+- en: '[PRE6]'
+  id: totrans-98
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: Output is what Falco prints when the rule triggers—and yes, you can use filter
+    fields in this section (the same fields that you can use in the `condition` section)
+    by prepending the `%` character to the field names. *libsinsp* has logic to resolve
+    these fields and create the final output string. What’s nice is that if you become
+    an expert at writing condition filters, you will also have mastered output strings!
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 触发规则时，Falco 打印的内容就是输出——是的，在此部分中您可以通过在字段名前加上 `%` 字符来使用 `condition` 部分中同样可以使用的过滤字段。*libsinsp*
+    具有解析这些字段并创建最终输出字符串的逻辑。值得一提的是，如果您成为编写条件过滤器的专家，您也将掌握输出字符串的技能！
+- en: One More Thing About libsinsp
+  id: totrans-100
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: '*libsinsp* 的另一重要事项'
+- en: By now you can probably see that a lot of Falco’s logic is in *libsinsp*. That’s
+    deliberate. Falco’s developers recognized the value (and elegance) of its data
+    collection stack and realized it could be the base for many other tools. That’s
+    precisely why *libsinsp* exists. It sits on top of the powerful Falco collection
+    stack (which includes the drivers, plugins, and *libscap*) and adds the most important
+    pieces of the Falco logic in a way that makes them reusable. What’s more, *libsinsp*
+    includes all you need to collect security and forensics data from containers,
+    virtual machines, Linux hosts, and cloud infrastructure. It’s stable, efficient,
+    and well documented.
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，您可能已经看到 Falco 很多逻辑都在 *libsinsp* 中。这是有意为之的。Falco 的开发人员认识到了其数据收集堆栈的价值（以及其优雅性），并意识到它可以成为许多其他工具的基础。这就是
+    *libsinsp* 存在的原因。它位于强大的 Falco 收集堆栈（包括驱动程序、插件和 *libscap*）之上，并以可重复使用的方式添加了 Falco
+    逻辑的最重要部分。更重要的是，*libsinsp* 包含了从容器、虚拟机、Linux 主机和云基础设施收集安全和取证数据所需的一切。它稳定、高效且文档完善。
+- en: Several other open source and commercial tools have been built on top of *libsinsp*.
+    If you would like to write one, or if you are just curious and want to learn more,
+    we recommend you start at the [*falcosecurity/libs* repository](https://oreil.ly/Cp2Nt).
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 还有几个其他开源和商业工具是基于 *libsinsp* 构建的。如果你想编写一个，或者只是好奇想了解更多，我们建议你从 [*falcosecurity/libs*
+    仓库](https://oreil.ly/Cp2Nt) 开始。
+- en: Rule Engine
+  id: totrans-103
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 规则引擎
+- en: 'The Falco rule engine is the component you interact with when you run Falco.
+    Here are some of the things that the rule engine is responsible for:'
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco 规则引擎是你在运行 Falco 时互动的组件。以下是规则引擎负责的一些事务：
+- en: Loading Falco rules files
+  id: totrans-105
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 载入 Falco 规则文件
+- en: Parsing the rules in a file
+  id: totrans-106
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 解析文件中的规则
+- en: Applying local customizations (such as appends and overrides) to rules based
+    on local rules files
+  id: totrans-107
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 根据本地规则文件对规则应用本地定制（例如追加和覆盖）。
+- en: Using *libsinsp* to compile the condition and output of each rule
+  id: totrans-108
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用 *libsinsp* 编译每个规则的条件和输出。
+- en: Performing the appropriate action, including emitting the output, when a rule
+    triggers
+  id: totrans-109
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 当规则触发时执行适当的操作，包括输出结果。
+- en: Thanks to the power of *libscap* and *libsinsp*, the rule engine is simple and
+    relatively independent from the rest of the stack.
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于 *libscap* 和 *libsinsp* 的强大功能，规则引擎简单且相对独立于堆栈的其他部分。
+- en: Conclusion
+  id: totrans-111
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 结论
+- en: Now you know what’s inside Falco and how its components relate to each other—you’re
+    well on your way to mastering it! In the next chapters we’ll dive deeper into
+    some of the components and concepts that this chapter introduced.
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在你知道了 Falco 的内部构成及其组件之间的关系，你已经在掌握它的路上了！在接下来的章节中，我们将更深入地探讨本章介绍的一些组件和概念。

@@ -1,0 +1,936 @@
+- en: Chapter 6\. Adapter Operators
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第6章 适配器运算符
+- en: Consider the numerous steps it would take to write an Operator from scratch.
+    You would have to create CRDs to specify the interface for end users. Kubernetes
+    controllers would not only need to be written with the Operator’s domain-specific
+    logic, but also be correctly hooked into a running cluster to receive the proper
+    notifications. Roles and service accounts would need to be created to permit the
+    Operator to function in the capacity it needs. An Operator is run as a pod inside
+    of a cluster, so an image would need to be built, along with its accompanying
+    deployment manifest.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 考虑从头开始编写Operator可能需要的众多步骤。您将不得不创建CRDs来指定最终用户的接口。Kubernetes控制器不仅需要用Operator的领域特定逻辑编写，还需要正确地连接到运行中的集群以接收适当的通知。还需要创建角色和服务账户以允许Operator按其需要的方式运行。Operator作为集群内的一个pod运行，因此需要构建一个镜像，以及其伴随的部署清单。
+- en: Many projects have already invested in application deployment and configuration
+    technologies. The Helm project allows users to define their cluster resources
+    in a formatted text file and deploy them through the Helm command-line tools.
+    Ansible is a popular automation engine for creating reusable scripts for provisioning
+    and configuring a group of resources. Both projects have devoted followings of
+    developers who may lack the resources to migrate to using Operators for their
+    applications.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 许多项目已经投资于应用程序部署和配置技术。Helm项目允许用户在格式化的文本文件中定义其集群资源，并通过Helm命令行工具部署它们。Ansible是一个流行的自动化引擎，用于创建可重用脚本来配置和配置一组资源。这两个项目都有专注的开发者群体，他们可能缺乏资源来迁移到使用Operator来管理其应用程序。
+- en: 'The Operator SDK provides a solution to both these problems through its *Adapter
+    Operators*. Through the command-line tool, the SDK generates the code necessary
+    to run technologies such as Helm and Ansible in an Operator. This allows you to
+    rapidly migrate your infrastructure to an Operator model without needing to write
+    the necessary supporting Operator code. The advantages of doing this include:'
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Operator SDK通过其*适配器运算符*解决了这两个问题。通过命令行工具，SDK生成运行Helm和Ansible等技术所需的代码。这使您能够快速将基础架构迁移到Operator模型，无需编写必要的支持Operator代码。这样做的优势包括：
+- en: Provides a consistent interface through CRDs, regardless of whether the underlying
+    technology is Helm, Ansible, or Go.
+  id: totrans-4
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 通过CRDs提供一致的接口，无论底层技术是Helm、Ansible还是Go。
+- en: Allows the Helm and Ansible solutions to leverage the Operator deployment and
+    lifecycle benefits that Operator Lifecycle Manager provides (see [Chapter 8](ch08.html#operator_lifecyle_manager)
+    for more information).
+  id: totrans-5
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 允许Helm和Ansible解决方案利用Operator生命周期管理器提供的部署和生命周期优势（有关更多信息，请参见[第8章](ch08.html#operator_lifecyle_manager)）。
+- en: Enables hosting of those solutions on Operator repositories like OperatorHub.io
+    (see [Chapter 10](ch10.html#getting_involved) for more information).
+  id: totrans-6
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 允许将这些解决方案托管在OperatorHub.io等Operator仓库上（有关更多信息，请参见[第10章](ch10.html#getting_involved)）。
+- en: In this chapter we demonstrate how to use the SDK to build and test Adapter
+    Operators using the Visitors Site application introduced in the previous chapter.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们展示了如何使用SDK在前一章介绍的访客网站应用程序中构建和测试适配器运算符。
+- en: Helm Operator
+  id: totrans-8
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Helm运算符
+- en: '[Helm](https://helm.sh/) is a package manager for Kubernetes. It makes it easier
+    to deploy applications with multiple components, but each deployment is still
+    a manual process. If you’re deploying many instances of a Helm-packaged app, it
+    would be convenient to automate those deployments with an Operator.'
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Helm](https://helm.sh/)是Kubernetes的一个包管理工具。它简化了部署具有多个组件的应用程序，但每次部署仍然是一个手动过程。如果您正在部署多个Helm打包的应用程序实例，使用Operator自动化这些部署将非常方便。'
+- en: Helm’s intricacies are outside the scope of this book—you can consult the [documentation](https://helm.sh/docs/)
+    for more details—but a little background will help you understand the Helm Operator.
+    Helm defines the Kubernetes resources that constitute an application, such as
+    deployments and services, in a file called a *chart*. Charts support configuration
+    variables, so you can customize application instances without needing to edit
+    the chart itself. These configuration values are specified in a file named *values.yaml*.
+    A Helm Operator can deploy each instance of an application with a different version
+    of *values.yaml*.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Helm的复杂性超出了本书的范围——您可以查阅[文档](https://helm.sh/docs/)以获取更多详细信息——但一些背景知识将帮助您理解Helm
+    Operator。Helm定义了构成应用程序的Kubernetes资源，如部署和服务，在一个称为*chart*的文件中。图表支持配置变量，因此您可以自定义应用程序实例而无需编辑图表本身。这些配置值在名为*values.yaml*的文件中指定。Helm
+    Operator可以使用不同版本的*values.yaml*部署每个应用程序实例。
+- en: The Operator SDK generates Kubernetes controller code for a Helm Operator when
+    it is passed the `--type=helm` argument. You supply a Helm chart for your application,
+    and the resulting Helm Operator watches for new CRs of its given type. When it
+    finds one of these CRs, it constructs a Helm *values.yaml* file from the values
+    defined in the resource. The Operator then creates the application resources specified
+    in its Helm chart according to the settings in *values.yaml*. To configure another
+    instance of the application, you create a new CR containing appropriate values
+    for the instance.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当传递`--type=helm`参数时，Operator SDK为Helm Operator生成Kubernetes控制器代码。您为应用程序提供一个Helm图表，生成的Helm
+    Operator会监视其给定类型的新CR。当它找到其中一个CR时，它会根据资源中定义的值构建一个Helm *values.yaml*文件。然后，Operator根据*values.yaml*中的设置创建其Helm图表中指定的应用程序资源。要配置另一个应用程序实例，您需要创建一个包含适当值的新CR。
+- en: 'The SDK provides two variations on how to build Helm-based Operators:'
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: SDK提供了两种构建基于Helm的Operator的变体：
+- en: The project generation process builds a blank Helm chart structure within the
+    Operator project code.
+  id: totrans-13
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 项目生成过程在Operator项目代码中构建了一个空白的Helm图表结构。
+- en: An existing chart is specified at Operator creation time, which the creation
+    process uses to populate the generated Operator.
+  id: totrans-14
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在Operator创建时指定现有图表，创建过程将使用它来填充生成的Operator。
+- en: In the following sections we discuss each of these approaches. As a prerequisite,
+    be sure to install the Helm command-line tools on your machine. You can find information
+    on doing this in [Helm’s install documentation](https://oreil.ly/qpZX0).
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在接下来的章节中，我们将讨论这些方法的每一个。作为先决条件，请确保在您的计算机上安装了Helm命令行工具。您可以在[Helm的安装文档](https://oreil.ly/qpZX0)中找到有关如何执行此操作的信息。
+- en: Building the Operator
+  id: totrans-16
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 构建Operator
+- en: The SDK’s `new` command creates the skeleton project files for a new Operator.
+    These files include all of the code necessary for a Kubernetes controller that
+    invokes the appropriate Helm chart to field requests for CRs. We’ll discuss these
+    files in greater detail later in this section.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: SDK的`new`命令为新Operator创建了框架项目文件。这些文件包括调用适当的Helm图表以处理CR请求的Kubernetes控制器所需的所有代码。我们稍后将在本节更详细地讨论这些文件。
+- en: Creating a new chart
+  id: totrans-18
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 创建一个新图表
+- en: 'To create an Operator with the skeleton for a new Helm chart, use the `--type=helm`
+    argument. The following example creates the basis of a Helm Operator for the Visitors
+    Site application (see [Chapter 5](ch05.html#sample_application_visitors_site)):'
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用`--type=helm`参数创建一个具有新Helm图表框架的Operator。以下示例创建了一个访客站点应用程序的Helm Operator的基础（参见[第5章](ch05.html#sample_application_visitors_site)）：
+- en: '[PRE0]'
+  id: totrans-20
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: '`visitors-helm-operator` is the name of the generated Operator. The other two
+    arguments, `--api-version` and `--kind`, describe the CR this Operator manages.
+    These arguments result in the creation of a basic CRD for the new type.'
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`visitors-helm-operator`是生成的Operator的名称。另外两个参数，`--api-version`和`--kind`，描述了此Operator管理的CR。这些参数导致为新类型创建基本CRD。'
+- en: 'The SDK creates a new directory with the same name as `$OPERATOR_NAME`, which
+    contains all of the Operator’s files. There are a few files and directories to
+    note:'
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: SDK创建一个与`$OPERATOR_NAME`相同名称的新目录，其中包含所有Operator的文件。有几个文件和目录需要注意：
+- en: '*deploy/*'
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*deploy/*'
+- en: This directory contains Kubernetes template files that are used to deploy and
+    configure the Operator, including the CRD, the Operator deployment resource itself,
+    and the necessary RBAC resources for the Operator to run.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此目录包含用于部署和配置Operator的Kubernetes模板文件，包括CRD、Operator部署资源本身以及Operator运行所需的RBAC资源。
+- en: '*helm-charts/*'
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*helm-charts/*'
+- en: This directory contains a skeleton directory structure for a Helm chart with
+    the same name as the CR kind. The files within are similar to those the Helm CLI
+    creates when it initializes a new chart, including a *values.yaml* file. A new
+    chart is added to this directory for each new CR type the Operator manages.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此目录包含与CR类型同名的Helm chart的骨架目录结构。其中的文件与Helm CLI在初始化新图表时创建的文件类似，包括一个*values.yaml*文件。每个Operator管理的新CR类型都将向此目录添加一个新图表。
+- en: '*watches.yaml*'
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*watches.yaml*'
+- en: This file maps each CR type to the specific Helm chart that is used to handle
+    it.
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 该文件将每种CR类型映射到用于处理它的特定Helm chart。
+- en: At this point, everything is in place to begin to implement your chart. However,
+    if you already have a chart written, there is an easier approach.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，一切都准备就绪，可以开始实现您的图表。但是，如果您已经编写了一个图表，还有一种更简单的方法。
+- en: Use an existing chart
+  id: totrans-30
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 使用现有图表
+- en: 'The process for building an Operator from an existing Helm chart is similar
+    to that for creating an Operator with a new chart. In addition to the `--type=helm`
+    argument, there are a few additional arguments to take into consideration:'
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从现有Helm chart构建Operator的过程与使用新chart创建Operator的过程类似。除了`--type=helm`参数外，还有一些额外的参数需要考虑：
+- en: --helm-chart
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: --helm-chart
+- en: 'Tells the SDK to initialize the Operator with an existing chart. The value
+    can be:'
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 告知SDK使用现有图表初始化Operator。该值可以是：
+- en: A URL to a chart archive
+  id: totrans-34
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 图表存档的URL
+- en: The repository and name of a remote chart
+  id: totrans-35
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 远程图表的存储库和名称
+- en: The location of a local directory
+  id: totrans-36
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 本地目录的位置
+- en: --helm-chart-repo
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: --helm-chart-repo
+- en: Specifies a remote repository URL for the chart (unless a local directory is
+    otherwise specified).
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 指定图表的远程存储库URL（除非另有指定本地目录）。
+- en: --helm-chart-version
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: --helm-chart-version
+- en: Tells the SDK to fetch a specific version of the chart. If this is omitted,
+    the latest available version is used.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 告知SDK获取特定版本的图表。如果省略此项，则使用最新可用版本。
+- en: When using the `--helm-chart` argument, the `--api-version` and `--kind` arguments
+    become optional. The `api-version` is defaulted to `charts.helm.k8s.io/v1alpha1`
+    and the `kind` name will be derived from the name of the chart. However, as the
+    `api-version` carries information about the CR creator, we recommend that you
+    explicitly populate these values appropriately. You can find an example Helm chart
+    for deploying the Visitors Site application in this book’s [GitHub repository](https://github.com/kubernetes-operators-book/chapters/tree/master/ch06/visitors-helm).
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在使用`--helm-chart`参数时，`--api-version`和`--kind`参数变为可选项。`api-version`默认为`charts.helm.k8s.io/v1alpha1`，并且`kind`名称将根据chart名称推断而来。然而，由于`api-version`携带有关CR创建者的信息，我们建议您明确地适当填充这些值。您可以在本书的[Github存储库](https://github.com/kubernetes-operators-book/chapters/tree/master/ch06/visitors-helm)中找到部署Visitors
+    Site应用程序的示例Helm chart。
+- en: 'The following example demonstrates how to build an Operator and initialize
+    it using an archive of the Visitors Site Helm chart:'
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下面的示例演示了如何构建一个Operator，并使用Visitors Site Helm chart的存档进行初始化：
+- en: '[PRE1]'
+  id: totrans-43
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: '[![1](assets/1.png)](#comarker1-01a)'
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#comarker1-01a)'
+- en: Due to an issue with how the Operator SDK handles redirects, you must manually
+    download the chart tarball and pass it as a local reference.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于Operator SDK处理重定向的方式存在问题，您必须手动下载图表tarball并将其作为本地引用传递。
+- en: 'The preceding example generates the same files as in the case of creating an
+    Operator with a new Helm chart, with the notable exception that the chart files
+    are populated from the specified archive:'
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 前述示例生成了与使用新Helm chart创建Operator时相同的文件，唯一的例外是图表文件是从指定的存档中填充的：
+- en: '[PRE2]'
+  id: totrans-47
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'The SDK uses the values in the chart’s *values.yaml* file to populate the example
+    CR template. For example, the Visitors Site Helm chart has the following *values.yaml*
+    file:'
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: SDK使用图表的*values.yaml*文件中的值填充示例CR模板。例如，Visitors Site Helm chart具有以下*values.yaml*文件：
+- en: '[PRE3]'
+  id: totrans-49
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'The example CR generated by the SDK, found in the *deploy/crds* directory in
+    the Operator project root directory, includes these same values in its `spec`
+    section:'
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: SDK生成的示例CR位于Operator项目根目录中的*deploy/crds*目录中，并在其`spec`部分包含相同的值：
+- en: '[PRE4]'
+  id: totrans-51
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: Before running the chart, the Operator will map the values found in the custom
+    resource’s `spec` field to the *values.yaml* file.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在运行图表之前，Operator将将自定义资源的`spec`字段中的值映射到*values.yaml*文件中。
+- en: Fleshing Out the CRD
+  id: totrans-53
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Fleshing Out the CRD
+- en: The generated CRD does not include specific details of the value input and state
+    values of the CR type. [Appendix B](app02.html#appendix_crd_validation) describes
+    the steps you should take to finish defining the CR.
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 生成的 CRD 不包括 CR 类型的值输入和状态值的具体细节。[附录 B](app02.html#appendix_crd_validation) 描述了完成
+    CR 定义的步骤。
+- en: Reviewing Operator Permissions
+  id: totrans-55
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 审查操作员权限
+- en: The generated deployment files include the role the Operator will use to connect
+    to the Kubernetes API. By default, this role is extremely permissive. [Appendix C](app03.html#appendix_rbac)
+    talks about how to fine-tune the role definition to limit the Operator’s permissions.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 生成的部署文件包括操作员将用于连接 Kubernetes API 的角色。默认情况下，此角色权限非常宽泛。[附录 C](app03.html#appendix_rbac)
+    讨论如何精细调整角色定义以限制操作员的权限。
+- en: Running the Helm Operator
+  id: totrans-57
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 运行 Helm Operator
+- en: 'An Operator is delivered as a normal container image. However, during the development
+    and testing cycle, it is often easier to skip the image creation process and simply
+    run the Operator outside of the cluster. In this section we describe those steps
+    (see [Appendix A](app01.html#appendix_operator_as_deployment) for information
+    about running the Operator as a deployment inside the cluster). Run all the commands
+    here from within the Operator project root directory:'
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 操作员作为普通容器映像交付。然而，在开发和测试周期中，跳过映像创建过程并在集群外部简单运行操作员通常更容易。本节描述了这些步骤（请参阅 [附录 A](app01.html#appendix_operator_as_deployment)
+    了解有关在集群内部署操作员的信息）。请从操作员项目根目录内运行所有命令：
+- en: Create a local watches file. The generated *watches.yaml* file refers to a specific
+    path where the Helm chart is found. This path makes sense in the deployed Operator
+    scenario; the image creation process takes care of copying the chart to the necessary
+    location. This *watches.yaml* file is still required when running the Operator
+    outside of the cluster, so you need to manually make sure your chart can be found
+    at that location.
+  id: totrans-59
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 创建本地观察文件。生成的 *watches.yaml* 文件引用特定路径，该路径在部署的操作员场景中与 Helm chart 相对应。镜像创建过程负责将
+    chart 复制到必要的位置。当在集群外运行操作员时，仍需要此 *watches.yaml* 文件，因此您需要手动确保 chart 可以在该位置找到。
+- en: 'The simplest approach is to copy the existing *watches.yaml* file, which is
+    located in the root of the Operator project:'
+  id: totrans-60
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 最简单的方法是复制已存在于操作员项目根目录中的 *watches.yaml* 文件：
+- en: '[PRE5]'
+  id: totrans-61
+  prefs:
+  - PREF_IND
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: In the *local-watches.yaml* file, edit the `chart` field to contain the full
+    path of the chart on your machine. Remember the name of the local watches file;
+    you will need it later when you start the Operator process.
+  id: totrans-62
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 在 *local-watches.yaml* 文件中，编辑 `chart` 字段，以包含您机器上 Helm chart 的完整路径。请记住本地观察文件的名称；稍后在启动操作员过程中会用到它。
+- en: 'Create the CRDs in the cluster using the `kubectl` command:'
+  id: totrans-63
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 使用 `kubectl` 命令在集群中创建 CRDs：
+- en: '[PRE6]'
+  id: totrans-64
+  prefs:
+  - PREF_IND
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: 'Once you have finished creating the CRDs, start the Operator using the following
+    SDK command:'
+  id: totrans-65
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 创建完 CRDs 后，使用以下 SDK 命令启动操作员：
+- en: '[PRE7]'
+  id: totrans-66
+  prefs:
+  - PREF_IND
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: '[![1](assets/1.png)](#comarker1-02a)'
+  id: totrans-67
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#comarker1-02a)'
+- en: The Operator log messages will appear in this running process as it starts up
+    and fields CR requests.
+  id: totrans-68
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 当操作员启动并处理 CR 请求时，操作员日志消息将显示在此运行过程中。
+- en: This command starts a running process that behaves in the same way the Operator
+    would if you had deployed it as a pod inside the cluster. (We’ll cover testing
+    in more detail in [“Testing an Operator”](#test_operator).)
+  id: totrans-69
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 此命令启动一个运行过程，其行为方式与在集群内部署为 pod 的操作员相同。我们将在 [“测试操作员”](#test_operator) 中更详细地讨论测试。
+- en: Ansible Operator
+  id: totrans-70
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Ansible Operator
+- en: '[Ansible](https://www.ansible.com/) is a popular management tool for automating
+    the provisioning and configuration of commonly run tasks. Similar to a Helm chart,
+    an Ansible *playbook* defines a series of *tasks* that are run on a set of servers.
+    Reusable *roles*, which extend Ansible through custom functionality, may be used
+    to enhance the set of tasks in a playbook.'
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Ansible](https://www.ansible.com/) 是一种流行的管理工具，用于自动化常见任务的配置和部署。与 Helm chart
+    类似，Ansible *playbook* 定义了一系列在一组服务器上运行的 *tasks*。可重用的 *roles* 可通过自定义功能扩展 Ansible，以增强
+    playbook 中的任务集合。'
+- en: One useful collection of roles is [k8s](https://oreil.ly/1ckgw), which provides
+    tasks for interacting with a Kubernetes cluster. Using this module, you can write
+    playbooks to handle the deployment of applications, including all of the necessary
+    supporting Kubernetes resources.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个有用的角色集合是 [k8s](https://oreil.ly/1ckgw)，它提供了与 Kubernetes 集群交互的任务。使用此模块，您可以编写
+    playbook 来处理应用程序的部署，包括所有必要的支持 Kubernetes 资源。
+- en: The Operator SDK provides a way to build an Operator that will run Ansible playbooks
+    to react to CR changes. The SDK supplies the code for the Kubernetes pieces, such
+    as the controller, allowing you to focus on writing the playbooks themselves.
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Operator SDK提供了一种构建Operator的方式，该Operator将运行Ansible playbook以响应CR更改。SDK提供了用于Kubernetes组件（例如控制器）的代码，使您可以专注于编写playbook本身。
+- en: Building the Operator
+  id: totrans-74
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 构建Operator
+- en: As with its Helm support, the Operator SDK generates a project skeleton. When
+    run with the `--type=ansible` argument, the project skeleton contains the structure
+    for a blank Ansible role. The name of the role is derived from the specified CR
+    type name.
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与其Helm支持一样，Operator SDK生成项目框架。使用`--type=ansible`参数运行时，项目框架包含空白Ansible角色的结构。角色名称由指定的CR类型名称派生。
+- en: 'The following example demonstrates creating an Ansible Operator that defines
+    a CR for the Visitors Site application:'
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下示例演示了创建定义Visitors Site应用程序CR的Ansible Operator：
+- en: '[PRE8]'
+  id: totrans-77
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: This command produces a similar directory structure to the Helm Operator example.
+    The SDK creates a *deploy* directory that contains the same set of files, including
+    the CRD and deployment template.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此命令生成类似于Helm Operator示例的目录结构。SDK创建包含CRD和部署模板等相同文件集的*deploy*目录。
+- en: 'There are a few notable differences from the Helm Operator:'
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与Helm Operator相比，有几个显著的区别：
+- en: '*watches.yaml*'
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*watches.yaml*'
+- en: 'The purpose of this is the same as for the Helm Operator: it maps a CR type
+    to the location of a file that is executed during its resolution. The Ansible
+    Operator, however, supports two different types of files (these fields are mutually
+    exclusive):'
+  id: totrans-81
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 这样做的目的与Helm Operator相同：它将CR类型映射到在其解析期间执行的文件位置。但是，Ansible Operator支持两种不同类型的文件（这些字段是互斥的）：
+- en: If the `role` field is included, it must point to the directory of an Ansible
+    *role* that is executed during resource reconciliation.
+  id: totrans-82
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如果包含`role`字段，则必须指向在资源协调期间执行的Ansible *role*目录。
+- en: If the `playbook` field is included, it must point to a *playbook* file that
+    is run.
+  id: totrans-83
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如果包含`playbook`字段，则必须指向要运行的*playbook*文件。
+- en: The SDK defaults this file to point to the role it created during generation.
+  id: totrans-84
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: SDK默认将此文件指向在生成期间创建的角色。
+- en: '*roles/*'
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*roles/*'
+- en: This directory contains all of the Ansible roles that may be run by the Operator.
+    The SDK generates the base files for a new role when the project is created.
+  id: totrans-86
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 此目录包含所有操作员可能运行的Ansible角色。项目创建时，SDK会生成新角色的基本文件。
+- en: If the Operator manages multiple CR types, multiple roles are added to this
+    directory. Additionally, an entry for each type, and its associated role, is added
+    to the watches file.
+  id: totrans-87
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如果Operator管理多个CR类型，则将多个角色添加到此目录中。此外，对于每种类型及其关联的角色，watches文件都会添加一个条目。
+- en: 'Next, you’ll implement the Ansible role for the CR. The details of what the
+    role does will vary depending on the application: some common tasks include the
+    creation of deployments and services to run the application’s containers. For
+    more on writing Ansible roles, see the [Ansible documentation](https://oreil.ly/bLd5g).'
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，您将为CR实现Ansible角色。角色的具体操作取决于应用程序：一些常见任务包括创建部署和服务以运行应用程序的容器。有关编写Ansible角色的更多信息，请参阅[Ansible文档](https://oreil.ly/bLd5g)。
+- en: 'You can find the Ansible role for deploying the Visitors Site in the book’s
+    [GitHub repository](https://github.com/kubernetes-operators-book/chapters/tree/master/ch06/ansible/visitors).
+    For simplicity while following along with the example application, the role files
+    are available as a release there. Similar to the previous Operator creation command,
+    you can add the Visitors Site role with the following:'
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在本书的[GitHub存储库](https://github.com/kubernetes-operators-book/chapters/tree/master/ch06/ansible/visitors)中找到部署Visitors
+    Site的Ansible角色。为了简便起见，按照示例应用程序进行跟随时，角色文件作为发布可用。与以前的Operator创建命令类似，您可以通过以下方式添加Visitors
+    Site角色：
+- en: '[PRE9]'
+  id: totrans-90
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: '[![1](assets/1.png)](#comarker1-03a)'
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#comarker1-03a)'
+- en: This command overwrites the default generated role files with the files necessary
+    to run the Visitors Site role.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此命令使用运行Visitors Site角色所需的文件覆盖默认生成的角色文件。
+- en: We don’t cover writing Ansible roles in this book, but it’s important for you
+    to understand how user-entered configuration values are propagated into an Ansible
+    role.
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本书不涵盖编写Ansible角色，但重要的是您了解如何将用户输入的配置值传播到Ansible角色中。
+- en: As with the Helm Operator, configuration values come from the CR’s `spec` section.
+    However, within the playbooks and roles, Ansible’s standard ``{{ `variable_name`
+    }}`` syntax is used. Field names in Kubernetes typically use camel case (e.g.,
+    camelCase), so the Ansible Operator will convert the name of each field to snake
+    case (e.g., snake_case) before passing the parameter to the Ansible role. That
+    is, the field name `serviceAccount` would be converted to `service_account`. This
+    allows the reuse of existing roles using the standard Ansible convention while
+    also honoring the Kubernetes resource conventions. You can find the source for
+    an Ansible role that deploys the Visitors Site in the book’s [GitHub repository](https://github.com/kubernetes-operators-book/chapters/tree/master/ch06/ansible).
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与 Helm 操作员类似，配置值来自 CR 的 `spec` 部分。然而，在 Playbooks 和 Roles 中，Ansible 使用标准的 `{{
+    `variable_name` }}` 语法。Kubernetes 中的字段名称通常使用驼峰命名（例如，camelCase），因此 Ansible 操作员会在将参数传递给
+    Ansible 角色之前将每个字段的名称转换为蛇形命名（例如，snake_case）。也就是说，字段名称 `serviceAccount` 将转换为 `service_account`。这样可以使用标准的
+    Ansible 约定重用现有的角色，同时也遵循 Kubernetes 资源约定。你可以在书籍的[GitHub 仓库](https://github.com/kubernetes-operators-book/chapters/tree/master/ch06/ansible)中找到部署访问者站点的
+    Ansible 角色的源代码。
+- en: Fleshing Out the CRD
+  id: totrans-95
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 扩展自定义资源定义（CRD）
+- en: As with the Helm Operator, you’ll need to expand on the generated CRD to include
+    the specifics of your CR. Consult [Appendix B](app02.html#appendix_crd_validation)
+    for more information.
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与 Helm 操作员类似，您需要扩展生成的 CRD 来包含您的 CR 的具体信息。有关更多信息，请参阅[附录 B](app02.html#appendix_crd_validation)。
+- en: Reviewing Operator Permissions
+  id: totrans-97
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 检查操作员权限
+- en: The Ansible Operator also includes a generated role the Operator uses to connect
+    to the Kubernetes API. Check [Appendix C](app03.html#appendix_rbac) for more on
+    refining the default permissions.
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Ansible 操作员还包括一个生成的角色，操作员用它来连接 Kubernetes API。更多关于优化默认权限的信息，请查看[附录 C](app03.html#appendix_rbac)。
+- en: Running the Ansible Operator
+  id: totrans-99
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 运行 Ansible 操作员
+- en: As with the Helm Operator, the easiest way to test and debug an Ansible Operator
+    is to run it outside a cluster, avoiding the steps of building and pushing an
+    image.
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与 Helm 操作员类似，测试和调试 Ansible 操作员的最简单方法是在集群外运行它，避免构建和推送镜像的步骤。
+- en: 'Before you can do this, however, there are a few extra steps you need to take:'
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，在你执行此操作之前，还有一些额外的步骤你需要完成：
+- en: First, install Ansible on the machine running the Operator. Consult the [Ansible
+    documentation](https://oreil.ly/9yZRC) for specifics on how to install Ansible
+    on your local OS.
+  id: totrans-102
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 首先，在运行操作员的机器上安装 Ansible。请查阅[Ansible 文档](https://oreil.ly/9yZRC)获取有关如何在您的本地操作系统上安装
+    Ansible 的具体信息。
+- en: 'Additional Ansible-related packages must be installed as well, including the
+    following (consult the documentation for details on installation):'
+  id: totrans-103
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 还必须安装其他与 Ansible 相关的软件包，包括以下内容（有关安装详细信息，请查阅文档）：
+- en: '[Ansible Runner](https://oreil.ly/lHDCe)'
+  id: totrans-104
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Ansible Runner](https://oreil.ly/lHDCe)'
+- en: '[Ansible Runner HTTP Event Emitter](https://oreil.ly/N6ebi)'
+  id: totrans-105
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Ansible Runner HTTP 事件发射器](https://oreil.ly/N6ebi)'
+- en: 'As with the Helm Operator, the *watches.yaml* file generated by the SDK refers
+    to a specific directory for the Ansible role. So you’ll copy the watches file
+    and modify it as necessary. Again, run these commands from within the Operator
+    project root directory:'
+  id: totrans-106
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 与 Helm 操作员类似，SDK 生成的 *watches.yaml* 文件引用特定目录中的 Ansible 角色。因此，您需要复制 watches 文件并根据需要进行修改。再次强调，从操作员项目根目录中运行这些命令：
+- en: '[PRE10]'
+  id: totrans-107
+  prefs:
+  - PREF_IND
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: In the *local-watches.yaml* file, change the `role` field to reflect the directory
+    structure on your machine.
+  id: totrans-108
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 在 *local-watches.yaml* 文件中，更改 `role` 字段以反映您计算机上的目录结构。
+- en: 'Create the CRDs in the cluster using the `kubectl` command:'
+  id: totrans-109
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 使用 `kubectl` 命令在集群中创建自定义资源定义（CRD）：
+- en: '[PRE11]'
+  id: totrans-110
+  prefs:
+  - PREF_IND
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: 'Once the CRDs are deployed in the cluster, run the Operator using the SDK:'
+  id: totrans-111
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 一旦 CRD 在集群中部署，就可以使用 SDK 运行操作员：
+- en: '[PRE12]'
+  id: totrans-112
+  prefs:
+  - PREF_IND
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: '[![1](assets/1.png)](#comarker1-04a)'
+  id: totrans-113
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#comarker1-04a)'
+- en: The Operator log messages will appear in this running process as it starts up
+    and fields CR requests.
+  id: totrans-114
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 操作员日志消息将在这个运行中的进程中显示，随着其启动和处理 CR 请求。
+- en: This command starts a running process that behaves as the Operator would if
+    it was deployed as a pod inside the cluster.
+  id: totrans-115
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 该命令启动一个运行中的进程，其行为类似于如果操作员作为一个 Pod 部署在集群内部的话。
+- en: Now let’s walk through the steps of how to test an Operator.
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在让我们一起逐步走过测试操作员的步骤。
+- en: Testing an Operator
+  id: totrans-117
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 测试操作员
+- en: 'You can test both of the Adapter Operators using the same approach: by deploying
+    a CR. Kubernetes notifies the Operator of the CR, which then executes the underlying
+    files (either Helm charts or Ansible roles). The SDK generates a sample CR template
+    in the *deploy/crds* directory that you can use, or you can create one manually.'
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用相同的方法测试适配器运算符：通过部署 CR。Kubernetes 会通知运算符 CR 的存在，然后执行底层文件（Helm 图表或 Ansible
+    角色）。SDK 在 *deploy/crds* 目录中生成一个示例 CR 模板，您可以使用它，或者手动创建一个。
+- en: 'Follow these steps to test both types of Operators discussed in this chapter:'
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 按照以下步骤测试本章讨论的两种运算符类型：
+- en: Edit the `spec` section of the example CR template (in the Visitors Site example,
+    this is named *example_v1_visitorsapp_cr.yaml*) with whatever values are relevant
+    to your CR.
+  id: totrans-120
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 编辑示例 CR 模板的 `spec` 部分（在访问者网站示例中，它命名为 *example_v1_visitorsapp_cr.yaml*），填入与您的
+    CR 相关的任何值。
+- en: 'Create the resource (in the Operator project root directory) using the Kubernetes
+    CLI:'
+  id: totrans-121
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 使用 Kubernetes CLI 在运算符项目根目录中创建资源：
+- en: '[PRE13]'
+  id: totrans-122
+  prefs:
+  - PREF_IND
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: The output for the Operator will appear in the same terminal where you ran the
+    `operator-sdk up local` command. Once the test is complete, end the running process
+    by pressing `Ctrl-C`.
+  id: totrans-123
+  prefs:
+  - PREF_IND
+  type: TYPE_NORMAL
+  zh: 运算符的输出将显示在您运行 `operator-sdk up local` 命令的同一终端中。测试完成后，通过按下 `Ctrl-C` 结束运行进程。
+- en: Navigate to the Visitors Site as described in [Chapter 5](ch05.html#sample_application_visitors_site)
+    to verify the application works as expected.
+  id: totrans-124
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 按照 [第5章](ch05.html#sample_application_visitors_site) 中描述的步骤导航到访问者网站，以验证应用程序按预期工作。
+- en: 'Once the test is complete, delete the CR using the `kubectl delete` command:'
+  id: totrans-125
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 测试完成后，请使用 `kubectl delete` 命令删除 CR：
+- en: '[PRE14]'
+  id: totrans-126
+  prefs:
+  - PREF_IND
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: During development, repeat this process to test changes. On each iteration,
+    be sure to restart the Operator process to pick up any changes to the Helm or
+    Ansible files.
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在开发过程中，重复此过程以测试更改。在每次迭代中，请确保重新启动运算符进程，以获取对 Helm 或 Ansible 文件的任何更改。
+- en: Summary
+  id: totrans-128
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 摘要
+- en: You don’t need to be a programmer to write an Operator. The Operator SDK facilitates
+    the packaging of two existing provisioning and configuration technologies, Helm
+    and Ansible, as Operators. The SDK also provides a way to rapidly test and debug
+    changes by running an Operator outside of the cluster, skipping the time-consuming
+    image building and hosting steps.
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你无需成为程序员就能编写一个运算符。Operator SDK 简化了将两种现有的配置和配置技术（Helm 和 Ansible）打包为运算符的过程。SDK
+    还提供了一种快速测试和调试更改的方式，通过在集群之外运行运算符，跳过耗时的镜像构建和托管步骤。
+- en: In the next chapter, we’ll look at a more powerful and flexible way of implementing
+    Operators by using the Go language.
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在下一章中，我们将介绍一种更强大和灵活的运算符实现方式，使用 Go 语言。
+- en: Resources
+  id: totrans-131
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 资源
+- en: '[Helm](https://helm.sh/)'
+  id: totrans-132
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Helm](https://helm.sh/)'
+- en: '[Ansible](https://www.ansible.com/)'
+  id: totrans-133
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Ansible](https://www.ansible.com/)'
+- en: '[Example Operators](https://oreil.ly/KbPFs)'
+  id: totrans-134
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[示例运算符](https://oreil.ly/KbPFs)'

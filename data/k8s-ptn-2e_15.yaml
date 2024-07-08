@@ -1,0 +1,763 @@
+- en: Chapter 12\. Stateful Service
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第12章 有状态服务
+- en: Distributed stateful applications require features such as persistent identity,
+    networking, storage, and ordinality. The *Stateful Service* pattern describes
+    the StatefulSet primitive that provides these building blocks with strong guarantees
+    ideal for the management of stateful applications.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 分布式有状态应用程序需要持久标识、网络、存储和序列。*有状态服务*模式描述了提供这些构建块及强保证的 StatefulSet 原语，非常适合管理有状态应用程序。
+- en: Problem
+  id: totrans-2
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 问题
+- en: 'We have seen many Kubernetes primitives for creating distributed applications:
+    containers with health checks and resource limits, Pods with multiple containers,
+    dynamic cluster-wide placements, batch jobs, scheduled jobs, singletons, and more.
+    The common characteristic of these primitives is that they treat the managed application
+    as a stateless application composed of identical, swappable, and replaceable containers
+    and comply with the [twelve-factor app principles](https://12factor.net).'
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们已经看到许多 Kubernetes 原语用于创建分布式应用程序：带有健康检查和资源限制的容器，具有多个容器的 Pod，动态的整个集群放置，批处理作业，定时作业，单例等等。这些原语的共同特征是它们将托管应用程序视为由相同、可交换和可替换容器组成的无状态应用，并符合[十二因素应用原则](https://12factor.net)。
+- en: 'It is a significant boost to have a platform taking care of the placement,
+    resiliency, and scaling of stateless applications, but there is still a large
+    part of the workload to consider: stateful applications in which every instance
+    is unique and has long-lived characteristics.'
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有一个平台负责处理无状态应用的放置、弹性和扩展，这对提升显著，但仍需考虑大部分工作负载：有状态应用，其中每个实例都是独特的，具有长期特性。
+- en: In the real world, behind every highly scalable stateless service is a stateful
+    service, typically in the shape of a data store. In the early days of Kubernetes,
+    when it lacked support for stateful workloads, the solution was placing stateless
+    applications on Kubernetes to get the benefits of the cloud native model and keeping
+    stateful components outside the cluster, either on a public cloud or on-premises
+    hardware, managed with the traditional noncloud native mechanisms. Considering
+    that every enterprise has a multitude of stateful workloads (legacy and modern),
+    the lack of support for stateful workloads was a significant limitation in Kubernetes,
+    which was known as a universal cloud native platform.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在现实世界中，每个高度可扩展的无状态服务背后通常是一个有状态服务，通常以数据存储的形式存在。在 Kubernetes 初期，缺乏对有状态工作负载的支持时，解决方案是将无状态应用放置在
+    Kubernetes 上，以获得云原生模型的好处，并将有状态组件保留在集群外，无论是在公共云还是本地硬件上，通过传统的非云原生机制进行管理。考虑到每个企业都有大量的有状态工作负载（传统和现代），Kubernetes
+    对有状态工作负载的不支持是一个显著的限制，尽管它被认为是一个通用的云原生平台。
+- en: But what are the typical requirements of a stateful application? We could deploy
+    a stateful application such as Apache ZooKeeper, MongoDB, Redis, or MySQL by using
+    a Deployment, which could create a ReplicaSet with `replicas=1` to make it reliable,
+    use a Service to discover its endpoint, and use PersistentVolumeClaim (PVC) and
+    PersistentVolume (PV) as permanent storage for its state.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 那么，有状态应用程序的典型要求是什么呢？我们可以通过使用 Deployment 部署诸如 Apache ZooKeeper、MongoDB、Redis
+    或 MySQL 等有状态应用程序，这样可以创建一个 ReplicaSet，并设置 `replicas=1` 以确保其可靠性，使用 Service 发现其终端点，并使用
+    PersistentVolumeClaim（PVC）和 PersistentVolume（PV）作为其状态的永久存储。
+- en: While that is mostly true for a single-instance stateful application, it is
+    not entirely true, as a ReplicaSet does not guarantee At-Most-One semantics, and
+    the number of replicas can vary temporarily. Such a situation can be disastrous
+    and lead to data loss for distributed stateful applications. Also, the main challenges
+    arise when it is a distributed stateful service that is composed of multiple instances.
+    A stateful application composed of multiple clustered services requires multifaceted
+    guarantees from the underlying infrastructure. Let’s see some of the most common
+    long-lived persistent prerequisites for distributed stateful applications.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然这在单实例有状态应用程序中大体上是真的，但并非完全正确，因为 ReplicaSet 不保证 At-Most-One 语义，并且副本的数量可能会暂时变化。对于分布式有状态应用程序，这种情况可能非常危险，导致数据丢失。而且，当涉及由多个实例组成的分布式有状态服务时，主要的挑战在于来自基础架构的多方面保证。让我们看看分布式有状态应用程序最常见的长期持久性先决条件。
+- en: Storage
+  id: totrans-8
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 存储
+- en: We could easily increase the number of `replicas` in a ReplicaSet and end up
+    with a distributed stateful application. However, how do we define the storage
+    requirements in such a case? Typically, a distributed stateful application such
+    as those mentioned previously would require dedicated, persistent storage for
+    every instance. A ReplicaSet with `replicas=3` and a PVC definition would result
+    in all three Pods attached to the same PV. While the ReplicaSet and the PVC ensure
+    the instances are up and the storage is attached to whichever node the instances
+    are scheduled on, the storage is not dedicated but shared among all Pod instances.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以轻松增加 ReplicaSet 中的`副本`数量，并最终得到一个分布式有状态应用程序。然而，在这种情况下，我们如何定义存储需求呢？通常情况下，像之前提到的那样的分布式有状态应用程序需要为每个实例提供专用的持久化存储。具有
+    `replicas=3` 的 ReplicaSet 和 PVC 定义将导致所有三个 Pod 连接到同一个 PV。虽然 ReplicaSet 和 PVC 确保实例处于运行状态并且存储已附加到实例所调度的任何节点，但存储并非专用，而是在所有
+    Pod 实例之间共享。
+- en: A workaround is for the application instances to share storage and have an in-app
+    mechanism to split the storage into subfolders and use it without conflicts. While
+    doable, this approach creates a single point of failure with the single storage.
+    Also, it is error-prone as the number of Pods changes during scaling, and it may
+    cause severe challenges around preventing data corruption or loss during scaling.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一种解决方案是让应用程序实例共享存储，并使用应用程序内的机制将存储拆分为子文件夹并无冲突地使用。虽然可行，但这种方法会导致单点故障存在于单一存储中。此外，由于
+    Pod 数量在扩展期间变化，这种方法容易出现错误，并可能在扩展期间导致严重的数据损坏或丢失挑战。
+- en: 'Another workaround is to have a separate ReplicaSet (with `replicas=1`) for
+    every instance of the distributed stateful application. In this scenario, every
+    ReplicaSet would get its PVC and dedicated storage. The downside of this approach
+    is that it is intensive in manual labor: scaling up requires creating a new set
+    of ReplicaSet, PVC, or Service definitions. This approach lacks a single abstraction
+    for managing all instances of the stateful application as one.'
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个解决方法是为分布式有状态应用程序的每个实例单独创建一个 `replicas=1` 的 ReplicaSet。在这种情况下，每个 ReplicaSet
+    将获得其 PVC 和专用存储。这种方法的缺点是其工作量大：扩展需要创建新的 ReplicaSet、PVC 或 Service 定义集合。这种方法缺乏一个单一的抽象来管理所有状态应用程序实例。
+- en: Networking
+  id: totrans-12
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 网络
+- en: 'Similar to the storage requirements, a distributed stateful application requires
+    a stable network identity. In addition to storing application-specific data into
+    the storage space, stateful applications also store configuration details such
+    as hostname and connection details of their peers. That means every instance should
+    be reachable in a predictable address that should not change dynamically, as is
+    the case with Pod IP addresses in a ReplicaSet. Here we could address this requirement
+    again through a workaround: create a Service per ReplicaSet and have `replicas=1`.
+    However, managing such a setup is manual work, and the application itself cannot
+    rely on a stable hostname because it changes after every restart and is also not
+    aware of the Service name it is accessed from.'
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与存储要求类似，分布式有状态应用程序需要稳定的网络标识。除了将特定于应用程序的数据存储到存储空间中外，有状态应用程序还存储诸如主机名和其对等体的连接详细信息等配置详细信息。这意味着每个实例应该以可预测的地址可达，这种地址在
+    ReplicaSet 中的 Pod IP 地址中不会动态更改。在这里，我们可以再次通过一个解决方案来满足这个需求：为每个 ReplicaSet 创建一个 Service
+    并设置 `replicas=1`。然而，管理这样的设置是手工操作，而且应用程序本身无法依赖于稳定的主机名，因为每次重新启动后都会更改，并且也不知道其从何处访问到的
+    Service 名称。
+- en: Identity
+  id: totrans-14
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 身份
+- en: As you can see from the preceding requirements, clustered stateful applications
+    depend heavily on every instance having a hold of its long-lived storage and network
+    identity. That is because in a stateful application, every instance is unique
+    and knows its own identity, and the main ingredients of that identity are the
+    long-lived storage and the networking coordinates. To this list, we could also
+    add the identity/name of the instance (some stateful applications require unique
+    persistent names), which in Kubernetes would be the Pod name. A Pod created with
+    ReplicaSet would have a random name and would not preserve that identity across
+    a restart.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如您从上述需求中可以看到的，集群化的有状态应用程序严重依赖于每个实例拥有其长期存储和网络标识。这是因为在有状态应用程序中，每个实例都是唯一的并且知道自己的身份，其主要组成部分是长期存储和网络坐标。除此之外，我们还可以添加实例的身份/名称（一些有状态应用程序需要唯一的持久名称），在
+    Kubernetes 中就是 Pod 名称。使用 ReplicaSet 创建的 Pod 将具有随机名称，并且在重新启动后不会保留该身份。
+- en: Ordinality
+  id: totrans-16
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 序数性
+- en: In addition to a unique and long-lived identity, the instances of clustered
+    stateful applications have a fixed position in the collection of instances. This
+    ordering typically impacts the sequence in which the instances are scaled up and
+    down. However, it can also be used for data distribution or access and in-cluster
+    behavior positioning such as locks, singletons, or leaders.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了独特且长期的身份外，集群化有状态应用的实例在实例集合中有一个固定位置。这种顺序通常影响实例的缩放顺序，但也可以用于数据分发或访问，以及集群内行为定位，如锁定、单例或领导者。
+- en: Other Requirements
+  id: totrans-18
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 其他要求
+- en: Stable and long-lived storage, networking, identity, and ordinality are among
+    the collective needs of clustered stateful applications. Managing stateful applications
+    also carries many other specific requirements that vary case by case. For example,
+    some applications have the notion of a quorum and require a minimum number of
+    instances to always be available; some are sensitive to ordinality, and some are
+    fine with parallel Deployments; and some tolerate duplicate instances, and some
+    don’t. Planning for all these one-off cases and providing generic mechanisms is
+    an impossible task, and that’s why Kubernetes also allows you to create CustomResourceDefinitions
+    (CRDs) and *Operators* for managing applications with bespoke requirements. The
+    *Operator* pattern is explained in [Chapter 28](ch28.html#Operator).
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 集群化有状态应用的共同需求包括稳定和长期的存储、网络、身份和序号。管理有状态应用还涉及许多其他具体需求，这些需求因案例而异。例如，一些应用程序具有仲裁的概念，需要始终可用的最小实例数量；有些对序号敏感，有些可以进行并行部署；有些容忍重复实例，而有些则不行。计划处理所有这些特例并提供通用机制是不可能的任务，这就是为什么
+    Kubernetes 还允许您创建 CustomResourceDefinitions（CRD）和*运算符*来管理具有定制需求的应用程序。[第 28 章](ch28.html#Operator)
+    解释了*运算符*模式。
+- en: We have seen some common challenges of managing distributed stateful applications
+    and a few less-than-ideal workarounds. Next, let’s check out the Kubernetes native
+    mechanism for addressing these requirements through the StatefulSet primitive.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们已经看到管理分布式有状态应用的一些常见挑战以及一些不太理想的解决方案。接下来，让我们看看 Kubernetes 原生机制如何通过 StatefulSet
+    原语来满足这些需求。
+- en: Solution
+  id: totrans-21
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 解决方案
+- en: 'To explain what StatefulSet provides for managing stateful applications, we
+    occasionally compare its behavior to the already-familiar ReplicaSet primitive
+    that Kubernetes uses for running stateless workloads. In many ways, StatefulSet
+    is for managing pets, and ReplicaSet is for managing cattle. Pets versus cattle
+    is a famous (but also a controversial) analogy in the DevOps world: identical
+    and replaceable servers are referred to as cattle, and nonfungible unique servers
+    that require individual care are referred to as pets. Similarly, StatefulSet (initially
+    inspired by the analogy and named PetSet) is designed for managing nonfungible
+    Pods, as opposed to ReplicaSet, which is for managing identical replaceable Pods.'
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了解释 StatefulSet 提供的管理有状态应用的功能，我们有时将其行为与 Kubernetes 用于运行无状态工作负载的已熟悉 ReplicaSet
+    原语进行比较。在许多方面，StatefulSet 用于管理宠物，而 ReplicaSet 用于管理牲畜。宠物与牲畜是 DevOps 世界中著名（但也颇有争议）的类比：相同和可替换的服务器被称为牲畜，需要个别关怀的非交换性独特服务器被称为宠物。类似地，StatefulSet（最初受该类比启发并命名为
+    PetSet）设计用于管理非交换性 Pod，而 ReplicaSet 用于管理相同可替换的 Pod。
+- en: Let’s explore how StatefulSets work and how they address the needs of stateful
+    applications. [Example 12-1](#ex-statefulset-example-statefulset) is our random-generator
+    service as a StatefulSet.^([1](ch12.html#idm45902101914272))
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们探讨 StatefulSets 的工作原理以及它们如何满足有状态应用的需求。[示例 12-1](#ex-statefulset-example-statefulset)
+    是我们的随机生成器服务作为一个 StatefulSet。^([1](ch12.html#idm45902101914272))
+- en: Example 12-1\. StatefulSet definition for a stateful application
+  id: totrans-24
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 12-1\. 用于有状态应用的 StatefulSet 定义
+- en: '[PRE0]'
+  id: totrans-25
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: '[![1](assets/1.png)](#co_stateful_service_CO1-1)'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_stateful_service_CO1-1)'
+- en: Name of the StatefulSet is used as prefix for the generated node names.
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: StatefulSet 的名称用作生成节点名称的前缀。
+- en: '[![2](assets/2.png)](#co_stateful_service_CO1-2)'
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_stateful_service_CO1-2)'
+- en: References the mandatory Service defined in [Example 12-2](#ex-statefulset-example-service).
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 引用 [示例 12-2](#ex-statefulset-example-service) 中定义的强制服务。
+- en: '[![3](assets/3.png)](#co_stateful_service_CO1-3)'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_stateful_service_CO1-3)'
+- en: Two Pod members in the StatefulSet named *rg-0* and *rg-1*.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: StatefulSet 中有两个 Pod 成员，命名为 *rg-0* 和 *rg-1*。
+- en: '[![4](assets/4.png)](#co_stateful_service_CO1-4)'
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_stateful_service_CO1-4)'
+- en: Template for creating a PVC for each Pod (similar to the Pod’s template).
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为每个 Pod 创建 PVC 的模板（类似于 Pod 的模板）。
+- en: Rather than going through the definition in [Example 12-1](#ex-statefulset-example-statefulset)
+    line by line, we explore the overall behavior and the guarantees provided by this
+    StatefulSet definition.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不必逐行解释 [Example 12-1](#ex-statefulset-example-statefulset) 中的定义，我们探讨该 StatefulSet
+    定义所提供的整体行为和保证。
+- en: Storage
+  id: totrans-35
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 存储
+- en: While it is not always necessary, the majority of stateful applications store
+    state and thus require per-instance-based dedicated persistent storage. The way
+    to request and associate persistent storage with a Pod in Kubernetes is through
+    PVs and PVCs. To create PVCs the same way it creates Pods, StatefulSet uses a
+    `volumeClaimTemplates` element. This extra property is one of the main differences
+    between a StatefulSet and a ReplicaSet, which has a `persistentVolumeClaim` element.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然并非总是必需，但大多数状态应用程序保存状态，因此需要基于每个实例的专用持久存储。在 Kubernetes 中，通过 PVs 和 PVCs 请求和关联持久存储与
+    Pod 的方式。为了像创建 Pods 一样创建 PVCs，StatefulSet 使用了 `volumeClaimTemplates` 元素。这个额外的属性是
+    StatefulSet 和 ReplicaSet 之间的主要区别之一，后者使用了 `persistentVolumeClaim` 元素。
+- en: Rather than referring to a predefined PVC, StatefulSets create PVCs by using
+    `volumeClaimTemplates` on the fly during Pod creation. This mechanism allows every
+    Pod to get its own dedicated PVC during initial creation as well as during scaling
+    up by changing the `replicas` count of the StatefulSets.
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: StatefulSet 不是通过引用预定义的 PVC，而是在 Pod 创建过程中通过 `volumeClaimTemplates` 动态创建 PVCs。这种机制允许每个
+    Pod 在初始创建期间以及通过改变 StatefulSet 的 `replicas` 数量进行扩展时获得自己的专用 PVC。
+- en: As you probably realize, we said PVCs are created and associated with the Pods,
+    but we didn’t say anything about PVs. That is because StatefulSets do not manage
+    PVs in any way. The storage for the Pods must be provisioned in advance by an
+    admin or provisioned on demand by a PV provisioner based on the requested storage
+    class and ready for consumption by the stateful Pods.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如你可能意识到的，我们说过 PVCs 是与 Pods 一起创建并关联的，但我们并没有提及 PVs。这是因为 StatefulSet 不以任何方式管理
+    PVs。Pods 的存储必须由管理员预先提供或根据请求的存储类由 PV 提供程序按需提供，并准备好供状态型 Pods 使用。
+- en: 'Note the asymmetric behavior here: scaling up a StatefulSet (increasing the
+    `replicas` count) creates new Pods and associated PVCs. Scaling down deletes the
+    Pods, but it does not delete any PVCs (or PVs), which means the PVs cannot be
+    recycled or deleted, and Kubernetes cannot free the storage. This behavior is
+    by design and driven by the presumption that the storage of stateful applications
+    is critical and that an accidental scale-down should not cause data loss. If you
+    are sure the stateful application has been scaled down on purpose and has replicated/drained
+    the data to other instances, you can delete the PVC manually, which allows subsequent
+    PV recycling.'
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注意这里的不对称行为：扩展 StatefulSet（增加 `replicas` 数量）会创建新的 Pods 和相关的 PVCs。缩减则会删除 Pods，但不会删除任何
+    PVCs（或 PVs），这意味着 PVs 无法被回收或删除，Kubernetes 也无法释放存储空间。这种行为是设计上的选择，基于对状态应用程序存储的重要性的假设，意外的缩减不应造成数据丢失。如果你确定状态应用程序已经有意地进行了缩减，并且已经将数据复制/转移至其他实例，你可以手动删除
+    PVC，这样可以允许后续的 PV 回收。
+- en: Networking
+  id: totrans-40
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 网络
+- en: Each Pod created by a StatefulSet has a stable identity generated by the StatefulSet’s
+    name and an ordinal index (starting from 0). Based on the preceding example, the
+    two Pods are named `rg-0` and `rg-1`. The Pod names are generated in a predictable
+    format that differs from the ReplicaSet’s Pod-name-generation mechanism, which
+    contains a random suffix.
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个由 StatefulSet 创建的 Pod 都有一个稳定的标识，由 StatefulSet 的名称和序数索引（从 0 开始）生成。根据前面的示例，两个
+    Pods 的名称分别是 `rg-0` 和 `rg-1`。Pod 的名称是以可预测的格式生成的，这与 ReplicaSet 的 Pod 名称生成机制不同，后者包含一个随机后缀。
+- en: Dedicated scalable persistent storage is an essential aspect of stateful applications
+    and so is networking.
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 专用可扩展的持久存储是状态应用程序的重要组成部分，网络也是如此。
+- en: In [Example 12-2](#ex-statefulset-example-service), we define a *headless* Service.
+    In a headless Service, `clusterIP` is set to `None`, which means we don’t want
+    a kube-proxy to handle the Service, and we don’t want a cluster IP allocation
+    or load balancing. Then why do we need a Service?
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 [Example 12-2](#ex-statefulset-example-service) 中，我们定义了一个 *headless* Service。在
+    headless Service 中，`clusterIP` 被设置为 `None`，这意味着我们不希望 kube-proxy 处理该 Service，也不需要集群
+    IP 分配或负载均衡。那么为什么我们需要一个 Service？
+- en: Example 12-2\. Service for accessing StatefulSet
+  id: totrans-44
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 12-2\. 访问 StatefulSet 的 Service
+- en: '[PRE1]'
+  id: totrans-45
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: '[![1](assets/1.png)](#co_stateful_service_CO2-1)'
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_stateful_service_CO2-1)'
+- en: Declares this Service as headless.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 声明该 Service 为 headless。
+- en: Stateless Pods created through a ReplicaSet are assumed to be identical, and
+    it doesn’t matter on which one a request lands (hence the load balancing with
+    a regular Service). But stateful Pods differ from one another, and we may need
+    to reach a specific Pod by its coordinates.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过 ReplicaSet 创建的无状态 Pod 被假定为相同的，请求可以落在任意一个上（因此使用常规 Service 进行负载均衡）。但是有状态 Pod
+    互不相同，我们可能需要通过其坐标访问特定的 Pod。
+- en: 'A headless Service with selectors (notice `.selector.app == random-generator`)
+    enables exactly this. Such a Service creates endpoint records in the API Server
+    and creates DNS entries to return A records (addresses) that point directly to
+    the Pods backing the Service. Long story short, each Pod gets a DNS entry where
+    clients can directly reach out to it in a predictable way. For example, if our
+    `random-generator` Service belongs to the `default` namespace, we can reach our
+    `rg-0` Pod through its fully qualified domain name: `rg-0.random-generator.default.svc.cluster.local`,
+    where the Pod’s name is prepended to the Service name. This mapping allows other
+    members of the clustered application or other clients to reach specific Pods if
+    they wish to.'
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 具有选择器的无头服务（请注意 `.selector.app == random-generator`）正是这样做的。这种服务会在 API 服务器中创建端点记录，并创建
+    DNS 条目以返回 A 记录（地址），直接指向支持服务的 Pod。简而言之，每个 Pod 都会获得一个 DNS 条目，客户端可以以可预测的方式直接访问它。例如，如果我们的
+    `random-generator` 服务属于 `default` 命名空间，则可以通过其完全限定域名 `rg-0.random-generator.default.svc.cluster.local`
+    访问我们的 `rg-0` Pod，其中 Pod 的名称会添加到服务名称前面。这种映射允许集群应用程序的其他成员或其他客户端根据需要访问特定的 Pod。
+- en: 'We can also perform DNS lookup for Service (SRV) records (e.g., through `dig
+    SRV random-generator.default.svc.cluster.local`) and discover all running Pods
+    registered with the StatefulSet’s governing Service. This mechanism allows dynamic
+    cluster member discovery if any client application needs to do so. The association
+    between the headless Service and the StatefulSet is not only based on the selectors,
+    but the StatefulSet should also link back to the Service by its name as `serviceName:
+    "random-generator"`.'
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '我们还可以执行服务的 DNS 查找（例如，通过 `dig SRV random-generator.default.svc.cluster.local`）并发现所有注册到
+    StatefulSet 管理的服务的正在运行的 Pod。如果任何客户端应用程序需要这样做，此机制允许动态集群成员发现。无头服务与 StatefulSet 的关联不仅基于选择器，而且
+    StatefulSet 还应通过其名称链接回服务，如 `serviceName: "random-generator"`。'
+- en: Having dedicated storage defined through `volumeClaimTemplates` is not mandatory,
+    but linking to a Service through `serviceName` field is. The governing Service
+    must exist before the StatefulSet is created and is responsible for the network
+    identity of the set. You can always create other types of Services that also load
+    balance across your stateful Pods if that is what you want.
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过 `volumeClaimTemplates` 定义专用存储不是强制性的，但通过 `serviceName` 字段链接到服务是必需的。在创建 StatefulSet
+    之前，管理服务必须存在，并负责集合的网络身份。如果需要，您始终可以创建其他类型的服务，以便在您希望的情况下负载均衡您的有状态 Pod。
+- en: As [Figure 12-1](#img-stateful-service-application) shows, StatefulSets offer
+    a set of building blocks and guaranteed behavior needed for managing stateful
+    applications in a distributed environment. Your job is to choose and use them
+    in a meaningful way for your stateful use case.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如[图 12-1](#img-stateful-service-application)所示，StatefulSets提供了在分布式环境中管理有状态应用所需的一组构建块和保证行为。您的任务是选择并以有意义的方式为您的有状态用例使用它们。
+- en: '![A Distributed Stateful Application on Kubernetes](assets/kup2_1201.png)'
+  id: totrans-53
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Kubernetes 上的分布式有状态应用](assets/kup2_1201.png)'
+- en: Figure 12-1\. A distributed stateful application on Kubernetes
+  id: totrans-54
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 12-1\. Kubernetes 上的分布式有状态应用
+- en: Identity
+  id: totrans-55
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 身份
+- en: '*Identity* is the meta building block all other StatefulSet guarantees are
+    built upon. A predictable Pod name and identity is generated based on StatefulSet’s
+    name. We then use that identity to name PVCs, reach out to specific Pods through
+    headless Services, and more. You can predict the identity of every Pod before
+    creating it and use that knowledge in the application itself if needed.'
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*身份* 是所有其他 StatefulSet 保证构建的元构建块。基于 StatefulSet 名称生成可预测的 Pod 名称和身份。然后，我们使用该身份命名
+    PVC，并通过无头服务到达特定的 Pod 等。在创建 Pod 之前，您可以预测每个 Pod 的身份，并在需要时在应用程序本身中使用该知识。'
+- en: Ordinality
+  id: totrans-57
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Ordinality
+- en: By definition, a distributed stateful application consists of multiple instances
+    that are unique and nonswappable. In addition to their uniqueness, instances may
+    also be related to one another based on their instantiation order/position, and
+    this is where the *ordinality* requirement comes in.
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 按定义，分布式有状态应用由多个实例组成，这些实例是独特且不可交换的。除了它们的独特性，实例还可以根据它们的实例化顺序/位置彼此相关，这就是*顺序性*要求的地方。
+- en: From a StatefulSet point of view, the only place where ordinality comes into
+    play is during scaling. Pods have names that have an ordinal suffix (starting
+    from 0), and that Pod creation order also defines the order in which Pods are
+    scaled up and down (in reverse order, from *n* – 1 to 0).
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从 StatefulSet 的角度来看，顺序性只在扩展期间起作用。Pods 的名称带有序数后缀（从 0 开始），并且 Pod 的创建顺序也定义了 Pods
+    的缩放顺序（逆序，从 *n* – 1 到 0）。
+- en: If we create a ReplicaSet with multiple replicas, Pods are scheduled and started
+    together without waiting for the first one to start successfully (running and
+    ready status, as described in [Chapter 4, “Health Probe”](ch04.html#HealthProbe)).
+    The order in which Pods are starting and are ready is not guaranteed. It is the
+    same when we scale down a ReplicaSet (either by changing the `replicas` count
+    or deleting it). All Pods belonging to a ReplicaSet start shutting down simultaneously
+    without any ordering and dependency among them. This behavior may be faster to
+    complete but is not preferred for stateful applications, especially if data partitioning
+    and distribution are involved among the instances.
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果我们创建一个具有多个副本的 ReplicaSet，Pods 将一起被调度和启动，而不必等待第一个成功启动（处于运行和就绪状态，如 [第 4 章，“健康探测”](ch04.html#HealthProbe)
+    中所述）。 Pods 启动和准备就绪的顺序不被保证。当我们缩减 ReplicaSet（通过更改 `replicas` 计数或删除它）时，属于 ReplicaSet
+    的所有 Pods 将同时开始关闭，没有任何排序和依赖关系。这种行为可能更快完成，但对于涉及实例间数据分区和分发的有状态应用并不理想。
+- en: To allow proper data synchronization during scale-up and -down, StatefulSet
+    by default performs sequential startup and shutdown. That means Pods start from
+    the first one (with index 0), and only when that Pod has successfully started
+    is the next one scheduled (with index 1), and the sequence continues. During scaling
+    down, the order reverses—first shutting down the Pod with the highest index, and
+    only when it has shut down successfully is the Pod with the next lower index stopped.
+    This sequence continues until the Pod with index 0 is terminated.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了在缩放时允许正确的数据同步，StatefulSet 默认执行顺序启动和关闭。这意味着 Pods 从第一个（索引 0）开始启动，只有当该 Pod 成功启动后，才会调度下一个（索引
+    1），并且顺序继续。在缩减时，顺序相反—首先关闭具有最高索引的 Pod，只有当它成功关闭后，才停止具有较低索引的 Pod。这个顺序持续，直到索引 0 的 Pod
+    被终止。
+- en: Other Features
+  id: totrans-62
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 其他特性
+- en: 'StatefulSets have other aspects that are customizable to suit the needs of
+    stateful applications. Each stateful application is unique and requires careful
+    consideration while trying to fit it into the StatefulSet model. Let’s see a few
+    more Kubernetes features that may turn out to be useful while taming stateful
+    applications:'
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: StatefulSets 具有其他可定制的方面，以适应有状态应用的需求。每个有状态应用都是独特的，在尝试将其适应 StatefulSet 模型时需要仔细考虑。让我们看看一些可能在驯服有状态应用时有用的
+    Kubernetes 特性：
+- en: Partitioned updates
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 分区更新
+- en: We described earlier the sequential ordering guarantees when scaling a StatefulSet.
+    As for updating an already-running stateful application (e.g., by altering the
+    `.spec.template` element), StatefulSets allow phased rollout (such as a canary
+    release), which guarantees a certain number of instances to remain intact while
+    applying updates to the rest of the instances.
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们之前描述了在扩展 StatefulSet 时的顺序保证。至于更新已运行的有状态应用（例如通过修改 `.spec.template` 元素），StatefulSets
+    允许分阶段的发布（如金丝雀发布），这可以保证某些实例保持完整，同时对其余实例应用更新。
+- en: By using the default rolling update strategy, you can partition instances by
+    specifying a `.spec.updateStrategy.rollingUpdate.partition` number. The parameter
+    (with a default value of 0) indicates the ordinal at which the StatefulSet should
+    be partitioned for updates. If the parameter is specified, all Pods with an ordinal
+    index greater than or equal to the `partition` are updated, while all Pods with
+    an ordinal less than that are not updated. That is true even if the Pods are deleted;
+    Kubernetes recreates them at the previous version. This feature can enable partial
+    updates to clustered stateful applications (ensuring the quorum is preserved,
+    for example) and then roll out the changes to the rest of the cluster by setting
+    the `partition` back to 0.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过使用默认的滚动更新策略，您可以通过指定 `.spec.updateStrategy.rollingUpdate.partition` 数字来分区实例。该参数（默认值为
+    0）指示 StatefulSet 在更新时应分区的序数。如果指定了该参数，则所有序数大于或等于 `partition` 的 Pod 将被更新，而所有序数小于该值的
+    Pod 则不会被更新。即使 Pod 被删除，Kubernetes 也会以先前版本重新创建它们。该功能可以支持对集群化状态应用进行部分更新（例如确保保持法定人数），然后通过将
+    `partition` 设置回 0 将更改推广到集群的其余部分。
+- en: Parallel deployments
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 并行部署
+- en: When we set `.spec.podManagementPolicy` to `Parallel`, the StatefulSet launches
+    or terminates all Pods in parallel and does not wait for Pods to run and become
+    ready or completely terminated before moving to the next one. If sequential processing
+    is not a requirement for your stateful application, this option can speed up operational
+    procedures.
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当我们将 `.spec.podManagementPolicy` 设置为 `Parallel` 时，StatefulSet 将并行启动或终止所有 Pod，并且在移动到下一个
+    Pod 之前不会等待 Pod 运行并准备好或完全终止。如果您的状态应用程序不需要顺序处理，这个选项可以加快操作过程的速度。
+- en: At-Most-One Guarantee
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: At-Most-One 保证
+- en: Uniqueness is among the fundamental attributes of stateful application instances,
+    and Kubernetes guarantees that uniqueness by making sure no two Pods of a StatefulSet
+    have the same identity or are bound to the same PV. In contrast, ReplicaSet offers
+    the *At-Least-X-Guarantee* for its instances. For example, a ReplicaSet with two
+    replicas tries to keep at least two instances up and running at all times. Even
+    if there is occasionally a chance for that number to go higher, the controller’s
+    priority is not to let the number of Pods go below the specified number. It is
+    possible to have more than the specified number of replicas running when a Pod
+    is being replaced by a new one and the old Pod is still not fully terminated.
+    Or, it can go higher if a Kubernetes node is unreachable with `NotReady` state
+    but still has running Pods. In this scenario, the ReplicaSet’s controller would
+    start new Pods on healthy nodes, which could lead to more running Pods than desired.
+    That is all acceptable within the semantics of At-Least-X.
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 独特性是状态应用实例的基本属性之一，Kubernetes 通过确保 StatefulSet 的两个 Pod 没有相同的标识或绑定到相同的 PV 来保证这种独特性。相比之下，ReplicaSet
+    为其实例提供 *At-Least-X-Guarantee*。例如，具有两个复本的 ReplicaSet 试图始终保持至少两个实例运行。即使偶尔可能会使该数字增加，控制器的优先级也不是让
+    Pod 数量低于指定数量。当一个 Pod 正被新的 Pod 替换且旧 Pod 仍未完全终止时，或者 Kubernetes 节点处于 `NotReady` 状态但仍有运行中的
+    Pod 时，可能会运行多于指定数量的复本。在这种情况下，ReplicaSet 的控制器会在健康节点上启动新的 Pod，这可能导致运行中的 Pod 多于预期数量。这在
+    At-Least-X 的语义范围内是可以接受的。
+- en: A StatefulSet controller, on the other hand, makes every possible check to ensure
+    there are no duplicate Pods—hence the *At-Most-One Guarantee*. It does not start
+    a Pod again unless the old instance is confirmed to be shut down completely. When
+    a node fails, it does not schedule new Pods on a different node unless Kubernetes
+    can confirm that the Pods (and maybe the whole node) are shut down. The At-Most-One
+    semantics of StatefulSets dictates these rules.
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一方面，StatefulSet 控制器会进行一切可能的检查，以确保没有重复的 Pod — 因此有 *At-Most-One 保证*。除非确认旧实例完全关闭，否则它不会重新启动
+    Pod。当节点故障时，除非 Kubernetes 能够确认 Pod（甚至可能是整个节点）已关闭，否则不会在不同节点上调度新的 Pod。StatefulSet
+    的 At-Most-One 语义规定了这些规则。
+- en: It is still possible to break these guarantees and end up with duplicate Pods
+    in a StatefulSet, but this requires active human intervention. For example, deleting
+    an unreachable node resource object from the API Server while the physical node
+    is still running would break this guarantee. Such an action should be performed
+    only when the node is confirmed to be dead or powered down and no Pod processes
+    are running on it. Or, for example, when you are forcefully deleting a Pod with
+    `kubectl delete pods <pod> --grace-period=0 --force`, which does not wait for
+    a confirmation from the Kubelet that the Pod is terminated. This action immediately
+    clears the Pod from the API Server and causes the StatefulSet controller to start
+    a replacement Pod that could lead to duplicates.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 仍然有可能破坏这些保证，并在 StatefulSet 中出现重复的 Pod，但这需要积极的人工干预。例如，在物理节点仍在运行时从 API 服务器中删除不可达节点资源对象将会破坏此保证。这样的操作应仅在确认节点已死亡或已关机且没有
+    Pod 进程在其上运行时执行。或者，例如，当您强制删除带有 `kubectl delete pods <pod> --grace-period=0 --force`
+    的 Pod 时，它不会等待 Kubelet 确认 Pod 已终止。此操作会立即从 API 服务器中清除 Pod，并导致 StatefulSet 控制器启动替换
+    Pod，可能导致重复。
+- en: We discuss other approaches to achieving singletons in more depth in [Chapter 10,
+    “Singleton Service”](ch10.html#SingletonService).
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在第 [Chapter 10, “Singleton Service”](ch10.html#SingletonService) 中深入讨论了实现单例模式的其他方法。
+- en: Discussion
+  id: totrans-74
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 讨论
+- en: In this chapter, we saw some of the standard requirements and challenges in
+    managing distributed stateful applications on a cloud native platform. We discovered
+    that handling a single-instance stateful application is relatively easy, but handling
+    distributed state is a multidimensional challenge. While we typically associate
+    the notion of “state” with “storage,” here we have seen multiple facets of state
+    and how it requires different guarantees from different stateful applications.
+    In this space, StatefulSets is an excellent primitive for implementing distributed
+    stateful applications generically. It addresses the need for persistent storage,
+    networking (through Services), identity, ordinality, and a few other aspects.
+    It provides a good set of building blocks for managing stateful applications in
+    an automated fashion, making them first-class citizens in the cloud native world.
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们看到了在云原生平台上管理分布式有状态应用程序的标准需求和挑战。我们发现处理单实例有状态应用程序相对较容易，但处理分布式状态是一个多维挑战。虽然我们通常将“状态”与“存储”联系在一起，但在这里，我们看到了状态的多个方面及其如何需要不同的保证来自不同的有状态应用程序。在这个领域，StatefulSets
+    是一个优秀的原语，用于通用实现分布式有状态应用程序。它解决了持久存储、网络（通过服务）、身份、顺序性和其他几个方面的需求。它为以自动化方式管理有状态应用程序提供了一组良好的构建块，使它们成为云原生世界中的一流公民。
+- en: StatefulSets are a good start and a step forward, but the world of stateful
+    applications is unique and complex. In addition to the stateful applications designed
+    for a cloud native world that can fit into a StatefulSet, a ton of legacy stateful
+    applications exist that have not been designed for cloud native platforms and
+    have even more needs. Luckily Kubernetes has an answer for that too. The Kubernetes
+    community has realized that rather than modeling different workloads through Kubernetes
+    resources and implementing their behavior through generic controllers, it should
+    allow users to implement their custom controllers and even go one step further
+    and allow modeling application resources through custom resource definitions and
+    behavior through operators.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: StatefulSets 是一个良好的起点和进步，但是有状态应用程序的世界是独特且复杂的。除了为云原生世界设计的可以适应 StatefulSet 的有状态应用程序外，还存在大量未为云原生平台设计并具有更多需求的传统有状态应用程序。幸运的是，Kubernetes
+    对此也有解决方案。Kubernetes 社区意识到，与其通过 Kubernetes 资源建模不同的工作负载并通过通用控制器实现其行为，不如允许用户实现其自定义控制器，甚至进一步允许通过自定义资源定义和操作员来建模应用程序资源的行为。
+- en: In Chapters [27](ch27.html#Controller) and [28](ch28.html#Operator), you will
+    learn about the related *Controller* and *Operator* patterns, which are better
+    suited for managing complex stateful applications in cloud native environments.
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在第 [27](ch27.html#Controller) 章和第 [28](ch28.html#Operator) 章中，您将学习有关相关的*控制器*和*操作员*模式，这些模式更适合于在云原生环境中管理复杂的有状态应用程序。
+- en: More Information
+  id: totrans-78
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 更多信息
+- en: '[Stateful Service Example](https://oreil.ly/FXeca)'
+  id: totrans-79
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[有状态服务示例](https://oreil.ly/FXeca)'
+- en: '[StatefulSet Basics](https://oreil.ly/NdHnS)'
+  id: totrans-80
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[StatefulSet 基础](https://oreil.ly/NdHnS)'
+- en: '[StatefulSets](https://oreil.ly/WyxHN)'
+  id: totrans-81
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[StatefulSets](https://oreil.ly/WyxHN)'
+- en: '[Example: Deploying Cassandra with a Stateful Set](https://oreil.ly/YECff)'
+  id: totrans-82
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[示例：使用有状态集群部署 Cassandra](https://oreil.ly/YECff)'
+- en: '[Running ZooKeeper, a Distributed System Coordinator](https://oreil.ly/WzQXP)'
+  id: totrans-83
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[运行 ZooKeeper，一个分布式系统协调器](https://oreil.ly/WzQXP)'
+- en: '[Headless Services](https://oreil.ly/7GPda)'
+  id: totrans-84
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[无头服务](https://oreil.ly/7GPda)'
+- en: '[Force Delete StatefulSet Pods](https://oreil.ly/ZRTlO)'
+  id: totrans-85
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[强制删除有状态集群 Pods](https://oreil.ly/ZRTlO)'
+- en: '[Graceful Scaledown of Stateful Apps in Kubernetes](https://oreil.ly/7Zw-5)'
+  id: totrans-86
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[优雅地缩减 Kubernetes 中有状态应用](https://oreil.ly/7Zw-5)'
+- en: ^([1](ch12.html#idm45902101914272-marker)) Let’s assume we have invented a highly
+    sophisticated way of generating random numbers in a distributed Random Number
+    Generator (RNG) cluster with several instances of our service as nodes. Of course,
+    that’s not true, but for this example’s sake, it’s a good enough story.
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([1](ch12.html#idm45902101914272-marker)) 假设我们已经发明了一种在分布式随机数生成器 (RNG) 集群中生成随机数的高度复杂的方法，该集群中的多个服务实例充当节点。当然，这并不是真的，但为了这个例子，这个故事已经足够了。

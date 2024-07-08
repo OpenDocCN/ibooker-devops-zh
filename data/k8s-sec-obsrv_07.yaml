@@ -1,0 +1,704 @@
+- en: Chapter 7\. Network Policy
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第 7 章\. 网络策略
+- en: In this chapter, we will describe network policy and discuss its importance
+    in securing a Kubernetes cluster. We will review various network policy implementations
+    and tooling to support network policy implementations. We will also cover network
+    policy best practices with examples.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们将描述网络策略并讨论其在保护 Kubernetes 集群中的重要性。我们将回顾各种网络策略的实现和支持网络策略实施的工具。我们还将介绍带有示例的网络策略最佳实践。
+- en: What Is Network Policy?
+  id: totrans-2
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 什么是网络策略？
+- en: Network policy is the primary tool for securing a Kubernetes network. It allows
+    you to easily restrict the network traffic in your cluster so only the traffic
+    that you want to flow is allowed.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 网络策略是保护 Kubernetes 网络的主要工具。它允许您轻松地限制集群中的网络流量，使只有您希望流动的流量被允许。
+- en: To understand the significance of network policy, let’s briefly explore how
+    network security was typically achieved prior to network policy. Historically
+    in enterprise networks, network security was provided by designing a physical
+    topology of network devices (switches, routers, firewalls) and their associated
+    configuration. The physical topology defined the security boundaries of the network.
+    In the first phase of virtualization, the same network and network device constructs
+    were virtualized in the cloud, and the same techniques for creating specific network
+    topologies of (virtual) network devices were used to provide network security.
+    Adding new applications or services often required additional network design to
+    update the network topology and network device configuration to provide the desired
+    security.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要理解网络策略的重要性，让我们简要探讨一下在引入网络策略之前如何典型地实现网络安全。在企业网络的历史上，网络安全是通过设计网络设备（交换机、路由器、防火墙）的物理拓扑及其相关配置来实现的。物理拓扑定义了网络的安全边界。在虚拟化的第一阶段中，云中同样对网络和网络设备构造进行了虚拟化，并使用相同的技术来创建（虚拟）网络设备的特定网络拓扑，以提供网络安全。添加新的应用程序或服务通常需要更新网络拓扑和网络设备配置，以提供所需的安全性。
+- en: In contrast, the Kubernetes network model defines a “flat” network in which,
+    by default, every pod can communicate directly with all other pods in the cluster.
+    This approach massively simplifies network design and allows new workloads to
+    be scheduled dynamically anywhere in the cluster with no dependencies on the network
+    design.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 相比之下，Kubernetes 网络模型定义了一个“扁平”的网络，在这种网络中，默认情况下，每个 Pod 可以直接与集群中的所有其他 Pod 进行通信。这种方法极大地简化了网络设计，并允许新的工作负载在集群中的任何位置动态调度，而无需依赖于网络设计。
+- en: In this model, rather than network security being defined by network topology
+    boundaries, it is defined using network policies that are independent of the network
+    topology. Network policies are further abstracted from the network by using label
+    selectors as their primary mechanism for defining which workloads can talk to
+    which workloads, rather than IP addresses or IP address ranges.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这种模型中，与其通过网络拓扑边界来定义网络安全，不如使用独立于网络拓扑的网络策略来定义。网络策略进一步通过使用标签选择器作为其主要机制来定义哪些工作负载可以与哪些工作负载通信，而不是使用
+    IP 地址或 IP 地址范围。
+- en: Network policy enforcement can be thought of as each pod being protected by
+    its own dedicated virtual firewall that is automatically programmed and updated
+    in real time based on the network policy that has been defined. [Figure 7-1](#pod_secured_by_a_virtual_firewall)
+    shows network policy enforcement at a pod using its dedicated virtual firewall.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以将网络策略执行视为每个 Pod 都受其自身的专用虚拟防火墙保护，并根据已定义的网络策略自动编程和实时更新。[图 7-1](#pod_secured_by_a_virtual_firewall)
+    展示了在 Pod 上使用其专用虚拟防火墙进行网络策略执行的情况。
+- en: '![](Images/ksao_0701.png)'
+  id: totrans-8
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/ksao_0701.png)'
+- en: Figure 7-1\. Pod secured by a virtual firewall
+  id: totrans-9
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 7-1\. 由虚拟防火墙保护的 Pod
+- en: Why Is Network Policy Important?
+  id: totrans-10
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 为什么网络策略很重要？
+- en: In an age where attackers are becoming more and more sophisticated, network
+    security as a line of defense is more important than ever.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在攻击者变得越来越复杂的时代，作为防线的网络安全比以往任何时候都更为重要。
+- en: While you can (and should) use firewalls to restrict traffic at the perimeters
+    of your network (commonly referred to as north-south traffic), their ability to
+    police Kubernetes traffic is often limited to a granularity of the cluster as
+    a whole, rather than to specific groups of pods, due to the dynamic nature of
+    pod scheduling and pod IP addresses. In addition, the goal of most attackers once
+    they gain a small foothold inside the perimeter is to move laterally (east-west)
+    to gain access to higher-value targets, which perimeter-based firewalls can’t
+    police against. With application architectures evolving from monoliths to microservices,
+    the amount of east-west traffic, and therefore attack surface for lateral movement,
+    is continuing to grow.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然您可以（而且应该）使用防火墙来限制网络的边界流量（通常称为南北流量），但由于 Pod 调度的动态性和 Pod IP 地址，它们通常只能以集群整体的粒度进行
+    Kubernetes 流量的管控，而不能针对特定的 Pod 组进行细粒度管控。此外，一旦攻击者在边界内部获得小小的立足点，他们的大多数目标是横向移动（东西流量）以获取对更高价值目标的访问权限，而基于边界的防火墙无法对其进行管控。随着应用架构从单块到微服务的演变，东西流量的数量和因此横向移动的攻击面仍在继续增长。
+- en: Network policy, on the other hand, is designed for the dynamic nature of Kubernetes
+    by following the standard Kubernetes paradigm of using label selectors to define
+    groups of pods, rather than IP addresses. And because network policy is enforced
+    within the cluster itself, it can secure both north-south and east-west traffic.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一方面，网络策略设计用于 Kubernetes 的动态特性，遵循标准的 Kubernetes 范式，使用标签选择器来定义 Pod 组，而不是 IP 地址。由于网络策略在集群内部执行，它可以保护南北和东西流量。
+- en: Network policy represents an important evolution of network security, not just
+    because it handles the dynamic nature of modern microservices, but because it
+    empowers dev and DevOps engineers to easily define network security themselves,
+    rather than needing to learn low-level networking details. Network policy makes
+    it easy to define intent, such as *only this microservice gets to connect to the
+    database*, write that intent as code (typically in *.yaml* files), and integrate
+    authoring of network policies into Git workflows and CI/CD processes.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 网络策略代表了网络安全的重要进步，不仅因为它处理了现代微服务的动态特性，而且因为它使开发和 DevOps 工程师能够轻松地自定义网络安全，而无需学习低级网络细节。网络策略使得定义意图变得容易，例如*只有这个微服务能连接到数据库*，将该意图编写为代码（通常是
+    *.yaml* 文件），并将网络策略的编写集成到 Git 工作流程和 CI/CD 过程中。
+- en: Network Policy Implementations
+  id: totrans-15
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 网络策略实现
+- en: Kubernetes defines a standard network policy API, so there’s a base set of features
+    you can expect on any cluster. But Kubernetes itself doesn’t do anything with
+    the network policy other than store it. Enforcement of network policies is delegated
+    to network plug-ins, allowing for a range of implementations. Most network plug-ins
+    support the mainline elements of Kubernetes network policies, though many do not
+    implement every feature of the specification. It’s worth noting that most implementations
+    are coupled with the network plug-in’s specific pod networking implementation.
+    However, some network policy implementations can enforce network policy on top
+    of a variety of different pod networking plug-ins. [Figure 7-2](#network_policy_that_is_stored_in_kubern)
+    shows network policies stored in the Kubernetes datastore being used by network
+    plug-ins for enforcement.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 定义了一个标准的网络策略 API，因此您可以在任何集群上期望一组基本特性。但 Kubernetes 本身除了存储外不对网络策略进行任何操作。网络策略的执行委托给了网络插件，允许一系列实现。大多数网络插件支持
+    Kubernetes 网络策略的主要元素，尽管许多插件并未实现规范的每个功能。值得注意的是，大多数实现与网络插件特定的 Pod 网络实现耦合。然而，某些网络策略实现可以在多种不同的
+    Pod 网络插件上强制执行网络策略。[图 7-2](#network_policy_that_is_stored_in_kubern)显示存储在 Kubernetes
+    数据存储中的网络策略，由网络插件用于执行。
+- en: '![](Images/ksao_0702.png)'
+  id: totrans-17
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/ksao_0702.png)'
+- en: Figure 7-2\. Network policy that is stored in Kubernetes enforced by network
+    plug-ins
+  id: totrans-18
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 7-2\. 由网络插件实施的存储在 Kubernetes 中的网络策略
+- en: There are a number of networking and network policy implementations to choose
+    from, as shown in [Figure 7-3](#adoption_of_top_networking_technology_i).
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有多种网络和网络策略实现可供选择，如[图 7-3](#adoption_of_top_networking_technology_i)所示。
+- en: '![](Images/ksao_0703.png)'
+  id: totrans-20
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/ksao_0703.png)'
+- en: Figure 7-3\. Adoption of top networking technology implementations
+  id: totrans-21
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 7-3\. 顶级网络技术实现的采纳情况
+- en: 'No matter what network policy implementation you choose, we recommend using
+    one for the following reasons:'
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 无论您选择哪种网络策略实现，我们建议出于以下原因选择其中一种：
+- en: It implements the complete Kubernetes network policy specification.
+  id: totrans-23
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 它实现了完整的 Kubernetes 网络策略规范。
+- en: In addition to supporting the Kubernetes network policy specification, its own
+    policy model provides additional capabilities, which can be used alongside Kubernetes
+    network policies to support additional enterprise security use cases.
+  id: totrans-24
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 除了支持 Kubernetes 网络策略规范外，其自身的策略模型还提供额外的功能，可以与 Kubernetes 网络策略一起使用，支持额外的企业安全用例。
+- en: A few network plug-ins, like Weave Net, Kube-router, and Calico, can enforce
+    network policy on top of their own rich set of networking capabilities, or on
+    top of several other networking options, including the network plug-ins used by
+    Amazon’s Elastic Kubernetes Service (EKS), Azure Kubernetes Service (AKS), and
+    Google Kubernetes Engine (GKE). This makes them a particularly strong choice as
+    part of a multicloud strategy, because it gives you the flexibility to select
+    the best networking for your environment from a broad range of options with the
+    same rich set of network policy features available across all environments.
+  id: totrans-25
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一些网络插件，如 Weave Net、Kube-router 和 Calico，可以在其自身丰富的网络功能集之上强制执行网络策略，也可以在包括亚马逊的弹性
+    Kubernetes 服务（EKS）、Azure Kubernetes 服务（AKS）和谷歌 Kubernetes 引擎（GKE）在内的几个其他网络选项上强制执行。这使它们成为多云策略的特别强大选择，因为它使您可以从广泛的选项中选择最适合您环境的网络，并在所有环境中使用相同丰富的网络策略功能。
+- en: The network policy can be applied to host endpoints/interfaces, allowing the
+    same flexible policy model to be used to secure Kubernetes nodes or noncluster
+    hosts/VMs.
+  id: totrans-26
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 网络策略可以应用于主机端点/接口，允许使用相同的灵活策略模型来保护 Kubernetes 节点或非集群主机/虚拟机。
+- en: It supports network policy that is enforced both at the network/infrastructure
+    layer and at the layers above, including supporting L5–L7 match criteria with
+    its policy rules such as HTTP methods and paths. The multiple enforcement points
+    help protect your infrastructure from compromised workloads and protect your workloads
+    from compromised infrastructure. It also avoids the need for dual provisioning
+    of security at the application and infrastructure layers, or having to learn different
+    policy models for each layer.
+  id: totrans-27
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 它支持在网络/基础设施层以及上层（包括支持 L5-L7 匹配标准的策略规则，如 HTTP 方法和路径）强制执行的网络策略。多个执行点有助于保护您的基础设施免受受损工作负载的影响，并保护您的工作负载免受受损基础设施的影响。它还避免了需要在应用和基础设施层分别进行安全配置的需要，或者需要学习每一层不同的策略模型。
+- en: It needs to be production-grade, which means it must perform very well in clusters
+    of any size, from single-node clusters to several-thousand-node clusters.
+  id: totrans-28
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 它需要是生产级的，这意味着它必须在任何大小的集群中表现出色，从单节点集群到数千节点集群。
+- en: It provides the ability for enterprises to add new capabilities and serves as
+    a building block for an enterprise-grade Kubernetes network security solution.
+  id: totrans-29
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 它提供企业增加新功能的能力，并作为企业级 Kubernetes 网络安全解决方案的基础组件。
+- en: Network Policy Best Practices
+  id: totrans-30
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 网络策略最佳实践
+- en: In this section we’ll explore how to implement network policy with examples
+    and cover best practices for implementation. The following examples use the Calico
+    network policy schema, which extends the Kubernetes network policy schema. We’re
+    using these examples due to our familiarity with Calico network policy, but these
+    best practices can be implemented with other available network policy models as
+    well.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本节中，我们将探讨如何使用示例实现网络策略，并涵盖实施的最佳实践。以下示例使用 Calico 网络策略模式，该模式扩展了 Kubernetes 网络策略模式。我们之所以选择这些示例，是因为我们熟悉
+    Calico 网络策略，但这些最佳实践也可以与其他可用的网络策略模型一起实现。
+- en: Ingress and Egress
+  id: totrans-32
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 入口和出口
+- en: When people think about network security, the first thought is often of how
+    to protect your workloads from north-south external attackers. To help defend
+    against this, you can use network policy to restrict ingress traffic to any pods
+    that are reachable from outside the cluster.
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当人们考虑网络安全时，第一个想法往往是如何保护工作负载免受南北向的外部攻击者的侵害。为了帮助防御此类攻击，您可以使用网络策略来限制可以从集群外部访问的任何
+    Pod 的入口流量。
+- en: However, when an attacker does manage to find a vulnerability, they often use
+    the compromised workload as the place from which to move laterally, probing the
+    rest of your network to exploit additional vulnerabilities that give them access
+    to more valuable resources or allow them to elevate privileges to mount more powerful
+    attacks or exfiltrate sensitive data.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，当攻击者成功找到漏洞时，他们通常会使用受损的工作负载作为横向移动的起点，探测您网络的其余部分，以利用额外的漏洞来访问更有价值的资源或提升权限以发动更强大的攻击或窃取敏感数据。
+- en: Even if you have network policies to restrict ingress traffic on all pods in
+    the cluster, the lateral movement may target assets outside of the cluster, which
+    are less well protected. Consequently, the best practice is to always define both
+    ingress and egress network policy rules for every pod in the cluster.
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 即使您在集群中的所有 Pod 上设置了限制入口流量的网络策略，横向移动可能会针对集群外保护较弱的资产。因此，最佳实践是始终为集群中的每个 Pod 定义入口和出口网络策略规则。
+- en: While this doesn’t guarantee an attacker cannot find additional vulnerabilities,
+    it does significantly reduce the available attack surface, making the attacker’s
+    job much harder. In addition, if combined with suitable alerting of policy violations,
+    the time to identify that a workload has been compromised can be massively reduced.
+    To put this into perspective, in the 2020 IBM Cost of a Data Breach Report, IBM
+    reported that on average it took enterprises 207 days to identify a breach, and
+    a further 73 days to contain it! With correctly authored network policies and
+    alerting of violations, the breach can be prevented or reduced potentially to
+    minutes or seconds and even opens the possibility of automated responses to quarantine
+    the suspect workload if desired.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管这并不能保证攻击者无法找到额外的漏洞，但它确实大大减少了可用的攻击面，使攻击者的工作变得更加困难。此外，如果结合适当的策略违规警报，可以大大缩短确定工作负载已受损的时间。以2020年IBM数据泄露成本报告为例，IBM报告企业平均需要207天才能发现一次数据泄露，然后需要额外的73天来进行控制！通过正确编写的网络策略和违规警报，可以防止或大大减少泄露，潜在地将其减少到几分钟甚至几秒钟，并且甚至可以自动响应以隔离可疑工作负载。
+- en: Not Just Mission-Critical Workloads
+  id: totrans-37
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 不仅仅是使命关键的工作负载
+- en: Best practice already recommends ensuring every pod has a network policy that
+    restricts its ingress and egress traffic. What this means is that when you are
+    thinking about how to protect your mission-critical workloads, you really need
+    to be protecting all workloads. If you don’t, then some seemingly unimportant,
+    innocuous workload could end up being used as the base for attacks across the
+    rest of your network, ultimately leading to the downfall of your most critical
+    workloads.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最佳实践已建议确保每个 Pod 都具有限制其入口和出口流量的网络策略。这意味着当您考虑如何保护使命关键的工作负载时，您确实需要保护所有工作负载。如果不这样做，那么一些看似不重要、无害的工作负载最终可能成为攻击您网络其余部分的基础，最终导致最关键工作负载的失败。
+- en: Policy and Label Schemas
+  id: totrans-39
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 策略和标签模式
+- en: One of the strengths of Kubernetes labels and network policies is the flexibility
+    in how you can use them. However, as a result there are often multiple different
+    ways of labeling and writing policies that can achieve the same particular goal.
+    So another best practice is to consider standardizing the way you label your pods
+    and write your network policies using a consistent schema or design pattern. This
+    can make authoring and understanding the intent of each network policy much more
+    straightforward, especially if your clusters are hosting a large number of microservices.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 标签和网络策略的一个优势是您可以以多种方式灵活使用它们。然而，结果是通常存在多种标记和编写策略的方式可以实现相同的特定目标。因此，另一个最佳实践是考虑使用一致的模式或设计模式标准化标记
+    Pod 和编写网络策略的方式。这可以使编写和理解每个网络策略的意图变得更加简单明了，特别是如果您的集群托管大量微服务时。
+- en: 'For example, you might say every pod will have an “app” label that identifies
+    which microservice it is, and every pod will have a single network policy applied
+    to it using that app label, with the policy defining ingress and egress rules
+    for the microservices it is expected to interact with, again using the app label:'
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，您可以指定每个 Pod 都将具有标识其所属微服务的“app”标签，并且每个 Pod 将使用该 app 标签应用单一网络策略，该策略使用该 app
+    标签定义与其预期交互的微服务的入口和出口规则：
+- en: '[PRE0]'
+  id: totrans-42
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'Or you might decide to use permission-style labels in the policy rules so that
+    rather than listing the microservices that are allowed to access each service
+    in its ingress rules, any microservice that has the permission label is allowed:'
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 或者，您可以决定在策略规则中使用权限样式标签，而不是在其入口规则中列出允许访问每个服务的微服务。
+- en: '[PRE1]'
+  id: totrans-44
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: This could make it easier for individual microservice teams to author their
+    own network policies without needing to know the full list of other microservices
+    that must consume the service.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这可以使得单独的微服务团队能够编写自己的网络策略，而无需知道必须消费该服务的其他微服务的完整列表。
+- en: There are plenty of other ways you could go about it, and there is no right
+    or wrong here. But taking the time to define how to approach labeling and defining
+    network policies up front can make life significantly easier in the long run.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 还有很多其他方法可以解决这个问题，这里没有对错之分。但是，在前期定义如何标记和定义网络策略的方法会使得长期来看生活变得更加轻松。
+- en: If you are not sure which approach will work best for you, then a simple “app”
+    approach is a good place to start. This can always be expanded later to include
+    the ideas of permission-style labels for microservices that have a lot of clients
+    if maintaining the policy rules becomes time-consuming.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果不确定哪种方法最适合您，那么“应用程序”方法是一个很好的起点。稍后总是可以扩展为包括为那些具有大量客户端的微服务定义权限样式标签的想法，如果维护策略规则变得耗时。
+- en: Default Deny and Default App Policy
+  id: totrans-48
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 默认拒绝和默认应用策略
+- en: The Kubernetes network policy specification allows all ingress pod traffic,
+    unless there is one or more network policy with an ingress rule that applies to
+    the pod, and then only the ingress traffic that is explicitly allowed by the policies
+    is allowed. And likewise for egress pod traffic. As a result, if you forget to
+    write a network policy for a new microservice, it will be left unsecured. And
+    if you forget to write both ingress and egress rules for the microservice, then
+    it will be left partially unsecured.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 网络策略规范允许所有入口 Pod 流量通过，除非存在一个或多个适用于该 Pod 的入口规则的网络策略，然后只有策略明确允许的入口流量才被允许。出口
+    Pod 流量同理。因此，如果忘记为新的微服务编写网络策略，它将保持不安全状态。如果忘记为该微服务编写入口和出口规则，那么它将部分保持不安全状态。
+- en: 'Given this, a good practice is to put in place a “default deny policy” that
+    prevents any traffic that is not explicitly allowed by another network policy.
+    The way this is normally done is to have a policy that specifies it applies to
+    all pods, with both ingress and egress rules, but does not explicitly allow any
+    traffic itself. As a result, if no other network policy applies that explicitly
+    allows the traffic, then the traffic will be denied:'
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 鉴于此，一个良好的做法是制定一个“默认拒绝策略”，防止未经其他网络策略明确允许的任何流量。通常的做法是制定一个适用于所有 Pod 的策略，包括入口和出口规则，但本身不明确允许任何流量。因此，如果没有其他明确允许流量的网络策略适用，那么流量将被拒绝：
+- en: '[PRE2]'
+  id: totrans-51
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'Since Kubernetes network policy is namespaced, the network policy mentioned
+    previously needs repeating for each namespace and ideally needs to be built into
+    the standard operating procedure for provisioning new namespaces in the cluster.
+    Alternatively, some network policy implementations go beyond Kubernetes network
+    policy and provide the ability to specify cluster-wide network policies (that
+    are not limited to a single namespace). The following example shows how to create
+    a policy that switches the whole cluster to default deny behavior, including any
+    namespaces that are created in the future:'
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于 Kubernetes 网络策略是有命名空间的，前面提到的网络策略需要为每个命名空间重复，并且最好纳入集群中新命名空间配置的标准操作流程中。另外，一些网络策略实现超越了
+    Kubernetes 网络策略，提供了指定整个集群范围网络策略的能力（不限于单一命名空间）。下面的示例展示了如何创建一个策略，将整个集群切换到默认拒绝行为，包括将来创建的任何命名空间：
+- en: '[PRE3]'
+  id: totrans-53
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: However, it’s worth noting that this policy applies to all pods, not just application
+    pods, including control plane pods for Kubernetes. If you do not have the right
+    network policies in place or failsafe ports configured before you create such
+    a policy, you can break your cluster in pretty bad ways.
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，值得注意的是，这个策略适用于所有 Pod，而不仅仅是应用 Pod，包括 Kubernetes 的控制平面 Pod。如果在创建此类策略之前没有正确的网络策略或配置故障安全端口，可能会导致集群出现严重问题。
+- en: 'A much less high-stakes best practice is to define a network policy that applies
+    only to pods, excluding control plane pods. As well as triggering default deny
+    behavior, this policy can include any rules that you want to apply to all application
+    pods. For example, you could include a rule that allows all application pods to
+    access kube-DNS. This helps simplify any per-microservice policies that need writing
+    so they can focus solely on the desired per-microservice specific behaviors:'
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个风险较低的最佳实践是定义一个仅适用于 Pod 的网络策略，排除控制平面 Pod。除了触发默认拒绝行为外，此策略还可以包括您希望应用于所有应用 Pod
+    的任何规则。例如，您可以包括一个允许所有应用 Pod 访问 kube-DNS 的规则。这有助于简化需要编写的每个微服务策略，使其能够专注于所需的每个微服务特定行为：
+- en: '[PRE4]'
+  id: totrans-56
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: As this policy deliberately excludes control plane components, to secure the
+    control plane you can write specific policies for each control plane component.
+    It is best to do any such policy creation at cluster creation time before the
+    cluster is hosting workloads, since getting these policies wrong can leave your
+    cluster in a broken state that might result in a significant production outage.
+    In addition, it is highly recommended you always make sure you have in place the
+    correct failsafe ports for the network plug-in you are using before you start
+    trying to create any policies for the control plane.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于此策略故意排除控制平面组件，为了保护控制平面，您可以为每个控制平面组件编写特定的策略。最好在集群创建时进行此类策略创建，而不是在集群托管工作负载之前，因为策略出错可能会使您的集群处于破损状态，可能导致重大的生产中断。此外，强烈建议在开始尝试为控制平面创建任何策略之前，始终确保已设置了您使用的网络插件的正确故障转移端口。
+- en: Policy Tooling
+  id: totrans-58
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 策略工具化
+- en: In this section we explore tools at your disposal to effectively add network
+    policies to your Kubernetes cluster.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这一节中，我们将探讨可用于有效向您的 Kubernetes 集群添加网络策略的工具。
+- en: Development Processes and Microservices Benefits
+  id: totrans-60
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 开发过程和微服务的好处
+- en: One of the advantages of network policy compared with traditional network security
+    controls is that defining network policy does not require networking or firewall
+    expertise. Network policies use the same concepts and paradigms as other Kubernetes
+    resources. In theory, any team that is familiar with deploying microservices in
+    Kubernetes can easily master network policies. As a result, network policy represents
+    an opportunity to adopt a shift-left philosophy for network security, where network
+    security is defined earlier in the development cycle, rather than being defined
+    late in the process. This is a great opportunity for the security and development
+    teams to collaborate to secure your Kubernetes cluster.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与传统网络安全控制相比，网络策略的一个优点是定义网络策略不需要网络或防火墙专业知识。网络策略使用与其他 Kubernetes 资源相同的概念和范式。理论上，任何熟悉在
+    Kubernetes 中部署微服务的团队都可以轻松掌握网络策略。因此，网络策略代表了采用向左转移（shift-left）哲学的机会，其中网络安全在开发周期的早期定义，而不是在过程的后期定义。这是安全和开发团队合作以保护您的
+    Kubernetes 集群的绝佳机会。
+- en: At the same time, many organizations are moving from monolith application architectures
+    to microservice architectures, often with one of the goals being to increase development
+    and organizational agility. In such an approach, each microservice is typically
+    maintained by a single development team, with that team having significant expertise
+    on the microservice, but not necessarily the whole of the application that the
+    microservice is a part of. The move to microservices complements the shift-left
+    opportunity of network policy. The team responsible for the development of a microservice
+    normally has a good understanding of which other microservices it consumes and
+    depends on. They may also have a good understanding of which microservices consume
+    their microservice.
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与此同时，许多组织正在从单体应用架构转向微服务架构，其中一个目标通常是增加开发和组织的灵活性。在这种方法中，每个微服务通常由一个开发团队维护，该团队对微服务有显著的专业知识，但不一定了解微服务所属应用的整体。微服务的转移与网络策略的向左转移机会互补。负责开发微服务的团队通常很了解其消耗和依赖的其他微服务。他们可能也很了解哪些微服务消耗他们的微服务。
+- en: When coupled with a well-defined, standardized approach to policy and label
+    schemas, this puts them in a strong position to implement network policies for
+    their microservice as part of the development of the microservice. In this model,
+    network policy is treated as code built into and tested during the development
+    process, just like any other critical part of a microservice’s code.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当与明确定义的、标准化的政策和标签模式方法结合时，这使他们在实施微服务网络策略时处于一个强势位置，作为微服务开发过程的一部分。在这种模型中，网络策略被视为内嵌并在开发过程中进行测试的代码，就像微服务代码的任何其他关键部分一样。
+- en: An equally valid approach is to have development teams focus purely on the internals
+    of the microservices they are responsible for and leave responsibility for operating
+    the microservices with DevOps teams. However, the same ideas still apply. Such
+    a DevOps team typically needs a good understanding of the dependencies between
+    the microservices they are responsible for operating in order to manage the operation
+    of the application and life cycle of the microservices. Network security can be
+    defined as code by the DevOps team and tested just like they would any other operational
+    code or scripts they develop before using in production.
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 同样有效的方法是让开发团队专注于他们负责的微服务的内部，并将微服务的操作责任留给 DevOps 团队。然而，相同的理念仍然适用。这样的 DevOps 团队通常需要深入了解他们负责操作的微服务之间的依赖关系，以管理应用程序的运行和微服务的生命周期。网络安全可以由
+    DevOps 团队定义为代码，并在使用之前像他们开发的其他操作代码或脚本一样进行测试。
+- en: The reality today, of course, is that many organizations are some way off from
+    achieving this nirvana of microservices, agility, and shift-left security. Network
+    security may come much later in the organization’s processes, or even as an afterthought
+    on a system already in production. In such scenarios, defining network policies
+    may be significantly more challenging, and getting network policies wrong could
+    have significant production impacts. The good news is that there are a range of
+    tools to help with network policy life cycle management to make this easier, including
+    policy recommendations, policy impact previews, and policy staging/audit modes.
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当然，今天的现实是，许多组织在实现微服务、敏捷和左移安全的天堂方面还有很长的路要走。网络安全可能在组织的流程中来得更晚，甚至作为已经投入生产的系统的事后想法。在这种情况下，定义网络策略可能会更具挑战性，错误的网络策略可能会对生产造成重大影响。好消息是，有一系列工具可帮助管理网络策略的生命周期，使这一过程更容易，包括政策推荐、政策影响预览和政策暂存/审核模式。
+- en: Policy Recommendations
+  id: totrans-66
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 政策建议
+- en: Policy recommendation tools are a great help in scenarios where the team responsible
+    for network security does not have a good, confident understanding of all the
+    network dependencies between the applications or microservices they need to secure.
+    These tools also help you get started with authoring network policies the right
+    way, and make the creation of network policy significantly easier than writing
+    it by hand.
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 政策推荐工具在那些负责网络安全的团队对他们需要保护的应用程序或微服务之间所有网络依赖关系没有很好、自信理解的情况下提供了极大的帮助。这些工具还帮助您正确开始编写网络策略，并使网络策略的创建比手工编写容易得多。
+- en: The way recommendation tools usually work is to analyze the network traffic
+    to and from each microservices over a period of time. This means to get recommendations,
+    the microservice needs to be running in production, or a staging or test environment
+    that accurately reflects the production interactions between the microservice
+    and the rest of the application.
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 推荐工具通常的工作方式是分析每个微服务在一段时间内与其他微服务之间的网络流量。这意味着要获得推荐，微服务需要在生产中运行，或者在能够准确反映微服务与应用程序其余部分之间生产交互的暂存或测试环境中运行。
+- en: There are many policy recommendation tools available to choose from, often with
+    varying levels of sophistication, degrees of Kubernetes awareness, and policy
+    schema approaches. It is recommended that you use a Kubernetes-aware policy recommendation
+    engine built into your network policy solution.
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有许多可供选择的政策推荐工具，通常具有不同程度的复杂性、对 Kubernetes 的认识程度和政策模式方法。建议您使用集成到您的网络策略解决方案中的 Kubernetes
+    感知政策推荐引擎。
+- en: Policy Impact Previews
+  id: totrans-70
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 政策影响预览
+- en: Policy impact preview tools provide a way of sanity-checking a network policy
+    before it is applied to the cluster. Like policy recommendations, this is usually
+    done by analyzing the cluster’s historical network traffic over a period of time
+    and calculating which network flows would have been impacted by the new policy.
+    An example is to identify any flows that were previously allowed that would now
+    be denied, and any flows that were previously denied that would now be allowed.
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 政策影响预览工具在应用到集群之前提供了一种检查网络策略的方法。类似政策建议，通常通过分析一段时间内集群的历史网络流量来完成，计算新策略可能会影响哪些网络流。例如，识别以前允许但现在会被拒绝的流量，以及以前被拒绝但现在会被允许的流量。
+- en: Policy impact previews are a great help in any scenarios where you are not relying
+    completely on policy recommendations. For example, this could be if you are defining
+    network policies by hand or modifying a policy recommendation to align with a
+    particular standardized approach to policy and label schemas. Even if the team
+    defining the network policy for a microservice has high confidence in their understanding
+    of the microservice’s network dependencies, policy impact previews can be invaluable
+    to help catch any accidental mistakes, such as hard-to-spot typos, that might
+    significantly impact legitimate network traffic.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 政策影响预览在任何情况下都是极大的帮助，特别是在你并非完全依赖政策建议的场景下。例如，当你手动定义网络策略或者修改政策建议以与特定的政策和标签模式标准一致时，这将非常有用。即使团队对微服务的网络策略定义有很高的信心，了解微服务的网络依赖，政策影响预览也是无价的，它有助于捕捉任何意外错误，例如难以发现的拼写错误，这些错误可能会显著影响合法的网络流量。
+- en: Policy impact preview tools are less common than policy recommendations. It
+    is very useful to use a tool that provides a visual representation of the impact
+    based on analysis of the flow log data it collects over any desired time period.
+    This will help in reducing issues due to incorrectly authored policies or outages
+    due to operator error.
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 政策影响预览工具比政策建议更少见。使用提供基于分析所收集的流日志数据的影响可视化表示的工具非常有用，无论在任何所需的时间段内。这将有助于减少由于不正确撰写的政策或由于操作员错误而导致的停机问题。
+- en: Policy Staging and Audit Modes
+  id: totrans-74
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 政策分阶段和审计模式
+- en: Even less common than policy impact previews, but potentially even more valuable,
+    is support for policy staging, sometimes called policy audit mode.
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 甚至比政策影响预览更少见但可能更有价值的是支持政策分阶段，有时称为政策审计模式。
+- en: Policy staging allows network policy changes to be applied to the cluster without
+    impacting network traffic. The staged policy then records the full details of
+    all the flows it would have interacted with, without actually impacting any of
+    the flows. This is incredibly useful in scenarios where a policy impact preview
+    of an individual policy against historical data may be overly simplistic given
+    the complexity of the applications running in the cluster. For example, this could
+    be if multiple interdependent policies need to be updated in unison, or if there’s
+    a desire to monitor the policy impact with live rather than historical network
+    flows.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 政策分阶段允许应用于集群的网络策略变更，而不会影响网络流量。然后，分阶段的策略会记录其将与之交互的所有流的详细信息，而实际上不会影响任何流。在需要对个别政策进行历史数据的政策影响预览可能过于简单化的应用程序运行复杂性的情况下，这非常有用。例如，如果需要同时更新多个相互依赖的策略，或者希望使用实时而非历史网络流来监视策略影响。
+- en: In order to make the task of authoring effective network policies less daunting,
+    you need to use policy recommendations and then stage policies to understand the
+    impact of the policy before you promote it for enforcement. This cycle of policy
+    recommendation (based on historical network flows), followed by staging (applying
+    policies to current and future network flows), followed by making desired adjustments
+    and then finally enforcing the policy is the best way to ensure the policy change
+    would do exactly what you want.
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了使撰写有效网络策略的任务不再艰巨，你需要使用政策建议，然后将策略分阶段以了解其影响，然后再将其推广以供执行。这种基于历史网络流量的政策建议循环，随后是分阶段（将策略应用于当前和未来的网络流），然后进行所需的调整，最后实施策略，是确保策略变更能够确切达到预期效果的最佳方式。
+- en: Conclusion
+  id: totrans-78
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 结论
+- en: 'In this chapter we discussed the importance of network policy and various network
+    policy implementations and tooling to help you with implementation. The following
+    are some key aspects of network policy:'
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们讨论了网络策略的重要性以及各种网络策略的实施和工具，以帮助您进行实施。以下是网络策略的一些关键方面：
+- en: Network policy should be used to secure a Kubernetes network, and it complements
+    the firewalls that are implemented at the perimeter of your cluster.
+  id: totrans-80
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 网络策略应该用于保护 Kubernetes 网络，并且它与在集群外围实施的防火墙相辅相成。
+- en: It is recommended that you choose a Kubernetes-aware implementation that extends
+    the basic Kubernetes network policy.
+  id: totrans-81
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 建议选择一个能够识别 Kubernetes 的实现，扩展基本的 Kubernetes 网络策略。
+- en: There are a lot of network policy implementations that offer tooling to help
+    with the implementation of network policy in a Kubernetes cluster.
+  id: totrans-82
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 有许多网络策略实施提供工具，帮助在 Kubernetes 集群中实施网络策略。

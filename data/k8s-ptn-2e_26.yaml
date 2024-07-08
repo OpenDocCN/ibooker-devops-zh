@@ -1,0 +1,590 @@
+- en: Chapter 21\. Immutable Configuration
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第21章 不可变配置
+- en: The *Immutable Configuration* pattern offers two ways to make configuration
+    data immutable so that your application’s configuration is always in a well-known
+    and recorded state. With this pattern, we can not only use immutable and versioned
+    configuration data, but also overcome the size limitation of configuration data
+    stored in environment variables or ConfigMaps.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*不可变配置* 模式提供了两种使配置数据不可变的方法，以确保应用程序的配置始终处于良好已知和记录的状态。通过此模式，我们不仅可以使用不可变和版本化的配置数据，还可以克服存储在环境变量或
+    ConfigMaps 中的配置数据的大小限制。'
+- en: Problem
+  id: totrans-2
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 问题
+- en: As you saw in [Chapter 19, “EnvVar Configuration”](ch19.html#EnvVarConfiguration),
+    environment variables provide a simple way to configure container-based applications.
+    And although they are easy to use and universally supported, as soon as the number
+    of environment variables exceeds a certain threshold, managing them becomes hard.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如您在 [第19章，“EnvVar 配置”](ch19.html#EnvVarConfiguration) 中看到的那样，环境变量提供了一种简单的方法来配置基于容器的应用程序。尽管它们易于使用并且得到普遍支持，但一旦环境变量的数量超过某个阈值，管理它们就变得困难。
+- en: This complexity can be handled to some degree by using *Configuration Resources*,
+    as described in [Chapter 20, “Configuration Resource”](ch20.html#ConfigurationResource),
+    which since Kubernetes 1.21 can be declared as *immutable*. However, ConfigMaps
+    still have a size limitation, so if you work with large configuration data (like
+    precomputed data models in a machine learning context), then ConfigMaps are not
+    suitable even when marked as immutable.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种复杂性可以通过使用 *配置资源* 在一定程度上加以处理，如 [第20章，“配置资源”](ch20.html#ConfigurationResource)
+    中所述，自 Kubernetes 1.21 起可以声明为 *不可变*。然而，ConfigMaps 仍然存在大小限制，因此如果您处理大型配置数据（例如机器学习上下文中的预计算数据模型），即使标记为不可变，ConfigMaps
+    也不适用。
+- en: '*Immutability* here means that we can’t change the configuration after the
+    application has started, in order to ensure that we always have a well-defined
+    state for our configuration data. In addition, immutable configuration can be
+    put under version control and follow a change control process.'
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*不可变性* 意味着应用程序启动后我们无法更改配置，以确保配置数据始终保持良好定义的状态。此外，不可变配置可以放入版本控制，并遵循变更控制流程。'
+- en: Solution
+  id: totrans-6
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 解决方案
+- en: There are several options to address the concern of configuration immutability.
+    The simplest and preferred option is to use ConfigMaps or Secrets that are marked
+    as immutable in their declaration. You learned about immutable ConfigMaps in [Chapter 20](ch20.html#ConfigurationResource).
+    ConfigMaps should be the first choice if your configuration fits into a ConfigMap
+    and is reasonably easy to maintain. In real-world scenarios, however, the amount
+    of configuration data can increase quickly. Although a WildFly application server
+    configuration might still fit in a ConfigMap, it is quite huge. It becomes really
+    ugly when you have to nest XML or YAML within YAML—i.e., when the content of your
+    configuration is also YAML and you embed this as within the ConfigMaps YAML section.
+    Editor support for such use cases is limited, so you have to be very careful about
+    the indentation, and even then, you will probably mess it up more than once (believe
+    us!). Another nightmare is having to maintain tens or hundreds of entries in a
+    single ConfigMap because your application requires many different configuration
+    files. Although this pain can be mitigated to some degree with good tooling, large
+    configuration data sets like pretrained machine learning data models are just
+    impossible with ConfigMap because of the backend size restriction of 1 MB.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有几种选项可以解决配置不可变性的问题。最简单和首选的选项是使用在声明中标记为不可变的 ConfigMaps 或 Secrets。您在 [第20章](ch20.html#ConfigurationResource)
+    中已了解到不可变的 ConfigMaps。如果您的配置适合 ConfigMap 并且易于维护，则应首选 ConfigMaps。然而，在实际场景中，配置数据量可能会迅速增加。尽管
+    WildFly 应用服务器配置可能仍适合于 ConfigMap，但它非常庞大。当您需要将 XML 或 YAML 嵌套到 YAML 中时，情况变得非常复杂——也就是说，当您的配置内容也是
+    YAML 并且将其嵌入到 ConfigMaps 的 YAML 部分中时。编辑器对这种用例的支持有限，因此您必须非常小心地处理缩进，即使如此，您可能会多次出错（相信我们！）。另一个噩梦是需要在单个
+    ConfigMap 中维护数十个或数百个条目，因为您的应用程序需要许多不同的配置文件。虽然可以通过良好的工具来在一定程度上减少这种痛苦，但像预训练的机器学习数据模型这样的大型配置数据集因为后端大小限制为
+    1 MB 而无法使用 ConfigMap。
+- en: To address the concern of complex configuration data, we can put all environment-specific
+    configuration data into a single, passive data image that we can distribute as
+    a regular container image. During runtime, the application and the data image
+    are linked together so that the application can extract the configuration from
+    the data image. With this approach, it is easy to craft different configuration
+    data images for various environments. These images then combine all configuration
+    information for specific environments and can be versioned like any other container
+    image.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了解决复杂配置数据的问题，我们可以将所有特定环境配置数据放入一个单独的被动数据镜像中，这个镜像可以像常规容器镜像一样分发。在运行时，应用程序和数据镜像进行链接，以便应用程序可以从数据镜像中提取配置。通过这种方式，可以轻松地为各种环境制作不同的配置数据镜像。这些镜像将所有特定环境的配置信息组合起来，并且可以像其他容器镜像一样进行版本控制。
+- en: Creating such a data image is trivial, as it is a simple container image that
+    contains only data. The challenge is the linking step during startup. We can use
+    various approaches, depending on the platform.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建这样一个数据镜像非常简单，因为它只是包含数据的简单容器镜像。挑战在于启动期间的链接步骤。我们可以根据平台使用各种方法。
+- en: Docker Volumes
+  id: totrans-10
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Docker 卷
+- en: Before looking at Kubernetes, let’s go one step back and consider the vanilla
+    Docker case. In Docker, it is possible for a container to expose a *volume* with
+    data from the container. With a `VOLUME` directive in a Dockerfile, you can specify
+    a directory that can be shared later. During startup, the content of this directory
+    within the container is copied over to this shared directory. As shown in [Figure 21-1](#img-immutable-configuration-volumes),
+    this volume linking is an excellent way to share configuration information from
+    a dedicated configuration container with another application container.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在探讨 Kubernetes 之前，让我们先回顾一下纯 Docker 的情况。在 Docker 中，容器可以通过 *卷（volume）* 共享来自容器的数据。在
+    Dockerfile 中使用 `VOLUME` 指令，可以指定一个稍后可以共享的目录。在启动过程中，容器内该目录的内容会复制到共享目录中。如 [图 21-1](#img-immutable-configuration-volumes)
+    所示，这种卷链接是从专用配置容器向其他应用容器共享配置信息的优秀方式。
+- en: '![Immutable Configuration with Docker volumes](assets/kup2_2101.png)'
+  id: totrans-12
+  prefs: []
+  type: TYPE_IMG
+  zh: '![使用 Docker 卷进行不可变配置](assets/kup2_2101.png)'
+- en: Figure 21-1\. Immutable configuration with Docker volume
+  id: totrans-13
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 21-1\. 使用 Docker 卷进行不可变配置
+- en: Let’s have a look at an example. For the development environment, we create
+    a Docker image that holds the developer configuration and creates a volume with
+    mount point */config*. We can create such an image with `Dockerfile-config`, as
+    in [Example 21-1](#ex-immutable-config-dockerfile).
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们看一个例子。对于开发环境，我们创建一个包含开发人员配置的 Docker 镜像，并创建一个带有挂载点 */config* 的卷。我们可以使用 `Dockerfile-config`
+    创建这样的镜像，如 [示例 21-1](#ex-immutable-config-dockerfile) 所示。
+- en: Example 21-1\. Dockerfile for a configuration image
+  id: totrans-15
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 21-1\. 用于配置镜像的 Dockerfile
+- en: '[PRE0]'
+  id: totrans-16
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: '[![1](assets/1.png)](#co_immutable_configuration_CO1-1)'
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_immutable_configuration_CO1-1)'
+- en: Add specified property.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 添加指定属性。
+- en: '[![2](assets/2.png)](#co_immutable_configuration_CO1-2)'
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_immutable_configuration_CO1-2)'
+- en: Create volume and copy property into it.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建卷并将属性复制到其中。
+- en: We now create the image itself and the Docker container with the Docker CLI
+    in [Example 21-2](#ex-immutable-config-build-image).
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们使用 Docker CLI 创建镜像本身和 Docker 容器，如 [示例 21-2](#ex-immutable-config-build-image)
+    所示。
+- en: Example 21-2\. Building the configuration Docker image
+  id: totrans-22
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 21-2\. 构建配置 Docker 镜像
+- en: '[PRE1]'
+  id: totrans-23
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: The final step is to start the application container and connect it to this
+    configuration container ([Example 21-3](#ex-immutable-config-start-application)).
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后一步是启动应用程序容器并将其连接到此配置容器（[示例 21-3](#ex-immutable-config-start-application)）。
+- en: Example 21-3\. Start application container with config container linked
+  id: totrans-25
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 21-3\. 使用配置容器链接启动应用程序容器
+- en: '[PRE2]'
+  id: totrans-26
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: The application image expects its configuration files to be within a */config*
+    directory, the volume exposed by the configuration container. When you move this
+    application from the development environment to the production environment, all
+    you have to do is change the startup command. There is no need to alter the application
+    image itself. Instead, you simply volume-link the application container with the
+    production configuration container, as seen in [Example 21-4](#ex-immutable-config-production).
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用程序镜像期望其配置文件位于 */config* 目录中，即由配置容器暴露的卷。当您将此应用程序从开发环境移至生产环境时，您只需更改启动命令。无需修改应用程序镜像本身。相反，您只需将应用容器与生产配置容器进行卷链接，如
+    [示例 21-4](#ex-immutable-config-production) 所示。
+- en: Example 21-4\. Use different configuration for production environment
+  id: totrans-28
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 21-4\. 在生产环境中使用不同的配置
+- en: '[PRE3]'
+  id: totrans-29
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: Kubernetes Init Containers
+  id: totrans-30
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Kubernetes 初始容器
+- en: In Kubernetes, volume sharing within a Pod is perfectly suited for this kind
+    of linking of configuration and application containers. However, if we want to
+    transfer this technique of Docker volume linking to the Kubernetes world, we will
+    find that there is currently no support for container volumes in Kubernetes. Considering
+    the age of the discussion and the complexity of implementing this feature versus
+    its limited benefits, it’s likely that container volumes will not arrive anytime
+    soon.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 中，Pod 内部的卷共享非常适合这种链接配置和应用容器的方式。然而，如果我们想将 Docker 卷链接技术转移到 Kubernetes
+    世界中，我们会发现目前 Kubernetes 并不支持容器卷。考虑到讨论的年龄和实现此功能的复杂性与其受益有限之间的关系，容器卷可能不会很快到来。
+- en: So containers can share (external) volumes, but they cannot yet directly share
+    directories located within the containers. To use immutable configuration containers
+    in Kubernetes, we can use the *Init Containers* pattern from [Chapter 15](ch15.html#InitContainer)
+    that can initialize an empty shared volume during startup.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此容器可以共享（外部）卷，但它们目前无法直接共享位于容器内部的目录。要在 Kubernetes 中使用不可变配置容器，我们可以使用来自[第 15 章](ch15.html#InitContainer)的
+    *Init Containers* 模式，在启动期间初始化空的共享卷。
+- en: In the Docker example, we base the configuration Docker image on `scratch`,
+    an empty Docker image with no operating system files. We don’t need anything else
+    because we only want the configuration data shared via Docker volumes. But for
+    Kubernetes init containers, we need help from the base image to copy over the
+    configuration data to a shared Pod volume. A good choice for this is `busybox`,
+    which is still small but allows us to use a plain Unix `cp` command for this task.
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Docker 示例中，我们将配置 Docker 镜像基于`scratch`，这是一个空的 Docker 镜像，没有操作系统文件。我们不需要其他内容，因为我们只希望通过
+    Docker 卷共享配置数据。但是对于 Kubernetes 初始容器，我们需要基础镜像的帮助，将配置数据复制到共享的 Pod 卷中。这种情况下一个好的选择是`busybox`，它仍然很小，但允许我们使用简单的
+    Unix `cp`命令来完成此任务。
+- en: So how does the initialization of shared volumes with configuration work under
+    the hood? Let’s have a look at an example. First, we need to create a configuration
+    image again with a Dockerfile, as in [Example 21-5](#ex-immutable-config-dev-properties).
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 那么在底层如何初始化带有配置的共享卷？让我们看一个例子。首先，我们需要再次创建一个配置镜像，使用 Dockerfile，就像[示例 21-5](#ex-immutable-config-dev-properties)中那样。
+- en: Example 21-5\. Development configuration image
+  id: totrans-35
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 21-5\. 开发配置镜像
+- en: '[PRE4]'
+  id: totrans-36
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: '[![1](assets/1.png)](#co_immutable_configuration_CO2-1)'
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_immutable_configuration_CO2-1)'
+- en: Using a shell here in order to resolve wildcards.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这里使用一个 shell 以解析通配符。
+- en: The only difference from the vanilla Docker case in [Example 21-1](#ex-immutable-config-dockerfile)
+    is that we have a different base image and we add an `ENTRYPOINT` that copies
+    the properties file to the directory given as an argument when the container image
+    starts. This image can now be referenced in an init container within a Deployment’s
+    `.template.spec` (see [Example 21-6](#ex-immutable-config-deployment-init)).
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与 [示例 21-1](#ex-immutable-config-dockerfile) 中的普通 Docker 情况唯一的区别是，我们有一个不同的基础镜像，并且我们添加了一个
+    `ENTRYPOINT`，在容器镜像启动时将属性文件复制到作为参数给出的目录中。现在可以在部署的`.template.spec`中的初始容器中引用此镜像（见[示例
+    21-6](#ex-immutable-config-deployment-init)）。
+- en: Example 21-6\. Deployment that copies configuration to destination in init container
+  id: totrans-40
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 21-6\. 在初始容器中将配置复制到目标的部署
+- en: '[PRE5]'
+  id: totrans-41
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'The Deployment’s Pod template specification contains a single volume and two
+    containers:'
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 部署的 Pod 模板规范包含一个卷和两个容器：
+- en: The volume `config-directory` is of the type `emptyDir`, so it’s created as
+    an empty directory on the node hosting this Pod.
+  id: totrans-43
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 卷`config-directory`的类型是`emptyDir`，因此它将作为空目录在托管此 Pod 的节点上创建。
+- en: The init container Kubernetes calls during startup is built from the image we
+    just created, and we set a single argument, `/config`, used by the image’s `ENTRYPOINT`.
+    This argument instructs the init container to copy its content to the specified
+    directory. The directory */config* is mounted from the volume `config-directory`.
+  id: totrans-44
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Kubernetes 在启动期间调用的初始容器是从我们刚刚创建的镜像构建的，并且我们设置了一个单一参数`/config`，被镜像的 `ENTRYPOINT`
+    使用。此参数指示初始容器将其内容复制到指定的目录。目录`/config`是从卷`config-directory`挂载的。
+- en: The application container mounts the volume `config-directory` to access the
+    configuration that was copied over by the init container.
+  id: totrans-45
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 应用容器挂载卷`config-directory`以访问初始容器复制的配置。
+- en: '[Figure 21-2](#img-immutable-configuration-init-container) illustrates how
+    the application container accesses the configuration data created by an init container
+    over a shared volume.'
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 21-2](#img-immutable-configuration-init-container)说明了应用程序容器如何通过共享卷访问由init容器创建的配置数据。'
+- en: '![Immutable Configuration with an init container](assets/kup2_2102.png)'
+  id: totrans-47
+  prefs: []
+  type: TYPE_IMG
+  zh: '![具有init容器的不可变配置](assets/kup2_2102.png)'
+- en: Figure 21-2\. Immutable configuration with an init container
+  id: totrans-48
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 21-2\. 具有init容器的不可变配置
+- en: Now to change the configuration from the development to the production environment,
+    all we need to do is exchange the image of the init container. We can do this
+    either by changing the YAML definition or by updating with `kubectl`. However,
+    it is not ideal to have to edit the resource descriptor for each environment.
+    If you are on Red Hat OpenShift, an enterprise distribution of Kubernetes, *OpenShift
+    Templates* can help address this. OpenShift Templates can create different resource
+    descriptors for the different environments from a single template.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，要从开发环境更改配置到生产环境，我们只需交换init容器的镜像即可。我们可以通过更改YAML定义或使用`kubectl`进行更新来实现这一点。但是，必须为每个环境编辑资源描述符并不理想。如果您正在使用Red
+    Hat OpenShift，一个Kubernetes的企业分发版，*OpenShift模板*可以帮助解决此问题。OpenShift模板可以从单个模板创建不同环境的不同资源描述符。
+- en: OpenShift Templates
+  id: totrans-50
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: OpenShift模板
+- en: OpenShift Templates are regular resource descriptors that are parameterized.
+    As seen in [Example 21-7](#ex-immutable-config-template), we can easily use the
+    configuration image as a parameter.
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: OpenShift模板是常规的资源描述符，可以进行参数化。正如在[示例 21-7](#ex-immutable-config-template)中看到的那样，我们可以轻松地将配置图像用作参数。
+- en: Example 21-7\. OpenShift Template for parameterizing config image
+  id: totrans-52
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 21-7\. 用于参数化配置图像的OpenShift模板
+- en: '[PRE6]'
+  id: totrans-53
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: '[![1](assets/1.png)](#co_immutable_configuration_CO3-1)'
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_immutable_configuration_CO3-1)'
+- en: Template parameter `CONFIG_IMAGE` declaration.
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 模板参数`CONFIG_IMAGE`声明。
+- en: '[![2](assets/2.png)](#co_immutable_configuration_CO3-2)'
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_immutable_configuration_CO3-2)'
+- en: Use of the template parameter.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用模板参数。
+- en: We show here only a fragment of the full descriptor, but you can quickly recognize
+    the parameter `CONFIG_IMAGE` we reference in the init container declaration. If
+    we create this template on an OpenShift cluster, we can instantiate it by calling
+    `oc`, as in [Example 21-8](#ex-immutable-config-template-apply).
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在此处仅显示完整描述符的片段，但您可以快速识别我们在init容器声明中引用的`CONFIG_IMAGE`参数。如果我们在OpenShift集群上创建此模板，可以通过调用`oc`来实例化它，如[示例 21-8](#ex-immutable-config-template-apply)所示。
+- en: Example 21-8\. Applying OpenShift template to create new application
+  id: totrans-59
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 21-8\. 应用OpenShift模板以创建新应用程序
+- en: '[PRE7]'
+  id: totrans-60
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: Detailed instructions for running this example, as well as the full Deployment
+    descriptors, can be found as usual in our example Git repository.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运行此示例的详细说明以及完整的部署描述符通常可以在我们的示例Git存储库中找到。
+- en: Discussion
+  id: totrans-62
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 讨论
+- en: Using data containers for the *Immutable Configuration* pattern is admittedly
+    a bit involved. Use these only if immutable ConfigMaps and Secret are not suitable
+    for your use case.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于*不可变配置*模式使用数据容器确实有些复杂。只有在不适合您的用例使用不可变ConfigMaps和Secret时才使用这些。
+- en: 'Data containers have some unique advantages:'
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 数据容器具有一些独特的优势：
+- en: Environment-specific configuration is sealed within a container. Therefore,
+    it can be versioned like any other container image.
+  id: totrans-65
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 环境特定的配置封装在容器中。因此，它可以像任何其他容器镜像一样进行版本控制。
+- en: Configuration created this way can be distributed over a container registry.
+    The configuration can be examined even without accessing the cluster.
+  id: totrans-66
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 以这种方式创建的配置可以分发到容器注册表。即使不访问集群，也可以检查配置。
+- en: 'The configuration is immutable, as is the container image holding the configuration:
+    a change in the configuration requires a version update and a new container image.'
+  id: totrans-67
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 配置是不可变的，持有配置的容器镜像也是如此：配置的更改需要版本更新和新的容器镜像。
+- en: Configuration data images are useful when the configuration data is too complex
+    to put into environment variables or ConfigMaps, since it can hold arbitrarily
+    large configuration data.
+  id: totrans-68
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 当配置数据太复杂而无法放入环境变量或ConfigMaps时，配置数据镜像非常有用，因为它可以容纳任意大的配置数据。
+- en: 'As expected, the *Immutable Configuration* pattern also has certain drawbacks:'
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如预期的那样，*不可变配置*模式也具有某些缺点：
+- en: It has higher complexity, because extra container images need to be built and
+    distributed via registries.
+  id: totrans-70
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 由于需要构建并通过注册表分发额外的容器镜像，因此复杂度较高。
+- en: It does not address any of the security concerns around sensitive configuration
+    data.
+  id: totrans-71
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 它未解决围绕敏感配置数据的任何安全问题。
+- en: Since no image volume support is actually available for Kubernetes workloads,
+    the technique described here is still limited for use cases where the overhead
+    of copying over data from init containers to a local volume is acceptable. We
+    hope that eventually mounting container images directly as volumes will be possible
+    in the future, but as of 2023, only experimental CSI support is available.
+  id: totrans-72
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 由于 Kubernetes 工作负载实际上不支持镜像卷，因此本文描述的技术仍然局限于那些从初始化容器复制数据到本地卷的开销可以接受的用例。我们希望未来能够直接将容器镜像挂载为卷，但截至2023年，只有实验性的
+    CSI 支持可用。
+- en: Extra init container processing is required in the Kubernetes case, and hence
+    we need to manage different Deployment objects for different environments.
+  id: totrans-73
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Kubernetes 案例中需要额外的初始化容器处理，因此我们需要为不同环境管理不同的部署对象。
+- en: All in all, you should carefully evaluate whether such an involved approach
+    is really required.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 总的来说，你应该仔细评估是否真的需要这样复杂的方法。
+- en: Another approach for dealing with large configuration files that differ only
+    slightly from environment to environment is described with the *Configuration
+    Template* pattern, the topic of the next chapter.
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 处理大型配置文件的另一种方法是使用*配置模板*模式，这是下一章的主题，用于描述只在环境之间略有不同的配置文件。
+- en: More Information
+  id: totrans-76
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 更多信息
+- en: '[Immutable Configuration Example](https://oreil.ly/1bPZ2)'
+  id: totrans-77
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[不可变配置示例](https://oreil.ly/1bPZ2)'
+- en: '[How to Mimic `--volumes-from` in Kubernetes](https://oreil.ly/bTtty)'
+  id: totrans-78
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[如何在 Kubernetes 中模拟 `--volumes-from`](https://oreil.ly/bTtty)'
+- en: '[Immutable ConfigMaps](https://oreil.ly/RfrwN)'
+  id: totrans-79
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[不可变的 ConfigMaps](https://oreil.ly/RfrwN)'
+- en: '[Feature Request: Image Volumes and Container Volumes](https://oreil.ly/XQ54e)'
+  id: totrans-80
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[功能请求：镜像卷和容器卷](https://oreil.ly/XQ54e)'
+- en: '[docker-flexvol: A Kubernetes Driver That Supports Docker Volumes](https://oreil.ly/vhCdH)'
+  id: totrans-81
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[docker-flexvol：支持 Docker 卷的 Kubernetes 驱动](https://oreil.ly/vhCdH)'
+- en: '[Red Hat OpenShift: Using Templates](https://oreil.ly/QyX2y)'
+  id: totrans-82
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Red Hat OpenShift：使用模板](https://oreil.ly/QyX2y)'
+- en: '[Kubernetes CSI Driver for Mounting Images](https://oreil.ly/OMqRo)'
+  id: totrans-83
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[挂载镜像的 Kubernetes CSI 驱动](https://oreil.ly/OMqRo)'

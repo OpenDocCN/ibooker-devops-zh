@@ -1,0 +1,676 @@
+- en: Chapter 17\. Extending Kubernetes
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第17章 扩展 Kubernetes
+- en: From the beginning, it was clear that Kubernetes was going to be more than its
+    core set of APIs; once an application is orchestrated within the cluster, there
+    are countless other useful tools and utilities that can be represented and deployed
+    as API objects in the Kubernetes cluster. The challenge was how to embrace this
+    explosion of objects and use cases without having an API that sprawled without
+    bound.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从一开始就清楚，Kubernetes 将不仅仅是其核心 API 集合；一旦应用程序在集群中进行编排，就会有无数其他有用的工具和实用程序可以作为 API
+    对象在 Kubernetes 集群中表示和部署。挑战在于如何在没有无限制扩展 API 的情况下，接纳这些对象和用例的爆炸式增长。
+- en: To resolve this tension between extended use cases and API sprawl, significant
+    effort was put into making the Kubernetes API extensible. This extensibility meant
+    that cluster operators could customize their clusters with the additional components
+    that suited their needs. This extensibility enables people to augment their clusters
+    themselves, consume community-developed cluster add-ons, and even develop extensions
+    that are bundled and sold in an ecosystem of cluster plug-ins. Extensibility has
+    also given rise to whole new patterns of managing systems, such as the operator
+    pattern.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了解决扩展用例和 API 扩展之间的张力，我们付出了大量努力，使 Kubernetes API 可扩展。这种可扩展性意味着集群运营者可以根据自己的需求定制他们的集群，添加适合的附加组件。这种可扩展性使人们能够自行增强其集群，使用社区开发的集群附加组件，甚至开发捆绑在集群插件生态系统中出售的扩展。可扩展性也催生了管理系统的全新模式，如运算符模式。
+- en: Regardless of whether you are building your own extensions or consuming operators
+    from the ecosystem, understanding how the Kubernetes API server is extended and
+    how extensions can be built and delivered is a key component to unlocking the
+    complete power of Kubernetes and its ecosystem. As more and more advanced tools
+    and platforms are built on top of Kubernetes using these extensibility mechanisms,
+    a working knowledge of how they operate is critical to understanding how to build
+    applications in a modern Kubernetes cluster.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不论是构建自己的扩展还是从生态系统中消费运算符，理解如何扩展 Kubernetes API 服务器以及如何构建和交付扩展是解锁 Kubernetes 及其生态系统全部潜力的关键组成部分。随着越来越多的高级工具和平台使用这些可扩展机制构建在
+    Kubernetes 之上，了解它们的操作方式对于在现代 Kubernetes 集群中构建应用程序至关重要。
+- en: What It Means to Extend Kubernetes
+  id: totrans-4
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 扩展 Kubernetes 的含义
+- en: In general, extensions to the Kubernetes API server either add new functionality
+    to a cluster or limit and tweak the ways that users can interact with their clusters.
+    There is a rich ecosystem of plug-ins that cluster administrators can use to add
+    services and capabilities to their clusters. It’s worth noting that extending
+    the cluster is a very high-privilege thing to do. It is not a capability that
+    should be extended to arbitrary users or arbitrary code because cluster administrator
+    privileges are required to extend a cluster. Even cluster administrators should
+    be careful and use diligence when installing third-party tools. Some extensions,
+    like admission controllers, can be used to view all objects being created in the
+    cluster, and could easily be used as a vector to steal Secrets or run malicious
+    code. Additionally, extending a cluster makes it different than stock Kubernetes.
+    When running on multiple clusters, it is very valuable to build tooling to maintain
+    consistency of experience across the clusters, and this includes the extensions
+    that are installed.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 总体而言，扩展 Kubernetes API 服务器通常是为集群添加新功能或限制和调整用户与其集群交互的方式。有一个丰富的插件生态系统，集群管理员可以使用这些插件为其集群添加服务和功能。值得注意的是，扩展集群是一项非常高权限的操作。这不应该授予任意用户或任意代码的能力，因为扩展集群需要集群管理员权限。即使是集群管理员在安装第三方工具时也应该小心谨慎。一些扩展，如准入控制器，可以用于查看集群中创建的所有对象，并且可以轻易地被用作窃取密钥或运行恶意代码的手段。此外，扩展集群会使其与原始的
+    Kubernetes 有所不同。在多个集群上运行时，构建工具以保持跨集群一致性体验非常重要，这包括安装的扩展。
+- en: Points of Extensibility
+  id: totrans-6
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 可扩展点
+- en: There are many ways to extend Kubernetes, from CustomResourceDefinitions to
+    Container Network Interface plug-ins. This chapter is going to focus on extending
+    the API server by adding new resource types or admission controllers to API requests.
+    We will not cover CNI/CSI/CRI (Container Network Interface/Container Storage Interface/Container
+    Runtime Interface) extensions, as they are more commonly used by Kubernetes cluster
+    providers rather than by the Kubernetes end users, for whom this book was written.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 可以通过多种方式进行扩展，从自定义资源定义到容器网络接口插件。本章将重点介绍通过向 API 请求添加新资源类型或接入控制器来扩展
+    API 服务器。我们不会涵盖 CNI/CSI/CRI（容器网络接口/容器存储接口/容器运行时接口）扩展，因为它们更常用于 Kubernetes 集群提供者而非本书的目标读者——Kubernetes
+    终端用户。
+- en: In addition to admission controllers and API extensions, there are actually
+    a number of ways to “extend” your cluster without ever modifying the API server
+    at all. These include DaemonSets that install automatic logging and monitoring,
+    tools that scan your services for cross-site scripting (XSS) vulnerabilities,
+    and more. Before embarking on extending your cluster yourself, however, it’s worth
+    considering the landscape of things that are possible within the confines of the
+    existing Kubernetes APIs.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了接入控制器和 API 扩展之外，实际上还有许多方法可以在完全不修改 API 服务器的情况下“扩展”您的集群。这些包括安装自动日志记录和监控的 DaemonSet、扫描服务以查找跨站点脚本（XSS）漏洞的工具等。然而，在开始自行扩展集群之前，值得考虑的是在现有
+    Kubernetes API 的限制内可能实现的各种可能性。
+- en: To understand the role of admission controllers and CustomResourceDefinitions,
+    it helps to review the flow of requests through the Kubernetes API server, shown
+    in [Figure 17-1](#api_server_request_flow).
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要理解接入控制器和 CustomResourceDefinition 的作用，有助于回顾请求通过 Kubernetes API 服务器的流程，如 [图 17-1](#api_server_request_flow)
+    所示。
+- en: '![](assets/kur3_1701.png)'
+  id: totrans-10
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](assets/kur3_1701.png)'
+- en: Figure 17-1\. API server request flow
+  id: totrans-11
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 17-1\. API 服务器请求流程
+- en: '*Admission controllers* are called prior to the API object being written into
+    the backing storage. Admission controllers can reject or modify API requests.
+    Several admission controllers are built into the Kubernetes API server; for example,
+    the limit range admission controller that sets default limits for Pods without
+    them. Many other systems use custom admission controllers to auto-inject sidecar
+    containers into all Pods created on the system to enable “auto-magic” experiences.'
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*接入控制器*是在 API 对象写入后端存储之前调用的。接入控制器可以拒绝或修改 API 请求。几个接入控制器内置于 Kubernetes API 服务器中；例如，限制范围接入控制器为没有设置默认限制的
+    Pod 设置默认限制。许多其他系统使用自定义接入控制器自动将 sidecar 容器注入到系统上创建的所有 Pod 中，以实现“自动化体验”。'
+- en: The other form of extension, which can also be used in conjunction with admission
+    controllers, is *custom resources*. With custom resources, whole new API objects
+    are added to the Kubernetes API surface area. These new API objects can be added
+    to namespaces, are subject to RBAC, and can be accessed with existing tools like
+    `kubectl` as well as via the Kubernetes API.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一种扩展形式，也可以与接入控制器结合使用，是*自定义资源*。使用自定义资源，可以向 Kubernetes API 添加全新的 API 对象。这些新的
+    API 对象可以添加到命名空间中，受到 RBAC 的限制，并且可以通过现有工具如 `kubectl` 和 Kubernetes API 访问。
+- en: The following sections describe these Kubernetes extension points in greater
+    detail and give both use cases and hands-on examples of how to extend your cluster.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 后续章节将更详细地描述这些 Kubernetes 扩展点，并提供如何扩展集群的使用案例和实际示例。
+- en: The first thing to do to create a custom resource is to create a CustomResourceDefinition.
+    This object is actually a meta-resource; that is, a resource that is the definition
+    of another resource.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建自定义资源的第一步是创建 CustomResourceDefinition。该对象实际上是一个元资源，即定义另一个资源的资源。
+- en: As a concrete example, consider defining a new resource to represent load tests
+    in your cluster. When a new LoadTest resource is created, a load test is spun
+    up in your Kubernetes cluster and drives traffic to a service.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为一个具体的例子，考虑定义一个新资源来表示集群中的负载测试。当创建新的 LoadTest 资源时，将在 Kubernetes 集群中启动一个负载测试，并向服务驱动流量。
+- en: 'The first step in creating this new resource is defining it through a CustomResourceDefinition.
+    An example definition looks as follows:'
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建新资源的第一步是通过 CustomResourceDefinition 进行定义。一个示例定义如下：
+- en: '[PRE0]'
+  id: totrans-18
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: You can see that this is a Kubernetes object like any other. It has a `metadata`
+    sub-object, and within that sub-object, the resource is named. However, in the
+    case of custom resources, the name is special. It has to be the format `*<resource-plural>*.*<api-group>*`
+    to ensure that each resource definition is unique in the cluster, because the
+    name of each CustomResourceDefinition has to match this pattern, and no two objects
+    in the cluster can have the same name. We are thus guaranteed that no two CustomResourceDefinitions
+    define the same resource.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以看到这是像任何其他对象一样的Kubernetes对象。它有一个`metadata`子对象，在该子对象中，资源被命名。然而，在自定义资源的情况下，名称是特殊的。它必须是格式`*<resource-plural>*.*<api-group>*`，以确保集群中每个资源定义都是唯一的，因为每个CustomResourceDefinition的名称必须匹配此模式，并且集群中没有两个对象可以具有相同的名称。因此，我们确保没有两个CustomResourceDefinitions定义相同的资源。
+- en: In addition to metadata, the CustomResourceDefinition has a `spec` sub-object.
+    This is where the resource itself is defined. In that `spec` object, there is
+    an `apigroup` field that supplies the API group for the resource. As mentioned
+    previously, it must match the suffix of the CustomResourceDefinition’s name. Additionally,
+    there is a list of versions for the resource, which includes the name of the version
+    (e.g., `v1`, `v2`, etc.), as well as fields that indicate if that version is served
+    by the API server and which version is used for storing data in the backing storage
+    for the API server. The `storage` field must be true for only a single version
+    for the resource. There is also a `scope` field to indicate whether the resource
+    is namespaced (the default is namespaced), and a `names` field that allows for
+    the definition of the singular, plural, and `kind` values for the resource. It
+    also allows the definition of convenience “short names” for the resource for use
+    in `kubectl` and elsewhere.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了元数据外，CustomResourceDefinition还有一个`spec`子对象。这是资源本身的定义位置。在该`spec`对象中，有一个`apigroup`字段，用于为资源提供API组。如前所述，它必须与CustomResourceDefinition名称的后缀匹配。此外，还有一个版本列表，包括版本名称（例如，`v1`，`v2`等），以及指示该版本是否由API服务器提供以及用于在API服务器的后端存储中存储数据的版本的字段。`storage`字段必须对于资源的单个版本为true。还有一个`scope`字段，用于指示资源是否是有命名空间的（默认为有命名空间），以及一个`names`字段，允许为资源的单数、复数和`kind`值定义。它还允许定义方便的“短名称”，以供在`kubectl`和其他地方使用。
+- en: 'Given this definition, you can create the resource in the Kubernetes API server.
+    But first, to show the true nature of dynamic resource types, try to list our
+    `loadtests` resource using `kubectl`:'
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 根据这个定义，您可以在Kubernetes API服务器中创建资源。但是首先，为了展示动态资源类型的真实本质，请尝试使用`kubectl`列出我们的`loadtests`资源：
+- en: '[PRE1]'
+  id: totrans-22
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: 'You’ll see that there is no such resource currently defined. Now use *loadtest-resource.yaml*
+    to create this resource:'
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您将看到当前没有定义这样的资源。现在使用*loadtest-resource.yaml*创建此资源：
+- en: '[PRE2]'
+  id: totrans-24
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'Then get the `loadtests` resource again:'
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后再次获取`loadtests`资源：
+- en: '[PRE3]'
+  id: totrans-26
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: This time you’ll see that there is a LoadTest resource type defined, though
+    there are still no instances of this resource type. Let’s change that by creating
+    a new LoadTest resource.
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这次您会看到已定义了LoadTest资源类型，尽管尚未存在此资源类型的实例。让我们通过创建一个新的LoadTest资源来改变这种情况。
+- en: 'As with all built-in Kubernetes API objects, you can use YAML or JSON to define
+    a custom resource (in this case our LoadTest). See the following definition:'
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 就像所有内置的Kubernetes API对象一样，您可以使用YAML或JSON来定义自定义资源（在本例中是我们的LoadTest）。请参阅以下定义：
+- en: '[PRE4]'
+  id: totrans-29
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: One thing you’ll note is that we never defined the schema for the custom resource
+    in the CustomResourceDefinition. It actually is possible to provide an OpenAPI
+    specification (known previously as Swagger) for a custom resource, but this complexity
+    is generally not worth it for simple resource types. If you do want to perform
+    validation, you can register a validating admission controller, as described in
+    the following sections.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有一件事情您会注意到，那就是我们从未在CustomResourceDefinition中定义自定义资源的模式。实际上，为自定义资源提供OpenAPI规范（以前称为Swagger）是可能的，但对于简单的资源类型来说，这种复杂性通常不值得。如果您确实希望执行验证，可以注册一个验证入场控制器，如下节所述。
+- en: 'You can now use this *loadtest.yaml* file to create a resource just like you
+    would with any built-in type:'
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您现在可以使用*loadtest.yaml*文件创建资源，就像使用任何内置类型一样：
+- en: '[PRE5]'
+  id: totrans-32
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'Now when you list the `loadtests` resource, you’ll see your newly created resource:'
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您列出`loadtests`资源时，您将看到您新创建的资源：
+- en: '[PRE6]'
+  id: totrans-34
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: This may be exciting, but it doesn’t really do anything yet. Sure, you can use
+    this simple CRUD (Create/Read/Update/Delete) API to manipulate the data for LoadTest
+    objects, but no actual load tests are created in response to this new API we defined
+    because there is no controller present in the cluster to react and take action
+    when a LoadTest object is defined. The LoadTest custom resource is only half of
+    the infrastructure needed to add LoadTests to our cluster. The other half is a
+    piece of code that will continuously monitor the custom resources and create,
+    modify, or delete LoadTests as necessary to implement the API.
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这可能令人兴奋，但实际上它还没有做任何事情。当然，你可以使用这个简单的 CRUD（创建/读取/更新/删除）API来操作 LoadTest 对象的数据，但是在我们定义的新
+    API 中，没有控制器存在于集群中以在定义 LoadTest 对象时做出反应并采取行动，因此没有实际的负载测试被创建。LoadTest 自定义资源仅仅是添加
+    LoadTests 到我们集群所需基础设施的一半。另一半是一段代码，将持续监视自定义资源，并根据需要创建、修改或删除 LoadTests 来实现 API。
+- en: Just like the user of the API, the controller interacts with the API server
+    to list LoadTests and watches for any changes that might occur. This interaction
+    between controller and API server is shown in [Figure 17-2](#custom_resource_definition_interactions).
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 就像 API 的用户一样，控制器与 API 服务器交互以列出 LoadTests 并监视可能发生的任何更改。控制器与 API 服务器之间的这种交互在[图
+    17-2](#custom_resource_definition_interactions)中展示。
+- en: '![](assets/kur3_1702.png)'
+  id: totrans-37
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](assets/kur3_1702.png)'
+- en: Figure 17-2\. CustomResourceDefinition interactions
+  id: totrans-38
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 17-2\. CustomResourceDefinition 交互
+- en: The code for such a controller can range from simple to complex. The simplest
+    controllers run a `for` loop and repeatedly poll for new custom objects, and then
+    take actions to create or delete the resources that implement those custom objects
+    (e.g., the LoadTest worker Pods).
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这样的控制器代码可能从简单到复杂不等。最简单的控制器运行一个 `for` 循环，重复轮询新的自定义对象，然后执行创建或删除实现这些自定义对象的资源（例如
+    LoadTest 工作 Pod）的操作。
+- en: 'However, this polling-based approach is inefficient: the period of the polling
+    loop adds unnecessary latency, and the overhead of polling may add unnecessary
+    load on the API server. A more efficient approach is to use the watch API on the
+    API server, which provides a stream of updates when they occur, eliminating both
+    the latency and overhead of polling. However, using this API correctly in a bug-free
+    way is complicated. As a result, if you want to use watches, it is highly recommended
+    that you use a well-supported mechanism such as the `Informer` pattern exposed
+    in the [*client-go* library](https://oreil.ly/L0QK2).'
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，这种基于轮询的方法效率低下：轮询循环的周期增加了不必要的延迟，并且轮询的开销可能会给 API 服务器增加不必要的负载。更高效的方法是使用 API
+    服务器上的 watch API，它在更新发生时提供更新流，消除了轮询的延迟和开销。然而，在一个没有 bug 的方式中正确地使用这个 API 是复杂的。因此，如果您想使用
+    watch，强烈建议使用像 [*client-go* library](https://oreil.ly/L0QK2) 中提供的 *Informer* 模式这样的受到良好支持的机制。
+- en: Now that we have created a custom resource and implemented it via a controller,
+    we have the basic functionality of a new resource in our cluster. However, many
+    parts of what it means to be a well-functioning resource are missing. The two
+    most important are validation and defaulting. *Validation* is the process of ensuring
+    that LoadTest objects sent to the API server are well formed and can be used to
+    create load tests, while *defaulting* makes it easier for people to use our resources
+    by providing automatic, commonly used values by default. We’ll now cover adding
+    these capabilities to our custom resource.
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经创建了一个自定义资源，并通过控制器实现了它，我们在集群中具备了一个新资源的基本功能。然而，作为一个良好运行的资源所需的许多部分还缺失。其中最重要的两个部分是验证和默认设置。*验证*是确保发送到
+    API 服务器的 LoadTest 对象格式正确，并能用于创建负载测试的过程，而*默认设置*则通过默认提供自动化、常用的数值，使我们的资源更易于使用。接下来我们将介绍如何为我们的自定义资源添加这些功能。
+- en: As mentioned earlier, one option for adding validation is via an OpenAPI specification
+    for our objects. This can be useful for basic validation of the presence of required
+    fields or the absence of unknown fields. A complete OpenAPI tutorial is beyond
+    the scope of this book, but there are lots of resources online, including the
+    [complete Kubernetes API specification](https://oreil.ly/u3rRl).
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如前面提到的，通过 OpenAPI 规范来添加验证的一个选项是为我们的对象定义一个 OpenAPI 规范。这对于基本验证（例如检查必填字段的存在或未知字段的缺失）是有用的。完整的
+    OpenAPI 教程超出了本书的范围，但是在线上有很多资源，包括 [完整的 Kubernetes API 规范](https://oreil.ly/u3rRl)。
+- en: Generally speaking, an API schema is actually insufficient for validation of
+    API objects. For example, in our `loadtests` example, we may want to validate
+    that the LoadTest object has a valid scheme (e.g., *http* or *https*) or that
+    `requestsPerSecond` is a nonzero positive number.
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一般来说，API 架构实际上不足以验证 API 对象。例如，在我们的 `loadtests` 示例中，我们可能希望验证 LoadTest 对象具有有效的方案（例如
+    *http* 或 *https*）或者 `requestsPerSecond` 是一个非零正数。
+- en: To accomplish this, we will use a validating admission controller. As discussed
+    previously, admission controllers intercept requests to the API server before
+    they are processed and can reject or modify the requests in flight. Admission
+    controllers can be added to a cluster via the dynamic admission control system.
+    A dynamic admission controller is a simple HTTP application. The API server connects
+    to the admission controller via either a Kubernetes Service object or an arbitrary
+    URL. This means that admission controllers can optionally run outside of the cluster—for
+    example, in a cloud provider’s Function-as-a-Service offering, like Azure Functions
+    or AWS Lambda.
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了完成这个任务，我们将使用一个验证型 admission 控制器。正如前面讨论的那样，admission 控制器在请求被处理之前拦截这些请求，并且可以在处理过程中拒绝或修改这些请求。admission
+    控制器可以通过动态 admission 控制系统添加到集群中。动态 admission 控制器是一个简单的 HTTP 应用程序。API 服务器可以通过 Kubernetes
+    Service 对象或任意 URL 连接到 admission 控制器。这意味着 admission 控制器可以选择在集群外部运行，例如在云提供商的函数即服务（如
+    Azure Functions 或 AWS Lambda）中。
+- en: 'To install our validating admission controller, we need to specify it as a
+    Kubernetes ValidatingWebhookConfiguration. This object specifies the endpoint
+    where the admission controller runs, as well as the resource (in this case LoadTest)
+    and the action (in this case `CREATE`) where the admission controller should be
+    run. You can see the full definition for the validating admission controller in
+    the following code:'
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要安装我们的验证型 admission 控制器，我们需要将其指定为 Kubernetes ValidatingWebhookConfiguration。该对象指定了
+    admission 控制器运行的端点，以及应该在哪个资源（在本例中为 LoadTest）和操作（在本例中为 `CREATE`）上运行 admission 控制器。您可以在以下代码中查看验证型
+    admission 控制器的完整定义：
+- en: '[PRE7]'
+  id: totrans-46
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: Fortunately for security, but unfortunately for complexity, webhooks that are
+    accessed by the Kubernetes API server can only be accessed via HTTPS. So we need
+    to generate a certificate to serve the webhook. The easiest way to do this is
+    to use the cluster’s ability to generate new certificates using its own certificate
+    authority (CA).
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于安全性来说是件好事，但对于复杂性来说是件不好的事，被 Kubernetes API 服务器访问的 Webhook 只能通过 HTTPS 访问。因此，我们需要生成一个用于提供
+    Webhook 的证书。做到这一点的最简单方法是使用集群自身的证书颁发机构（CA）生成新证书。
+- en: 'First, we need a private key and a certificate signing request (CSR). Here’s
+    a simple Go program that generates these:'
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，我们需要一个私钥和一个证书签名请求（CSR）。以下是一个生成这些内容的简单 Go 程序：
+- en: '[PRE8]'
+  id: totrans-49
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: 'You can run this program with:'
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用以下命令运行此程序：
+- en: '[PRE9]'
+  id: totrans-51
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: and it will generate two files, *server.csr* and *server-key.pem*.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 并且它会生成两个文件，*server.csr* 和 *server-key.pem*。
+- en: 'You can then create a certificate signing request for the Kubernetes API server
+    using the following YAML:'
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后，您可以使用以下 YAML 为 Kubernetes API 服务器创建证书签名请求：
+- en: '[PRE10]'
+  id: totrans-54
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: 'You will notice for the `request` field the value is `REPLACEME`; this needs
+    to be replaced with the base64-encoded certificate signing request we produced
+    in the preceding code:'
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您会注意到 `request` 字段的值是 `REPLACEME`；这需要用我们在前述代码中生成的 base64 编码的证书签名请求来替换：
+- en: '[PRE11]'
+  id: totrans-56
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: 'Now that your certificate signing request is ready, you can send it to the
+    API server to get the certificate:'
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在您的证书签名请求已经准备好，您可以将其发送到 API 服务器以获取证书：
+- en: '[PRE12]'
+  id: totrans-58
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: 'Next, you need to approve that request:'
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，您需要批准该请求：
+- en: '[PRE13]'
+  id: totrans-60
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: 'Once approved, you can download the new certificate:'
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦批准，您可以下载新证书：
+- en: '[PRE14]'
+  id: totrans-62
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: With the certificate, you are finally ready to create an SSL-based admission
+    controller (phew!). When the admission controller code receives a request, it
+    contains an object of type `AdmissionReview`, which contains metadata about the
+    request as well as the body of the request itself. In our validating admission
+    controller, we have only registered for a single resource type and a single action
+    (`CREATE`), so we don’t need to examine the request metadata. Instead, we dive
+    directly into the resource itself and validate that `requestsPerSecond` is positive
+    and the URL scheme is valid. If they aren’t, we return a JSON body disallowing
+    the request.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有了证书，您最终可以创建基于 SSL 的准入控制器（哦！）。当准入控制器代码收到请求时，它包含一个类型为 `AdmissionReview` 的对象，其中包含有关请求的元数据以及请求本身的主体。在我们的验证准入控制器中，我们仅注册了单个资源类型和单个操作（`CREATE`），因此我们不需要检查请求的元数据。相反，我们直接进入资源本身，并验证
+    `requestsPerSecond` 是否为正数以及 URL 方案是否有效。如果它们不是，则返回一个 JSON 主体，禁止请求。
+- en: Implementing an admission controller to provide defaulting is similar to the
+    steps just described, but instead of using a ValidatingWebhookConfiguration, you
+    use a MutatingWebhookConfiguration, and you need to provide a JSON Patch object
+    to mutate the request object before it is stored.
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 实现准入控制器以提供默认值与刚才描述的步骤类似，但不使用 `ValidatingWebhookConfiguration`，而是使用 `MutatingWebhookConfiguration`，并需要提供一个
+    JSON Patch 对象来修改请求对象在存储之前。
+- en: 'Here’s a TypeScript snippet that you can add to your validating admission controller
+    to add defaulting. If the `paths` field in the `loadtest` is of length zero, add
+    a single path for `/index.xhtml`:'
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下面是一个 TypeScript 片段，您可以将其添加到验证准入控制器中以添加默认值。如果 `loadtest` 中的 `paths` 字段长度为零，则为
+    `/index.xhtml` 添加一个路径：
+- en: '[PRE15]'
+  id: totrans-66
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: 'You can then register this webhook as a MutatingWebhookConfiguration by simply
+    changing the `kind` field in the YAML object and saving the file as *mutating-controller.yaml*.
+    Then create the controller by running:'
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以通过简单地更改 YAML 对象中的 `kind` 字段并将文件保存为 *mutating-controller.yaml*，然后通过运行以下命令创建控制器：
+- en: '[PRE16]'
+  id: totrans-68
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: At this point, you’ve seen a complete example of how to extend the Kubernetes
+    API server using custom resources and admission controllers. The following section
+    describes some general patterns for various extensions.
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到此为止，您已经看到了如何使用自定义资源和准入控制器扩展 Kubernetes API 服务器的完整示例。以下部分描述了一些各种扩展的常见模式。
+- en: Patterns for Custom Resources
+  id: totrans-70
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 自定义资源的模式
+- en: Not all custom resources are identical. There are a variety of reasons for extending
+    the Kubernetes API surface area, and the following sections discuss some general
+    patterns you may want to consider.
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 并非所有的自定义资源都相同。有许多原因可以扩展 Kubernetes API 的表面，接下来的部分将讨论一些您可能想考虑的一般模式。
+- en: Just Data
+  id: totrans-72
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 仅数据
+- en: The easiest pattern for API extension is the notion of “just data.” In this
+    pattern, you are simply using the API server for storage and retrieval of information
+    for your application. It is important to note that you should *not* use the Kubernetes
+    API server for application data storage. The Kubernetes API server is not designed
+    to be a key/value store for your app; instead, API extensions should be control
+    or configuration objects that help you manage the deployment or runtime of your
+    application. An example use case for the “just data” pattern might be configuration
+    for canary deployments of your application—for example, directing 10% of all traffic
+    to an experimental backend. While in theory such configuration information could
+    also be stored in a ConfigMap, ConfigMaps are essentially untyped, and sometimes
+    using a more strongly typed API extension object provides clarity and ease of
+    use.
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: API 扩展的最简单模式是“仅数据”的概念。在这种模式下，您只是使用 API 服务器来存储和检索应用程序的信息。重要的是要注意，您不应该将 Kubernetes
+    API 服务器用作应用程序数据存储的关键/值存储。 Kubernetes API 服务器并非设计用于您的应用程序的关键/值存储；相反，API 扩展应该是帮助您管理应用程序部署或运行时的控制或配置对象。例如，“仅数据”模式的一个用例可能是配置您的应用程序的金丝雀部署，例如，将所有流量的
+    10% 导向实验后端。尽管从理论上讲，这种配置信息也可以存储在 ConfigMap 中，但 ConfigMap 本质上是无类型的，有时使用更强类型的 API
+    扩展对象提供了更清晰和易用的操作。
+- en: Extensions that are just data don’t need a corresponding controller to activate
+    them, but they may have validating or mutating admission controllers to ensure
+    that they are well formed. For example, in the canary use case, a validating controller
+    might ensure that all percentages in the canary object sum to 100%.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 只是数据的扩展不需要相应的控制器来激活它们，但它们可能有验证或变更控制器来确保它们的格式良好。例如，在金丝雀使用案例中，验证控制器可以确保金丝雀对象中的所有百分比总和为100%。
+- en: Compilers
+  id: totrans-75
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 编译器
+- en: A slightly more complicated pattern is the “compiler” or “abstraction” pattern.
+    In this pattern, the API extension object represents a higher-level abstraction
+    that is “compiled” into a combination of lower-level Kubernetes objects. The LoadTest
+    extension in the previous example is an example of this compiler abstraction pattern.
+    A user consumes the extension as a high-level concept, in this case a `loadtest`,
+    but it comes into being by being deployed as a collection of Kubernetes Pods and
+    services. To achieve this, a compiled abstraction requires an API controller to
+    be running somewhere in the cluster to watch the current LoadTests and create
+    the “compiled” representation (and likewise delete representations that no longer
+    exist). In contrast to the operator pattern described next, however, there is
+    no online health maintenance for compiled abstractions; it is delegated down to
+    the lower-level objects (e.g., Pods).
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 稍微复杂一些的模式是“编译器”或“抽象”模式。在这种模式中，API 扩展对象代表一个更高级别的抽象，被“编译”成一组低级别的 Kubernetes 对象的组合。前面例子中的
+    LoadTest 扩展就是这种编译器抽象模式的一个示例。用户以高级概念（例如`loadtest`）使用该扩展，但它以 Kubernetes Pods 和服务的集合形式部署。为了实现这一点，编译后的抽象需要一个
+    API 控制器在集群中某处运行，以监视当前的 LoadTests 并创建“编译”的表示形式（以及删除不再存在的表示形式）。然而，与下文描述的运算符模式相比，编译的抽象没有在线健康维护；健康维护被委托给更低级别的对象（例如
+    Pods）。
+- en: Operators
+  id: totrans-77
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 运算符
+- en: While compiler extensions provide easy-to-use abstractions, extensions that
+    use the “operator” pattern provide online, proactive management of the resources
+    created by the extensions. These extensions likely provide a higher-level abstraction
+    (for example, a database) that is compiled down to a lower-level representation,
+    but they also provide online functionality, such as snapshot backups of the database
+    or upgrade notifications when a new version of the software is available. To achieve
+    this, the controller not only monitors the extension API to add or remove things
+    as necessary, but also monitors the running state of the application supplied
+    by the extension (e.g., a database) and takes actions to remediate unhealthy databases,
+    take snapshots, or restore from a snapshot if a failure occurs.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然编译器扩展提供了易于使用的抽象，但使用“运算符”模式的扩展提供了对扩展创建的资源的在线、主动管理。这些扩展可能提供更高级别的抽象（例如数据库），被编译为较低级别的表示，但它们还提供在线功能，例如数据库的快照备份或在软件新版本可用时的升级通知。为实现这一点，控制器不仅监视扩展
+    API 以根据需要添加或删除内容，还监视扩展提供的应用程序（例如数据库）的运行状态，并采取行动来修复不健康的数据库，拍摄快照，或在发生故障时从快照中恢复。
+- en: Operators are the most complicated pattern for API extension of Kubernetes,
+    but they are also the most powerful, enabling users to get easy access to “self-driving”
+    abstractions that are responsible not just for deployment, but also health checking
+    and repair.
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运算符是 Kubernetes API 扩展中最复杂的模式之一，但也是最强大的，使用户能够轻松访问“自动驾驶”抽象，不仅负责部署，还包括健康检查和修复。
+- en: Getting Started
+  id: totrans-80
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 入门指南
+- en: Getting started extending the Kubernetes API can be a daunting and exhausting
+    experience. Fortunately, there is a great deal of code to help you out. The [Kubebuilder
+    project](https://kubebuilder.io) contains a library of code intended to help you
+    easily build reliable Kubernetes API extensions. It’s a great resource to help
+    you bootstrap your extension.
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 开始扩展 Kubernetes API 可能是一个令人畏惧和耗费精力的经验。幸运的是，有大量的代码可以帮助您。[Kubebuilder 项目](https://kubebuilder.io)
+    包含了一个代码库，旨在帮助您轻松构建可靠的 Kubernetes API 扩展。这是一个极好的资源，可以帮助您启动扩展。
+- en: Summary
+  id: totrans-82
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 概要
+- en: One of the great “superpowers” of Kubernetes is its ecosystem, and one of the
+    most significant things powering this ecosystem is the extensibility of the Kubernetes
+    API. Whether you’re designing your own extensions to customize your cluster or
+    consuming off-the-shelf extensions as utilities, cluster services, or operators,
+    API extensions are the key to making your cluster your own and building the right
+    environment for the rapid development of reliable applications.
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 的一个伟大的“超能力”之一是其生态系统，推动这一生态系统的其中一个最重要的因素是 Kubernetes API 的可扩展性。无论您是设计自己的扩展来定制您的集群，还是使用现成的扩展作为实用工具、集群服务或运营商，API
+    扩展都是使您的集群独一无二并为可靠应用程序的快速开发构建正确环境的关键。

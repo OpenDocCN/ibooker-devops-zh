@@ -1,0 +1,356 @@
+- en: Chapter 15\. Init Container
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第 15 章\. 初始化容器
+- en: The *Init Container* pattern enables separation of concerns by providing a separate
+    lifecycle for initialization-related tasks distinct from the main application
+    containers. In this chapter, we look closely at this fundamental Kubernetes concept
+    that is used in many other patterns when initialization logic is required.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*初始化容器*模式通过为初始化相关任务提供独立的生命周期，使关注点分离，与主应用容器的生命周期不同步。在本章中，我们将深入研究这一基础的 Kubernetes
+    概念，在许多其他模式中需要初始化逻辑时使用。'
+- en: Problem
+  id: totrans-2
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 问题
+- en: Initialization is a widespread concern in many programming languages. Some languages
+    have it covered as part of the language, and some use naming conventions and patterns
+    to indicate a construct as the initializer. For example, in the Java programming
+    language, to instantiate an object that requires some setup, we use the constructor
+    (or static blocks for fancier use cases). Constructors are guaranteed to run as
+    the first thing within the object, and they are guaranteed to run only once by
+    the managing runtime (this is just an example; we don’t go into detail here on
+    the different languages and corner cases). Moreover, we can use the constructor
+    to validate preconditions such as mandatory parameters. We also use constructors
+    to initialize the instance fields with incoming arguments or default values.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 初始化在许多编程语言中是一个普遍关注的问题。某些语言将其作为语言的一部分来处理，而某些使用命名约定和模式来指示构造为初始化器。例如，在 Java 编程语言中，要实例化一个需要一些设置的对象，我们使用构造函数（或者对于更复杂的用例，使用静态块）。构造函数保证作为对象内部的第一件事运行，并且由运行时管理者保证仅运行一次（这只是一个示例；我们这里不详细介绍不同语言和特殊情况）。此外，我们可以使用构造函数来验证必填参数等前提条件。我们还使用构造函数用传入的参数或默认值初始化实例字段。
+- en: Init containers are similar but are at the Pod level rather than at the Java
+    class level. So if you have one or more containers in a Pod that represent your
+    main application, these containers may have prerequisites before starting up.
+    These may include special permissions setup on the filesystem, database schema
+    setup, or application seed data installation. Also, this initializing logic may
+    require tools and libraries that cannot be included in the application image.
+    For security reasons, the application image may not have permissions to perform
+    the initializing activities. Alternatively, you may want to delay the startup
+    of your application until an external dependency is satisfied. For all these kinds
+    of use cases, Kubernetes uses init containers as implementation of this pattern,
+    which allow separation of initializing activities from the main application duties.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 初始化容器类似于但位于 Pod 级别，而不是 Java 类级别。因此，如果在 Pod 中有一个或多个表示主应用程序的容器，则这些容器可能在启动之前有先决条件。这些可能包括在文件系统上设置特殊权限、数据库架构设置或应用程序种子数据安装。此外，这种初始化逻辑可能需要工具和库，这些工具和库不能包含在应用程序镜像中。出于安全原因，应用程序镜像可能没有权限执行初始化活动。或者，您可能希望推迟应用程序的启动，直到满足外部依赖关系。对于所有这些用例，Kubernetes
+    使用初始化容器作为该模式的实现，允许将初始化活动与主应用程序职责分离。
+- en: Solution
+  id: totrans-5
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 解决方案
+- en: 'Init containers in Kubernetes are part of the Pod definition, and they separate
+    all containers in a Pod into two groups: init containers and application containers.
+    All init containers are executed in a sequence, one by one, and all of them have
+    to terminate successfully before the application containers are started up. In
+    that sense, init containers are like constructor instructions in a Java class
+    that help object initialization. Application containers, on the other hand, run
+    in parallel, and the startup order is arbitrary. The execution flow is demonstrated
+    in [Figure 15-1](#img-init-container).'
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 中的初始化容器是 Pod 定义的一部分，它们将 Pod 中的所有容器分为两组：初始化容器和应用容器。所有初始化容器按顺序逐个执行，它们全部必须成功终止，然后才能启动应用容器。在这个意义上，初始化容器就像
+    Java 类中的构造器指令，帮助对象初始化。另一方面，应用容器并行运行，启动顺序是任意的。执行流程在 [图 15-1](#img-init-container)
+    中演示。
+- en: '![Init and application containers in a Pod](assets/kup2_1501.png)'
+  id: totrans-7
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Pod 中的初始化和应用容器](assets/kup2_1501.png)'
+- en: Figure 15-1\. Init and application containers in a Pod
+  id: totrans-8
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 15-1\. Pod 中的初始化和应用容器
+- en: Typically, init containers are expected to be small, run quickly, and complete
+    successfully, except when an init container is used to delay the start of a Pod
+    while waiting for a dependency, in which case it may not terminate until the dependency
+    is satisfied. If an init container fails, the whole Pod is restarted (unless it
+    is marked with `RestartNever`), causing all init containers to run again. Thus,
+    to prevent any side effects, making init containers idempotent is a good practice.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常情况下，期望 init 容器小巧、快速运行并成功完成，除非使用 init 容器延迟 Pod 启动以等待依赖项，此时它可能不会在依赖项满足之前终止。如果
+    init 容器失败，整个 Pod 将重新启动（除非标记为 `RestartNever`），导致所有 init 容器再次运行。因此，为了防止任何副作用，使 init
+    容器具有幂等性是一个良好的实践。
+- en: 'On one hand, init containers have all of the same capabilities as application
+    containers: all of the containers are part of the same Pod, so they share resource
+    limits, volumes, and security settings and end up placed on the same node. On
+    the other hand, they have slightly different lifecycle, health-checking, and resource-handling
+    semantics. There is no `livenessProbe`, `readinessProbe`, or `startupProbe` for
+    init containers, as all init containers must terminate successfully before the
+    Pod startup processes can continue with application containers.'
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一方面，init 容器与应用容器具有相同的能力：它们都是同一 Pod 的一部分，因此共享资源限制、卷和安全设置，并最终被放置在同一节点上。另一方面，它们具有稍微不同的生命周期、健康检查和资源处理语义。对于
+    init 容器，没有 `livenessProbe`、`readinessProbe` 或 `startupProbe`，因为所有 init 容器必须在 Pod
+    启动过程中的应用容器继续之前成功终止。
+- en: 'Init containers also affect the way Pod resource requirements are calculated
+    for scheduling, autoscaling, and quota management. Given the ordering in the execution
+    of all containers in a Pod (first, init containers run a sequence, then all application
+    containers run in parallel), the effective Pod-level request and limit values
+    become the highest values of the following two groups:'
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Init 容器还会影响 Pod 资源需求的计算方式，用于调度、自动扩展和配额管理。考虑到 Pod 中所有容器执行的顺序（首先，init 容器按顺序运行，然后所有应用容器并行运行），有效的
+    Pod 级请求和限制值将成为以下两组最高值之一：
+- en: The highest init container request/limit value
+  id: totrans-12
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 最高的 init 容器请求/限制值
+- en: The sum of all application container values for request/limit
+  id: totrans-13
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 所有应用容器请求/限制值的总和
+- en: A consequence of this behavior is that if you have init containers with high
+    resource demands and application containers with low resource demands, the Pod-level
+    request and limit values affecting the scheduling will be based on the higher
+    value of the init containers, as demonstrated in [Figure 15-2](#img-init-container-resource).
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种行为的一个后果是，如果您的 init 容器需求高而应用容器需求低，则影响调度的 Pod 级请求和限制值将基于 init 容器的较高值，如 [图 15-2](#img-init-container-resource)
+    所示。
+- en: '![Effective Pod request/limit calculation](assets/kup2_1502.png)'
+  id: totrans-15
+  prefs: []
+  type: TYPE_IMG
+  zh: '![有效的 Pod 请求/限制计算](assets/kup2_1502.png)'
+- en: Figure 15-2\. Effective Pod request/limit calculation
+  id: totrans-16
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 15-2\. 有效的 Pod 请求/限制计算
+- en: This setup is not resource-efficient. Even if init containers run for a short
+    period of time and there is available capacity on the node for the majority of
+    the time, no other Pod can use it.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管 init 容器运行时间短且大部分时间节点上有可用容量，但此设置并不高效。其他 Pod 不能使用该容量。
+- en: Moreover, init containers enable separation of concerns and allow you to keep
+    containers single-purposed. An application container can be created by the application
+    engineer and focus on the application logic only. A deployment engineer can author
+    an init container and focus on configuration and initialization tasks only. We
+    demonstrate this in [Example 15-1](#ex-init-container), which has one application
+    container based on an HTTP server that serves files.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此外，init 容器使关注点分离，允许您保持容器的单一目的性。应用工程师可以创建应用容器，专注于应用逻辑。部署工程师可以编写 init 容器，专注于配置和初始化任务。我们在
+    [示例 15-1](#ex-init-container) 中演示了这一点，其中有一个基于 HTTP 服务器提供文件的应用容器。
+- en: The container provides a generic HTTP-serving capability and does not make any
+    assumptions about where the files to serve might come from for the different use
+    cases. In the same Pod, an init container provides Git client capability, and
+    its sole purpose is to clone a Git repo. Since both containers are part of the
+    same Pod, they can access the same volume to share data. We use the same mechanism
+    to share the cloned files from the init container to the application container.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器提供了通用的HTTP服务能力，并且不假设用于不同用例中的服务文件的来源。在同一个 Pod 中，一个初始化容器提供了 Git 客户端的能力，其唯一目的是克隆一个
+    Git 仓库。由于这两个容器都属于同一个 Pod，它们可以访问同一个卷来共享数据。我们使用相同的机制来从初始化容器向应用容器共享克隆的文件。
+- en: '[Example 15-1](#ex-init-container) shows an init container that copies data
+    into an empty volume.'
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[示例 15-1](#ex-init-container) 展示了将数据复制到空卷的初始化容器。'
+- en: Example 15-1\. Init Container
+  id: totrans-21
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 15-1\. 初始化容器
+- en: '[PRE0]'
+  id: totrans-22
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: '[![1](assets/1.png)](#co_init_container_CO1-1)'
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_init_container_CO1-1)'
+- en: Clone an external Git repository into the mounted directory.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 克隆外部 Git 仓库到挂载目录中。
+- en: '[![2](assets/2.png)](#co_init_container_CO1-2)'
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_init_container_CO1-2)'
+- en: Shared volume used by both init container and the application container.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由初始化容器和应用容器共享的卷。
+- en: '[![3](assets/3.png)](#co_init_container_CO1-4)'
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_init_container_CO1-4)'
+- en: Empty directory used on the node for sharing data.
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在节点上用于数据共享的空目录。
+- en: We could have achieved the same effect by using ConfigMap or PersistentVolumes
+    but want to demonstrate how init containers work here. This example illustrates
+    a typical usage pattern of an init container sharing a volume with the main container.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们也可以通过使用 ConfigMap 或 PersistentVolumes 实现相同的效果，但是这里我们想演示初始化容器的工作原理。这个例子展示了初始化容器与主容器共享卷的典型用法模式。
+- en: Tip
+  id: totrans-30
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: 'For debugging the outcome of init containers, it helps if the command of the
+    application container is replaced temporarily with a dummy `sleep` command so
+    that you have time to examine the situation. This trick is particularly useful
+    if your init container fails to start up and your application fails to start because
+    the configuration is missing or broken. The following command within the Pod declaration
+    gives you an hour to debug the volumes mounted by entering the Pod with `kubectl
+    exec -it *<pod>* sh`:'
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了调试初始化容器的结果，可以临时用一个虚拟的 `sleep` 命令替换应用容器的命令，这样您有时间检查情况。如果初始化容器启动失败，导致配置丢失或损坏，这个技巧尤其有用。在
+    Pod 声明中使用以下命令，可以进入 Pod 来调试由 `kubectl exec -it *<pod>* sh` 挂载的卷：
+- en: '[PRE1]'
+  id: totrans-32
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: A similar effect can be achieved by using a sidecar, as described next in [Chapter 16,
+    “Sidecar”](ch16.html#Sidecar), where the HTTP server container and the Git container
+    are running side by side as application containers. But with the sidecar approach,
+    there is no way of knowing which container will run first, and sidecar is meant
+    to be used when containers run side by side continuously. We could also use a
+    sidecar and init container together if both a guaranteed initialization and a
+    constant update of the data are required.
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 Sidecar 可以达到类似的效果，如下文所述的 [第16章，“Sidecar”](ch16.html#Sidecar)，其中 HTTP 服务器容器和
+    Git 容器作为应用容器并行运行。但是使用 Sidecar 方法时，无法确保哪个容器会首先运行，并且 Sidecar 适用于容器持续并行运行的情况。如果需要保证初始化和数据持续更新，则还可以同时使用
+    Sidecar 和初始化容器。
+- en: Discussion
+  id: totrans-34
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 讨论
+- en: So why separate containers in a Pod into two groups? Why not just use an application
+    container with a bit of scripting in a Pod for initialization if required? The
+    answer is that these two groups of containers have different lifecycles, purposes,
+    and even authors in some cases.
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 那么为什么将 Pod 中的容器分成两组？为什么不仅仅使用一个应用容器，并在需要时在 Pod 中使用一点脚本进行初始化？答案是这两组容器具有不同的生命周期、目的甚至在某些情况下还有不同的作者。
+- en: Having init containers run before application containers, and more importantly,
+    having init containers run in stages that progress only when the current init
+    container completes successfully, means you can be sure at every step of the initialization
+    that the previous step has completed successfully, and you can progress to the
+    next stage. Application containers, in contrast, run in parallel and do not provide
+    similar guarantees as init containers. With this distinction in hand, we can create
+    containers focused on initialization or application-focused tasks, and reuse them
+    in different contexts by organizing them in Pods with predictable guarantees.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在应用容器之前运行初始化容器，更重要的是，使初始化容器按阶段运行，只有当前初始化容器成功完成时才能继续进行，这意味着在初始化的每一步，您可以确保前一步已成功完成，并且可以继续下一个阶段。
+    相比之下，应用容器并行运行，并且不像初始化容器提供类似的保证。 有了这个区别，我们可以创建专注于初始化或应用任务的容器，并通过将它们组织在具有可预测保证的
+    Pod 中，在不同的上下文中重复使用它们。
+- en: More Information
+  id: totrans-37
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 更多信息
+- en: '[Init Container Example](https://oreil.ly/dtC_W)'
+  id: totrans-38
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[初始化容器示例](https://oreil.ly/dtC_W)'
+- en: '[Init Containers](https://oreil.ly/AcBVc)'
+  id: totrans-39
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[初始化容器](https://oreil.ly/AcBVc)'
+- en: '[Configuring Pod Initialization](https://oreil.ly/XJV9K)'
+  id: totrans-40
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[配置 Pod 初始化](https://oreil.ly/XJV9K)'
+- en: '[Admission Controllers Reference](https://oreil.ly/H1-va)'
+  id: totrans-41
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[准入控制器参考](https://oreil.ly/H1-va)'
+- en: '[Dynamic Admission Control](https://oreil.ly/uOzBD)'
+  id: totrans-42
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[动态准入控制](https://oreil.ly/uOzBD)'
+- en: '[Metacontroller](https://oreil.ly/f-P_d)'
+  id: totrans-43
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Metacontroller](https://oreil.ly/f-P_d)'
+- en: '[Kyverno](https://oreil.ly/VnbkZ)'
+  id: totrans-44
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Kyverno](https://oreil.ly/VnbkZ)'
+- en: '[Demystifying Istio’s Sidecar Injection Model](https://oreil.ly/a3kmy)'
+  id: totrans-45
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[揭秘 Istio 的 Sidecar 注入模型](https://oreil.ly/a3kmy)'
+- en: '[Object Initialization in Swift](https://oreil.ly/Wy-ca)'
+  id: totrans-46
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Swift 中的对象初始化](https://oreil.ly/Wy-ca)'

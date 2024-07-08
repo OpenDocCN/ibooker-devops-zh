@@ -1,0 +1,462 @@
+- en: Chapter 20\. Configuration Resource
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第20章\. 配置资源
+- en: Kubernetes provides native configuration resources for regular and confidential
+    data, which allows you to decouple the configuration lifecycle from the application
+    lifecycle. The *Configuration Resource* pattern explains the concepts of ConfigMap
+    and Secret resources and how we can use them, as well as their limitations.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 提供了用于常规和机密数据的原生配置资源，允许您将配置生命周期与应用程序生命周期解耦。*配置资源* 模式解释了 ConfigMap
+    和 Secret 资源的概念，以及如何使用它们，以及它们的局限性。
+- en: Problem
+  id: totrans-2
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 问题
+- en: One significant disadvantage of the *EnvVar Configuration* pattern, discussed
+    in [Chapter 19](ch19.html#EnvVarConfiguration), is that it’s suitable for only
+    a handful of variables and simple configurations. Another disadvantage is that
+    because environment variables can be defined in various places, it is often hard
+    to find the definition of a variable. And even if you find it, you can’t be entirely
+    sure it won’t be overridden in another location. For example, environment variables
+    defined within a OCI image can be replaced during runtime in a Kubernetes Deployment
+    resource.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: “EnvVar Configuration” 模式的一个显著缺点，讨论见 [第19章](ch19.html#EnvVarConfiguration)，是它仅适用于少量变量和简单配置。另一个缺点是，由于环境变量可以在各种地方定义，因此很难找到变量的定义。即使找到了，也不能完全确定它不会在其他位置被覆盖。例如，在
+    Kubernetes 部署资源中，OCI 镜像内定义的环境变量可能在运行时被替换。
+- en: Often, it is better to keep all the configuration data in a single place and
+    not scattered around in various resource definition files. But it does not make
+    sense to put the content of a whole configuration file into an environment variable.
+    So some extra indirection would allow more flexibility, which is what Kubernetes
+    configuration resources offer.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常，将所有配置数据放在一个地方而不是分散在各种资源定义文件中更好。但是，将整个配置文件的内容放入环境变量中是没有意义的。因此，一些额外的间接方式可以提供更多灵活性，这正是
+    Kubernetes 配置资源所提供的。
+- en: Solution
+  id: totrans-5
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 解决方案
+- en: Kubernetes provides dedicated configuration Resources that are more flexible
+    than pure environment variables. These are the ConfigMap and Secret objects for
+    general-purpose and sensitive data, respectively.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 提供了专用的配置资源，比纯环境变量更灵活。这些是用于一般用途和敏感数据的 ConfigMap 和 Secret 对象。
+- en: We can use both in the same way, as both provide storage and management of key-value
+    pairs. When we are describing ConfigMaps, the same can be applied most of the
+    time to Secrets too. Besides the actual data encoding (which is Base64 for Secrets),
+    there is no technical difference for the use of ConfigMaps and Secrets.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以以相同的方式使用两者，因为它们都提供键值对的存储和管理。当我们描述 ConfigMaps 时，大多数时间也可以应用于 Secrets。除了实际数据编码（Secrets
+    的 Base64 编码外），在使用 ConfigMaps 和 Secrets 时没有技术上的区别。
+- en: 'Once a ConfigMap is created and holding data, we can use the keys of a ConfigMap
+    in two ways:'
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦创建了 ConfigMap 并存储了数据，我们可以以两种方式使用 ConfigMap 的键：
+- en: As a reference for *environment variables*, where the key is the name of the
+    environment variable.
+  id: totrans-9
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 作为 *环境变量* 的引用，其中键是环境变量的名称。
+- en: As *files* that are mapped to a volume mounted in a Pod. The key is used as
+    the filename.
+  id: totrans-10
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 作为映射到 Pod 中挂载卷的 *文件*。键用作文件名。
+- en: The file in a mounted ConfigMap volume is updated when the ConfigMap is updated
+    via the Kubernetes API. So, if an application supports hot reload of configuration
+    files, it can immediately benefit from such an update. However, with ConfigMap
+    entries used as environment variables, updates are not reflected because environment
+    variables can’t be changed after a process has been started.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当通过 Kubernetes API 更新 ConfigMap 时，挂载的 ConfigMap 卷中的文件也会更新。因此，如果应用程序支持配置文件的热重载，它可以立即从此类更新中受益。但是，使用
+    ConfigMap 条目作为环境变量时，更新不会反映出来，因为环境变量在进程启动后无法更改。
+- en: In addition to ConfigMap and Secret, another alternative is to store configuration
+    directly in external volumes that are then mounted.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了 ConfigMap 和 Secret，另一种选择是直接将配置存储在外部卷中，然后挂载。
+- en: 'The following examples concentrate on ConfigMap usage, but they can also be
+    used for Secrets. There is one big difference, though: values for Secrets have
+    to be Base64 encoded.'
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下示例集中于 ConfigMap 的使用，但它们也可以用于 Secrets。但是有一个重要区别：Secrets 的值必须进行 Base64 编码。
+- en: A ConfigMap resource contains key-value pairs in its `data` section, as shown
+    in [Example 20-1](#ex-config-resource).
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ConfigMap 资源在其 `data` 部分包含键值对，如 [示例 20-1](#ex-config-resource) 所示。
+- en: Example 20-1\. ConfigMap resource
+  id: totrans-15
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 20-1\. ConfigMap 资源
+- en: '[PRE0]'
+  id: totrans-16
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: '[![1](assets/1.png)](#co_configuration_resource_CO1-1)'
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_configuration_resource_CO1-1)'
+- en: ConfigMaps can be accessed as environment variables and as a mounted file. We
+    recommend using uppercase keys in the ConfigMap to indicate an EnvVar usage and
+    proper filenames when used as mounted files.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ConfigMaps可以作为环境变量和挂载文件访问。我们建议在ConfigMap中使用大写键来表示EnvVar的用法，并在用作挂载文件时使用适当的文件名。
+- en: We see here that a ConfigMap can also carry the content of complete configuration
+    files, like the Spring Boot `application.properties` in this example. You can
+    imagine that for a nontrivial use case, this section could get quite large!
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在这里看到，ConfigMap还可以承载完整配置文件的内容，例如本示例中的Spring Boot `application.properties`。您可以想象，对于非平凡的用例，此部分可能会变得相当大！
+- en: Instead of manually creating the full resource descriptor, we can use `kubectl`
+    to create ConfigMaps or Secrets too. For the preceding example, the equivalent
+    `kubectl` command looks like that in [Example 20-2](#ex-config-map-apply).
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不必手动创建完整的资源描述符，我们也可以使用`kubectl`创建ConfigMaps或Secrets。对于前述示例，等效的`kubectl`命令如[示例 20-2](#ex-config-map-apply)所示。
+- en: Example 20-2\. Create a ConfigMap from a file
+  id: totrans-21
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 20-2\. 从文件创建ConfigMap
+- en: '[PRE1]'
+  id: totrans-22
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: This ConfigMap then can be read in various places—everywhere environment variables
+    are defined, as demonstrated [Example 20-3](#ex-config-map-env).
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后可以在各处读取此ConfigMap——在定义环境变量的每个地方，正如示例[20-3](#ex-config-map-env)所示。
+- en: Example 20-3\. Environment variable set from ConfigMap
+  id: totrans-24
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 20-3\. 从ConfigMap设置的环境变量
+- en: '[PRE2]'
+  id: totrans-25
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: If a ConfigMap has many entries that you want to consume as environment variables,
+    using a certain syntax can save a lot of typing. Rather than specifying each entry
+    individually, as shown in the preceding example in the `env` section, `envFrom`
+    allows you to expose all ConfigMap entries that have a key that also can be used
+    as a valid environment variable. We can prepend this with a prefix, as shown in
+    [Example 20-4](#ex-config-map-env-from). Any key that cannot be used as an environment
+    variable is ignored (e.g., `"illeg.al"`). When multiple ConfigMaps are specified
+    with duplicate keys, the last entry in `envFrom` takes precedence. Also, any same-named
+    environment variable set directly with `env` has higher priority.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果一个ConfigMap有许多条目需要作为环境变量使用，使用特定的语法可以节省大量的输入。与单独指定每个条目不同，在`env`部分的前述示例中，`envFrom`允许您公开所有具有也可以用作有效环境变量的键的ConfigMap条目。我们可以以前缀的形式添加这个，如[示例 20-4](#ex-config-map-env-from)所示。任何不能作为环境变量使用的键都会被忽略（例如，`"illeg.al"`）。当指定了具有重复键的多个ConfigMaps时，`envFrom`中的最后一个条目优先。而且，直接使用`env`设置的任何同名环境变量具有更高的优先级。
+- en: Example 20-4\. Setting all entries of a ConfigMap as environment variables
+  id: totrans-27
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 20-4\. 将ConfigMap的所有条目设置为环境变量
+- en: '[PRE3]'
+  id: totrans-28
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: '[![1](assets/1.png)](#co_configuration_resource_CO2-1)'
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_configuration_resource_CO2-1)'
+- en: Pick up all keys from the ConfigMap `random-generator-config` that can be used
+    as environment variable names.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 检索可以用作环境变量名称的ConfigMap `random-generator-config` 的所有键。
+- en: '[![2](assets/2.png)](#co_configuration_resource_CO2-2)'
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_configuration_resource_CO2-2)'
+- en: 'Prefix all suitable ConfigMap keys with `CONFIG_`. With the ConfigMap defined
+    in [Example 20-1](#ex-config-resource), this leads to three exposed environment
+    variables: `CONFIG_​PAT⁠TERN_NAME`, `CONFIG_EXTRA_OPTIONS`, and `CONFIG_SEED`.'
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用`CONFIG_`前缀所有适合的ConfigMap键。通过在[示例 20-1](#ex-config-resource)中定义的ConfigMap，这将导致三个公开的环境变量：`CONFIG_​PAT⁠TERN_NAME`、`CONFIG_EXTRA_OPTIONS`和`CONFIG_SEED`。
+- en: Secrets, as with ConfigMaps, can also be consumed as environment variables,
+    either per entry or for all entries. To access a Secret instead of a ConfigMap,
+    replace `configMapKeyRef` with `secretKeyRef`.
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Secrets，与ConfigMaps一样，也可以作为环境变量使用，无论是每个条目还是所有条目。要访问Secret而不是ConfigMap，请用`secretKeyRef`替换`configMapKeyRef`。
+- en: When a ConfigMap is used as a volume, its complete content is projected into
+    this volume, with the keys used as filenames. See [Example 20-5](#ex-config-map-volume).
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当将ConfigMap用作卷时，它的完整内容将投射到此卷中，其中键用作文件名。参见[示例 20-5](#ex-config-map-volume)。
+- en: Example 20-5\. Mount a ConfigMap as a volume
+  id: totrans-35
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 20-5\. 将ConfigMap挂载为卷
+- en: '[PRE4]'
+  id: totrans-36
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: '[![1](assets/1.png)](#co_configuration_resource_CO3-1)'
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_configuration_resource_CO3-1)'
+- en: A ConfigMap-backed volume will contain as many files as entries, with the map’s
+    keys as filenames and the map’s values as file content.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个由ConfigMap支持的卷将包含与条目数量相同的文件，其中映射的键作为文件名，映射的值作为文件内容。
+- en: 'The configuration in [Example 20-1](#ex-config-resource) that is mounted as
+    a volume results in four files in the */config* folder: an *application.properties*
+    file with the content defined in the ConfigMap and the files *PATTERN*, *EXTRA_OPTIONS*,
+    and *SEED*, each with a single line of content.'
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为卷挂载的示例[例子 20-1](#ex-config-resource)在 */config* 文件夹中生成四个文件：一个 *application.properties*
+    文件，其中包含在 ConfigMap 中定义的内容，以及 *PATTERN*、*EXTRA_OPTIONS* 和 *SEED* 文件，每个文件都有单行内容。
+- en: The mapping of configuration data can be fine-tuned more granularly by adding
+    additional properties to the volume declaration. Rather than mapping all entries
+    as files, you can also individually select every key that should be exposed, the
+    filename, and permissions under which it should be available. [Example 20-6](#ex-config-map-volume-items)
+    demonstrates how you can granularly select which parts of a ConfigMap are exposed
+    as volumes.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 配置数据的映射可以通过向卷声明添加额外属性来更加精细地调整。与其将所有条目都映射为文件，您还可以单独选择应该暴露的每个键、文件名以及可用的权限。[示例 20-6](#ex-config-map-volume-items)展示了如何精细选择
+    ConfigMap 的哪些部分作为卷暴露。
+- en: Example 20-6\. Expose ConfigMap entries selectively as volumes
+  id: totrans-41
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 20-6\. 有选择地将 ConfigMap 条目作为卷暴露
+- en: '[PRE5]'
+  id: totrans-42
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: '[![1](assets/1.png)](#co_configuration_resource_CO4-1)'
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_configuration_resource_CO4-1)'
+- en: List of ConfigMap entries to expose as volumes.
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要暴露为卷的 ConfigMap 条目列表。
+- en: '[![2](assets/2.png)](#co_configuration_resource_CO4-2)'
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_configuration_resource_CO4-2)'
+- en: Expose only `application.properties` from the ConfigMap under the path `spring/myapp.properties`
+    with file mode 0400.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 仅将 `application.properties` 从 ConfigMap 暴露在路径 `spring/myapp.properties` 下，文件模式为
+    0400。
+- en: As you have seen, changes to a ConfigMap are directly reflected in a projected
+    volume that contains the ConfigMap’s content as files. An application can watch
+    those files and immediately pick up any changes. This hot reload is very useful
+    to avoid a redeployment of an application, which can cause an interruption of
+    the service. On the other hand, such live changes are not tracked anywhere and
+    can easily get lost during a restart. These ad hoc chances can cause configuration
+    drift that is hard to detect and analyze. That is one of the reasons many people
+    prefer an *immutable configuration* that stays constant once deployed. We have
+    dedicated a whole pattern in [Chapter 21, “Immutable Configuration”](ch21.html#ImmutableConfiguration),
+    to this paradigm, but there is a cheap way to easily achieve this with ConfigMap
+    and Secrets too.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如您所见，对 ConfigMap 的更改会直接反映在作为文件包含 ConfigMap 内容的投影卷中。应用程序可以监视这些文件并立即获取任何更改。这种热重载非常有用，可以避免应用程序的重新部署，从而避免服务中断。另一方面，这些实时更改并未被任何地方跟踪，容易在重新启动期间丢失。这些临时更改可能导致配置漂移，难以检测和分析。这就是为什么许多人更喜欢一种*不可变配置*，一旦部署后就保持不变。我们在[第
+    21 章，“不可变配置”](ch21.html#ImmutableConfiguration)中专门介绍了这一范式，但使用 ConfigMap 和 Secrets
+    也有一种简单的方法可以轻松实现这一点。
+- en: Since version 1.21, Kubernetes supports an `immutable` field for ConfigMaps
+    and Secrets that, if set to `true`, prevents the resource from being updated once
+    created. Besides preventing unwanted updates, using immutable ConfigMaps and Secrets
+    considerably improves a cluster’s performance as the Kubernetes API server does
+    not need to monitor changes on those immutable objects. [Example 20-7](#ex-secret-immutable)
+    shows how to declare a Secret immutable. The only way to change such a Secret
+    after it has been stored on the cluster is to delete and recreate the updated
+    Secret. Any running Pod referencing this secret needs to be restarted too.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 自版本 1.21 起，Kubernetes 支持 ConfigMaps 和 Secrets 的 `immutable` 字段，如果设置为 `true`，则阻止资源在创建后更新。除了防止不必要的更新外，使用不可变的
+    ConfigMaps 和 Secrets 还显著提升了集群的性能，因为 Kubernetes API 服务器不需要监视这些不可变对象的更改。[示例 20-7](#ex-secret-immutable)展示了如何声明一个不可变的
+    Secret。一旦在集群上存储了这样一个 Secret，唯一更改它的方法是删除并重新创建更新后的 Secret。任何引用此 Secret 的运行中 Pod
+    也需要重新启动。
+- en: Example 20-7\. Immutable Secret
+  id: totrans-49
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 20-7\. 不可变的 Secret
+- en: '[PRE6]'
+  id: totrans-50
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: '[![1](assets/1.png)](#co_configuration_resource_CO5-1)'
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_configuration_resource_CO5-1)'
+- en: Boolean flag declaring the mutability of the Secret (default is `false`).
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 声明 Secret 的可变性的布尔标志（默认为 `false`）。
+- en: Discussion
+  id: totrans-53
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 讨论
+- en: ConfigMaps and Secrets allow you to store configuration information in dedicated
+    resource objects that are easy to manage with the Kubernetes API. The most significant
+    advantage of using ConfigMaps and Secrets is that they decouple the *definition*
+    of configuration data from its *usage*. This decoupling allows us to manage the
+    objects that use the configuration independently of the configuration definition.
+    Another benefit of ConfigMaps and Secrets is that they are intrinsic features
+    of the platform. No custom construct like that in [Chapter 21, “Immutable Configuration”](ch21.html#ImmutableConfiguration),
+    is required.
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ConfigMaps 和 Secrets 允许您将配置信息存储在专用资源对象中，通过 Kubernetes API 很容易管理。使用 ConfigMaps
+    和 Secrets 的最大优势是，它们将配置数据的*定义*与其*使用*分离。这种解耦允许我们独立管理使用配置的对象，而不依赖于配置的定义。ConfigMaps
+    和 Secrets 的另一个好处是它们是平台的固有特性。不像需要类似 [第 21 章，“不可变配置”](ch21.html#ImmutableConfiguration)
+    中的自定义构造。
+- en: 'However, these configuration resources also have their restrictions: with a
+    1 MB size limit for Secrets, they can’t store arbitrarily large data and are not
+    well suited for nonconfiguration application data. You can also store binary data
+    in Secrets, but since they have to be Base64 encoded, you can use only around
+    700 KB data for it. Real-world Kubernetes clusters also put an individual quota
+    on the number of ConfigMaps that can be used per namespace or project, so ConfigMap
+    is not a golden hammer.'
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，这些配置资源也有它们的限制：Secrets 的大小限制为 1 MB，无法存储任意大的数据，也不适合非配置应用数据。您也可以在 Secrets 中存储二进制数据，但由于必须进行
+    Base64 编码，只能使用约 700 KB 的数据。现实世界的 Kubernetes 集群还会对每个命名空间或项目可以使用的 ConfigMap 数量设置单独的配额，因此
+    ConfigMap 不是万能的解决方案。
+- en: The next two chapters show how to deal with large configuration data by using
+    the *Immutable Configuration* and *Configuration Template* patterns.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来的两章介绍如何通过使用*不可变配置*和*配置模板*模式来处理大型配置数据。
+- en: More Information
+  id: totrans-57
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 更多信息
+- en: '[Configuration Resource Example](https://oreil.ly/-_jDa)'
+  id: totrans-58
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[配置资源示例](https://oreil.ly/-_jDa)'
+- en: '[Configure a Pod to Use a ConfigMap](https://oreil.ly/oRN9a)'
+  id: totrans-59
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[配置 Pod 使用 ConfigMap](https://oreil.ly/oRN9a)'
+- en: '[Secrets](https://oreil.ly/mvoXO)'
+  id: totrans-60
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[秘密](https://oreil.ly/mvoXO)'
+- en: '[Encrypting Secret Data at Rest](https://oreil.ly/GrL0_)'
+  id: totrans-61
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[加密静态数据](https://oreil.ly/GrL0_)'
+- en: '[Distribute Credentials Securely Using Secrets](https://oreil.ly/Im-R9)'
+  id: totrans-62
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[安全分发凭据](https://oreil.ly/Im-R9)'
+- en: '[Immutable Secrets](https://oreil.ly/9PvQ5)'
+  id: totrans-63
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[不可变 Secrets](https://oreil.ly/9PvQ5)'
+- en: '[How to Create Immutable ConfigMaps and Secrets](https://oreil.ly/ndYd0)'
+  id: totrans-64
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[如何创建不可变的 ConfigMaps 和 Secrets](https://oreil.ly/ndYd0)'
+- en: '[Size Limit for a ConfigMap](https://oreil.ly/JUDZU)'
+  id: totrans-65
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[ConfigMap 的大小限制](https://oreil.ly/JUDZU)'

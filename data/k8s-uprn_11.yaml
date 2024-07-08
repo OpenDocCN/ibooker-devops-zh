@@ -1,0 +1,504 @@
+- en: Chapter 11\. DaemonSets
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第 11 章. DaemonSets
+- en: Deployments and ReplicaSets are generally about creating a service (such as
+    a web server) with multiple replicas for redundancy. But that is not the only
+    reason to replicate a set of Pods within a cluster. Another reason is to schedule
+    a single Pod on every node within the cluster. Generally, the motivation for replicating
+    a Pod to every node is to land some sort of agent or daemon on each node, and
+    the Kubernetes object for achieving this is the DaemonSet.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 部署（Deployments）和 ReplicaSet 通常用于创建具有多个副本以提高冗余性的服务（例如 Web 服务器）。但复制 Pod 集群的另一个原因是在集群内的每个节点上调度单个
+    Pod。一般来说，将 Pod 复制到每个节点的动机是为了在每个节点上部署某种代理或守护程序，而 Kubernetes 中实现这一目标的对象就是 DaemonSet。
+- en: A DaemonSet ensures that a copy of a Pod is running across a set of nodes in
+    a Kubernetes cluster. DaemonSets are used to deploy system daemons such as log
+    collectors and monitoring agents, which typically must run on every node. DaemonSets
+    share similar functionality with ReplicaSets; both create Pods that are expected
+    to be long-running services and ensure that the desired state and the observed
+    state of the cluster match.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: DaemonSet 确保在 Kubernetes 集群的一组节点上运行 Pod 的副本。DaemonSet 用于部署系统守护程序，如日志收集器和监控代理，这些程序通常需要在每个节点上运行。DaemonSet
+    与 ReplicaSet 具有类似的功能；它们都创建预期长时间运行的 Pod，并确保集群的期望状态和观察状态匹配。
+- en: Given the similarities between DaemonSets and ReplicaSets, it’s important to
+    understand when to use one over the other. ReplicaSets should be used when your
+    application is completely decoupled from the node and you can run multiple copies
+    on a given node without special consideration. DaemonSets should be used when
+    a single copy of your application must run on all or a subset of the nodes in
+    the cluster.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 鉴于 DaemonSet 和 ReplicaSet 的相似性，了解何时使用其中之一是很重要的。当您的应用程序与节点完全解耦并且可以在给定节点上运行多个副本而无需特别考虑时，应使用
+    ReplicaSet。当必须在集群中的所有或一部分节点上运行应用程序的单个副本时，应使用 DaemonSet。
+- en: You should generally not use scheduling restrictions or other parameters to
+    ensure that Pods do not colocate on the same node. If you find yourself wanting
+    a single Pod per node, then a DaemonSet is the correct Kubernetes resource to
+    use. Likewise, if you find yourself building a homogeneous replicated service
+    to serve user traffic, then a ReplicaSet is probably the right Kubernetes resource
+    to use.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常不应使用调度限制或其他参数来确保 Pod 不共同存在于同一节点上。如果发现自己希望每个节点只有一个 Pod，则 DaemonSet 是正确的 Kubernetes
+    资源。同样，如果发现自己正在构建一个用于服务用户流量的同质化复制服务，则 ReplicaSet 可能是正确的 Kubernetes 资源。
+- en: You can use labels to run DaemonSet Pods on specific nodes; for example, you
+    may want to run specialized intrusion-detection software on nodes that are exposed
+    to the edge network.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用标签在特定节点上运行 DaemonSet Pod；例如，您可能希望在暴露给边缘网络的节点上运行专门的入侵检测软件。
+- en: You can also use DaemonSets to install software on nodes in a cloud-based cluster.
+    For many cloud services, an upgrade or scaling of a cluster can delete and/or
+    re-create new virtual machines. This dynamic *immutable infrastructure* approach
+    can cause problems if you want (or are required by central IT) to have specific
+    software on every node. To ensure that specific software is installed on every
+    machine despite upgrades and scale events, a DaemonSet is the right approach.
+    You can even mount the host filesystem and run scripts that install RPM/DEB packages
+    onto the host operating system. In this way, you can have a cloud native cluster
+    that still meets the enterprise requirements of your IT department.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您还可以使用 DaemonSet 在基于云的集群中的节点上安装软件。对于许多云服务来说，升级或扩展集群可能会删除和/或重新创建新的虚拟机。这种动态的*不可变基础设施*方法可能会在您希望（或被中央
+    IT 要求）在每个节点上具有特定软件时造成问题。为了确保尽管升级和扩展事件，每台机器上都安装了特定软件，DaemonSet 是正确的方法。您甚至可以挂载主机文件系统并运行安装
+    RPM/DEB 包的脚本到主机操作系统上。通过这种方式，您可以拥有一个符合企业 IT 部门要求的云原生集群。
+- en: DaemonSet Scheduler
+  id: totrans-7
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: DaemonSet 调度器
+- en: By default, a DaemonSet will create a copy of a Pod on every node unless a node
+    selector is used, which will limit eligible nodes to those with a matching set
+    of labels. DaemonSets determine which node a Pod will run on at Pod creation time
+    by specifying the `nodeName` field in the Pod spec. As a result, Pods created
+    by DaemonSets are ignored by the Kubernetes scheduler.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，DaemonSet 会在每个节点上创建一个 Pod 的副本，除非使用了节点选择器，该选择器将限制符合一组标签的节点为符合条件的节点。DaemonSet
+    在 Pod 创建时通过在 Pod 规范中指定 `nodeName` 字段来确定 Pod 将在哪个节点上运行。因此，DaemonSets 创建的 Pods 将被
+    Kubernetes 调度程序忽略。
+- en: Like ReplicaSets, DaemonSets are managed by a reconciliation control loop that
+    measures the desired state (a Pod is present on all nodes) with the observed state
+    (is the Pod present on a particular node?). Given this information, the DaemonSet
+    controller creates a Pod on each node that doesn’t currently have a matching Pod.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 像 ReplicaSets 一样，DaemonSets 由一个协调控制循环管理，该循环通过测量期望状态（所有节点上都存在一个 Pod）和观察状态（特定节点上是否存在该
+    Pod？）来工作。根据这些信息，DaemonSet 控制器在每个当前没有匹配 Pod 的节点上创建一个 Pod。
+- en: If a new node is added to the cluster, then the DaemonSet controller notices
+    that it is missing a Pod and adds the Pod to the new node.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果向集群添加了新节点，则 DaemonSet 控制器会注意到缺少一个 Pod 并将该 Pod 添加到新节点上。
+- en: Note
+  id: totrans-11
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: 'DaemonSets and ReplicaSets are a great demonstration of the value of decoupled
+    architecture. It might seem that the right design would be for a ReplicaSet to
+    own the Pods it manages, and for Pods to be subresources of a ReplicaSet. Likewise,
+    the Pods managed by a DaemonSet would be subresources of that DaemonSet. However,
+    this kind of encapsulation would require that tools for dealing with Pods be written
+    twice: once for DaemonSets and once for ReplicaSets. Instead, Kubernetes uses
+    a decoupled approach where Pods are top-level objects. This means that every tool
+    you have learned for introspecting Pods in the context of ReplicaSets (e.g., `kubectl
+    logs <*pod-name*>`) is equally applicable to Pods created by DaemonSets.'
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: DaemonSets 和 ReplicaSets 很好地展示了解耦架构的价值。也许看起来正确的设计是 ReplicaSet 拥有它管理的 Pods，并且
+    Pods 是 ReplicaSet 的子资源。同样，由 DaemonSet 管理的 Pods 将是该 DaemonSet 的子资源。然而，这种封装会要求为处理
+    Pods 编写两次工具：一次为 DaemonSets，一次为 ReplicaSets。相反，Kubernetes 使用了一种解耦的方法，其中 Pods 是顶级对象。这意味着您在
+    ReplicaSets 上下文中学习的用于检查 Pods 的每个工具（例如 `kubectl logs <*pod-name*>`）同样适用于 DaemonSets
+    创建的 Pods。
+- en: Creating DaemonSets
+  id: totrans-13
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 创建 DaemonSets
+- en: DaemonSets are created by submitting a DaemonSet configuration to the Kubernetes
+    API server. The DaemonSet in [Example 11-1](#example0901) will create a `fluentd`
+    logging agent on every node in the target cluster.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: DaemonSets 是通过向 Kubernetes API 服务器提交 DaemonSet 配置来创建的。[示例 11-1](#example0901)
+    中的 DaemonSet 将在目标集群的每个节点上创建一个 `fluentd` 日志代理。
+- en: Example 11-1\. fluentd.yaml
+  id: totrans-15
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 11-1\. fluentd.yaml
+- en: '[PRE0]'
+  id: totrans-16
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: DaemonSets require a unique name across all DaemonSets in a given Kubernetes
+    namespace. Each DaemonSet must include a Pod template spec, which will be used
+    to create Pods as needed. This is where the similarities between ReplicaSets and
+    DaemonSets end. Unlike ReplicaSets, DaemonSets will create Pods on every node
+    in the cluster by default unless a node selector is used.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在给定 Kubernetes 命名空间中，DaemonSets 需要唯一的名称。每个 DaemonSet 必须包含一个 Pod 模板规范，该规范将用于根据需要创建
+    Pods。这是 ReplicaSets 和 DaemonSets 相似性的结束之处。与 ReplicaSets 不同，DaemonSets 默认会在集群中的每个节点上创建
+    Pods，除非使用节点选择器。
+- en: 'Once you have a valid DaemonSet configuration in place, you can use the `kubectl
+    apply` command to submit the DaemonSet to the Kubernetes API. In this section,
+    we will create a DaemonSet to ensure the `fluentd` HTTP server is running on every
+    node in our cluster:'
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦您有了有效的 DaemonSet 配置，您可以使用 `kubectl apply` 命令将 DaemonSet 提交给 Kubernetes API。在本节中，我们将创建一个
+    DaemonSet 来确保 `fluentd` HTTP 服务器在我们集群中的每个节点上运行：
+- en: '[PRE1]'
+  id: totrans-19
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: 'Once the `fluentd` DaemonSet has been successfully submitted to the Kubernetes
+    API, you can query its current state using the `kubectl describe` command:'
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦成功将 `fluentd` DaemonSet 提交到 Kubernetes API，您可以使用 `kubectl describe` 命令查询其当前状态：
+- en: '[PRE2]'
+  id: totrans-21
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'This output indicates a `fluentd` Pod was successfully deployed to all three
+    nodes in our cluster. We can verify this using the `kubectl get pods` command
+    with the `-o` flag to print the nodes where each `fluentd` Pod was assigned:'
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此输出表明 `fluentd` Pod 已成功部署到我们集群中的所有三个节点。我们可以使用 `kubectl get pods` 命令，并使用 `-o`
+    标志打印每个 `fluentd` Pod 分配到的节点来验证这一点：
+- en: '[PRE3]'
+  id: totrans-23
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'With the `fluentd` DaemonSet in place, adding a new node to the cluster will
+    result in a `fluentd` Pod being deployed to that node automatically:'
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有了 `fluentd` DaemonSet 后，在集群中添加新节点将自动部署一个 `fluentd` Pod 到该节点：
+- en: '[PRE4]'
+  id: totrans-25
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: This is exactly the behavior you want when managing logging daemons and other
+    cluster-wide services. No action was required from our end; this is how the Kubernetes
+    DaemonSet controller reconciles its observed state with our desired state.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这正是管理日志守护程序和其他整个集群服务时所需的行为。我们不需要采取任何行动；这就是 Kubernetes DaemonSet 控制器将其观察到的状态与我们期望的状态进行对比的方式。
+- en: Limiting DaemonSets to Specific Nodes
+  id: totrans-27
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 限制 DaemonSets 只能部署到特定节点
+- en: The most common use case for DaemonSets is to run a Pod across every node in
+    a Kubernetes cluster. However, there are some cases where you want to deploy a
+    Pod to only a subset of nodes. For example, maybe you have a workload that requires
+    a GPU or access to fast storage only available on a subset of nodes in your cluster.
+    In cases like these, node labels can be used to tag specific nodes that meet workload
+    requirements.
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: DaemonSets 最常见的用例是在 Kubernetes 集群中的每个节点上运行一个 Pod。但是，也有一些情况下，您只希望将 Pod 部署到节点的子集中。例如，可能有一些工作负载需要
+    GPU 或仅在集群中特定节点上可用的快速存储访问。在这些情况下，可以使用节点标签来标记满足工作负载需求的特定节点。
+- en: Adding Labels to Nodes
+  id: totrans-29
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 向节点添加标签
+- en: The first step in limiting DaemonSets to specific nodes is to add the desired
+    set of labels to a subset of nodes. This can be achieved using the `kubectl label`
+    command.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 限制 DaemonSet 只能部署到特定节点的第一步是在节点子集上添加所需的标签集。可以使用 `kubectl label` 命令实现此操作。
+- en: 'The following command adds the `ssd=true` label to a single node:'
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下命令向单个节点添加 `ssd=true` 标签：
+- en: '[PRE5]'
+  id: totrans-32
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'Just like with other Kubernetes resources, listing nodes without a label selector
+    returns all nodes in the cluster:'
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与其他 Kubernetes 资源一样，如果没有标签选择器，则列出没有标签选择器的节点将返回集群中的所有节点：
+- en: '[PRE6]'
+  id: totrans-34
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: 'Using a label selector, we can filter nodes based on labels. To list only the
+    nodes that have the `ssd` label set to `true`, use the `kubectl get nodes` command
+    with the `--selector` flag:'
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用标签选择器，我们可以根据标签筛选节点。要仅列出具有设置为 `true` 的 `ssd` 标签的节点，请使用 `kubectl get nodes`
+    命令并带有 `--selector` 标志：
+- en: '[PRE7]'
+  id: totrans-36
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: Node Selectors
+  id: totrans-37
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 节点选择器
+- en: Node selectors can be used to limit what nodes a Pod can run on in a given Kubernetes
+    cluster. Node selectors are defined as part of the Pod spec when creating a DaemonSet.
+    The DaemonSet configuration in [Example 11-2](#example0902) limits NGINX to running
+    only on nodes with the `ssd=true` label set.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在给定的 Kubernetes 集群中创建 DaemonSet 时，可以将节点选择器作为 Pod 规范的一部分来限制 Pod 可以运行的节点。示例中的
+    DaemonSet 配置[示例 11-2](#example0902)限制 NGINX 仅在带有 `ssd=true` 标签设置的节点上运行。
+- en: Example 11-2\. nginx-fast-storage.yaml
+  id: totrans-39
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 11-2\. nginx-fast-storage.yaml
+- en: '[PRE8]'
+  id: totrans-40
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: 'Let’s see what happens when we submit the `nginx-fast-storage` DaemonSet to
+    the Kubernetes API:'
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们看看当我们向 Kubernetes API 提交 `nginx-fast-storage` DaemonSet 时会发生什么：
+- en: '[PRE9]'
+  id: totrans-42
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: 'Since there is only one node with the `ssd=true` label, the `nginx-fast-storage`
+    Pod will only run on that node:'
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于只有一个带有 `ssd=true` 标签的节点，`nginx-fast-storage` Pod 将仅在该节点上运行：
+- en: '[PRE10]'
+  id: totrans-44
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: 'Adding the `ssd=true` label to additional nodes will cause the `nginx-fast-storage`
+    Pod to be deployed on those nodes. The inverse is also true: if a required label
+    is removed from a node, the Pod will be removed by the DaemonSet controller.'
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将 `ssd=true` 标签添加到其他节点将导致 `nginx-fast-storage` Pod 部署在这些节点上。反之亦然：如果从节点中删除了所需的标签，则
+    DaemonSet 控制器将删除由该 DaemonSet 管理的 Pod。
+- en: Warning
+  id: totrans-46
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Removing labels from a node that are required by a DaemonSet’s node selector
+    will cause the Pod being managed by that DaemonSet to be removed from the node.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从具有 DaemonSet 节点选择器所需标签的节点上删除标签将导致该 DaemonSet 管理的 Pod 从节点中删除。
+- en: Updating a DaemonSet
+  id: totrans-48
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 更新 DaemonSet
+- en: DaemonSets are great for deploying services across an entire cluster, but what
+    about upgrades? Prior to Kubernetes 1.6, the only way to update Pods managed by
+    a DaemonSet was to update the DaemonSet and then manually delete each Pod that
+    was managed by the DaemonSet so that it would be re-created with the new configuration.
+    With the release of Kubernetes 1.6, DaemonSets gained an equivalent to the Deployment
+    object that manages a ReplicaSet rollout inside the cluster.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: DaemonSets 适用于在整个集群中部署服务，但是如何进行升级呢？在 Kubernetes 1.6 之前，更新由 DaemonSet 管理的 Pod
+    的唯一方法是更新 DaemonSet，然后手动删除每个由 DaemonSet 管理的 Pod，以便使用新配置重新创建它们。随着 Kubernetes 1.6
+    的发布，DaemonSets 获得了类似于 Deployment 对象的功能，在集群内管理 ReplicaSet 的滚动更新。
+- en: DaemonSets can be rolled out using the same `RollingUpdate` strategy that Deployments
+    use. You can configure the update strategy using the `spec.update​Strat⁠egy.type`
+    field, which should have the value `RollingUpdate`. When a DaemonSet has an update
+    strategy of `RollingUpdate`, any change to the `spec.template` field (or subfields)
+    in the DaemonSet will initiate a rolling update.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以使用与 Deployments 相同的 `RollingUpdate` 策略推出 DaemonSets。可以使用 `spec.update​Strat⁠egy.type`
+    字段配置更新策略，该字段的值应为 `RollingUpdate`。当 DaemonSet 具有 `RollingUpdate` 的更新策略时，对 DaemonSet
+    中的 `spec.template` 字段（或子字段）进行任何更改将启动滚动更新。
+- en: 'As with rolling updates of Deployments (see [Chapter 10](ch10.xhtml#deployments_chapter)),
+    the `RollingUpdate` strategy gradually updates members of a DaemonSet until all
+    of the Pods are running the new configuration. There are two parameters that control
+    the rolling update of a DaemonSet:'
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与 Deployments 的滚动更新类似（参见 [第 10 章](ch10.xhtml#deployments_chapter)），`RollingUpdate`
+    策略逐步更新 DaemonSet 的成员，直到所有 Pod 都在新配置下运行。有两个参数控制 DaemonSet 的滚动更新：
+- en: '`spec.minReadySeconds`'
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`spec.minReadySeconds`'
+- en: Determines how long a Pod must be “ready” before the rolling update proceeds
+    to upgrade subsequent Pods
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 确定 Pod 必须“准备就绪”多长时间，然后滚动更新才能继续升级后续 Pod
+- en: '`spec.updateStrategy.rollingUpdate.maxUnavailable`'
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`spec.updateStrategy.rollingUpdate.maxUnavailable`'
+- en: Indicates how many Pods may be simultaneously updated by the rolling update
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 指示可以同时更新多少个 Pod 的滚动更新
+- en: You will likely want to set `spec.minReadySeconds` to a reasonably long value,
+    for example 30–60 seconds, to ensure that your Pod is truly healthy before the
+    rollout proceeds.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常应设置 `spec.minReadySeconds` 为一个合理较长的值，例如 30-60 秒，以确保 Pod 在继续推出之前确实健康。
+- en: The setting for `spec.updateStrategy.rollingUpdate.maxUnavailable` is more likely
+    to be application-dependent. Setting it to `1` is a safe, general-purpose strategy,
+    but it also takes a while to complete the rollout (number of nodes × `minReady​Sec⁠onds`).
+    Increasing the maximum unavailability will make your rollout move faster, but
+    increases the “blast radius” of a failed rollout. The characteristics of your
+    application and cluster environment dictate the relative values of speed versus
+    safety. A good approach might be to set `maxUnavailable` to `1` and only increase
+    it if users or administrators complain about DaemonSet rollout speed.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 设置 `spec.updateStrategy.rollingUpdate.maxUnavailable` 更可能依赖于应用程序。将其设置为 `1` 是一种安全的通用策略，但完全推出可能需要一段时间（节点数
+    × `minReady​Sec⁠onds`）。增加最大不可用性将加快推出速度，但会增加失败推出的“影响范围”。应用程序和集群环境的特性决定了速度与安全性之间的相对值。一个好的方法可能是将
+    `maxUnavailable` 设置为 `1`，并仅在用户或管理员投诉 DaemonSet 推出速度时才增加它。
+- en: Once a rolling update has started, you can use the `kubectl rollout` commands
+    to see the current status of a DaemonSet rollout. For example, `kubectl rollout
+    status daemonSets my-daemon-set` will show the current rollout status of a DaemonSet
+    named `my-daemon-set`.
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦开始滚动更新，您可以使用 `kubectl rollout` 命令查看 DaemonSet 推出的当前状态。例如，`kubectl rollout
+    status daemonSets my-daemon-set` 将显示名为 `my-daemon-set` 的 DaemonSet 的当前推出状态。
+- en: Deleting a DaemonSet
+  id: totrans-59
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 删除 DaemonSet
+- en: 'Deleting a DaemonSet using the `kubectl delete` command is pretty straightfoward.
+    Just be sure to supply the correct name of the DaemonSet you would like to delete:'
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 `kubectl delete` 命令删除 DaemonSet 非常简单。只需确保提供要删除的 DaemonSet 的正确名称：
+- en: '[PRE11]'
+  id: totrans-61
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: Warning
+  id: totrans-62
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Deleting a DaemonSet will also delete all the Pods being managed by that DaemonSet.
+    Set the `--cascade` flag to `false` to ensure only the DaemonSet is deleted and
+    not the Pods.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 删除 DaemonSet 还将删除由该 DaemonSet 管理的所有 Pod。设置 `--cascade` 标志为 `false`，以确保仅删除 DaemonSet
+    而不是 Pod。
+- en: Summary
+  id: totrans-64
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 总结
+- en: DaemonSets provide an easy-to-use abstraction for running a set of Pods on every
+    node in a Kubernetes cluster, or, if the case requires it, on a subset of nodes
+    based on labels. The DaemonSet provides its own controller and scheduler to ensure
+    key services like monitoring agents are always up and running on the right nodes
+    in your cluster.
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: DaemonSets 提供了在 Kubernetes 集群中每个节点上运行一组 Pod 的易用抽象，或者根据标签在节点子集上运行。DaemonSet 提供了自己的控制器和调度器，以确保关键服务如监控代理始终在集群中的正确节点上运行。
+- en: For some applications, you simply want to schedule a certain number of replicas;
+    you don’t really care where they run as long as they have sufficient resources
+    and distribution to operate reliably. However, there is a different class of applications,
+    like agents and monitoring applications, that needs to be present on every machine
+    in a cluster to function properly. These DaemonSets aren’t really traditional
+    serving applications, but rather add additional capabilities and features to the
+    Kubernetes cluster itself. Because the DaemonSet is an active declarative object
+    managed by a controller, it makes it easy to declare your intent that an agent
+    run on every machine without explicitly placing it on every machine. This is especially
+    useful in the context of an autoscaled Kubernetes cluster where nodes may constantly
+    be coming and going without user intervention. In such cases, the DaemonSet automatically
+    adds the proper agents to each node as the autoscaler adds the node to the cluster.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于某些应用程序，你只需安排一定数量的副本；只要它们具有足够的资源和分布以可靠地运行，你并不关心它们运行在哪里。然而，有一类不同的应用程序，如代理和监控应用程序，需要在集群中的每台机器上都存在才能正常工作。这些守护集并不是传统的服务应用程序，而是为
+    Kubernetes 集群本身添加额外功能和特性。因为守护集是由控制器管理的主动声明对象，因此很容易声明你希望代理在每台机器上运行，而无需显式地将其放置在每台机器上。在自动缩放的
+    Kubernetes 集群中尤其有用，因为节点可能会不断地添加和移除而无需用户干预。在这种情况下，守护集会在自动缩放器将节点添加到集群时自动向每个节点添加适当的代理。

@@ -1,0 +1,575 @@
+- en: 'Chapter 5\. Sample Application: Visitors Site'
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第五章。示例应用程序：访客站点
+- en: Real, production-level applications are difficult. Container-based architectures
+    are often made up of multiple services, each requiring their own configuration
+    and installation process. Maintaining these types of applications, including the
+    individual components and their interactions, is a time-consuming and error-prone
+    process. Operators are designed to reduce the difficulty in this process.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 真实的生产级应用程序很难。基于容器的架构通常由多个服务组成，每个服务都需要自己的配置和安装过程。维护这些类型的应用程序，包括各个组件及其交互，是一个耗时且容易出错的过程。操作员的设计目的在于简化此过程的复杂性。
+- en: A simple, one–container “Hello World” application isn’t going to provide enough
+    complexity to fully demonstrate what Operators can do. To really help you understand
+    the capabilities of Operators, we need an application that requires multiple Kubernetes
+    resources with configuration values that cross between them to use for demonstration.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 简单的单容器“Hello World”应用程序不足以展示操作员的全部功能。为了帮助您真正理解操作员的能力，我们需要一个需要多个 Kubernetes 资源、配置值交叉使用的应用程序作为演示。
+- en: In this chapter we introduce the Visitors Site application, which we will use
+    as an example in the following chapters that cover writing Operators. We’ll take
+    a look at the application architecture and how to run the site, as well as the
+    process of installing it through traditional Kubernetes manifests. In the chapters
+    that follow, we’ll create Operators to deploy this application using each of the
+    approaches provided by the Operator SDK (Helm, Ansible, and Go), and explore the
+    benefits and drawbacks of each.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们介绍了访客站点应用程序，这将作为接下来涵盖操作员编写的章节的示例。我们将查看应用程序架构以及运行站点和通过传统的 Kubernetes 清单安装它的过程。在接下来的章节中，我们将使用
+    Operator SDK（Helm、Ansible 和 Go 提供的各种方法）创建操作员来部署此应用程序，并探讨每种方法的利弊。
+- en: Application Overview
+  id: totrans-4
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 应用程序概述
+- en: The Visitors Site tracks information about each request to its home page. Each
+    time the page is refreshed, an entry is stored with details about the client,
+    backend server, and timestamp. The home page displays a list of the most recent
+    visits (as shown in [Figure 5-1](#fig5-1)).
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 访客站点追踪有关每个对其主页的请求的信息。每次刷新页面时，都会存储一个包含客户端、后端服务器和时间戳详细信息的条目。主页显示最近访问的列表（如[图 5-1](#fig5-1)所示）。
+- en: '![Figure 5-1: Visitors Site Homepage](assets/kuop_0501.png)'
+  id: totrans-6
+  prefs: []
+  type: TYPE_IMG
+  zh: '![图 5-1：访客站点主页](assets/kuop_0501.png)'
+- en: Figure 5-1\. Visitors Site home page
+  id: totrans-7
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-1。访客站点主页
+- en: 'While the home page itself is fairly simple, the architecture is what makes
+    this an interesting example for exploring Operators. The Visitors Site is a traditional,
+    three-tier application, consisting of:'
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管主页本身相当简单，但架构使其成为一个探索操作员的有趣示例。访客站点是一个传统的三层应用程序，包括：
+- en: A web frontend, implemented in [React](https://reactjs.org/)
+  id: totrans-9
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一个 web 前端，使用[React](https://reactjs.org/)实现
+- en: A REST API, implemented in [Python](https://www.python.org/) using [the Django
+    framework](https://www.djangoproject.com/)
+  id: totrans-10
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一个 REST API，使用[Python](https://www.python.org/)和[Django 框架](https://www.djangoproject.com/)实现
+- en: A database, using [MySQL](https://www.mysql.com/)
+  id: totrans-11
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用[MySQL](https://www.mysql.com/)的数据库
+- en: As shown in [Figure 5-2](#fig5-2), each of these components is deployed as a
+    separate container. The flow is simple, with users interacting with the web interface,
+    which itself makes calls to the backend REST API. The data submitted to the REST
+    API is persisted in a MySQL database, which also runs as its own container.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如[图 5-2](#fig5-2)所示，每个组件都部署为单独的容器。流程简单，用户与 web 接口交互，接口本身调用后端 REST API。提交到 REST
+    API 的数据持久存储在 MySQL 数据库中，该数据库也作为其自己的容器运行。
+- en: '![Figure 5-2: Visitors Site Architecture](assets/kuop_0502.png)'
+  id: totrans-13
+  prefs: []
+  type: TYPE_IMG
+  zh: '![图 5-2：访客站点架构](assets/kuop_0502.png)'
+- en: Figure 5-2\. Visitors Site architecture
+  id: totrans-14
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-2。访客站点架构
+- en: Note that the database does not connect to a persistent volume and stores its
+    data ephemerally. While this isn’t a suitable production solution, for the purposes
+    of this example the important aspects are the deployments and interactions between
+    the containers themselves.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，数据库不连接到持久卷，并且临时存储其数据。虽然这不是适合生产的解决方案，但在本示例中，重要的是部署和容器之间的交互。
+- en: Installation with Manifests
+  id: totrans-16
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用清单进行安装
+- en: 'Each component in the Visitors Site requires two Kubernetes resources:'
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 访客站点中的每个组件都需要两个 Kubernetes 资源：
+- en: Deployment
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 部署
+- en: Contains the information needed to create the containers, including the image
+    name, exposed ports, and specific configuration for a single deployment.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 包含创建容器所需的信息，包括镜像名称、公开端口和单个部署的特定配置。
+- en: Service
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 服务
+- en: A network abstraction across all containers in a deployment. If a deployment
+    is scaled up beyond one container, which we will do with the backend, the service
+    sits in front and balances incoming requests across all of the replicas.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 部署中的所有容器之间的网络抽象。如果部署的容器数量超过一个（这将在后端完成），服务将位于前端并在所有副本之间平衡传入的请求。
+- en: A third resource is used to store the authentication details for the database.
+    The MySQL container uses this *secret* when it is started, and the backend containers
+    use it to authenticate against the database when making requests.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 第三个资源用于存储数据库的认证详细信息。MySQL容器在启动时使用此*密钥*，后端容器在发出请求时使用它进行数据库认证。
+- en: Additionally, there are configuration values that must be consistent between
+    components. For example, the backend needs to know the name of the database service
+    to connect to. When deploying applications through manifests, awareness of these
+    relationships is required to ensure that the values line up.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此外，组件之间必须保持一致的配置值。例如，后端需要知道连接的数据库服务的名称。在通过清单部署应用程序时，需要意识到这些关系，以确保这些值对应正确。
+- en: In the following manifests, the provided values will produce a working Visitors
+    Site deployment. Each section will highlight specific instances where user intervention
+    was required.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在以下清单中，提供的数值将产生一个可工作的访客网站部署。每个部分将突出需要用户干预的具体实例。
+- en: You can find all of the manifests in the [book’s GitHub repository](https://github.com/kubernetes-operators-book/chapters/tree/master/ch05).
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可以在[书籍的GitHub存储库](https://github.com/kubernetes-operators-book/chapters/tree/master/ch05)中找到所有的清单。
+- en: Deploying MySQL
+  id: totrans-26
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 部署MySQL
+- en: 'The secret must be created before the database is deployed, since it is used
+    during the container startup:'
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在部署数据库之前必须创建密钥，因为它在容器启动期间被使用：
+- en: '[PRE0]'
+  id: totrans-28
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: '[![1](assets/1.png)](#co_sample_application__visitors_site_CO1-1)'
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_sample_application__visitors_site_CO1-1)'
+- en: When the database and backend deployments use the secret, it is referred to
+    by this name.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当数据库和后端部署使用密钥时，它被此名称引用。
+- en: '[![2](assets/2.png)](#co_sample_application__visitors_site_CO1-2)'
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_sample_application__visitors_site_CO1-2)'
+- en: For simplicity in this example, the username and password are defaulted to testing
+    values.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 简单起见，在本示例中，用户名和密码默认为测试值。
+- en: You can find the definition for the secret resource in the *database.yaml* file
+    in this book’s [GitHub repository](https://oreil.ly/jZTgt).
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可以在本书的[GitHub存储库](https://oreil.ly/jZTgt)的*database.yaml*文件中找到密钥资源的定义。
+- en: 'Once the secret is in place, use the following manifest to deploy a MySQL instance
+    into Kubernetes:'
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦密钥就位，使用以下清单部署MySQL实例到Kubernetes中：
+- en: '[PRE1]'
+  id: totrans-35
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: '[![1](assets/1.png)](#co_sample_application__visitors_site_CO2-1)'
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_sample_application__visitors_site_CO2-1)'
+- en: The deployment name must be unique to the namespace in which it is deployed.
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 部署名称必须在部署的命名空间中是唯一的。
+- en: '[![2](assets/2.png)](#co_sample_application__visitors_site_CO2-2)'
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_sample_application__visitors_site_CO2-2)'
+- en: The deployment requires the details of the image to deploy, including its name
+    and hosting repository.
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 部署需要包含其名称和托管存储库的映像的详细信息。
+- en: '[![3](assets/3.png)](#co_sample_application__visitors_site_CO2-3)'
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_sample_application__visitors_site_CO2-3)'
+- en: Users must be aware of each port that the image exposes, and must explicitly
+    reference them.
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用户必须了解镜像公开的每个端口，并明确引用它们。
+- en: '[![4](assets/4.png)](#co_sample_application__visitors_site_CO2-4)'
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_sample_application__visitors_site_CO2-4)'
+- en: The values used to configure the containers for this specific deployment are
+    passed as environment variables.
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用于配置此特定部署的容器的值通过环境变量传递。
+- en: '[![5](assets/5.png)](#co_sample_application__visitors_site_CO2-5)'
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#co_sample_application__visitors_site_CO2-5)'
+- en: The secret provides the values for the database authentication credentials.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 该密钥提供了数据库认证凭据的值。
+- en: Keep in mind the value of the container port, as well as each of the environment
+    variables, as other manifests use these values.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要记住容器端口的值，以及每个环境变量的值，因为其他清单使用这些值。
+- en: 'The deployment causes the creation of the MySQL container; however, it does
+    not provide any ingress configuration on how to access it. For that, we will need
+    a service. The following manifest will create a Kubernetes service that provides
+    access to the MySQL deployment:'
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 部署将创建MySQL容器；然而，它不提供任何入口配置来访问它。为此，我们将需要一个服务。以下清单将创建一个Kubernetes服务，提供对MySQL部署的访问：
+- en: '[PRE2]'
+  id: totrans-48
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: '[![1](assets/1.png)](#co_sample_application__visitors_site_CO3-1)'
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_sample_application__visitors_site_CO3-1)'
+- en: As with deployments, service names must be unique in a given namespace. This
+    will also apply to the deployment and services for the backend and frontend components.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与部署一样，服务名称在给定的命名空间中必须是唯一的。这也适用于后端和前端组件的部署和服务。
+- en: '[![2](assets/2.png)](#co_sample_application__visitors_site_CO3-2)'
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_sample_application__visitors_site_CO3-2)'
+- en: The service maps to a port exposed by a deployment, so this value must be the
+    same as in the `ports` section of the deployment.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 服务映射到部署暴露的端口，因此此值必须与部署的`ports`部分中的值相同。
+- en: Backend
+  id: totrans-53
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 后端
+- en: 'Similar to the MySQL resources, the backend needs both a deployment and a service.
+    However, whereas the database is standalone, the configuration for the backend
+    relies heavily on the values set for the database. While this isn’t an unreasonable
+    requirement, it falls on the user to ensure that the values are consistent across
+    both resources. A single error could result in the backend not being able to communicate
+    with the database. Here’s the manifest to deploy the backend:'
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与MySQL资源类似，后端需要部署和服务。然而，与数据库独立不同，后端的配置严重依赖于为数据库设置的值。虽然这并不是不合理的要求，但用户需要确保这些值在两个资源中保持一致。一个错误可能导致后端无法与数据库通信。这是部署后端的清单：
+- en: '[PRE3]'
+  id: totrans-55
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: '[![1](assets/1.png)](#co_sample_application__visitors_site_CO4-1)'
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_sample_application__visitors_site_CO4-1)'
+- en: Each deployment configuration includes the number of containers it should spawn.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个部署配置都包括它应该生成的容器数量。
+- en: '[![2](assets/2.png)](#co_sample_application__visitors_site_CO4-2)'
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_sample_application__visitors_site_CO4-2)'
+- en: These values must be manually checked to ensure they match up with the values
+    set on the MySQL deployment. Otherwise, the backend will not be able to establish
+    a connection to the database.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 必须手动检查这些值，以确保它们与MySQL部署上设置的值匹配。否则，后端将无法与数据库建立连接。
+- en: '[![3](assets/3.png)](#co_sample_application__visitors_site_CO4-3)'
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_sample_application__visitors_site_CO4-3)'
+- en: This value tells the backend where to find the database and must match the name
+    of the MySQL service created previously.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此值告诉后端应用程序在哪里找到数据库，必须与先前创建的MySQL服务的名称匹配。
+- en: '[![4](assets/4.png)](#co_sample_application__visitors_site_CO4-4)'
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_sample_application__visitors_site_CO4-4)'
+- en: As with the database deployment, the secret provides the authentication credentials
+    for the database.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与数据库部署一样，密钥提供数据库的身份验证凭据。
+- en: One of the major benefits of using containerized applications is the ability
+    they give you to individually scale specific components. In the backend deployment
+    shown here, the `replicas` field can be modified to scale the backend. The example
+    Operators in the following chapters use a custom resource to expose this replica
+    count as a first-class configuration value of the Visitors Site custom resource.
+    Users do not need to manually navigate to the specific backend deployment as they
+    do when using manifests. The Operator knows how to appropriately use the entered
+    value.
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用容器化应用程序的主要好处之一是它们使您能够单独扩展特定组件。在此处显示的后端部署中，可以修改`replicas`字段来扩展后端。以下章节中的示例操作员使用自定义资源来将此副本计数公开为访问者站点自定义资源的一流配置值。用户不需要手动导航到特定后端部署，就像使用清单时一样。操作员知道如何适当地使用输入的值。
+- en: 'The service manifest looks similar to the one you created for the database:'
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 服务清单看起来与您为数据库创建的服务清单类似：
+- en: '[PRE4]'
+  id: totrans-66
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: '[![1](assets/1.png)](#co_sample_application__visitors_site_CO5-1)'
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_sample_application__visitors_site_CO5-1)'
+- en: As with the database service, the port referenced in the service definition
+    must match up with that exposed by the deployment.
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与数据库服务一样，服务定义中引用的端口必须与部署暴露的端口相匹配。
+- en: '[![2](assets/2.png)](#co_sample_application__visitors_site_CO5-2)'
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_sample_application__visitors_site_CO5-2)'
+- en: In this example, the backend is configured to run through port 30685 on the
+    same IP as Minikube. The frontend uses this port when making backend calls for
+    data. For simplicity, the frontend defaults to using this value, so it does not
+    need to be specified when the frontend is deployed.
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在此示例中，后端配置为通过与Minikube相同的IP地址的端口30685运行。前端在获取数据时使用此端口进行后端调用。为简化起见，前端默认使用此值，因此在部署前端时无需指定。
+- en: Frontend
+  id: totrans-71
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 前端
+- en: 'The frontend is in a similar position as the backend in the sense that it needs
+    configuration that is consistent with the backend deployment. Once again, it falls
+    on the user to manually verify that these values are consistent in both locations.
+    Here’s the manifest that creates the frontend deployment:'
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与后端部署类似，前端需要与后端部署一致的配置。再次，用户需要手动验证这些值在两个位置上是否一致。以下是创建前端部署的清单：
+- en: '[PRE5]'
+  id: totrans-73
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: '[![1](assets/1.png)](#co_sample_application__visitors_site_CO6-1)'
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_sample_application__visitors_site_CO6-1)'
+- en: To make the Visitors Site application more interesting, you can override the
+    home page title through an environment variable. The CR you’ll learn how to create
+    in the next chapters will expose it as a value of the Visitors Site, shielding
+    end users from having to know in which deployment to specify the value.
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为使访客站点应用程序更加有趣，您可以通过环境变量覆盖主页标题。在接下来的章节中，您将学习如何通过CR将其公开为访客站点的值，使终端用户无需知道在哪个部署中指定该值。
+- en: 'Similar to the MySQL and backend deployments, the following manifest creates
+    a service that provides access to the frontend deployment:'
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与MySQL和后端部署类似，以下清单创建了一个服务，用于访问前端部署：
+- en: '[PRE6]'
+  id: totrans-77
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: '[![1](assets/1.png)](#co_sample_application__visitors_site_CO7-1)'
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_sample_application__visitors_site_CO7-1)'
+- en: The frontend service looks very similar to the backend service, with the notable
+    difference that it runs on port 30686.
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 前端服务看起来与后端服务非常相似，但有一个显著的区别，即它在端口30686上运行。
+- en: Deploying the Manifests
+  id: totrans-80
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 部署清单
+- en: 'You can run the Visitors Site for yourself using the `kubectl` command:'
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用`kubectl`命令自行运行访客站点：
+- en: '[PRE7]'
+  id: totrans-82
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: Accessing the Visitors Site
+  id: totrans-83
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 访问访客站点
+- en: 'Using these manifests, you can find the home page by using the IP address of
+    the Minikube instance and specifying port 30686 in your browser. The `minikube`
+    command provides the IP address to access:'
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用这些清单，您可以通过使用Minikube实例的IP地址并在浏览器中指定端口30686来找到主页。`minikube`命令提供了访问的IP地址：
+- en: '[PRE8]'
+  id: totrans-85
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: For this Minikube instance, you can access the Visitors Site by opening a browser
+    and going to *http://192.168.99.100:30686*.
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于此Minikube实例，您可以通过打开浏览器并转到*http://192.168.99.100:30686*来访问访客站点。
+- en: Clicking refresh a few times will populate the table on that page with details
+    of the internal cluster IP and the timestamp of each request, as previously shown
+    in [Figure 5-1](#fig5-1).
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 点击几次刷新按钮将在该页面上的表格中填充内部集群IP和每个请求的时间戳的详细信息，如前文中所示的[图5-1](#fig5-1)。
+- en: Cleaning Up
+  id: totrans-88
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 清理工作
+- en: 'Similar to deploying the manifests, you delete the created resources using
+    the `kubectl` command:'
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 类似于部署清单，您可以使用`kubectl`命令删除创建的资源：
+- en: '[PRE9]'
+  id: totrans-90
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: Summary
+  id: totrans-91
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 摘要
+- en: We will use this sample application in the following chapters to demonstrate
+    a variety of technologies on which you can build Operators.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将在接下来的章节中使用这个示例应用程序来演示多种技术，您可以在其上构建运算符。
+- en: In addition to the Operator implementations, keep in mind the end user experience.
+    In this chapter we demonstrated a manifest-based installation, requiring a number
+    of manual changes and internal references to be made. All of the following Operator
+    implementations create a custom resource definition that acts as the sole API
+    for creating and configuring an instance of the Visitors Site.
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了运算符实现外，还要考虑最终用户的体验。在本章中，我们展示了基于清单的安装，需要进行多项手动更改和内部引用。所有以下运算符实现都会创建一个自定义资源定义，作为创建和配置访客站点实例的唯一API。

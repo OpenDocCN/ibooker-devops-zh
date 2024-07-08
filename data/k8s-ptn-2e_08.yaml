@@ -1,0 +1,1128 @@
+- en: Chapter 6\. Automated Placement
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第6章 自动化部署
+- en: '*Automated Placement* is the core function of the Kubernetes scheduler for
+    assigning new Pods to nodes that match container resource requests and honor scheduling
+    policies. This pattern describes the principles of the Kubernetes scheduling algorithm
+    and how to influence the placement decisions from the outside.'
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*自动化部署* 是 Kubernetes 调度器的核心功能，用于将新的 Pod 分配给符合容器资源请求并遵守调度策略的节点。此模式描述了 Kubernetes
+    调度算法的原则以及如何从外部影响部署决策。'
+- en: Problem
+  id: totrans-2
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 问题
+- en: A reasonably sized microservices-based system consists of tens or even hundreds
+    of isolated processes. Containers and Pods do provide nice abstractions for packaging
+    and deployment but do not solve the problem of placing these processes on suitable
+    nodes. With a large and ever-growing number of microservices, assigning and placing
+    them individually to nodes is not a manageable activity.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个合理大小的基于微服务的系统由数十甚至数百个隔离的进程组成。容器和 Pod 提供了打包和部署的良好抽象，但并没有解决将这些进程放置在合适节点上的问题。对于数量庞大且不断增长的微服务，单独将它们分配和放置到节点上是一项不可管理的活动。
+- en: Containers have dependencies among themselves, dependencies to nodes, and resource
+    demands, and all of that changes over time too. The resources available on a cluster
+    also vary over time, through shrinking or extending the cluster or by having it
+    consumed by already-placed containers. The way we place containers impacts the
+    availability, performance, and capacity of the distributed systems as well. All
+    of that makes scheduling containers to nodes a moving target.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器彼此之间存在依赖关系，与节点之间存在依赖关系，并且存在资源需求，所有这些都随时间而变化。集群上可用的资源也随时间变化，通过缩小或扩展集群或通过已放置容器来消耗它。我们放置容器的方式也影响分布系统的可用性、性能和容量。所有这些都使得将容器调度到节点成为一个动态目标。
+- en: Solution
+  id: totrans-5
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 解决方案
+- en: In Kubernetes, assigning Pods to nodes is done by the scheduler. It is a part
+    of Kubernetes that is highly configurable, and it is still evolving and improving.
+    In this chapter, we cover the main scheduling control mechanisms, driving forces
+    that affect the placement, why to choose one or the other option, and the resulting
+    consequences. The Kubernetes scheduler is a potent and time-saving tool. It plays
+    a fundamental role in the Kubernetes platform as a whole, but similar to other
+    Kubernetes components (API Server, Kubelet), it can be run in isolation or not
+    used at all.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 中，将 Pod 分配给节点是由调度器完成的。它是 Kubernetes 的一个高度可配置的部分，并且仍在不断演进和改进中。在本章中，我们将涵盖主要的调度控制机制，影响部署位置的驱动因素，为何选择其中一种选项以及由此产生的后果。Kubernetes
+    调度器是一个强大且节省时间的工具。它在整个 Kubernetes 平台中起着基础性作用，但类似于其他 Kubernetes 组件（API 服务器、Kubelet），它可以独立运行或完全不使用。
+- en: At a very high level, the main operation the Kubernetes scheduler performs is
+    to retrieve each newly created Pod definition from the API Server and assign it
+    to a node. It finds the most suitable node for every Pod (as long as there is
+    such a node), whether that is for the initial application placement, scaling up,
+    or when moving an application from an unhealthy node to a healthier one. It does
+    this by considering runtime dependencies, resource requirements, and guiding policies
+    for high availability; by spreading Pods horizontally; and also by colocating
+    Pods nearby for performance and low-latency interactions. However, for the scheduler
+    to do its job correctly and allow declarative placement, it needs nodes with available
+    capacity and containers with declared resource profiles and guiding policies in
+    place. Let’s look at each of these in more detail.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在非常高的层次上，Kubernetes 调度器执行的主要操作是从 API 服务器检索每个新创建的 Pod 定义，并将其分配给节点。它为每个 Pod 找到最合适的节点（只要有这样的节点），无论是用于初始应用程序部署、扩展还是在将应用程序从不健康节点移动到健康节点时。它通过考虑运行时依赖关系、资源需求以及高可用性的指导策略来实现这一点；通过水平扩展
+    Pods 进行分布；并且通过在性能和低延迟交互方面将 Pods 放置在附近。然而，为了使调度器能够正确地执行其工作并允许声明式部署，它需要具有可用容量的节点和已声明资源配置和指导策略的容器。让我们更详细地看看每个方面。
+- en: Available Node Resources
+  id: totrans-8
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 可用节点资源
+- en: First of all, the Kubernetes cluster needs to have nodes with enough resource
+    capacity to run new Pods. Every node has capacity available for running Pods,
+    and the scheduler ensures that the sum of the container resources requested for
+    a Pod is less than the available allocatable node capacity. Considering a node
+    dedicated only to Kubernetes, its capacity is calculated using the following formula
+    in [Example 6-1](#ex-node-resources).
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，Kubernetes 集群需要具有足够资源容量的节点来运行新的 Pods。每个节点都有用于运行 Pods 的可用容量，并且调度器确保为 Pod 请求的容器资源总和小于可分配的节点容量。考虑到一个专门用于
+    Kubernetes 的节点，其容量使用以下公式计算，详见 [示例 6-1](#ex-node-resources)。
+- en: Example 6-1\. Node capacity
+  id: totrans-10
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 6-1\. 节点容量
+- en: '[PRE0]'
+  id: totrans-11
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: If you don’t reserve resources for system daemons that power the OS and Kubernetes
+    itself, the Pods can be scheduled up to the full capacity of the node, which may
+    cause Pods and system daemons to compete for resources, leading to resource starvation
+    issues on the node. Even then, memory pressure on the node can affect all Pods
+    running on it through OOMKilled errors or cause the node to go temporarily offline.
+    OOMKilled is an error message displayed when the Linux kernel’s Out-of-Memory
+    (OOM) killer terminates a process because the system is out of memory. Eviction
+    thresholds are the last resort for the Kubelet to reserve memory on the node and
+    attempt to evict Pods when the available memory drops below the reserved value.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果不为操作系统和 Kubernetes 本身的系统守护程序保留资源，则 Pods 可以被调度到节点的全部容量，这可能导致 Pods 和系统守护程序竞争资源，从而导致节点上的资源匮乏问题。即使如此，节点上的内存压力也可能通过
+    OOMKilled 错误影响运行在其上的所有 Pods，或导致节点暂时下线。OOMKilled 是 Linux 内核因内存不足而终止进程时显示的错误消息。当可用内存低于保留值时，驱逐阈值是
+    Kubelet 为保留节点上的内存并尝试驱逐 Pods 的最后手段。
+- en: Also keep in mind that if containers are running on a node that is not managed
+    by Kubernetes, the resources used by these containers are not reflected in the
+    node capacity calculations by Kubernetes. A workaround is to run a placeholder
+    Pod that doesn’t do anything but has only resource requests for CPU and memory
+    corresponding to the untracked containers’ resource use amount. Such a Pod is
+    created only to represent and reserve the resource consumption of the untracked
+    containers and helps the scheduler build a better resource model of the node.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此外，请注意，如果容器运行在不受 Kubernetes 管理的节点上，则这些容器使用的资源不会反映在 Kubernetes 对节点容量计算中。一个解决方法是运行一个占位
+    Pod，它什么都不做，但只有对应于未跟踪的容器资源使用量的 CPU 和内存请求。这样的 Pod 只创建用于表示和保留未跟踪容器的资源消耗，并帮助调度器构建节点的更好资源模型。
+- en: Container Resource Demands
+  id: totrans-14
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 容器资源需求
+- en: Another important requirement for an efficient Pod placement is to define the
+    containers’ runtime dependencies and resource demands. We covered that in more
+    detail in [Chapter 2, “Predictable Demands”](ch02.html#PredictableDemands). It
+    boils down to having containers that declare their resource profiles (with `request`
+    and `limit`) and environment dependencies such as storage or ports. Only then
+    are Pods optimally assigned to nodes and can run without affecting one another
+    and facing resource starvation during peak usage.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有效的 Pod 放置的另一个重要要求是定义容器的运行时依赖和资源需求。我们在 [第二章，“可预测的需求”](ch02.html#PredictableDemands)
+    中更详细地讨论了这一点。它归结为具有声明其资源配置文件（使用 `request` 和 `limit`）以及存储或端口等环境依赖项的容器。只有这样，Pods
+    才能被最优地分配到节点上，并且在高峰使用期间可以运行而不相互影响或面临资源匮乏问题。
+- en: Scheduler Configurations
+  id: totrans-16
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 调度器配置
+- en: The next piece of the puzzle is having the right filtering or priority configurations
+    for your cluster needs. The scheduler has a default set of predicate and priority
+    policies configured that is good enough for most use cases. In Kubernetes versions
+    before v1.23, a scheduling policy can be used to configure the predicates and
+    priorities of a scheduler. Newer versions of Kubernetes moved to scheduling profiles
+    to achieve the same effect. This new approach exposes the different steps of the
+    scheduling process as an extension point and allows you to configure plugins that
+    override the default implementations of the steps. [Example 6-2](#ex-scheduler-plugin)
+    demonstrates how to override the `PodTopologySpread` plugin from the `score` step
+    with custom plugins.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下一个拼图是为您的集群需求配置正确的过滤或优先级配置。调度程序已配置了一组默认的断言和优先级策略，适用于大多数用例。在 Kubernetes v1.23
+    之前的版本中，可以使用调度策略来配置调度器的断言和优先级。Kubernetes 的新版本使用调度配置文件来实现相同的效果。这种新方法将调度过程的不同步骤暴露为扩展点，并允许您配置覆盖步骤的默认实现的插件。[示例 6-2](#ex-scheduler-plugin)
+    演示了如何使用自定义插件覆盖从 `score` 步骤中的 `PodTopologySpread` 插件。
+- en: Example 6-2\. A scheduler configuration
+  id: totrans-18
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 6-2\. 调度器配置
+- en: '[PRE1]'
+  id: totrans-19
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: '[![1](assets/1.png)](#co_automated_placement_CO1-1)'
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_automated_placement_CO1-1)'
+- en: The plugins in this phase provide a score to each node that has passed the filtering
+    phase.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在此阶段的插件为每个通过过滤阶段的节点提供评分。
+- en: '[![2](assets/2.png)](#co_automated_placement_CO1-2)'
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_automated_placement_CO1-2)'
+- en: This plugin implements topology spread constraints that we will see later in
+    the chapter.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此插件实现了稍后在本章中将看到的拓扑扩展约束。
+- en: '[![3](assets/3.png)](#co_automated_placement_CO1-3)'
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_automated_placement_CO1-3)'
+- en: The disabled plugin in the previous step is replaced by a new one.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在前一步中禁用的插件被新插件所替换。
+- en: Caution
+  id: totrans-26
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Scheduler plugins and custom schedulers should be defined only by an administrator
+    as part of the cluster configuration. As a regular user deploying applications
+    on a cluster, you can just refer to predefined schedulers.
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 只有管理员作为集群配置的一部分才能定义调度程序插件和自定义调度程序。作为在集群上部署应用程序的普通用户，您只需引用预定义的调度程序。
+- en: By default, the scheduler uses the default-scheduler profile with default plugins.
+    It is also possible to run multiple schedulers on the cluster, or multiple profiles
+    on the scheduler, and allow Pods to specify which profile to use. Each profile
+    must have a unique name. Then when defining a Pod, you can add the field `.spec.schedulerName`
+    with the name of your profile to the Pod specification, and the Pod will be processed
+    by the desired scheduler profile.
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，调度器使用默认的调度器配置文件和默认插件。还可以在集群上运行多个调度器，或在调度器上运行多个配置文件，并允许Pod指定使用哪个配置文件。每个配置文件必须具有唯一的名称。然后，在定义Pod时，您可以添加字段
+    `.spec.schedulerName` ，并指定要使用的配置文件名称到Pod的规范中，Pod将由所需的调度器配置文件处理。
+- en: Scheduling Process
+  id: totrans-29
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 调度过程
+- en: Pods get assigned to nodes with certain capacities based on placement policies.
+    For completeness, [Figure 6-1](#img-scheduler) visualizes at a high level how
+    these elements get together and the main steps a Pod goes through when being scheduled.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 根据放置策略，Pod被分配给具有特定容量的节点。为了完整起见，[图 6-1](#img-scheduler) 在高层次上展示了这些元素如何组合以及Pod在调度过程中经历的主要步骤。
+- en: '![A Pod to node assignment process](assets/kup2_0601.png)'
+  id: totrans-31
+  prefs: []
+  type: TYPE_IMG
+  zh: '![一个Pod到节点分配过程](assets/kup2_0601.png)'
+- en: Figure 6-1\. A Pod-to-node assignment process
+  id: totrans-32
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-1\. 一个Pod到节点的分配过程
+- en: As soon as a Pod is created that is not assigned to a node yet, it gets picked
+    by the scheduler together with all the available nodes and the set of filtering
+    and priority policies. In the first stage, the scheduler applies the filtering
+    policies and removes all nodes that do not qualify. Nodes that meet the Pod’s
+    scheduling requirements are called *feasible nodes*. In the second stage, the
+    scheduler runs a set of functions to score the remaining feasible nodes and orders
+    them by weight. In the last stage, the scheduler notifies the API server about
+    the assignment decision, which is the primary outcome of the scheduling process.
+    This whole process is also referred to as *scheduling*, *placement*, *node assignment*,
+    or *binding*.
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦创建了尚未分配到节点的 Pod，调度程序就会与所有可用节点一起选取它以及一组过滤和优先级策略。在第一阶段，调度程序应用过滤策略并删除不符合条件的所有节点。满足
+    Pod 调度要求的节点称为*可行节点*。在第二阶段，调度程序运行一组函数对剩余的可行节点进行评分，并按权重对它们进行排序。在最后阶段，调度程序通知 API
+    服务器有关分配决策的结果，这是调度过程的主要结果。整个过程也称为*调度*、*放置*、*节点分配*或*绑定*。
+- en: 'In most cases, it is better to let the scheduler do the Pod-to-node assignment
+    and not micromanage the placement logic. However, on some occasions, you may want
+    to force the assignment of a Pod to a specific node or group of nodes. This assignment
+    can be done using a node selector. The `.spec.nodeSelector` Pod field specifies
+    a map of key-value pairs that must be present as labels on the node for the node
+    to be eligible to run the Pod. For example, let’s say you want to force a Pod
+    to run on a specific node where you have SSD storage or GPU acceleration hardware.
+    With the Pod definition in [Example 6-3](#ex-node-selector) that has `nodeSelector`
+    matching `disktype: ssd`, only nodes that are labeled with `disktype=ssd` will
+    be eligible to run the Pod.'
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '在大多数情况下，最好让调度程序完成 Pod 到节点的分配，而不是微观管理放置逻辑。但是，在某些情况下，您可能希望强制将 Pod 分配到特定节点或节点组。可以使用节点选择器来执行此分配。`.spec.nodeSelector`
+    Pod 字段指定了必须作为节点上标签存在的键值对映射，以使节点有资格运行 Pod。例如，假设您想要强制将 Pod 运行在具有 SSD 存储或 GPU 加速硬件的特定节点上。使用在[示例 6-3](#ex-node-selector)中具有匹配
+    `disktype: ssd` 的 `nodeSelector` 的 Pod 定义，只有带有 `disktype=ssd` 标签的节点才有资格运行该 Pod。'
+- en: Example 6-3\. Node selector based on type of disk available
+  id: totrans-35
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 6-3\. 基于可用磁盘类型的节点选择器
+- en: '[PRE2]'
+  id: totrans-36
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: '[![1](assets/1.png)](#co_automated_placement_CO2-1)'
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_automated_placement_CO2-1)'
+- en: Set of node labels a node must match to be considered the node of this Pod.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 必须匹配的一组节点标签，以便将该 Pod 视为此节点的节点。
+- en: In addition to specifying custom labels to your nodes, you can use some of the
+    default labels that are present on every node. Every node has a unique `kubernetes.io/hostname`
+    label that can be used to place a Pod on a node by its hostname. Other default
+    labels that indicate the OS, architecture, and instance type can be useful for
+    placement too.
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了向节点指定自定义标签之外，您还可以使用每个节点上都存在的一些默认标签。每个节点都有一个唯一的 `kubernetes.io/hostname` 标签，可以通过其主机名将
+    Pod 放置在节点上。还有其他默认标签，指示操作系统、架构和实例类型，这些标签对于放置也可能很有用。
+- en: Node Affinity
+  id: totrans-40
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 节点亲和性
+- en: Kubernetes supports many more flexible ways to configure the scheduling processes.
+    One such feature is *node affinity*, which is a more expressive way of the node
+    selector approach described previously that allows specifying rules as either
+    required or preferred. *Required rules* must be met for a Pod to be scheduled
+    to a node, whereas preferred rules only imply preference by increasing the weight
+    for the matching nodes without making them mandatory. In addition, the node affinity
+    feature greatly expands the types of constraints you can express by making the
+    language more expressive with operators such as `In`, `NotIn`, `Exists`, `DoesNotExist`,
+    `Gt`, or `Lt`. [Example 6-4](#ex-node-affinity) demonstrates how node affinity
+    is declared.
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 支持许多更灵活的配置调度过程的方法。其中一种功能是*节点亲和性*，它是前面描述的节点选择器方法的更具表现力的方式，允许将规则指定为必需或首选。*必需规则*必须满足才能将
+    Pod 调度到节点，而首选规则只是通过增加匹配节点的权重来表示偏好，而不会使它们成为必需的。此外，节点亲和性功能通过使用诸如 `In`、`NotIn`、`Exists`、`DoesNotExist`、`Gt`
+    或 `Lt` 等运算符使语言更具表现力，极大地扩展了您可以表达的约束类型。[示例 6-4](#ex-node-affinity)演示了如何声明节点亲和性。
+- en: Example 6-4\. Pod with node affinity
+  id: totrans-42
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例   示例 6-4\. 具有节点亲和性的 Pod
+- en: '[PRE3]'
+  id: totrans-43
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: '[![1](assets/1.png)](#co_automated_placement_CO3-1)'
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_automated_placement_CO3-1)'
+- en: Hard requirement that the node must have more than three cores (indicated by
+    a node label) to be considered in the scheduling process. The rule is not reevaluated
+    during execution if the conditions on the node change.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 节点必须具有超过三个核心（由节点标签表示）才能考虑在调度过程中。如果节点上的条件发生变化，则在执行过程中不会重新评估该规则。
+- en: '[![2](assets/2.png)](#co_automated_placement_CO3-2)'
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_automated_placement_CO3-2)'
+- en: Match on labels. In this example, all nodes are matched that have a label `numberCores`
+    with a value greater than 3.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 匹配标签。在此示例中，匹配所有具有值大于 3 的标签 `numberCores` 的节点。
+- en: '[![3](assets/3.png)](#co_automated_placement_CO3-3)'
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_automated_placement_CO3-3)'
+- en: Soft requirements, which is a list of selectors with weights. For every node,
+    the sum of all weights for matching selectors is calculated, and the highest-valued
+    node is chosen, as long as it matches the hard requirement.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 软要求，这是带有权重的选择器列表。对于每个节点，计算所有匹配选择器的权重之和，并选择值最高的节点，只要它符合硬性要求。
+- en: Pod Affinity and Anti-Affinity
+  id: totrans-50
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Pod 亲和性和反亲和性
+- en: '*Pod affinity* is a more powerful way of scheduling and should be used when
+    `nodeSelector` is not enough. This mechanism allows you to constrain which nodes
+    a Pod can run based on label or field matching. It doesn’t allow you to express
+    dependencies among Pods to dictate where a Pod should be placed relative to other
+    Pods. To express how Pods should be spread to achieve high availability, or be
+    packed and colocated together to improve latency, you can use Pod affinity and
+    anti-affinity.'
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*Pod 亲和性* 是一种更强大的调度方式，当 `nodeSelector` 不够用时应该使用。该机制允许您根据标签或字段匹配来限制 Pod 可以在哪些节点上运行。它不允许您表达
+    Pod 之间的依赖关系以指导 Pod 应该相对于其他 Pod 放置在哪里。为了表达如何将 Pod 分散以实现高可用性，或者将其打包和共同放置以提高延迟，您可以使用
+    Pod 亲和性和反亲和性。'
+- en: Node affinity works at node granularity, but Pod affinity is not limited to
+    nodes and can express rules at various topology levels based on the Pods already
+    running on a node. Using the `topologyKey` field, and the matching labels, it
+    is possible to enforce more fine-grained rules, which combine rules on domains
+    like node, rack, cloud provider zone, and region, as demonstrated in [Example 6-5](#ex-pod-affinity).
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 节点亲和性在节点粒度上起作用，但 Pod 亲和性不限于节点，并且可以根据节点上已运行的 Pod 在各种拓扑级别上表达规则。使用 `topologyKey`
+    字段和匹配标签，可以强制执行更精细的规则，结合节点、机架、云服务提供商区域和区域等领域的规则，如 [示例 6-5](#ex-pod-affinity) 所示。
+- en: Example 6-5\. Pod with Pod affinity
+  id: totrans-53
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 6-5\. 具有 Pod 亲和性的 Pod
+- en: '[PRE4]'
+  id: totrans-54
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: '[![1](assets/1.png)](#co_automated_placement_CO4-1)'
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_automated_placement_CO4-1)'
+- en: Required rules for the Pod placement concerning other Pods running on the target
+    node.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 关于目标节点上运行的其他 Pod 的 Pod 放置的必要规则。
+- en: '[![2](assets/2.png)](#co_automated_placement_CO4-2)'
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_automated_placement_CO4-2)'
+- en: Label selector to find the Pods to be colocated with.
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 标签选择器，用于找到要与之共存的 Pod。
+- en: '[![3](assets/3.png)](#co_automated_placement_CO4-3)'
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_automated_placement_CO4-3)'
+- en: The nodes on which Pods with labels `confidential=high` are running are supposed
+    to carry a `security-zone` label. The Pod defined here is scheduled to a node
+    with the same label and value.
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 具有标签 `confidential=high` 的 Pod 所在的节点应该带有 `security-zone` 标签。此处定义的 Pod 被调度到具有相同标签和值的节点。
+- en: '[![4](assets/4.png)](#co_automated_placement_CO4-4)'
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_automated_placement_CO4-4)'
+- en: Anti-affinity rules to find nodes where a Pod would *not* be placed.
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 反亲和性规则用于找到不应放置 Pod 的节点。
+- en: '[![5](assets/5.png)](#co_automated_placement_CO4-5)'
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#co_automated_placement_CO4-5)'
+- en: Rule describing that the Pod should not (but could) be placed on any node where
+    a Pod with the label `confidential=none` is running.
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 规则描述 Pod 不应（但可以）放置在任何具有标签 `confidential=none` 的 Pod 的节点上。
+- en: Similar to node affinity, there are hard and soft requirements for Pod affinity
+    and anti-affinity, called `requiredDuringSchedulingIgnoredDuringExecution` and
+    `preferredDuringSchedulingIgnoredDuringExecution`, respectively. Again, as with
+    node affinity, the `IgnoredDuringExecution` suffix is in the field name, which
+    exists for future extensibility reasons. At the moment, if the labels on the node
+    change and affinity rules are no longer valid, the Pods continue running,^([1](ch06.html#idm45902104710704))
+    but in the future, runtime changes may also be taken into account.
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 类似于节点亲和性，Pod 亲和性和反亲和性也有硬性和软性要求，分别称为 `requiredDuringSchedulingIgnoredDuringExecution`
+    和 `preferredDuringSchedulingIgnoredDuringExecution`。与节点亲和性类似，`IgnoredDuringExecution`
+    后缀存在于字段名称中，这是为了未来的可扩展性。目前，如果节点上的标签发生更改并且亲和性规则不再有效，Pod 仍然继续运行，^([1](ch06.html#idm45902104710704))
+    但将来，也可能考虑运行时的更改。
+- en: Topology Spread Constraints
+  id: totrans-66
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 拓扑传播约束
+- en: Pod affinity rules allow the placement of unlimited Pods to a single topology,
+    whereas Pod anti-affinity disallows Pods to colocate in the same topology. Topology
+    spread constraints give you more fine-grained control to evenly distribute Pods
+    on your cluster and achieve better cluster utilization or high availability of
+    applications.
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod 亲和规则允许将无限多的 Pod 放置在单个拓扑中，而 Pod 反亲和性则禁止将 Pod 放置在同一拓扑中。拓扑传播约束使您可以更细粒度地控制如何在集群中均匀分布
+    Pod，并实现更好的集群利用率或应用程序的高可用性。
+- en: Let’s look at an example to understand how topology spread constraints can help.
+    Let’s suppose we have an application with two replicas and a two-node cluster.
+    To avoid downtime and a single point of failure, we can use Pod anti-affinity
+    rules to prevent the coexistence of the Pods on the same node and spread them
+    into both nodes. While this setup makes sense, it will prevent you from performing
+    rolling upgrades because the third replacement Pod cannot be placed on the existing
+    nodes because of the Pod anti-affinity constraints. We will have to either add
+    another node or change the Deployment strategy from rolling to recreate. Topology
+    spread constraints would be a better solution in this situation as they allow
+    you to tolerate some degree of uneven Pod distribution when the cluster is running
+    out of resources. [Example 6-6](#topology-spread-constraint) allows the placement
+    of the third rolling deployment Pod on one of the two nodes because it allows
+    imbalances—i.e., a skew of one Pod.
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们看一个例子来理解拓扑传播约束如何帮助解决问题。假设我们有一个具有两个副本和两个节点集群的应用程序。为了避免停机时间和单点故障，我们可以使用 Pod
+    反亲和规则，防止将 Pod 放置在同一节点上，并将其分布到两个节点上。虽然这种设置有其合理性，但它将阻止您执行滚动升级，因为第三个替换的 Pod 无法由于
+    Pod 反亲和性约束放置在现有节点上。我们将不得不添加另一个节点或将部署策略从滚动更改为重新创建。在资源不足时，拓扑传播约束将是更好的解决方案，因为它们允许您在集群中的
+    Pod 分布不均匀时容忍一定程度的不平衡。[示例 6-6](#topology-spread-constraint) 允许将第三个滚动部署 Pod 放置在两个节点中的一个，因为它允许不均匀—即一个
+    Pod 的偏斜。
+- en: Example 6-6\. Pod with topology spread constraints
+  id: totrans-69
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 6-6\. 具有拓扑传播约束的 Pod
+- en: '[PRE5]'
+  id: totrans-70
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: '[![1](assets/1.png)](#co_automated_placement_CO5-1)'
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_automated_placement_CO5-1)'
+- en: Topology spread constraints are defined in the `topologySpreadConstraints` field
+    of the Pod spec.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod 拓扑传播约束在 Pod 规范的 `topologySpreadConstraints` 字段中定义。
+- en: '[![2](assets/2.png)](#co_automated_placement_CO5-2)'
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_automated_placement_CO5-2)'
+- en: '`maxSkew` defines the maximum degree to which Pods can be unevenly distributed
+    in the topology.'
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`maxSkew` 定义了在拓扑中 Pod 可不均匀分布的最大程度。'
+- en: '[![3](assets/3.png)](#co_automated_placement_CO5-3)'
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_automated_placement_CO5-3)'
+- en: A topology domain is a logical unit of your infrastructure. And a `topologyKey`
+    is the key of the Node label where identical values are considered to be in the
+    same topology.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 拓扑域是您基础设施的逻辑单元。`topologyKey` 是 Node 标签的关键字，其中相同的值被视为属于同一拓扑。
+- en: '[![4](assets/4.png)](#co_automated_placement_CO5-4)'
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_automated_placement_CO5-4)'
+- en: The `whenUnsatisfiable` field defines what action should be taken when `maxSkew`
+    can’t be satisfied. `DoNotSchedule` is a hard constraint preventing the scheduling
+    of Pods, whereas `ScheduleAnyway` is a soft constraint that gives scheduling priority
+    to nodes that reduce cluster imbalance.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当 `maxSkew` 无法满足时，`whenUnsatisfiable` 字段定义了应采取的操作。`DoNotSchedule` 是阻止调度 Pod
+    的硬性约束，而 `ScheduleAnyway` 是软性约束，它会优先调度减少集群不平衡的节点。
+- en: '[![5](assets/5.png)](#co_automated_placement_CO5-5)'
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#co_automated_placement_CO5-5)'
+- en: '`labelSelector` Pods that match this selector are grouped together and counted
+    when spreading them to satisfy the constraint.'
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`labelSelector` 匹配此选择器的 Pod 被分组并计数，以满足约束条件。'
+- en: Topology spread constraints is a feature that is still evolving at the time
+    of this writing. Built-in cluster-level topology spread constraints allow certain
+    imbalances based on default Kubernetes labels and give you the ability to honor
+    or ignore node affinity and taint policies.
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本文撰写时，拓扑分布约束是一个正在不断发展的功能。内置的集群级拓扑分布约束允许基于默认的 Kubernetes 标签进行某些不平衡，并使您能够遵守或忽略节点亲和性和污点策略。
+- en: Taints and Tolerations
+  id: totrans-82
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 污点和宽容性
+- en: A more advanced feature that controls where Pods can be scheduled and allowed
+    to run is based on taints and tolerations. While node affinity is a property of
+    Pods that allows them to choose nodes, taints and tolerations are the opposite.
+    They allow the nodes to control which Pods should or should not be scheduled on
+    them. A *taint* is a characteristic of the node, and when it is present, it prevents
+    Pods from scheduling onto the node unless the Pod has toleration for the taint.
+    In that sense, taints and tolerations can be considered an *opt-in* to allow scheduling
+    on nodes that by default are not available for scheduling, whereas affinity rules
+    are an *opt-out* by explicitly selecting on which nodes to run and thus exclude
+    all the nonselected nodes.
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 基于污点和宽容性的高级功能控制 Pod 可以调度和允许运行的位置。而节点亲和性是允许 Pod 选择节点的属性，污点和宽容性则相反。它们允许节点控制哪些
+    Pod 应该或不应该在其上调度。*污点* 是节点的特征，当存在时，它会阻止 Pod 在节点上调度，除非 Pod 对该污点具有宽容性。从这个意义上说，污点和宽容性可以被视为一种
+    *选择加入*，允许在默认情况下不可用于调度的节点上进行调度，而亲和性规则则是一种 *选择退出*，通过显式选择在哪些节点上运行来排除所有未选定的节点。
+- en: 'A taint is added to a node by using `kubectl`: `kubectl taint nodes control-plane-node
+    node-role.kubernetes.io/control-plane="true":NoSchedule`, which has the effect
+    shown in [Example 6-7](#ex-taint). A matching toleration is added to a Pod as
+    shown in [Example 6-8](#ex-toleration). Notice that the values for `key` and `effect`
+    in the `taints` section of [Example 6-7](#ex-taint) and the `tolerations` section
+    in [Example 6-8](#ex-toleration) are the same.'
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过使用 `kubectl` 将污点添加到节点：`kubectl taint nodes control-plane-node node-role.kubernetes.io/control-plane="true":NoSchedule`，其效果如
+    [示例 6-7](#ex-taint) 所示。通过在 Pod 中添加匹配的宽容性，如 [示例 6-8](#ex-toleration) 所示。请注意，在 [示例
+    6-7](#ex-taint) 的 `taints` 部分和 [示例 6-8](#ex-toleration) 的 `tolerations` 部分中，`key`
+    和 `effect` 的值是相同的。
+- en: Example 6-7\. Tainted node
+  id: totrans-85
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 6-7\. 带污点的节点
+- en: '[PRE6]'
+  id: totrans-86
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: '[![1](assets/1.png)](#co_automated_placement_CO6-1)'
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_automated_placement_CO6-1)'
+- en: Mark this node as unschedulable except when a Pod tolerates this taint.
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 标记此节点为不可调度，除非 Pod 对此污点具有宽容性。
+- en: Example 6-8\. Pod tolerating node taints
+  id: totrans-89
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 6-8\. Pod 对节点污点的宽容
+- en: '[PRE7]'
+  id: totrans-90
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: '[![1](assets/1.png)](#co_automated_placement_CO7-1)'
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_automated_placement_CO7-1)'
+- en: Tolerate (i.e., consider for scheduling) nodes, which have a taint with key
+    `node-role.kubernetes.io/control-plane`. On production clusters, this taint is
+    set on the control plane node to prevent scheduling of Pods on this node. A toleration
+    like this allows this Pod to be installed on the control plane node nevertheless.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 宽容（即考虑调度）带有关键字`node-role.kubernetes.io/control-plane`的节点。在生产集群中，此污点设置在控制平面节点上，以防止在该节点上调度
+    Pod。此类宽容性允许此 Pod 安装在控制平面节点上。
+- en: '[![2](assets/2.png)](#co_automated_placement_CO7-2)'
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_automated_placement_CO7-2)'
+- en: Tolerate only when the taint specifies a `NoSchedule` effect. This field can
+    be empty here, in which case the toleration applies to every effect.
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 仅当污点指定为`NoSchedule`时才能容忍。此处该字段可以为空，在这种情况下，宽容性适用于每种效果。
+- en: There are hard taints that prevent scheduling on a node (`effect=NoSchedule`),
+    soft taints that try to avoid scheduling on a node (`effect=PreferNoSchedule`),
+    and taints that can evict already-running Pods from a node (`effect=NoExecute`).
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 存在硬污点以阻止在节点上调度（`effect=NoSchedule`），软污点尝试避免在节点上调度（`effect=PreferNoSchedule`），以及可以从节点上驱逐已运行的
+    Pods 的污点（`effect=NoExecute`）。
+- en: Taints and tolerations allow for complex use cases like having dedicated nodes
+    for an exclusive set of Pods, or force eviction of Pods from problematic nodes
+    by tainting those nodes.
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 污点和宽容性允许处理复杂的用例，例如专用节点供一组特定的 Pods 使用，或通过对这些节点进行污点处理来强制驱逐问题节点上的 Pods。
+- en: You can influence the placement based on the application’s high availability
+    and performance needs, but try not to limit the scheduler too much and back yourself
+    into a corner where no more Pods can be scheduled and there are too many stranded
+    resources. For example, if your containers’ resource requirements are too coarse-grained,
+    or nodes are too small, you may end up with stranded resources in nodes that are
+    not utilized.
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以根据应用程序的高可用性和性能需求影响其位置，但尽量不要限制调度程序太多，并使自己陷入无法调度更多Pods和有太多搁置资源的境地。例如，如果您的容器资源需求过于粗粒度，或者节点太小，则可能导致节点中存在未使用的搁置资源。
+- en: In [Figure 6-2](#img-resources), we can see node A has 4 GB of memory that cannot
+    be utilized as there is no CPU left to place other containers. Creating containers
+    with smaller resource requirements may help improve this situation. Another solution
+    is to use the Kubernetes *descheduler*, which helps defragment nodes and improve
+    their utilization.
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[图6-2](#img-resources)中，我们可以看到节点A有4GB的内存，因为没有剩余的CPU可用于放置其他容器，所以无法利用。创建具有较小资源需求的容器可能有助于改善这种情况。另一个解决方案是使用Kubernetes的*descheduler*，它有助于整理节点并提高其利用率。
+- en: '![Processes scheduled to nodes and stranded resources](assets/kup2_0602.png)'
+  id: totrans-99
+  prefs: []
+  type: TYPE_IMG
+  zh: '![安排到节点和搁置资源的进程](assets/kup2_0602.png)'
+- en: Figure 6-2\. Processes scheduled to nodes and stranded resources
+  id: totrans-100
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图6-2。安排到节点和搁置资源的进程
+- en: Once a Pod is assigned to a node, the job of the scheduler is done, and it does
+    not change the placement of the Pod unless the Pod is deleted and recreated without
+    a node assignment. As you have seen, with time, this can lead to resource fragmentation
+    and poor utilization of cluster resources. Another potential issue is that the
+    scheduler decisions are based on its cluster view at the point in time when a
+    new Pod is scheduled. If a cluster is dynamic and the resource profile of the
+    nodes changes or new nodes are added, the scheduler will not rectify its previous
+    Pod placements. Apart from changing the node capacity, you may also alter the
+    labels on the nodes that affect placement, but past placements are not rectified.
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦Pod分配给节点，调度程序的工作就完成了，除非删除并重新创建没有节点分配的Pod，否则不会更改Pod的位置。正如您所见，随着时间的推移，这可能导致资源碎片化和集群资源的利用不足。另一个潜在问题是调度器的决策是基于其在调度新Pod时的集群视图。如果集群是动态的，并且节点的资源配置文件发生变化或添加了新节点，则调度程序不会纠正其先前的Pod位置。除了更改节点容量外，您还可以更改影响位置的节点标签，但不会纠正过去的位置。
+- en: All of these scenarios can be addressed by the descheduler. The Kubernetes descheduler
+    is an optional feature that is typically run as a Job whenever a cluster administrator
+    decides it is a good time to tidy up and defragment a cluster by rescheduling
+    the Pods. The descheduler comes with some predefined policies that can be enabled
+    and tuned or disabled.
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有这些情况都可以通过调度程序来解决。 Kubernetes调度程序是一个可选功能，通常作为作业运行，当集群管理员决定是整理和碎片整理集群的好时机时，重新安排Pods。调度程序配备了一些预定义的策略，可以启用、调整或禁用。
+- en: 'Regardless of the policy used, the descheduler avoids evicting the following:'
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 无论使用哪种策略，调度程序避免驱逐以下内容：
+- en: Node- or cluster-critical Pods
+  id: totrans-104
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 节点或集群关键的Pods
+- en: Pods not managed by a ReplicaSet, Deployment, or Job, as these Pods cannot be
+    recreated
+  id: totrans-105
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 不受ReplicaSet、Deployment或Job管理的Pods，因为这些Pods无法重新创建
+- en: Pods managed by a DaemonSet
+  id: totrans-106
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 由DaemonSet管理的Pods
+- en: Pods that have local storage
+  id: totrans-107
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 带有本地存储的Pods
+- en: Pods with PodDisruptionBudget, where eviction would violate its rules
+  id: totrans-108
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 具有PodDisruptionBudget的Pods，驱逐将违反其规则
+- en: Pods that have a non-nil `DeletionTimestamp` field set
+  id: totrans-109
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 带有非空`DeletionTimestamp`字段设置的Pods
+- en: Deschedule Pod itself (achieved by marking itself as a critical Pod)
+  id: totrans-110
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 取消调度Pod本身（通过将自身标记为关键Pod实现）
+- en: Of course, all evictions respect Pods’ QoS levels by choosing *Best-Efforts*
+    Pods first, then *Burstable* Pods, and finally *Guaranteed* Pods as candidates
+    for eviction. See [Chapter 2, “Predictable Demands”](ch02.html#PredictableDemands),
+    for a detailed explanation of these QoS levels.
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当然，所有驱逐操作都会尊重Pods的QoS级别，首先选择*Best-Efforts* Pods，然后是*Burstable* Pods，最后是*Guaranteed*
+    Pods作为驱逐的候选对象。有关这些QoS级别的详细解释，请参阅[第2章，“可预测的需求”](ch02.html#PredictableDemands)。
+- en: Discussion
+  id: totrans-112
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 讨论
+- en: Placement is the art of assigning Pods to nodes. You want to have as minimal
+    intervention as possible, as the combination of multiple configurations can be
+    hard to predict. In simpler scenarios, scheduling Pods based on resource constraints
+    should be sufficient. If you follow the guidelines from [Chapter 2, “Predictable
+    Demands”](ch02.html#PredictableDemands), and declare all the resource needs of
+    a container, the scheduler will do its job and place the Pod on the most feasible
+    node possible.
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 放置是将 Pod 分配给节点的艺术。您希望尽可能少地干预，因为多个配置的组合很难预测。在更简单的场景中，根据资源约束调度 Pod 应该是足够的。如果您遵循《第二章，“可预测的需求”》的指南，声明容器的所有资源需求，调度器将完成其工作，并将
+    Pod 放置在可能性最大的节点上。
+- en: However, in more realistic scenarios, you may want to schedule Pods to specific
+    nodes according to other constraints such as data locality, Pod colocality, application
+    high availability, and efficient cluster resource utilization. In these cases,
+    there are multiple ways to steer the scheduler toward the desired deployment topology.
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，在更现实的场景中，您可能希望根据其他约束条件（如数据局部性、Pod 位置关联性、应用程序高可用性和有效的集群资源利用率）将 Pod 安排到特定的节点上。在这些情况下，有多种方法可以引导调度器朝向所需的部署拓扑进行调度。
+- en: '[Figure 6-3](#img-placement) shows one approach to thinking and making sense
+    of the different scheduling techniques in Kubernetes.'
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 6-3](#img-placement) 展示了 Kubernetes 中不同调度技术的一种思考和理解方法。'
+- en: '![Pod-to-Node and Pod-to-Pod dependencies](assets/kup2_0603.png)'
+  id: totrans-116
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Pod 到节点和 Pod 到 Pod 的依赖关系](assets/kup2_0603.png)'
+- en: Figure 6-3\. Pod-to-Pod and Pod-to-Node and dependencies
+  id: totrans-117
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 6-3\. Pod 到 Pod 和 Pod 到节点的依赖关系
+- en: 'Start by identifying the forces and dependencies between the Pod and the nodes
+    (for example, based on dedicated hardware capabilities or efficient resource utilization).
+    Use the following node affinity techniques to direct the Pod to the desired nodes,
+    or use anti-affinity techniques to steer the Pod away from the undesired nodes:'
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从识别 Pod 与节点之间的力量和依赖关系开始（例如，基于专用硬件能力或有效资源利用率）。使用以下节点亲和性技术将 Pod 定向到所需的节点，或者使用反亲和性技术将
+    Pod 从不希望的节点中移开：
+- en: nodeName
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: nodeName
+- en: This field provides the simplest form of hard wiring a Pod to a node. This field
+    should ideally be populated by the scheduler, which is driven by policies rather
+    than manual node assignment. Assigning a Pod to a node through this approach prevents
+    the scheduling of the Pod to any other node. If the named node has no capacity,
+    or the node doesn’t exist, the Pod will never run. This throws us back into the
+    pre-Kubernetes era, when we explicitly needed to specify the nodes to run our
+    applications. Setting this field manually is not a Kubernetes best practice and
+    should be used only as an exception.
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个字段提供了将 Pod 硬编码到节点的最简单形式。这个字段应该由调度器理想地填充，调度器是通过策略驱动而不是手动节点分配。通过这种方法将 Pod 分配到节点可以防止将
+    Pod 调度到任何其他节点。如果指定的节点没有容量，或者节点不存在，Pod 将永远不会运行。这将我们带回到 Kubernetes 之前的时代，当我们明确需要指定运行应用程序的节点时。手动设置此字段不是
+    Kubernetes 的最佳实践，应仅作为例外使用。
+- en: nodeSelector
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: nodeSelector
+- en: A node selector is a label map. For the Pod to be eligible to run on a node,
+    the Pod must have the indicated key-value pairs as the label on the node. Having
+    put some meaningful labels on the Pod and the node (which you should do anyway),
+    a node selector is one of the simplest recommended mechanisms for controlling
+    the scheduler choices.
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 节点选择器是一个标签映射。为了使 Pod 有资格在节点上运行，Pod 必须具有节点上指定的键值对作为标签。在 Pod 和节点上放置一些有意义的标签（无论如何都应该这样做），节点选择器是控制调度器选择的最简单的推荐机制之一。
+- en: Node affinity
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 节点亲和性
+- en: This rule improves the manual node assignment approaches and allows a Pod to
+    express dependency toward nodes using logical operators and constraints that provides
+    fine-grained control. It also offers soft and hard scheduling requirements that
+    control the strictness of node affinity constraints.
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此规则改进了手动节点分配方法，并允许 Pod 使用逻辑运算符和约束表达对节点的依赖性，提供细粒度的控制。它还提供了控制节点亲和性约束严格程度的软和硬调度要求。
+- en: Taints and tolerations
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Taints 和 tolerations
+- en: Taints and tolerations allow the node to control which Pods should or should
+    not be scheduled on them without modifying existing Pods. By default, Pods that
+    don’t have tolerations for the node taint will be rejected or evicted from the
+    node. Another advantage of taints and tolerations is that if you expand the Kubernetes
+    cluster by adding new nodes with new labels, you don’t need to add the new labels
+    on all Pods but only on those that should be placed on the new nodes.
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Taints 和 tolerations 允许节点控制应该或不应该调度到它们上的 Pod，而无需修改现有的 Pod。默认情况下，没有为节点污点设置 tolerations
+    的 Pod 将被拒绝或从节点中驱逐。Taints 和 tolerations 的另一个优点是，如果通过添加具有新标签的新节点来扩展 Kubernetes 集群，你不需要在所有
+    Pod 上添加新标签，而只需要在应该放置在新节点上的 Pod 上添加标签。
+- en: 'Once the desired correlation between a Pod and the nodes is expressed in Kubernetes
+    terms, identify the dependencies between different Pods. Use Pod affinity techniques
+    for Pod colocation for tightly coupled applications, and use Pod anti-affinity
+    techniques to spread Pods on nodes and avoid a single point of failure:'
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦在 Kubernetes 术语中表达了 Pod 与节点之间的期望关联，就可以识别不同 Pod 之间的依赖关系。使用 Pod 亲和性技术来将紧密耦合的应用程序放置在同一节点上以进行
+    Pod 集中，使用 Pod 反亲和性技术来将 Pod 分布在节点上，以避免单点故障：
+- en: Pod affinity and anti-affinity
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod 亲和性和反亲和性
+- en: These rules allow scheduling based on Pods’ dependencies on other Pods rather
+    than nodes. Affinity rules help for colocating tightly coupled application stacks
+    composed of multiple Pods on the same topology for low-latency and data locality
+    requirements. The anti-affinity rule, on the other hand, can spread Pods across
+    your cluster among failure domains to avoid a single point of failure, or prevent
+    resource-intensive Pods from competing for resources by avoiding placing them
+    on the same node.
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些规则允许基于 Pod 对其他 Pod 的依赖而不是节点进行调度。亲和性规则有助于在低延迟和数据局部性需求的情况下，在同一拓扑上放置由多个 Pod 组成的紧密耦合应用程序堆栈。另一方面，反亲和性规则可以在集群中不同故障域之间分布
+    Pod，以避免单点故障，或者通过避免将资源密集型 Pod 放置在同一节点上来防止竞争资源。
+- en: Topology spread constraints
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 拓扑分布约束
+- en: 'To use these features, platform administrators have to label nodes and provide
+    topology information such as regions, zones, or other user-defined domains. Then,
+    a workload author creating the Pod configurations must be aware of the underlying
+    cluster topology and specify the topology spread constraints. You can also specify
+    multiple topology spread constraints, but all of them must be satisfied for a
+    Pod to be placed. You must ensure that they do not conflict with one another.
+    You can also combine this feature with NodeAffinity and NodeSelector to filter
+    nodes where evenness should be applied. In that case, be sure to understand the
+    difference: multiple topology spread constraints are about calculating the result
+    set independently and producing an AND-joined result, while combining it with
+    NodeAffinity and NodeSelector, on the other hand, filters results of node constraints.'
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要使用这些功能，平台管理员必须为节点打标签，并提供拓扑信息，如区域、区域或其他用户定义的域。然后，创建 Pod 配置的工作负载作者必须了解底层集群拓扑，并指定拓扑分布约束。您还可以指定多个拓扑分布约束，但必须满足所有约束才能放置
+    Pod。您必须确保它们不会彼此冲突。您还可以将此功能与 NodeAffinity 和 NodeSelector 结合使用，以过滤需要应用均匀性的节点。在这种情况下，务必理解其差异：多个拓扑分布约束是独立计算结果集并生成
+    AND 连接的结果，而与 NodeAffinity 和 NodeSelector 结合使用则过滤节点约束的结果。
+- en: 'In some scenarios, all of these scheduling configurations might not be flexible
+    enough to express bespoke scheduling requirements. In that case, you may have
+    to customize and tune the scheduler configuration or even provide a custom scheduler
+    implementation that can understand your custom needs:'
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在某些情况下，所有这些调度配置可能不足以表达定制的调度需求。在这种情况下，您可能需要定制和调整调度器配置，甚至提供一个能够理解您自定义需求的自定义调度器实现。
+- en: Scheduler tuning
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 调度器调优
+- en: The default scheduler is responsible for the placement of new Pods onto nodes
+    within the cluster, and it does it well. However, it is possible to alter one
+    or more stages in the filtering and prioritization phases. This mechanism with
+    extension points and plugins is specifically designed to allow small alterations
+    without the need for a completely new scheduler implementation.
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认调度器负责将新的 Pod 放置到集群中的节点上，并且执行得很好。然而，可以修改一个或多个阶段在过滤和优先级排序阶段中的操作。这种具有扩展点和插件的机制专门设计用于允许进行小的修改，而无需完全实现一个新的调度器。
+- en: Custom scheduler
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 自定义调度器
+- en: If none of the preceding approaches is good enough, or if you have complex scheduling
+    requirements, you can also write your own custom scheduler. A custom scheduler
+    can run instead of, or alongside, the standard Kubernetes scheduler. A hybrid
+    approach is to have a “scheduler extender” process that the standard Kubernetes
+    scheduler calls out to as a final pass when making scheduling decisions. This
+    way, you don’t have to implement a full scheduler but only provide HTTP APIs to
+    filter and prioritize nodes. The advantage of having your scheduler is that you
+    can consider factors outside of the Kubernetes cluster like hardware cost, network
+    latency, and better utilization while assigning Pods to nodes. You can also use
+    multiple custom schedulers alongside the default scheduler and configure which
+    scheduler to use for each Pod. Each scheduler could have a different set of policies
+    dedicated to a subset of the Pods.
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果前述方法都不够理想，或者您有复杂的调度需求，您也可以编写自己的自定义调度器。自定义调度器可以代替或与标准 Kubernetes 调度器并行运行。一个混合方法是使用“调度器扩展器”进程，这个进程在进行调度决策的最后阶段被标准
+    Kubernetes 调度器调用。这样一来，您不必实现一个完整的调度器，只需提供HTTP API来过滤和优先考虑节点。拥有自己的调度器的优势在于，您可以考虑
+    Kubernetes 集群之外的因素，如硬件成本、网络延迟以及在分配 Pods 到节点时的更好利用率。您还可以在默认调度器旁边使用多个自定义调度器，并配置每个
+    Pod 使用哪个调度器。每个调度器可以针对一组 Pods 使用不同的策略。
+- en: 'To sum up, there are lots of ways to control the Pod placement, and choosing
+    the right approach or combining multiple approaches can be overwhelming. The takeaway
+    from this chapter is this: size and declare container resource profiles, and label
+    Pods and nodes for the best resource-consumption-driven scheduling results. If
+    that doesn’t deliver the desired scheduling outcome, start with small and iterative
+    changes. Strive for a minimal policy-based influence on the Kubernetes scheduler
+    to express node dependencies and then inter-Pod dependencies.'
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 总结一下，有许多方法可以控制 Pod 的放置方式，选择合适的方法或者结合多种方法可能会让人感到不知所措。本章的要点是：定义并声明容器资源配置文件，并为了最佳资源消耗驱动调度结果对
+    Pods 和节点进行标记。如果这些方法不能实现预期的调度结果，可以从小的迭代变化开始尝试。努力实现对 Kubernetes 调度器的最小策略影响，以表达节点依赖性和
+    Pod 之间的依赖关系。
+- en: More Information
+  id: totrans-138
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 更多信息
+- en: '[Automated Placement Example](https://oreil.ly/N-iAz)'
+  id: totrans-139
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[自动放置示例](https://oreil.ly/N-iAz)'
+- en: '[Assigning Pods to Nodes](https://oreil.ly/QlbMB)'
+  id: totrans-140
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[将 Pods 分配给 Nodes](https://oreil.ly/QlbMB)'
+- en: '[Scheduler Configuration](https://oreil.ly/iPbBT)'
+  id: totrans-141
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[调度器配置](https://oreil.ly/iPbBT)'
+- en: '[Pod Topology Spread Constraints](https://oreil.ly/qkp60)'
+  id: totrans-142
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Pod 拓扑传播约束](https://oreil.ly/qkp60)'
+- en: '[Configure Multiple Schedulers](https://oreil.ly/appyT)'
+  id: totrans-143
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[配置多个调度器](https://oreil.ly/appyT)'
+- en: '[Descheduler for Kubernetes](https://oreil.ly/4lPFX)'
+  id: totrans-144
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Kubernetes 的去调度器](https://oreil.ly/4lPFX)'
+- en: '[Disruptions](https://oreil.ly/oNGSR)'
+  id: totrans-145
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[中断](https://oreil.ly/oNGSR)'
+- en: '[Guaranteed Scheduling for Critical Add-On Pods](https://oreil.ly/w9tKY)'
+  id: totrans-146
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[为关键附加 Pods 提供保证的调度](https://oreil.ly/w9tKY)'
+- en: '[Keep Your Kubernetes Cluster Balanced: The Secret to High Availability](https://oreil.ly/_MODM)'
+  id: totrans-147
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[保持 Kubernetes 集群平衡：高可用性的秘密](https://oreil.ly/_MODM)'
+- en: '[Advanced Kubernetes Pod to Node Scheduling](https://oreil.ly/6Tog3)'
+  id: totrans-148
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[高级 Kubernetes Pod 到节点调度](https://oreil.ly/6Tog3)'
+- en: ^([1](ch06.html#idm45902104710704-marker)) However, if node labels change and
+    allow for unscheduled Pods to match their node affinity selector, these Pods are
+    scheduled on this node.
+  id: totrans-149
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([1](ch06.html#idm45902104710704-marker)) 然而，如果节点标签改变，并允许未调度的 Pods 匹配它们的节点亲和选择器，这些
+    Pods 将被调度到该节点上。

@@ -1,0 +1,2525 @@
+- en: Chapter 8\. Operator Lifecycle Manager
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第8章 运算符生命周期管理器（Operator Lifecycle Manager，OLM）。
+- en: Once you have written an Operator, it’s time to turn your attention to its installation
+    and management. As there are multiple steps involved in deploying an Operator,
+    including creating the deployment, adding the custom resource definitions, and
+    configuring the necessary permissions, a management layer becomes necessary to
+    facilitate the process.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦您编写了操作员（Operator），就该将注意力转向其安装和管理。由于部署操作员涉及多个步骤，包括创建部署、添加自定义资源定义以及配置必要的权限，因此需要管理层来促进这一过程。
+- en: Operator Lifecycle Manager (OLM) fulfills this role by introducing a packaging
+    mechanism for delivering Operators and the necessary metadata for visualizing
+    them in compatible UIs, including installation instructions and API hints in the
+    form of CRD descriptors.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 操作员生命周期管理器（OLM）通过引入交付操作员和在兼容UI中可视化所需元数据的打包机制来履行这一角色，其中包括安装说明和CRD描述符形式的API提示。
+- en: OLM’s benefits extend beyond installation into Day 2 operations, including managing
+    upgrades to existing Operators, providing a means to convey Operator stability
+    through version channels, and the ability to aggregate multiple Operator hosting
+    sources into a single interface.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: OLM的好处不仅限于安装，还包括Day 2运维，例如管理现有操作员的升级、通过版本通道传达操作员稳定性以及将多个操作员托管源聚合到单一接口的能力。
+- en: We begin this chapter by introducing OLM and its interfaces, including both
+    the CRDs that end users will interact with inside of the cluster and the packaging
+    format it uses for Operators. After that, we will show you OLM in action, using
+    it to connect to OperatorHub.io to install an Operator. We conclude the chapter
+    with a developer-focused exploration of the process of writing the necessary metadata
+    files to make an Operator available to OLM and test it against a local cluster.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '我们通过介绍OLM及其接口来开始本章，包括用户将在集群内部与之交互的CRD以及它用于操作员的打包格式。接下来，我们将展示OLM的操作，使用它连接到OperatorHub.io来安装操作员。我们以开发者为重点，探讨编写必要的元数据文件以使操作员可在OLM中使用，并在本地集群中进行测试的过程。  '
+- en: OLM Custom Resources
+  id: totrans-5
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: OLM自定义资源。
+- en: As you know, the CRDs owned by an Operator make up that Operator’s API. So,
+    it makes sense to look at each of the CRDs that are installed by OLM and explore
+    their uses.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如您所知，操作员拥有的CRD构成了操作员的API。因此，逐个查看由OLM安装的每个CRD及其用途是有意义的。
+- en: ClusterServiceVersion
+  id: totrans-7
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: ClusterServiceVersion（集群服务版本）。
+- en: 'The *ClusterServiceVersion* (CSV) is the primary metadata resource that describes
+    an Operator. Each CSV represents a version of an Operator and contains the following:'
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*ClusterServiceVersion*（CSV）是描述操作员的主要元数据资源。每个CSV表示操作员的一个版本，并包含以下内容：'
+- en: General metadata about the Operator, including its name, version, description,
+    and icon
+  id: totrans-9
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 操作员的通用元数据，包括其名称、版本、描述和图标。
+- en: Operator installation information, describing the deployments that are created
+    and the permissions that are required
+  id: totrans-10
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 描述操作员安装信息，包括创建的部署和所需的权限。
+- en: The CRDs that are owned by the Operator as well as references to any CRDs the
+    Operator is dependent on
+  id: totrans-11
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 操作员拥有的自定义资源定义（CRD）以及操作员依赖的任何CRD的引用。
+- en: Annotations on the CRD fields to provide hints to users on how to properly specify
+    values for the fields
+  id: totrans-12
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: CRD字段上的注解，为用户提供如何正确指定字段值的提示。
+- en: When learning about CSVs, it can be useful to relate the concepts to that of
+    a traditional Linux system. You can think of a CSV as analogous to a Linux package,
+    such as a Red Hat Package Manager (RPM) file. Like an RPM file, the CSV contains
+    information on how to install the Operator and any dependencies it requires. Following
+    this analogy, you can think of OLM as a management tool similar to yum or DNF.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当学习CSV时，将其概念与传统Linux系统进行关联可能很有用。您可以将CSV视为类似于Linux软件包（如Red Hat Package Manager（RPM）文件）的东西。与RPM文件类似，CSV包含有关如何安装操作员及其所需依赖项的信息。基于这种类比，您可以将OLM视为类似于yum或DNF的管理工具。
+- en: Another important aspect to understand is the relationship between a CSV and
+    the Operator deployment resource it manages. Much like how a deployment describes
+    the “pod template” for the pods it creates, a CSV contains a “deployment template”
+    for the deployment of the Operator pod. This is a formal ownership in the Kubernetes
+    sense of the word; if the Operator deployment is deleted, the CSV will recreate
+    it to bring the cluster back to the desired state, similar to how a deployment
+    will cause deleted pods to be recreated.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个重要的方面是理解CSV与其管理的运算符部署资源之间的关系。就像部署描述了它创建的pod的“pod模板”一样，CSV包含了用于运算符pod部署的“部署模板”。这是在Kubernetes意义上的正式所有权；如果运算符部署被删除，CSV将重新创建它以将集群恢复到所需状态，类似于部署将导致删除的pod重新创建。
+- en: A ClusterServiceVersion resource is typically populated from a Cluster Service
+    Version YAML file. We provide more details on how to write this file in [“Writing
+    a Cluster Service Version File”](#writing_a_cluster_service_version_file).
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 集群服务版本（ClusterServiceVersion）资源通常是从集群服务版本 YAML 文件中填充的。我们将在[“编写集群服务版本文件”](#writing_a_cluster_service_version_file)中提供有关如何编写此文件的更多详细信息。
+- en: CatalogSource
+  id: totrans-16
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: CatalogSource
+- en: 'A *CatalogSource* contains information for accessing a repository of Operators.
+    OLM provides a utility API named `packagemanifests` for querying catalog sources,
+    which provides a list of Operators and the catalogs in which they are found. It
+    uses resources of this kind to populate the list of available Operators. The following
+    is an example of using the `packagemanifests` API against the default catalog
+    source:'
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*CatalogSource* 包含访问运算符存储库的信息。OLM提供了一个名为`packagemanifests`的实用API，用于查询目录源，该API提供了运算符列表以及它们所在的目录。它使用这种资源来填充可用运算符列表。以下是针对默认目录源使用`packagemanifests`
+    API的示例：'
+- en: '[PRE0]'
+  id: totrans-18
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: Subscription
+  id: totrans-19
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 订阅
+- en: End users create a *subscription* to install, and subsequently update, the Operators
+    that OLM provides. A subscription is made to a *channel*, which is a stream of
+    Operator versions, such as “stable” or “nightly.”
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最终用户创建*订阅*来安装，并随后更新，OLM提供的运算符。订阅是针对*通道*进行的，通道是运算符版本的流，例如“稳定”或“夜间”。
+- en: To continue with the earlier analogy to Linux packages, a subscription is equivalent
+    to a command that installs a package, such as `yum install`. An installation command
+    through yum will typically refer to the package by name rather than to a specific
+    version, leaving the determination of the latest package to yum itself. In the
+    same way, a subscription to an Operator by name and its channel lets OLM resolve
+    the version based on what is available in that particular channel.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 继续之前对Linux软件包的类比，订阅等同于安装软件包的命令，例如`yum install`。通过yum的安装命令通常会引用软件包的名称而不是特定版本，将最新软件包的确定留给yum自己。同样，通过名称和通道订阅运算符让OLM根据特定通道中可用的内容解析版本。
+- en: Users configure a subscription with an *approval mode*. This value, set to either
+    `manual` or `automatic`, tells OLM if manual user review is required before an
+    Operator is installed. If set to `manual approval`, OLM-compatible user interfaces
+    present the user with the details of the resources OLM will create during the
+    Operator installation. The user has the option of approving or rejecting the Operator,
+    and OLM takes the appropriate next steps.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用户使用*批准模式*配置订阅。此值设置为`manual`或`automatic`，告诉OLM在安装运算符之前是否需要手动用户审查。如果设置为`manual
+    approval`，OLM兼容的用户界面会向用户呈现OLM在运算符安装期间将创建的资源的详细信息。用户可以选择批准或拒绝运算符，OLM会采取适当的下一步。
+- en: InstallPlan
+  id: totrans-23
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: InstallPlan
+- en: A subscription creates an *InstallPlan*, which describes the full list of resources
+    that OLM will create to satisfy the CSV’s resource requirements. For subscriptions
+    set to require manual approval, the end user sets an approval on this resource
+    to inform OLM that the installation should proceed. Otherwise, users do not need
+    to explicitly interact with these resources.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 订阅创建一个*InstallPlan*，描述了OLM将创建的用于满足CSV资源需求的完整资源列表。对于需要手动批准的订阅，最终用户会在此资源上设置批准，以通知OLM安装应该继续。否则，用户无需明确与这些资源交互。
+- en: OperatorGroup
+  id: totrans-25
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: OperatorGroup
+- en: End users control Operator multitenancy through an *OperatorGroup*. These designate
+    namespaces that may be accessed by an individual Operator. In other words, an
+    Operator belonging to an OperatorGroup will not react to custom resource changes
+    in a namespace not indicated by the group.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最终用户通过*OperatorGroup*控制运算符的多租户性。这些指定可以由单个运算符访问的命名空间。换句话说，属于OperatorGroup的运算符将不会对未在组指示的命名空间中的自定义资源更改作出反应。
+- en: 'Although you can use OperatorGroups for fine-grained control for a set of namespaces,
+    they are most commonly used in two ways:'
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管您可以使用OperatorGroups对一组命名空间进行精细化控制，但它们通常有两种常见用法：
+- en: To scope an Operator to a single namespace
+  id: totrans-28
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 将运算符范围限定为单个命名空间
+- en: To allow an Operator to run globally across all namespaces
+  id: totrans-29
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 允许运算符在所有命名空间全局运行
+- en: 'For example, the following definition creates a group that scopes Operators
+    within it to the single namespace `ns-alpha`:'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，以下定义创建了一个组，该组将其内的运算符范围限定为单个命名空间`ns-alpha`：
+- en: '[PRE1]'
+  id: totrans-31
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: 'Omitting the designator entirely results in a group that will cover all namespaces
+    in the cluster:'
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 完全省略指示符将导致该组覆盖集群中所有命名空间：
+- en: '[PRE2]'
+  id: totrans-33
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: '[![1](assets/1.png)](#co_operator_lifecycle_manager_CO1-1)'
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_operator_lifecycle_manager_CO1-1)'
+- en: Note that, as a Kubernetes resource, the OperatorGroup must still reside in
+    a specific namespace. However, the lack of the `targetNamespaces` designation
+    means the OperatorGroup will cover all namespaces.
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，作为Kubernetes资源，OperatorGroup仍必须驻留在特定命名空间中。但是，缺少`targetNamespaces`指定意味着OperatorGroup将覆盖所有命名空间。
+- en: Note
+  id: totrans-36
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The two examples shown here cover the majority of use cases; creating fine-grained
+    OperatorGroups scoped to more than one specific namespace is outside the scope
+    of this book. You can find more information in [OLM’s GitHub repository](https://oreil.ly/ZBAou).
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此处显示的两个示例涵盖了大多数用例；创建范围超过一个特定命名空间的精细OperatorGroups超出了本书的范围。您可以在[OLM的GitHub存储库](https://oreil.ly/ZBAou)中找到更多信息。
+- en: Installing OLM
+  id: totrans-38
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 安装OLM
+- en: In the rest of this chapter, we explore using and developing for OLM. As OLM
+    is not installed by default in most Kubernetes distributions, the first step is
+    to install the necessary resources to run it.
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章的其余部分中，我们将探讨使用和为OLM开发。由于大多数Kubernetes发行版默认未安装OLM，第一步是安装运行所需的资源。
+- en: Warning
+  id: totrans-40
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: OLM is an evolving project. As such, be sure to consult its GitHub repository
+    to find the latest installation instructions for [the current release](https://oreil.ly/It369).
+    You can find the most recent releases on the OLM project’s GitHub repository.
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: OLM是一个不断发展的项目。因此，请务必查阅其GitHub存储库，以找到[当前发布版](https://oreil.ly/It369)的最新安装说明。您可以在OLM项目的GitHub存储库上找到最新的发布版本。
+- en: As of the current release (0.11.0), the installation performs two primary tasks.
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在当前版本（0.11.0）中，安装执行两项主要任务。
+- en: 'To begin, you’ll need to install the CRDs required by OLM. These function as
+    the API into OLM and provide the ability to configure external sources that provide
+    Operators and the cluster-side resources used to make those Operators available
+    to users. You create these through the `kubectl apply` command, as follows:'
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，您需要安装OLM所需的CRDs。这些CRD作为API进入OLM，并提供配置外部源的能力，这些外部源提供运算符以及用于使这些运算符对用户可用的集群端资源。您可以通过`kubectl
+    apply`命令创建这些CRD，如下所示：
+- en: '[PRE3]'
+  id: totrans-44
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: Note
+  id: totrans-45
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The examples here use the 0.11.0 release, which was the latest version at the
+    time of writing; you can update these commands to use the most up-to-date version
+    available at the time you’re reading the book.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此处的示例使用了0.11.0版本，这是书写时的最新版本；您可以根据阅读时的最新版本更新这些命令。
+- en: The second step is to create all of the Kubernetes resources that make up OLM
+    itself. These include the Operators that will drive OLM as well as the necessary
+    RBAC resources (ServiceAccounts, ClusterRoles, etc.) for it to function.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 第二步是创建构成OLM本身的所有Kubernetes资源。这些资源包括将驱动OLM的运算符以及使其正常运行所需的RBAC资源（ServiceAccounts、ClusterRoles等）。
+- en: 'As with the CRD creation, you perform this step through the `kubectl apply`
+    command:'
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与CRD创建一样，您可以通过`kubectl apply`命令执行此步骤：
+- en: '[PRE4]'
+  id: totrans-49
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: 'You can verify the installation by looking at the resources that were created:'
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以通过查看创建的资源来验证安装是否成功：
+- en: '[PRE5]'
+  id: totrans-51
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: Using OLM
+  id: totrans-52
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用OLM
+- en: Now that we’ve introduced the basic concepts around OLM, let’s see how to use
+    it to install an Operator. We’ll use OperatorHub.io as the source repository for
+    Operators. We cover OperatorHub.io in more detail in [Chapter 10](ch10.html#getting_involved),
+    but for now the important thing to know is that it’s a community-curated list
+    of publicly available Operators for use with OLM. In keeping with the Linux package
+    analogy from earlier in the chapter, you can think of it as similar to an RPM
+    repository.
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经介绍了围绕 OLM 的基本概念，让我们看看如何使用它来安装运算符。我们将使用 OperatorHub.io 作为运算符的源代码库。我们将在[第
+    10 章](ch10.html#getting_involved)中更详细地介绍 OperatorHub.io，但现在需要知道的重要信息是，它是一个由社区策划的公开可用运算符列表，用于与
+    OLM 一起使用。与本章前面的 Linux 软件包类比一致，您可以将其视为类似于 RPM 存储库。
+- en: 'Installing OLM creates a default catalog source in the `olm` namespace. You
+    can verify that this source, named `operatorhubio-catalog`, exists by using the
+    CLI:'
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安装 OLM 将在 `olm` 命名空间中创建一个默认的目录源。您可以使用 CLI 验证该源是否存在，名称为 `operatorhubio-catalog`：
+- en: '[PRE6]'
+  id: totrans-55
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: 'You can find further details about the source by using the `describe` command:'
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用 `describe` 命令找到有关源的更多详细信息：
+- en: '[PRE7]'
+  id: totrans-57
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: '[![1](assets/1.png)](#comarker1-01)'
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#comarker1-01)'
+- en: Note that the display name is simply “Community Operators,” rather than indicating
+    anything about OperatorHub.io. This value appears in the output of the next command,
+    when we look at the list of possible Operators.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注意显示名称仅为“Community Operators”，而不指示任何关于 OperatorHub.io 的信息。此值将出现在下一个命令的输出中，当我们查看可能的运算符列表时。
+- en: 'This catalog source is configured to read all of the Operators hosted on OperatorHub.io.
+    You can use the `packagemanifest` utility API to get a list of the Operators that
+    are found:'
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此目录源已配置为读取 OperatorHub.io 托管的所有运算符。您可以使用 `packagemanifest` 实用程序 API 获取发现的运算符列表：
+- en: '[PRE8]'
+  id: totrans-61
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: '[![1](assets/1.png)](#comarker1-02)'
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#comarker1-02)'
+- en: At the time of writing, there are close to 80 Operators on OperatorHub.io. We
+    truncated the output of this command for brevity.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 截至撰写时，OperatorHub.io 上有接近 80 个运算符。为简洁起见，我们截取了此命令的输出。
+- en: 'For this example, you’ll install the etcd Operator. The first step is to define
+    an OperatorGroup to dictate which namespaces the Operator will manage. The etcd
+    Operator you’re going to be using is scoped to a single namespace (you’ll see
+    later how we determined that), so you’ll create a group for just the default namespace:'
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于此示例，您将安装 etcd 运算符。第一步是定义一个 OperatorGroup 来指定运算符将管理哪些命名空间。您将要使用的 etcd 运算符仅限于单个命名空间（稍后您将看到我们如何确定），因此您将为默认命名空间创建一个组：
+- en: '[PRE9]'
+  id: totrans-65
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: 'Create the group using the `kubectl` `apply` command (this example assumes
+    the YAML in the previous snippet is saved to a file named *all-og.yaml*):'
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 `kubectl` 的 `apply` 命令创建该组（本示例假定前一片段的 YAML 已保存为名为 *all-og.yaml* 的文件）：
+- en: '[PRE10]'
+  id: totrans-67
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: The creation of a subscription triggers the installation of an Operator. Before
+    you can do that, you need to determine which channel you want to subscribe to.
+    OLM provides channel information in addition to a wealth of other details about
+    the Operator.
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 订阅的创建会触发运算符的安装。在进行此操作之前，您需要确定要订阅哪个通道。OLM 除了提供运算符的通道信息外，还提供了丰富的其他详细信息。
+- en: 'You can view this information by using the `packagemanifest` API:'
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用 `packagemanifest` API 查看此信息：
+- en: '[PRE11]'
+  id: totrans-70
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: '[![1](assets/1.png)](#comarker1-03)'
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#comarker1-03)'
+- en: The examples section of a package manifest contains a series of manifests that
+    you can use to deploy custom resources defined by this Operator. For brevity,
+    we have omitted them from this output.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 包清单的示例部分包含一系列清单，您可以使用这些清单部署此运算符定义的自定义资源。为简洁起见，我们从此输出中省略了它们。
+- en: '[![2](assets/2.png)](#comarker2)'
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#comarker2)'
+- en: We cut out much of the file for readability. We’ll cover many of these fields
+    when we talk about creating the CSV file in [“Writing a Cluster Service Version
+    File”](#writing_a_cluster_service_version_file).
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了可读性，我们剪裁了文件的大部分内容。我们将在[“编写群集服务版本文件”](#writing_a_cluster_service_version_file)部分讨论这些字段中的许多内容。
+- en: '[![3](assets/3.png)](#comarker3)'
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#comarker3)'
+- en: The install modes section describes the circumstances in which an end user may
+    deploy this Operator. We will also cover these later in this chapter.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安装模式部分描述了最终用户可能部署此运算符的情况。我们稍后将在本章中详细介绍这些内容。
+- en: '[![4](assets/4.png)](#comarker4)'
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#comarker4)'
+- en: This particular channel offers an Operator that is configured to be run to watch
+    the same namespace it is deployed in.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此特定通道提供了一个配置为在部署的同一命名空间中监视的运算符。
+- en: '[![5](assets/5.png)](#comarker5)'
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#comarker5)'
+- en: Along the same lines, end users cannot install this Operator to monitor all
+    namespaces in the cluster. If you look around in the package manifest data you’ll
+    find another channel named `clusterwide-alpha` that is suited to this purpose.
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 类似地，最终用户无法安装此 Operator 来监视集群中的所有命名空间。如果您在包清单数据中查找，将会找到另一个名为 `clusterwide-alpha`
+    的通道，适用于此目的。
+- en: '[![6](assets/6.png)](#comarker6)'
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![6](assets/6.png)](#comarker6)'
+- en: The `Name` field in this section indicates the name of the channel which is
+    referenced by a subscription.
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此部分的 `Name` 字段指示订阅引用的通道名称。
+- en: Since this Operator comes from OperatorHub.io, it can be beneficial to view
+    its page on the site directly. All of the data contained in the package manifest
+    is displayed on the individual Operator’s page, but formatted in a more easily
+    readable manner. You can check this out on the [etcd Operator page](https://oreil.ly/1bjkr).
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于这个 Operator 来自 OperatorHub.io，直接查看其页面可能会很有帮助。包清单中包含的所有数据都显示在各个 Operator 页面上，但以更易读的方式格式化显示。您可以在
+    [etcd Operator 页面](https://oreil.ly/1bjkr) 查看这些内容。
+- en: 'Once you have decided on a channel, the last step is to create the subscription
+    resource itself. Here is an example manifest:'
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦确定了通道，最后一步是创建订阅资源本身。以下是一个示例清单：
+- en: '[PRE12]'
+  id: totrans-85
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: '[![1](assets/1.png)](#co_operator_lifecycle_manager_CO2-1)'
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_operator_lifecycle_manager_CO2-1)'
+- en: This manifest installs the subscription, and thus the Operator deployment itself,
+    in the default namespace.
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此清单在默认命名空间中安装了订阅，从而安装了 Operator 部署本身。
+- en: '[![2](assets/2.png)](#co_operator_lifecycle_manager_CO2-2)'
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_operator_lifecycle_manager_CO2-2)'
+- en: The name of the Operator to be installed, as found by the `packagemanifest`
+    API call.
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过 `packagemanifest` API 调用找到要安装的 Operator 的名称。
+- en: '[![3](assets/3.png)](#co_operator_lifecycle_manager_CO2-3)'
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_operator_lifecycle_manager_CO2-3)'
+- en: The `source` and `sourceNamespace` describe where to find the catalog source
+    that provides the Operator.
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`source` 和 `sourceNamespace` 描述了提供 Operator 的目录源的位置。'
+- en: '[![4](assets/4.png)](#co_operator_lifecycle_manager_CO2-4)'
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_operator_lifecycle_manager_CO2-4)'
+- en: OLM will install Operators from the `singlenamespace-alpha` channel.
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: OLM 将从 `singlenamespace-alpha` 通道安装 Operators。
+- en: 'As with other resources, you create the subscription using `kubectl` `apply`
+    (this command assumes the subscription YAML above is saved in a file named *sub.yaml*):'
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与其他资源一样，您可以使用 `kubectl apply` 创建订阅（此命令假定上述订阅 YAML 已保存在名为 *sub.yaml* 的文件中）：
+- en: '[PRE13]'
+  id: totrans-95
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: Exploring the Operator
+  id: totrans-96
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 探索 Operator
+- en: 'When you create the subscription, a number of things happen. At the highest
+    level of the resource hierarchy, OLM creates a ClusterServiceVersion resource
+    in the default namespace:'
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您创建订阅时，会发生一些事情。在资源层次结构的最高级别上，OLM 在默认命名空间中创建一个 ClusterServiceVersion 资源：
+- en: '[PRE14]'
+  id: totrans-98
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: 'The CSV is effectively what the subscription installs—it’s the package, in
+    the RPM analogy. OLM performs the Operator installation steps defined in the CSV
+    to create the Operator pods themselves. Additionally, OLM will store information
+    about events in this process, which you can view using the `describe` command:'
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CSV 实际上是订阅安装的内容——就像 RPM 比方中的软件包一样。OLM 执行在 CSV 中定义的 Operator 安装步骤来创建 Operator
+    Pods 本身。此外，OLM 还将存储有关此过程中事件的信息，您可以使用 `describe` 命令查看：
+- en: '[PRE15]'
+  id: totrans-100
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: Note
+  id: totrans-101
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The output here has been edited to fit the page. Your output will vary slightly
+    and contain more data per event.
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此处的输出已编辑以适应页面。您的输出将略有不同，并包含更多事件数据。
+- en: 'OLM is responsible for following the deployment template contained within the
+    CSV to create the Operator pod itself. Continuing down the resource ownership
+    hierarchy, you can see that OLM creates a deployment resource as well:'
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: OLM 负责按照 CSV 中包含的部署模板来创建 Operator Pod 本身。在资源所有权层次结构下进一步查看，您可以看到 OLM 还创建了一个部署资源：
+- en: '[PRE16]'
+  id: totrans-104
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: 'Viewing the details of the deployment explicitly shows the owner relationship
+    between the CSV and this deployment:'
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 明确查看部署的详细信息显示了 CSV 与此部署之间的所有权关系：
+- en: '[PRE17]'
+  id: totrans-106
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: 'Unsurprisingly, the deployment creates a number of pods based on its resource
+    definition. In the case of the etcd Operator, the CSV defines the deployment as
+    requiring three pods:'
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不出所料，部署根据其资源定义创建了多个 Pod。对于 etcd Operator，CSV 将部署定义为需要三个 Pod：
+- en: '[PRE18]'
+  id: totrans-108
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: 'To summarize, creating the subscription caused the following to take place:'
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 总结一下，创建订阅导致以下事件发生：
+- en: OLM creates a CSV resource in the same namespace as the subscription. This CSV
+    contains, among other things, the manifest for the deployment of the Operator
+    itself.
+  id: totrans-110
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: OLM 在与订阅相同的命名空间中创建一个 CSV 资源。此 CSV 包含了部署 Operator 本身的清单，以及其他信息。
+- en: OLM uses the deployment manifest to create a deployment resource for the Operator.
+    The owner of that resource is the CSV itself.
+  id: totrans-111
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: OLM 使用部署清单为 Operator 创建部署资源。该资源的所有者是 CSV 本身。
+- en: The deployment causes the creation of replica sets and pods for the Operator
+    itself.
+  id: totrans-112
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 部署导致为 Operator 本身创建副本集和 pod。
+- en: Deleting the Operator
+  id: totrans-113
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 删除 Operator
+- en: Deleting an OLM-deployed Operator isn’t as straightforward as it is when working
+    with simple deployment resources.
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与处理简单部署资源时一样，删除通过 OLM 部署的 Operator 并不那么简单。
+- en: A deployment resource acts as installation instructions for pods. If a pod is
+    removed, either by user intervention or because of an error on the pod itself,
+    Kubernetes detects the difference between the desired state of the deployment
+    and the actual number of pods.
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 部署资源充当 pod 的安装说明。如果通过用户干预或 pod 自身错误删除 pod，则 Kubernetes 检测到部署的期望状态与 pod 的实际数量之间的差异。
+- en: In much the same way, the CSV resource acts as the installation instructions
+    for the Operator. Often, a CSV indicates that a deployment must exist to fulfill
+    this plan. If that deployment ceases to exist, OLM takes the necessary steps to
+    make the actual state of the system match the CSV’s desired state.
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 类似地，CSV 资源作为 Operator 的安装说明。通常，CSV 指示必须存在部署以执行此计划。如果该部署不存在，OLM 将采取必要步骤，使系统的实际状态与
+    CSV 的期望状态匹配。
+- en: 'As such, it’s not sufficient to simply delete the Operator’s deployment resource.
+    Instead, an Operator deployed by OLM is deleted by deleting the CSV resource:'
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，仅仅删除 Operator 的部署资源是不够的。相反，由 OLM 部署的 Operator 将通过删除 CSV 资源来删除：
+- en: '[PRE19]'
+  id: totrans-118
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: OLM takes care of deleting the resources that the CSV created when it was originally
+    deployed, including the Operator’s deployment resource.
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当最初部署时，OLM 负责删除 CSV 创建的资源，包括 Operator 的部署资源。
+- en: 'Additionally, you’ll need to delete the subscription to prevent OLM from installing
+    new CSV versions in the future:'
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另外，您需要删除订阅以防止 OLM 在未来安装新的 CSV 版本：
+- en: '[PRE20]'
+  id: totrans-121
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: OLM Bundle Metadata Files
+  id: totrans-122
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: OLM Bundle 元数据文件
+- en: 'An “OLM bundle” provides details on an Operator that can be installed. The
+    bundle contains all the necessary information (for all the available versions
+    of the Operator) to:'
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: “OLM 包” 提供了可以安装的 Operator 的详细信息。该包含有关 Operator 所有可用版本的所有必要信息，以便：
+- en: Provide a flexible delivery structure for the Operator by offering one or more
+    *channels* that a user can subscribe to.
+  id: totrans-124
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 通过提供用户可以订阅的一个或多个 *通道*，为 Operator 提供灵活的交付结构。
+- en: Deploy the CRDs required for the Operator to function.
+  id: totrans-125
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 部署 Operator 所需的 CRD。
+- en: Instruct OLM on how to create the Operator deployment.
+  id: totrans-126
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 指导 OLM 如何创建 Operator 部署。
+- en: Include additional information on each CRD spec field, including hints on how
+    to render those fields in a UI.
+  id: totrans-127
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 包括每个 CRD spec 字段的额外信息，包括如何在 UI 中呈现这些字段的提示。
+- en: 'There are three types of files included in an OLM bundle: custom resource definitions,
+    Cluster Service Version files, and package manifest files.'
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: OLM 包包括三种类型的文件：自定义资源定义、集群服务版本文件和软件包清单文件。
+- en: Custom Resource Definitions
+  id: totrans-129
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 自定义资源定义
+- en: Since the Operator requires its CRDs to function, the OLM bundle includes them.
+    OLM installs the CRDs along with the Operator itself. You, as the OLM bundle developer,
+    do not need to make any changes or additions to the CRD files beyond what already
+    exists to support the Operator.
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于 Operator 需要其 CRD 来运行，OLM 包将其包括在内。OLM 与 Operator 一起安装 CRD。作为 OLM 包开发者，您无需对
+    CRD 文件进行任何更改或添加，只需支持 Operator 的已有内容即可。
+- en: Keep in mind that only CRDs that are owned by the Operator should be included.
+    Any dependent CRDs that are provided by other Operators will be installed automatically
+    by OLM’s dependency resolution (the notion of required CRDs is addressed in [“Owned
+    CRDs”](#owned_crds)).
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请记住，只应包括 Operator 拥有的 CRD。任何其他 Operator 提供的依赖 CRD 将由 OLM 的依赖解析自动安装（有关所需 CRD
+    的概念在[“Owned CRDs”](#owned_crds)中解决）。
+- en: Note
+  id: totrans-132
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Each CRD must be defined in its own file.
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个 CRD 必须在其自己的文件中定义。
+- en: Cluster Service Version File
+  id: totrans-134
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 集群服务版本文件
+- en: 'The CSV file contains the bulk of the metadata about the Operator, including:'
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CSV 文件包含关于 Operator 的大部分元数据，包括：
+- en: How to deploy the Operator
+  id: totrans-136
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如何部署 Operator
+- en: The list of CRDs that the Operator uses (those that it owns as well as dependencies
+    from other Operators)
+  id: totrans-137
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Operator 使用的 CRD 列表（包括它拥有的以及其他 Operator 的依赖项）
+- en: Metadata about the Operator, including a description, logo, its maturity level,
+    and related links
+  id: totrans-138
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 关于 Operator 的元数据，包括描述、标志、成熟级别和相关链接
+- en: Given the large role this file plays, we cover details on how to write one in
+    the following section.
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 考虑到此文件的重要角色，我们在下一节中详细介绍如何编写此文件。
+- en: Package Manifest File
+  id: totrans-140
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 包清单文件
+- en: The package manifest file describes a list of channels that point to particular
+    Operator versions. It is up to the Operator owners to determine the breakdown
+    of channels and their respective delivery cadence. We strongly recommend that
+    channels set expectations around stability, features, and rate of changes.
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 包清单文件描述了一系列指向特定 Operator 版本的频道。由于频道和它们各自的交付节奏的分解由 Operator 拥有者确定。我们强烈建议频道设置关于稳定性、功能和变更速率的期望。
+- en: Users subscribe to channels. OLM will use the package manifest to determine
+    if a new version of the Operator is available in a subscribed-to channel and allow
+    the user to take steps to update as appropriate. We’ll get into more detail about
+    this file in [“Writing a Package Manifest File”](#writ_pack_manifest_file).
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用户订阅频道。OLM 将使用包清单确定是否在订阅的频道中提供了 Operator 的新版本，并允许用户根据需要采取更新步骤。我们将在[“编写包清单文件”](#writ_pack_manifest_file)中详细介绍此文件。
+- en: Writing a Cluster Service Version File
+  id: totrans-143
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 编写集群服务版本文件
+- en: Each version of an Operator will have its own Cluster Service Version file.
+    The CSV file is a standard Kubernetes manifest of kind ClusterServiceVersion,
+    which is one of the custom resources that OLM provides.
+  id: totrans-144
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个 Operator 版本都将有自己的集群服务版本文件。CSV 文件是一种标准的 Kubernetes Manifest，类型为 ClusterServiceVersion，这是
+    OLM 提供的自定义资源之一。
+- en: The resources in this file provide OLM with information about a specific Operator
+    version, including installation instructions and extra details on how the user
+    interacts with the Operator’s CRDs.
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此文件中的资源向 OLM 提供有关特定 Operator 版本的信息，包括安装说明以及用户如何与 Operator 的 CRD 进行交互的额外细节。
+- en: Generating a File Skeleton
+  id: totrans-146
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 生成文件骨架
+- en: Given the amount of data included in a CSV file, the easiest starting point
+    is to use the Operator SDK to generate a skeleton. The SDK will build this skeleton
+    with the basic structure of a Cluster Service Version file, and will populate
+    it with as much data as it can determine about the Operator itself. It provides
+    a good basis from which you can flesh out the remaining details.
+  id: totrans-147
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 鉴于 CSV 文件中包含的数据量，最简单的起点是使用 Operator SDK 生成一个骨架。SDK 将以 Operator 本身的基本结构为基础构建此骨架，并尽可能填充其余详细信息。这为您提供了一个良好的基础，可以在此基础上完善其余细节。
+- en: As each CSV corresponds to a particular Operator version, that version information
+    is reflected in the filename scheme. The filename pattern is to use the Operator
+    name and append the semantic version number. For example, a CSV file for the Visitors
+    Site Operator will be named something like *visitors-operator.v1.0.0.yaml*.
+  id: totrans-148
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于每个 CSV 对应于特定的 Operator 版本，因此版本信息反映在文件名方案中。文件名模式是使用 Operator 名称并附加语义版本号。例如，Visitors
+    Site Operator 的 CSV 文件将命名为类似 *visitors-operator.v1.0.0.yaml* 的东西。
+- en: 'In order for the Operator SDK to populate the skeleton CSV file with information
+    about a specific Operator, you must run the generation command from the root of
+    the Operator project source code. The general form of this command is as follows:'
+  id: totrans-149
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了使 Operator SDK 能够用特定 Operator 的信息填充骨架 CSV 文件，您必须从 Operator 项目源代码的根目录运行生成命令。这个命令的一般形式如下：
+- en: '[PRE21]'
+  id: totrans-150
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: Again, is it up to the Operator’s development team to determine their own version
+    numbering policy. For consistency and general user-friendliness, we recommend
+    that Operator releases follow [Semantic Versioning](https://semver.org) principles.
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 再次强调，由 Operator 开发团队决定他们自己的版本编号策略。为了一致性和一般用户友好性，我们建议 Operator 的发布遵循[语义化版本](https://semver.org)原则。
+- en: 'Running the CSV generation command on the Visitors Site Operator produces the
+    following output:'
+  id: totrans-152
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运行 Visitors Site Operator 的 CSV 生成命令将产生以下输出：
+- en: '[PRE22]'
+  id: totrans-153
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: 'Even with only the base CSV structure, the generated file is already fairly
+    detailed. At a high level, it includes the following:'
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 即使只有基本的 CSV 结构，生成的文件已经相当详细。在高层次上，它包括以下内容：
+- en: References to all CRDs the Operator owns (in other words, those defined in the
+    Operator project)
+  id: totrans-155
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 所有 Operator 拥有的 CRD 的引用（换句话说，那些在 Operator 项目中定义的）
+- en: A partial definition for the Operator’s Deployment resource
+  id: totrans-156
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Operator 部署资源的部分定义
+- en: A set of RBAC rules that the Operator requires
+  id: totrans-157
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Operator 需要的一组 RBAC 规则
+- en: Indicators describing the scope of namespaces the Operator will watch
+  id: totrans-158
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 描述 Operator 将监视的命名空间范围的指示器
+- en: An example custom resource (found in `metadata.annotations.alm-examples`) that
+    you can modify for your needs
+  id: totrans-159
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 可以根据需要修改的自定义资源示例（在`metadata.annotations.alm-examples`中找到）
+- en: We dive deeper into each of these components and the sorts of changes you should
+    make to them in the following sections.
+  id: totrans-160
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将深入探讨每个组件及其应进行的更改类型，在接下来的章节中进行详细讨论。
+- en: Warning
+  id: totrans-161
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: 'The SDK will not know the name of the image to use for the Operator itself.
+    The skeleton file includes the field `image: REPLACE_IMAGE` in the deployment
+    descriptor. You must update this value to point to a hosted image of the Operator
+    (for example, on Docker Hub or Quay.io) that OLM will deploy.'
+  id: totrans-162
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 'SDK将不知道用于Operator本身的图像名称。骨架文件包括在部署描述符中的`image: REPLACE_IMAGE`字段。您必须更新此值，以指向OLM将部署的Operator的托管图像（例如在Docker
+    Hub或Quay.io上）。'
+- en: Metadata
+  id: totrans-163
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 元数据
+- en: As previously mentioned, the `metadata.annotations.alm-examples` field contains
+    an example for each CRD that the Operator owns. The SDK will initially populate
+    this field using the custom resource manifest found in the Operator project’s
+    *deploy/crds* directory. Be sure to review and flesh out this example with actual
+    data that end users can further customize to their needs.
+  id: totrans-164
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如前所述，`metadata.annotations.alm-examples`字段包含Operator拥有的每个CRD的示例。SDK将首先使用在Operator项目的*deploy/crds*目录中找到的自定义资源清单来填充此字段。务必查看并填写实际数据，以便最终用户可以根据自己的需求进一步定制。
+- en: 'Apart from `alm-examples`, you can find the remainder of the Operator’s metadata
+    under the `spec` section of the manifest. The output of the SDK’s generation command
+    highlights three specific fields as required:'
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了`alm-examples`之外，您可以在清单的`spec`部分找到Operator的其余元数据。SDK生成命令的输出将强调三个特定的必填字段：
+- en: keywords
+  id: totrans-166
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 关键字
+- en: A list of categories describing the Operator; compatible UIs use this for discovery
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 描述Operator的类别列表；兼容UI用于发现
+- en: maintainers
+  id: totrans-168
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 维护者
+- en: A list of name and email pairings for the maintainers of the Operator codebase
+  id: totrans-169
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 代码库维护Operator的姓名和电子邮件对列表
+- en: provider
+  id: totrans-170
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 提供者
+- en: The name of the publishing entity for the Operator
+  id: totrans-171
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Operator的发布实体名称
+- en: 'This snippet from the etcd Operator demonstrates the three required fields:'
+  id: totrans-172
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这段来自etcd Operator的片段展示了三个必填字段：
+- en: '[PRE23]'
+  id: totrans-173
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: 'We also encourage you to provide the following metadata fields, which produce
+    a more robust listing in catalogs such as OperatorHub.io:'
+  id: totrans-174
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们还鼓励您提供以下元数据字段，这些字段可以在OperatorHub.io等目录中生成更强大的列表：
+- en: displayName
+  id: totrans-175
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 显示名称
+- en: A user-friendly name for the Operator
+  id: totrans-176
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Operator的用户友好名称
+- en: description
+  id: totrans-177
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 描述
+- en: A string describing the Operator’s functionality; you can use YAML constructs
+    for multiline strings to provide further display information
+  id: totrans-178
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 描述Operator功能的字符串；您可以使用YAML结构的多行字符串来提供更多的显示信息
+- en: version
+  id: totrans-179
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 版本
+- en: The semantic version of the Operator, which should be incremented each time
+    a new Operator image is published
+  id: totrans-180
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Operator的语义版本，每次发布新的Operator镜像时都应递增
+- en: replaces
+  id: totrans-181
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 替代项
+- en: The version, if any, of the Operator that this CSV updates
+  id: totrans-182
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本CSV更新的Operator版本（如果有）
+- en: icon
+  id: totrans-183
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 图标
+- en: A base64–encoded image used by compatible UIs
+  id: totrans-184
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 兼容UI使用的Base64编码图像
+- en: maturity
+  id: totrans-185
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 成熟度
+- en: The maturity level of the Operator included in this release, such as `alpha`,
+    `beta`, or `stable`
+  id: totrans-186
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 包含在此版本中的Operator的成熟级别，例如`alpha`、`beta`或`stable`
+- en: links
+  id: totrans-187
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 链接
+- en: A list of relevant links for the Operator, such as documentation, quick start
+    guides, or blog entries
+  id: totrans-188
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Operator的相关链接列表，例如文档、快速入门指南或博客文章
+- en: minKubeVersion
+  id: totrans-189
+  prefs: []
+  type: TYPE_NORMAL
+  zh: minKubeVersion
+- en: The minimum version of Kubernetes that the Operator must be deployed on, using
+    the format “Major.Minor.Patch” (e.g., 1.13.0)
+  id: totrans-190
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Operator必须部署的Kubernetes的最低版本，使用“Major.Minor.Patch”格式（例如，1.13.0）
+- en: Owned CRDs
+  id: totrans-191
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 拥有的CRDs
+- en: 'In order to install an Operator, OLM must know about all of the CRDs it uses.
+    These come in two forms: those owned by the Operator and those that are used as
+    dependencies (in CSV terms, these are referred to as “required” CRDs; we will
+    cover these in the next section).'
+  id: totrans-192
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要安装Operator，OLM必须了解其使用的所有CRD。这些CRD分为两种形式：由Operator拥有的CRD和用作依赖项的CRD（在CSV术语中，这些被称为“必需”CRD；我们将在下一节中介绍这些内容）。
+- en: The SDK skeleton generation adds the `spec.customresourcedefinitions` section
+    to the CSV file. It also populates the `owned` section with entries for each CRD
+    defined by the Operator, including identifying information such as `kind`, `name`,
+    and `version`. However, there are more fields that you must manually add before
+    the OLM bundle is valid.
+  id: totrans-193
+  prefs: []
+  type: TYPE_NORMAL
+  zh: SDK 骨架生成将`spec.customresourcedefinitions`部分添加到 CSV 文件中。它还使用由操作员定义的每个 CRD 填充`owned`部分，包括诸如`kind`、`name`和`version`的标识信息。但是，在
+    OLM 捆绑包有效之前，您必须手动添加更多字段。
+- en: 'The following are required fields that you must set for each owned CRD:'
+  id: totrans-194
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您必须为每个拥有的 CRD 设置以下必需字段：
+- en: displayName
+  id: totrans-195
+  prefs: []
+  type: TYPE_NORMAL
+  zh: displayName
+- en: The user-friendly name of the custom resource
+  id: totrans-196
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 自定义资源的用户友好名称
+- en: description
+  id: totrans-197
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 描述
+- en: Information about what the custom resource represents
+  id: totrans-198
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 关于自定义资源表示的信息
+- en: resources
+  id: totrans-199
+  prefs: []
+  type: TYPE_NORMAL
+  zh: resources
+- en: A list of Kubernetes resource types that will be created by the custom resource
+  id: totrans-200
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将由自定义资源创建的 Kubernetes 资源类型列表
+- en: The `resources` list does not need to be exhaustive. Rather, it should only
+    list visible resources that are relevant to the user. For example, you should
+    list things an end user interacts with, such as service and deployment resources,
+    but omit an internal ConfigMap that the user does not directly manipulate.
+  id: totrans-201
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`resources` 列表不需要详尽无遗。相反，它应该仅列出用户相关的可见资源。例如，您应该列出用户与之交互的事物，如服务和部署资源，但应省略用户不直接操作的内部
+    ConfigMap。'
+- en: You only need to include one instance of each resource type, regardless of how
+    many resources of that type are created by the Operator. For example, if the custom
+    resource creates multiple deployments, you only need to list the deployment resource
+    type once.
+  id: totrans-202
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个资源类型只需包含一个实例，无论操作员创建该类型的资源多少个。例如，如果自定义资源创建多个部署，则只需列出部署资源类型一次。
+- en: 'An example list for a custom resource that creates one or more deployments
+    and services is as follows:'
+  id: totrans-203
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建一个或多个部署和服务的自定义资源的示例列表如下：
+- en: '[PRE24]'
+  id: totrans-204
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: 'There are two more fields you need to add to each owned resource: `specDescriptors`
+    and `statusDescriptors`. These fields provide additional metadata about the `spec`
+    and `status` fields that will be present in the custom resource. Compatible UIs
+    can use this additional information to render an interface for users.'
+  id: totrans-205
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您需要为每个拥有的资源添加两个字段：`specDescriptors` 和 `statusDescriptors`。这些字段提供有关将出现在自定义资源中的
+    `spec` 和 `status` 字段的附加元数据。兼容的 UI 可以使用此额外信息为用户呈现界面。
+- en: 'For each field in the custom resource’s spec, add an entry to the `specDescriptors`
+    field. Each entry should contain the following:'
+  id: totrans-206
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于自定义资源规范中的每个字段，都要向 `specDescriptors` 字段添加一个条目。每个条目应包含以下内容：
+- en: displayName
+  id: totrans-207
+  prefs: []
+  type: TYPE_NORMAL
+  zh: displayName
+- en: The user-friendly name of the field
+  id: totrans-208
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 字段的用户友好名称
+- en: description
+  id: totrans-209
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 描述
+- en: Information about what the field represents
+  id: totrans-210
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 关于字段表示的信息
+- en: path
+  id: totrans-211
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 路径
+- en: The dot-delimited path of the field in the object
+  id: totrans-212
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对象中字段的点分路径
+- en: x-descriptors
+  id: totrans-213
+  prefs: []
+  type: TYPE_NORMAL
+  zh: x-descriptors
+- en: UI component information about the field’s capabilities
+  id: totrans-214
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 关于字段能力的 UI 组件信息
+- en: '[Table 8-1](#commonly_used_spec_descriptors) lists the descriptors that are
+    commonly supported by compatible UIs.'
+  id: totrans-215
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[表 8-1](#commonly_used_spec_descriptors) 列出了兼容 UI 常见支持的描述符。'
+- en: Table 8-1\. Commonly used spec descriptors
+  id: totrans-216
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 8-1\. 常用的规范描述符
+- en: '| Type | Descriptor string |'
+  id: totrans-217
+  prefs: []
+  type: TYPE_TB
+  zh: '| 类型 | 描述符字符串 |'
+- en: '| --- | --- |'
+  id: totrans-218
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| Boolean switch | `urn:alm:descriptor:com.tectonic.ui:booleanSwitch` |'
+  id: totrans-219
+  prefs: []
+  type: TYPE_TB
+  zh: '| 布尔开关 | `urn:alm:descriptor:com.tectonic.ui:booleanSwitch` |'
+- en: '| Checkbox | `urn:alm:descriptor:com.tectonic.ui:checkbox` |'
+  id: totrans-220
+  prefs: []
+  type: TYPE_TB
+  zh: '| 复选框 | `urn:alm:descriptor:com.tectonic.ui:checkbox` |'
+- en: '| Endpoint list | `urn:alm:descriptor:com.tectonic.ui:endpointList` |'
+  id: totrans-221
+  prefs: []
+  type: TYPE_TB
+  zh: '| 端点列表 | `urn:alm:descriptor:com.tectonic.ui:endpointList` |'
+- en: '| Image pull policy | `urn:alm:descriptor:com.tectonic.ui:imagePullPolicy`
+    |'
+  id: totrans-222
+  prefs: []
+  type: TYPE_TB
+  zh: '| 镜像拉取策略 | `urn:alm:descriptor:com.tectonic.ui:imagePullPolicy` |'
+- en: '| Label | `urn:alm:descriptor:com.tectonic.ui:label` |'
+  id: totrans-223
+  prefs: []
+  type: TYPE_TB
+  zh: '| 标签 | `urn:alm:descriptor:com.tectonic.ui:label` |'
+- en: '| Namespace selector | `urn:alm:descriptor:com.tectonic.ui:namespaceSelector`
+    |'
+  id: totrans-224
+  prefs: []
+  type: TYPE_TB
+  zh: '| 命名空间选择器 | `urn:alm:descriptor:com.tectonic.ui:namespaceSelector` |'
+- en: '| Node affinity | `urn:alm:descriptor:com.tectonic.ui:nodeAffinity` |'
+  id: totrans-225
+  prefs: []
+  type: TYPE_TB
+  zh: '| 节点亲和性 | `urn:alm:descriptor:com.tectonic.ui:nodeAffinity` |'
+- en: '| Number | `urn:alm:descriptor:com.tectonic.ui:number` |'
+  id: totrans-226
+  prefs: []
+  type: TYPE_TB
+  zh: '| 数字 | `urn:alm:descriptor:com.tectonic.ui:number` |'
+- en: '| Password | `urn:alm:descriptor:com.tectonic.ui:password` |'
+  id: totrans-227
+  prefs: []
+  type: TYPE_TB
+  zh: '| 密码 | `urn:alm:descriptor:com.tectonic.ui:password` |'
+- en: '| Pod affinity | `urn:alm:descriptor:com.tectonic.ui:podAffinity` |'
+  id: totrans-228
+  prefs: []
+  type: TYPE_TB
+  zh: '| Pod 亲和性 | `urn:alm:descriptor:com.tectonic.ui:podAffinity` |'
+- en: '| Pod anti-affinity | `urn:alm:descriptor:com.tectonic.ui:podAntiAffinity`
+    |'
+  id: totrans-229
+  prefs: []
+  type: TYPE_TB
+  zh: '| Pod 反亲和性 | `urn:alm:descriptor:com.tectonic.ui:podAntiAffinity` |'
+- en: '| Resource requirements | `urn:alm:descriptor:com.tectonic.ui:resourceRequirements`
+    |'
+  id: totrans-230
+  prefs: []
+  type: TYPE_TB
+  zh: '| 资源需求 | `urn:alm:descriptor:com.tectonic.ui:resourceRequirements` |'
+- en: '| Selector | `urn:alm:descriptor:com.tectonic.ui:selector:` |'
+  id: totrans-231
+  prefs: []
+  type: TYPE_TB
+  zh: '| 选择器 | `urn:alm:descriptor:com.tectonic.ui:selector:` |'
+- en: '| Text | `urn:alm:descriptor:com.tectonic.ui:text` |'
+  id: totrans-232
+  prefs: []
+  type: TYPE_TB
+  zh: '| 文本 | `urn:alm:descriptor:com.tectonic.ui:text` |'
+- en: '| Update strategy | `urn:alm:descriptor:com.tectonic.ui:updateStrategy` |'
+  id: totrans-233
+  prefs: []
+  type: TYPE_TB
+  zh: '| 更新策略 | `urn:alm:descriptor:com.tectonic.ui:updateStrategy` |'
+- en: The structure of the `statusDescriptors` field is similar, including the same
+    fields you need to specify. The only difference is the set of valid descriptors;
+    these are listed in [Table 8-2](#commonly_used_status_descriptors).
+  id: totrans-234
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`statusDescriptors` 字段的结构类似，包括需要指定的相同字段。唯一的区别在于有效描述符的集合；这些列在[表 8-2](#commonly_used_status_descriptors)中列出。'
+- en: Table 8-2\. Commonly used status descriptors
+  id: totrans-235
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 8-2\. 常用状态描述符
+- en: '| Type | Descriptor string |'
+  id: totrans-236
+  prefs: []
+  type: TYPE_TB
+  zh: '| 类型 | 描述符字符串 |'
+- en: '| --- | --- |'
+  id: totrans-237
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| Conditions | `urn:alm:descriptor:io.kubernetes.conditions` |'
+  id: totrans-238
+  prefs: []
+  type: TYPE_TB
+  zh: '| 条件 | `urn:alm:descriptor:io.kubernetes.conditions` |'
+- en: '| k8s phase reason | `urn:alm:descriptor:io.kubernetes.phase:reason` |'
+  id: totrans-239
+  prefs: []
+  type: TYPE_TB
+  zh: '| k8s 阶段原因 | `urn:alm:descriptor:io.kubernetes.phase:reason` |'
+- en: '| k8s phase | `urn:alm:descriptor:io.kubernetes.phase` |'
+  id: totrans-240
+  prefs: []
+  type: TYPE_TB
+  zh: '| k8s 阶段 | `urn:alm:descriptor:io.kubernetes.phase` |'
+- en: '| Pod count | `urn:alm:descriptor:com.tectonic.ui:podCount` |'
+  id: totrans-241
+  prefs: []
+  type: TYPE_TB
+  zh: '| Pod 计数 | `urn:alm:descriptor:com.tectonic.ui:podCount` |'
+- en: '| Pod statuses | `urn:alm:descriptor:com.tectonic.ui:podStatuses` |'
+  id: totrans-242
+  prefs: []
+  type: TYPE_TB
+  zh: '| Pod 状态 | `urn:alm:descriptor:com.tectonic.ui:podStatuses` |'
+- en: '| Prometheus endpoint | `urn:alm:descriptor:prometheusEndpoint` |'
+  id: totrans-243
+  prefs: []
+  type: TYPE_TB
+  zh: '| Prometheus 终端 | `urn:alm:descriptor:prometheusEndpoint` |'
+- en: '| Text | `urn:alm:descriptor:text` |'
+  id: totrans-244
+  prefs: []
+  type: TYPE_TB
+  zh: '| 文本 | `urn:alm:descriptor:text` |'
+- en: '| W3 link | `urn:alm:descriptor:org.w3:link` |'
+  id: totrans-245
+  prefs: []
+  type: TYPE_TB
+  zh: '| W3 链接 | `urn:alm:descriptor:org.w3:link` |'
+- en: 'As an example, the following snippet contains a subset of the descriptors for
+    the etcd Operator:'
+  id: totrans-246
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，以下片段包含了 etcd Operator 的描述符子集：
+- en: '[PRE25]'
+  id: totrans-247
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE25]'
+- en: Required CRDs
+  id: totrans-248
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 需要的 CRD
+- en: Custom resources that are used by an Operator but not owned by it are designated
+    as *required*. When installing an Operator, OLM will find the appropriate Operator
+    that provides a required CRD and install it. This allows Operators to maintain
+    a limited scope while utilizing composition and dependency resolution when necessary.
+  id: totrans-249
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用但不由 Operator 拥有的自定义资源被指定为*所需*。在安装 Operator 时，OLM 将找到提供所需 CRD 的适当 Operator
+    并安装它。这允许 Operator 在必要时维持有限的范围，同时利用组合和依赖解析。
+- en: The required section of a CSV is optional. Only Operators that require the use
+    of other, non-Kubernetes resources need to include this.
+  id: totrans-250
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CSV 的所需部分是可选的。只有需要使用其他非 Kubernetes 资源的 Operator 需要包括这些。
+- en: 'Each required CRD is specified using its:'
+  id: totrans-251
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个所需 CRD 都使用其：
+- en: name
+  id: totrans-252
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 名称
+- en: The full name used to identify the required CRD
+  id: totrans-253
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用于识别所需 CRD 的完整名称
+- en: version
+  id: totrans-254
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 版本
+- en: The version of the CRD desired
+  id: totrans-255
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所需的 CRD 版本
+- en: kind
+  id: totrans-256
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 种类
+- en: The Kubernetes resource kind; displayed to users in compatible UIs
+  id: totrans-257
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 资源类型；在兼容的 UI 中显示给用户。
+- en: displayName
+  id: totrans-258
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 显示名称
+- en: The user-friendly name of the field; displayed to users in compatible UIs
+  id: totrans-259
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 字段的用户友好名称；在兼容的 UI 中显示给用户。
+- en: description
+  id: totrans-260
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 描述
+- en: Information on how the required CRD is used; displayed to users in compatible
+    UIs
+  id: totrans-261
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所需 CRD 的使用信息；在兼容的 UI 中显示给用户。
+- en: 'For example, the following indicates an EtcdCluster is a required CRD for a
+    different Operator:'
+  id: totrans-262
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，以下指示 EtcdCluster 是不同 Operator 的所需 CRD：
+- en: '[PRE26]'
+  id: totrans-263
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE26]'
+- en: One entry is needed under the `required` field for each required CRD.
+  id: totrans-264
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个所需 CRD 下 `required` 字段需要一个条目。
+- en: Install Modes
+  id: totrans-265
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 安装模式
+- en: The install modes section of a CSV tells OLM how the Operator can be deployed.
+    There are four options, all of which must be present in the `installModes` field
+    with their own flag indicating whether or not they are supported. The Operator
+    SDK includes a default set of values for each of these options when generating
+    a CSV.
+  id: totrans-266
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CSV 的安装模式部分告诉 OLM 如何部署 Operator。有四个选项，所有选项都必须在 `installModes` 字段中以自己的标志存在，指示它们是否受支持。当生成
+    CSV 时，Operator SDK 包含每个选项的默认值集。
+- en: 'The following installation modes are supported:'
+  id: totrans-267
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 支持以下安装模式：
+- en: OwnNamespace
+  id: totrans-268
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 拥有命名空间
+- en: The Operator can be deployed to an OperatorGroup that selects its own namespace.
+  id: totrans-269
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Operator 可以部署到选择自己命名空间的 OperatorGroup。
+- en: SingleNamespace
+  id: totrans-270
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 单个命名空间
+- en: The Operator can be deployed to an OperatorGroup that selects one namespace.
+  id: totrans-271
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Operator 可以部署到选择一个命名空间的 OperatorGroup。
+- en: MultiNamespace
+  id: totrans-272
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 多命名空间
+- en: The Operator can be deployed to an OperatorGroup that selects more than one
+    namespace.
+  id: totrans-273
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Operator 可以部署到选择多个命名空间的 OperatorGroup。
+- en: AllNamespaces
+  id: totrans-274
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有命名空间
+- en: 'The Operator can be deployed to an OperatorGroup that selects all namespaces
+    (defined as `targetNamespace: ""`).'
+  id: totrans-275
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 'Operator 可以部署到选择所有命名空间的 OperatorGroup（定义为 `targetNamespace: ""`）。'
+- en: 'The following snippet shows the proper way to structure this field, along with
+    the default values set by the SDK during generation:'
+  id: totrans-276
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下面的片段显示了正确构建此字段的方式，以及 SDK 在生成期间设置的默认值：
+- en: '[PRE27]'
+  id: totrans-277
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE27]'
+- en: Versioning and Updating
+  id: totrans-278
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 版本和更新
+- en: True to its name, each Cluster Service Version file represents a single version
+    of an Operator. Subsequent versions of the Operator will each have their own CSV
+    file. In many cases, this can be a copy of the previous version with the appropriate
+    changes.
+  id: totrans-279
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 忠实于其名称，每个集群服务版本文件代表一个操作员的单个版本。操作员的后续版本将分别具有自己的 CSV 文件。在许多情况下，这可以是前一个版本的副本，并进行适当的更改。
+- en: 'The following describes the general changes you need to make between versions
+    of an Operator (this is not an exhaustive list; take care to review the entire
+    contents of the file to ensure no further changes are required):'
+  id: totrans-280
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下面描述了操作员版本之间需要进行的一般更改（这不是详尽列表；请务必检查文件的全部内容，以确保不需要进一步的更改）：
+- en: Change the new CSV filename to reflect the new version of the Operator.
+  id: totrans-281
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 将新的 CSV 文件名更改为反映操作员的新版本。
+- en: Update the `metadata.name` field of the CSV file with the new version.
+  id: totrans-282
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 更新 CSV 文件的 `metadata.name` 字段以及新版本。
+- en: Update the `spec.version` field with the new version.
+  id: totrans-283
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 更新 `spec.version` 字段为新版本。
+- en: Update the `spec.replaces` field to indicate the previous version of the CSV
+    that is being upgraded by the new version.
+  id: totrans-284
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 更新 `spec.replaces` 字段以指示新版本升级的先前 CSV 版本。
+- en: In most cases, the new CSV will refer to a newer image of the Operator itself.
+    Be sure to update the `spec.containers.image` field as appropriate to refer to
+    the correct image.
+  id: totrans-285
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在大多数情况下，新的 CSV 将引用操作员本身的新镜像。请确保根据需要更新 `spec.containers.image` 字段以引用正确的镜像。
+- en: In the event of a CRD change, you may need to update the `specDescriptor` and
+    `statusDescriptor` fields of the CRD reference in the CSV file.
+  id: totrans-286
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如果 CRD 发生变化，则可能需要更新 CSV 文件中 CRD 引用的 `specDescriptor` 和 `statusDescriptor` 字段。
+- en: While these changes will result in a new version of the Operator, users cannot
+    access that version until it is present in a channel. Update the **.package.yaml*
+    file to reference the new CSV file for the appropriate channels (see the next
+    section for more information on this file).
+  id: totrans-287
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管这些更改将导致操作员的新版本，但用户在频道中存在该版本之前无法访问该版本。更新 **.package.yaml* 文件以引用适当频道的新 CSV 文件（有关此文件的更多信息，请参见下一节）。
+- en: Warning
+  id: totrans-288
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Do not modify existing CSV files once they are released and in use by OLM. Make
+    changes in a new version of the file instead, and propagate it to users through
+    the use of channels.
+  id: totrans-289
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦 OLM 发布并使用现有 CSV 文件，请勿修改现有 CSV 文件。请改在新版本的文件中进行更改，并通过频道将其传播给用户。
+- en: Writing a Package Manifest File
+  id: totrans-290
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 编写包清单文件
+- en: 'Compared to writing a Cluster Service Version file, writing a package manifest
+    is significantly easier. A package file requires three fields:'
+  id: totrans-291
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与编写集群服务版本文件相比，编写包清单要简单得多。包文件需要三个字段：
+- en: packageName
+  id: totrans-292
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 包名称
+- en: The name of the Operator itself; this should match the value used in the CSV
+    file
+  id: totrans-293
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 操作员本身的名称；这应该与 CSV 文件中使用的值匹配
+- en: channels
+  id: totrans-294
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 频道
+- en: A list of all channels for delivering versions of the Operator
+  id: totrans-295
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用于传送操作员版本的所有频道的列表
+- en: defaultChannel
+  id: totrans-296
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认频道
+- en: The name of the channel users should subscribe to by default
+  id: totrans-297
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用户应默认订阅的频道的名称
+- en: 'Each entry in the `channels` field is made up of two items:'
+  id: totrans-298
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`channels` 字段中的每个条目由两个项目组成：'
+- en: name
+  id: totrans-299
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 名称
+- en: The name of the channel; this is what users will subscribe to
+  id: totrans-300
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 频道的名称；这是用户将要订阅的内容
+- en: currentCSV
+  id: totrans-301
+  prefs: []
+  type: TYPE_NORMAL
+  zh: currentCSV
+- en: The full name (including the Operator name but not the *.yaml* suffix) of the
+    CSV file that is currently installed through the channel
+  id: totrans-302
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安装通过频道当前已安装的 CSV 文件的完整名称（包括操作员名称但不包括 *.yaml* 后缀）
+- en: It is left to the Operator’s team to determine their policy for what channels
+    will be supported.
+  id: totrans-303
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由操作员团队决定将支持哪些频道的政策留给操作员。
+- en: 'The following example distributes the Visitors Site Operator through two channels:'
+  id: totrans-304
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下面的示例通过两个频道分发 Visitors Site 操作员：
+- en: '[PRE28]'
+  id: totrans-305
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE28]'
+- en: Running Locally
+  id: totrans-306
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 本地运行
+- en: Once you have written the necessary bundle files, the next step is to build
+    the bundle and test it against a local cluster, such as one started by Minikube.
+    In the following sections, we’ll describe the process of installing OLM into a
+    cluster, building the OLM bundle, and subscribing to a channel to deploy the Operator.
+  id: totrans-307
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦编写了必要的捆绑文件，下一步就是构建捆绑并针对本地集群（例如 Minikube 启动的集群）进行测试。在接下来的章节中，我们将描述安装 OLM 到集群、构建
+    OLM 捆绑和订阅频道以部署操作员的过程。
+- en: Prerequisites
+  id: totrans-308
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 先决条件
+- en: This section covers the changes you need to make to the cluster to run OLM,
+    as well as configuring it to look at your repository of bundles. You only need
+    to complete these steps once for a cluster; we cover iterative development and
+    testing of an Operator in [“Building the OLM Bundle”](#building_the_olm_bundle).
+  id: totrans-309
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本节涵盖了您需要对集群进行的更改，以运行OLM，并配置它查看您的bundles存储库。对于一个集群，您只需要完成这些步骤一次；我们在[“构建OLM Bundle”](#building_the_olm_bundle)中讨论了Operator的迭代开发和测试。
+- en: Install the Marketplace Operator
+  id: totrans-310
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 安装Marketplace Operator
+- en: The Marketplace Operator imports Operators from an external data store. In this
+    chapter, you’ll be using Quay.io to host your OLM bundles.
+  id: totrans-311
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Marketplace Operator从外部数据存储中导入Operators。在本章中，您将使用Quay.io来托管您的OLM包。
+- en: Note
+  id: totrans-312
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Despite its name, the Marketplace Operator is not tied to a particular source
+    of Operators. It simply acts as a conduit to pull Operators from any compatible
+    external store. One such site is OperatorHub.io, which we discuss in [Chapter 10](ch10.html#getting_involved).
+  id: totrans-313
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管其名称如此，Marketplace Operator并未绑定到特定的Operators来源。它只是作为一个导管，从任何兼容的外部存储中获取Operators。OperatorHub.io是这样一个站点，我们在[第10章](ch10.html#getting_involved)中讨论它。
+- en: 'In keeping with the notion that CRDs represent an Operator’s API, installing
+    the Marketplace Operator introduces two CRDs:'
+  id: totrans-314
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 符合CRDs代表Operator API的概念，安装Marketplace Operator会引入两个CRDs：
+- en: The OperatorSource resource describes an external hosting registry for OLM bundles.
+    In this example, we use Quay.io, a free image hosting site.
+  id: totrans-315
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: OperatorSource资源描述了用于OLM包的外部托管注册表。在本例中，我们使用Quay.io，一个免费的图像托管站点。
+- en: The CatalogSourceConfig resource bridges between an OperatorSource and OLM itself.
+    An OperatorSource automatically creates CatalogSourceConfig resources, and you
+    do not need to explicitly interact with this type.
+  id: totrans-316
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: CatalogSourceConfig资源连接了OperatorSource和OLM本身。OperatorSource会自动创建CatalogSourceConfig资源，您无需显式与此类型交互。
+- en: Warning
+  id: totrans-317
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Similar to OLM, the Marketplace Operator is an evolving project. As such, be
+    sure to consult [its GitHub repository](https://oreil.ly/VNOrU) to find the latest
+    installation instructions for the current release.
+  id: totrans-318
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与OLM类似，Marketplace Operator是一个不断发展的项目。因此，请务必查阅[其GitHub存储库](https://oreil.ly/VNOrU)以获取当前发布的最新安装说明。
+- en: 'As there are currently no formal releases of the Marketplace Operator, it is
+    installed by cloning the upstream repository and using the manifests within:'
+  id: totrans-319
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于目前没有Marketplace Operator的正式发布，因此通过克隆上游存储库并使用其中的清单来安装它：
+- en: '[PRE29]'
+  id: totrans-320
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE29]'
+- en: 'You can verify the installation by ensuring the `marketplace` namespace was
+    created:'
+  id: totrans-321
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以通过确保创建了`marketplace`命名空间来验证安装：
+- en: '[PRE30]'
+  id: totrans-322
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE30]'
+- en: Install Operator Courier
+  id: totrans-323
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 安装Operator Courier
+- en: Operator Courier is a client-side tool used for building and pushing the OLM
+    bundle to a repository. It is also used for verifying the contents of the bundle
+    files.
+  id: totrans-324
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Operator Courier是一个客户端工具，用于构建并推送OLM包到存储库。它还用于验证包文件的内容。
+- en: 'You can install Operator Courier through the Python package installer `pip`:'
+  id: totrans-325
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以通过Python包安装程序`pip`安装Operator Courier：
+- en: '[PRE31]'
+  id: totrans-326
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE31]'
+- en: 'Once installed, you can run Operator Courier from the command line:'
+  id: totrans-327
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安装完成后，您可以从命令行运行Operator Courier：
+- en: '[PRE32]'
+  id: totrans-328
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE32]'
+- en: Retrieve a Quay token
+  id: totrans-329
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 检索一个Quay token
+- en: Quay.io is a free hosting site for container images. We will use Quay.io to
+    host the OLM bundles to serve them to the Operator Marketplace.
+  id: totrans-330
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Quay.io是一个免费的容器镜像托管站点。我们将使用Quay.io来托管OLM包以供Operator Marketplace使用。
+- en: New users can sign up for a free Quay.io account [via the website](https://quay.io/).
+  id: totrans-331
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 新用户可以通过[网站](https://quay.io/)注册免费的Quay.io帐户。
+- en: 'In order for Operator Courier to push OLM bundles into your Quay.io account,
+    you need an authentication token. While the token is accessible through the web
+    UI, you can also use the following script to retrieve it from the command line,
+    substituting your username and password as indicated:'
+  id: totrans-332
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了让Operator Courier能够将OLM包推送到您的Quay.io帐户，您需要一个认证令牌。虽然令牌可通过Web UI访问，但您也可以使用以下脚本从命令行检索它，按指示替换您的用户名和密码：
+- en: '[PRE33]'
+  id: totrans-333
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE33]'
+- en: An interactive version of this script is provided in [this book’s GitHub repository](https://github.com/kubernetes-operators-book/chapters/blob/master/ch08/get-quay-token).
+  id: totrans-334
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本书的GitHub存储库提供了此脚本的交互版本，位于[这里](https://github.com/kubernetes-operators-book/chapters/blob/master/ch08/get-quay-token)。
+- en: You will use this token later when pushing the bundle to Quay.io, so save it
+    somewhere accessible. The output of the script provides a command to save it as
+    an environment variable.
+  id: totrans-335
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以后在将bundle推送到Quay.io时，您将使用此令牌，因此请将其保存在可以访问的地方。脚本的输出提供了一个命令将其保存为环境变量。
+- en: Create the OperatorSource
+  id: totrans-336
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 创建OperatorSource
+- en: An OperatorSource resource defines the external data store used to host Operator
+    bundles. In this case, you will be defining an OperatorSource to point to your
+    Quay.io account, which will provide access to its hosted OLM bundles.
+  id: totrans-337
+  prefs: []
+  type: TYPE_NORMAL
+  zh: OperatorSource资源定义了用于托管Operator包的外部数据存储。在本例中，您将定义一个OperatorSource来指向您的Quay.io账户，这将提供对其托管的OLM包的访问。
+- en: 'A sample OperatorSource manifest follows; you should replace both instances
+    of `<QUAY_USERNAME>` with your Quay.io username:'
+  id: totrans-338
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下是一个示例OperatorSource清单；您应该将其中的两个`<QUAY_USERNAME>`替换为您的Quay.io用户名：
+- en: '[PRE34]'
+  id: totrans-339
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE34]'
+- en: '[![1](assets/1.png)](#co_operator_lifecycle_manager_CO3-1)'
+  id: totrans-340
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_operator_lifecycle_manager_CO3-1)'
+- en: Using your username here isn’t a hard requirement; it’s just a simple way to
+    ensure uniqueness for the OperatorSource name.
+  id: totrans-341
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这里使用您的用户名并不是硬性要求；这只是确保OperatorSource名称唯一的一种简单方式。
+- en: 'Once you’ve written the OperatorSource manifest, create the resource using
+    the following command (assuming the manifest file is named *operator-source.yaml*):'
+  id: totrans-342
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 编写了OperatorSource清单后，使用以下命令创建资源（假设清单文件名为*operator-source.yaml*）：
+- en: '[PRE35]'
+  id: totrans-343
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE35]'
+- en: 'To verify the OperatorSource was deployed correctly, you can look in the `marketplace`
+    namespace for a list of all known OperatorSources:'
+  id: totrans-344
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要验证OperatorSource是否正确部署，请在`marketplace`命名空间中查找所有已知的OperatorSources列表：
+- en: '[PRE36]'
+  id: totrans-345
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE36]'
+- en: '[![1](assets/1.png)](#comarker1-04)'
+  id: totrans-346
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#comarker1-04)'
+- en: If there are no bundles at the endpoint when you create the source, the status
+    will be `Failed`. You can ignore this for now; you’ll refresh this list later,
+    once you’ve uploaded a bundle.
+  id: totrans-347
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果在创建源时终点没有包，则状态将为`Failed`。现在您可以忽略这一点；一旦上传了包，稍后您将刷新此列表。
+- en: Note
+  id: totrans-348
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The output shown here has been truncated for readability; your results may vary
+    slightly.
+  id: totrans-349
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此处显示的输出已经截断以提高可读性；您的结果可能略有不同。
+- en: When the OperatorSource is initially created, it may fail if there are no OLM
+    bundles found in the user’s Quay.io application list. In a later step, you will
+    create and deploy the bundles, after which the OperatorSource will start correctly.
+    We included this step as a prerequisite since you only need to do it once; when
+    updating an OLM bundle or creating new ones in the same Quay.io namespace, you
+    will reuse the OperatorSource resource.
+  id: totrans-350
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当首次创建OperatorSource时，如果在用户的Quay.io应用程序列表中找不到OLM包，则可能会失败。在稍后的步骤中，您将创建和部署这些包，之后OperatorSource将正确启动。我们将此步骤包含为先决条件，因为您只需执行一次；在相同的Quay.io命名空间中更新OLM包或创建新的OLM包时，您将重用OperatorSource资源。
+- en: 'Additionally, the OperatorSource creation results in the creation of a CatalogSource.
+    No further action is required for this resource, but you can confirm its existence
+    by checking in the `marketplace` namespace:'
+  id: totrans-351
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此外，OperatorSource的创建会导致CatalogSource的创建。对于这个资源不需要进一步的操作，但您可以通过检查`marketplace`命名空间来确认其存在：
+- en: '[PRE37]'
+  id: totrans-352
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE37]'
+- en: Building the OLM Bundle
+  id: totrans-353
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 构建OLM包
+- en: Once you’ve installed the initial prerequisites, the bulk of your time is spent
+    on a build and test cycle. This section covers the steps necessary to build and
+    host an OLM bundle on Quay.io.
+  id: totrans-354
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安装了初始先决条件后，大部分时间将花在构建和测试循环上。本节涵盖了在Quay.io上构建和托管OLM包所需的步骤。
+- en: Perform linting
+  id: totrans-355
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 执行代码检查
+- en: 'OLM bundles are verified using Operator Courier’s `verify` command:'
+  id: totrans-356
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用Operator Courier的`verify`命令验证OLM包：
+- en: '[PRE38]'
+  id: totrans-357
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE38]'
+- en: Push the bundle to Quay.io
+  id: totrans-358
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 将包推送到Quay.io
+- en: 'When the metadata files pass verification and are ready to be tested, Operator
+    Courier uploads the OLM bundle into your Quay.io account. There are a number of
+    required parameters (and some optional arguments) when using the `push` command:'
+  id: totrans-359
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当元数据文件通过验证并准备好进行测试时，Operator Courier 将OLM包上传到您的Quay.io账户。在使用`push`命令时有一些必需的参数（和一些可选参数）：
+- en: '[PRE39]'
+  id: totrans-360
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE39]'
+- en: 'Here’s an example push for the Visitors Site Operator:'
+  id: totrans-361
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里是Visitors Site Operator的推送示例：
+- en: '[PRE40]'
+  id: totrans-362
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE40]'
+- en: '[![1](assets/1.png)](#comarker1-05)'
+  id: totrans-363
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#comarker1-05)'
+- en: '`QUAY_TOKEN` is the full token, including the “basic” prefix. You can use the
+    script we introduced earlier in this section to set this variable.'
+  id: totrans-364
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`QUAY_TOKEN`是完整的令牌，包括“basic”前缀。您可以使用本节早期介绍的脚本来设置此变量。'
+- en: Warning
+  id: totrans-365
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: By default, bundles pushed to Quay.io in this fashion are marked as private.
+    Navigate to the image at [*https://quay.io/application/*](https://quay.io/application/)
+    and mark it as public so that it is accessible to the cluster.
+  id: totrans-366
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，以这种方式推送到Quay.io的包被标记为私有。转到[*https://quay.io/application/*](https://quay.io/application/)的图像，并将其标记为公共，以便集群可以访问。
+- en: The Operator bundle is now ready for testing. For subsequent versions, update
+    the `PACKAGE_VERSION` variable according to the new version of the CSV file (see
+    [“Versioning and Updating”](#versioning_updating) for more information) and push
+    a new bundle.
+  id: totrans-367
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在Operator捆绑包已准备好测试。对于后续版本，请根据CSV文件的新版本更新`PACKAGE_VERSION`变量（有关更多信息，请参阅[“版本控制和更新”](#versioning_updating)）并推送新的捆绑包。
+- en: Restart the OperatorSource
+  id: totrans-368
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 重新启动OperatorSource
+- en: The OperatorSource reads the list of Operators in the configured Quay.io account
+    on startup. After uploading a new Operator or a new version of a CSV file, you’ll
+    need to restart the OperatorSource pod to pick up the changes.
+  id: totrans-369
+  prefs: []
+  type: TYPE_NORMAL
+  zh: OperatorSource在启动时读取配置的Quay.io帐户中的Operator列表。上传新Operator或CSV文件的新版本后，您需要重新启动OperatorSource
+    Pod以应用更改。
+- en: 'The pod’s name begins with the same name as the OperatorSource. Using the example
+    OperatorSource from the previous section, with “jdob” as the Quay.io username,
+    the following demonstrates how to restart the OperatorSource:'
+  id: totrans-370
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod的名称以OperatorSource的相同名称开头。使用前一节中的示例OperatorSource，将“jdob”作为Quay.io用户名，以下演示如何重新启动OperatorSource：
+- en: '[PRE41]'
+  id: totrans-371
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE41]'
+- en: '[![1](assets/1.png)](#comarker1-06)'
+  id: totrans-372
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#comarker1-06)'
+- en: The newly started pod name suffix differs from the original pod, confirming
+    that a new pod has been created.
+  id: totrans-373
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 新启动的Pod名称后缀与原始Pod不同，证实已创建了新的Pod。
+- en: 'At any point, you can query the OperatorSource to see a list of its known Operators:'
+  id: totrans-374
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在任何时候，您都可以查询OperatorSource以查看其已知Operator的列表：
+- en: '[PRE42]'
+  id: totrans-375
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE42]'
+- en: Installing the Operator Through OLM
+  id: totrans-376
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 通过OLM安装Operator
+- en: After you’ve configured the Marketplace Operator to retrieve your bundle, test
+    it by creating a subscription to one of its supported channels. OLM reacts to
+    the subscription and installs the corresponding Operator.
+  id: totrans-377
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在配置Marketplace Operator以检索您的捆绑包后，通过创建订阅到其支持的频道之一来测试它。OLM会响应订阅并安装相应的Operator。
+- en: Create the OperatorGroup
+  id: totrans-378
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 创建OperatorGroup
+- en: 'You’ll need an OperatorGroup to denote which namespaces the Operator should
+    watch. It must exist in the namespace where you want to deploy the Operator. For
+    simplicity while testing, the example OperatorGroup defined here deploys the Operator
+    into the existing `marketplace` namespace:'
+  id: totrans-379
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您将需要一个OperatorGroup来指定Operator应该监视哪些命名空间。它必须存在于您希望部署Operator的命名空间中。为了在测试时简化，此处定义的示例OperatorGroup将Operator部署到现有的`marketplace`命名空间中：
+- en: '[PRE43]'
+  id: totrans-380
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE43]'
+- en: 'Like with other Kubernetes resources, use the `kubectl` `apply` command to
+    create the OperatorGroup:'
+  id: totrans-381
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与其他Kubernetes资源一样，使用`kubectl`的`apply`命令创建OperatorGroup：
+- en: '[PRE44]'
+  id: totrans-382
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE44]'
+- en: Create the subscription
+  id: totrans-383
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 创建订阅
+- en: A subscription links the previous steps together by selecting an Operator and
+    one of its channels. OLM uses this information to start the corresponding Operator
+    pod.
+  id: totrans-384
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过选择Operator和其一个频道，订阅将前面的步骤连接在一起。OLM使用此信息来启动相应的Operator Pod。
+- en: 'The following example creates a new subscription to the stable channel for
+    the Visitors Site Operator:'
+  id: totrans-385
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下示例为访客站点操作员创建了一个新的稳定频道订阅：
+- en: '[PRE45]'
+  id: totrans-386
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE45]'
+- en: '[![1](assets/1.png)](#co_operator_lifecycle_manager_CO4-1)'
+  id: totrans-387
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_operator_lifecycle_manager_CO4-1)'
+- en: Indicates the namespace the subscription will be created in.
+  id: totrans-388
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 指示将在其中创建订阅的命名空间。
+- en: '[![2](assets/2.png)](#co_operator_lifecycle_manager_CO4-2)'
+  id: totrans-389
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_operator_lifecycle_manager_CO4-2)'
+- en: Selects one of the channels defined in the package manifest.
+  id: totrans-390
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 选择包清单中定义的一个频道。
+- en: '[![3](assets/3.png)](#co_operator_lifecycle_manager_CO4-3)'
+  id: totrans-391
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_operator_lifecycle_manager_CO4-3)'
+- en: Identifies which OperatorSource to look at for the corresponding Operator and
+    channel.
+  id: totrans-392
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 标识要查看其相应Operator和频道的OperatorSource。
+- en: '[![4](assets/4.png)](#co_operator_lifecycle_manager_CO4-4)'
+  id: totrans-393
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_operator_lifecycle_manager_CO4-4)'
+- en: Specifies the OperatorSource’s namespace.
+  id: totrans-394
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 指定OperatorSource的命名空间。
+- en: 'Create the subscription using the `apply` command:'
+  id: totrans-395
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用`apply`命令创建订阅：
+- en: '[PRE46]'
+  id: totrans-396
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE46]'
+- en: 'OLM will be notified of the new subscription and will start the Operator pod
+    in the `marketplace` namespace:'
+  id: totrans-397
+  prefs: []
+  type: TYPE_NORMAL
+  zh: OLM将收到新订阅的通知，并在`marketplace`命名空间中启动Operator Pod：
+- en: '[PRE47]'
+  id: totrans-398
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE47]'
+- en: Note
+  id: totrans-399
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: We have truncated the output here for readability; your results may vary slightly.
+  id: totrans-400
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们已为了易读性截断此处的输出；您的结果可能略有不同。
+- en: Testing the Running Operator
+  id: totrans-401
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 测试正在运行的Operator
+- en: Once OLM has started the Operator, you can test it by creating a custom resource
+    of the same type that the Operator owns. Refer to Chapters [6](ch06.html#adapter_operators)
+    and [7](ch07.html#operators_in_go_with_the_operator_sdk) for more information
+    about testing a running Operator.
+  id: totrans-402
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦OLM启动了Operator，您可以通过创建相同类型的自定义资源来测试它。有关测试正在运行的Operator的更多信息，请参阅第[6](ch06.html#adapter_operators)章和第[7](ch07.html#operators_in_go_with_the_operator_sdk)章。
+- en: Visitors Site Operator Example
+  id: totrans-403
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 访客站点操作员示例
+- en: You can find the OLM bundle files for the Visitors Site Operator in [the book’s
+    GitHub repository](https://github.com/kubernetes-operators-book/chapters/tree/master/ch08).
+  id: totrans-404
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在[书籍的GitHub存储库](https://github.com/kubernetes-operators-book/chapters/tree/master/ch08)中找到访客站点运营商的OLM捆绑文件。
+- en: 'There are two directories of note:'
+  id: totrans-405
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有两个值得注意的目录：
+- en: '*bundle*'
+  id: totrans-406
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*bundle*'
+- en: This directory contains the actual OLM bundle files, including the CSV, CRD,
+    and package files. You can use the process outlined in this chapter to build and
+    deploy the Visitors Site Operator using these files.
+  id: totrans-407
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此目录包含实际的OLM捆绑文件，包括CSV、CRD和软件包文件。您可以使用本章概述的过程来构建和部署访客站点运营商。
+- en: '*testing*'
+  id: totrans-408
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*testing*'
+- en: This directory contains the additional resources required to deploy an Operator
+    from OLM. These include the OperatorSource, OperatorGroup, subscription, and a
+    sample custom resource to test the Operator.
+  id: totrans-409
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此目录包含了从OLM部署运营商所需的额外资源。这些资源包括OperatorSource、OperatorGroup、订阅和一个用于测试运营商的示例自定义资源。
+- en: Readers are welcome to submit feedback, issues, and questions on these files
+    through the Issues tab in GitHub.
+  id: totrans-410
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 欢迎读者通过GitHub的问题选项卡提交有关这些文件的反馈、问题和疑问。
+- en: Summary
+  id: totrans-411
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 摘要
+- en: As with any piece of software, managing installation and upgrades is critical
+    for Operators. Operator Lifecycle Manager fills this role, giving you a mechanism
+    for discovering Operators, handling updates, and ensuring stability.
+  id: totrans-412
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如同任何软件，管理安装和升级对于运营商至关重要。运营商生命周期管理器（Operator Lifecycle Manager，OLM）扮演了这一角色，为您提供了一个机制来发现运营商、处理更新并确保稳定性。
+- en: Resources
+  id: totrans-413
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 资源
+- en: '[OLM installation](https://oreil.ly/cu1IP)'
+  id: totrans-414
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[OLM安装](https://oreil.ly/cu1IP)'
+- en: '[OLM repository](https://oreil.ly/1IN19)'
+  id: totrans-415
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[OLM存储库](https://oreil.ly/1IN19)'
+- en: '[Marketplace Operator repository](https://oreil.ly/VVvFM)'
+  id: totrans-416
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[市场运营商存储库](https://oreil.ly/VVvFM)'
+- en: '[Operator Courier repository](https://oreil.ly/d6XdP)'
+  id: totrans-417
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[运营商快递存储库](https://oreil.ly/d6XdP)'

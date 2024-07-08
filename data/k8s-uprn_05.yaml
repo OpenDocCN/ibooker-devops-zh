@@ -1,0 +1,1274 @@
+- en: Chapter 5\. Pods
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第 5 章 Pods
+- en: In earlier chapters, we discussed how you might go about containerizing your
+    application, but in real-world deployments of containerized applications, you
+    will often want to colocate multiple applications into a single atomic unit, scheduled
+    onto a single machine.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在早些章节中，我们讨论了如何将应用程序容器化，但在容器化应用程序的实际部署中，通常希望将多个应用程序放置在一个原子单元中，安排到单个机器上。
+- en: A canonical example of such a deployment is illustrated in [Figure 5-1](#pod_example),
+    which consists of a container serving web requests and a container synchronizing
+    the filesystem with a remote Git repository.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 典型的部署示例如图 [Figure 5-1](#pod_example) 所示，其中包括一个用于处理 web 请求的容器和一个用于将文件系统与远程 Git
+    仓库同步的容器。
+- en: '![](assets/kur3_0501.png)'
+  id: totrans-3
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](assets/kur3_0501.png)'
+- en: Figure 5-1\. An example Pod with two containers and a shared filesystem
+  id: totrans-4
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-1\. 一个包含两个容器和共享文件系统的示例 Pod
+- en: 'At first, it might seem tempting to wrap both the web server and the Git synchronizer
+    into a single container. After closer inspection, however, the reasons for the
+    separation become clear. First, the two containers have significantly different
+    requirements in terms of resource usage. Take, for example, memory: because the
+    web server is serving user requests, we want to ensure that it is always available
+    and responsive. On the other hand, the Git synchronizer isn’t really user-facing
+    and has a “best effort” quality of service.'
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 起初，将 web 服务器和 Git 同步器包装到单个容器中似乎很诱人。然而，经过更仔细的检查，分离的原因变得很明显。首先，两个容器在资源使用方面有显著不同的要求。例如，内存方面：因为
+    web 服务器正在为用户请求提供服务，我们希望确保它始终可用和响应迅速。另一方面，Git 同步器并不是面向用户的，其服务质量是“尽力而为”。
+- en: Suppose that our Git synchronizer has a memory leak. We need to ensure that
+    the Git synchronizer cannot use up memory that we want to use for our web server,
+    since this can affect performance or even crash the server.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设我们的 Git 同步器存在内存泄漏问题。我们需要确保 Git 同步器不能使用我们想要为 web 服务器使用的内存，因为这可能影响性能甚至导致服务器崩溃。
+- en: This sort of resource isolation is exactly the sort of thing that containers
+    are designed to accomplish. By separating the two applications into two separate
+    containers, we can ensure reliable web server operation.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种资源隔离正是容器设计要实现的目标。通过将两个应用程序分开到两个独立的容器中，我们可以确保 web 服务器的可靠运行。
+- en: Of course, the two containers are quite symbiotic; it makes no sense to schedule
+    the web server on one machine and the Git synchronizer on another. Consequently,
+    Kubernetes groups multiple containers into a single atomic unit called a *Pod*.
+    (The name goes with the whale theme of Docker containers, since a pod is also
+    a group of whales.)
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当然，这两个容器是相互依存的；在同一台机器上安排 web 服务器和 Git 同步器是没有意义的。因此，Kubernetes 将多个容器组合成一个称为 *Pod*
+    的原子单元。（这个名字与 Docker 容器的鲸鱼主题一致，因为 Pod 也是鲸鱼的一群。）
+- en: Note
+  id: totrans-9
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Though the grouping of multiple containers into a single Pod seemed controversial
+    or confusing when it was first introduced in Kubernetes, it has subsequently been
+    adopted by a variety of different applications to deploy their infrastructure.
+    For example, several service mesh implementations use a second *sidecar* container
+    to inject network management into an application’s Pod.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管最初在 Kubernetes 中将多个容器分组到单个 Pod 中似乎颇具争议或令人困惑，但随后被多种不同的应用程序采纳，以部署其基础设施。例如，几种服务网格实现使用第二个
+    *sidecar* 容器来将网络管理注入应用程序的 Pod 中。
+- en: Pods in Kubernetes
+  id: totrans-11
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Kubernetes 中的 Pods
+- en: A Pod is a collection of application containers and volumes running in the same
+    execution environment. Pods, not containers, are the smallest deployable artifact
+    in a Kubernetes cluster. This means all of the containers in a Pod always land
+    on the same machine.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个 Pod 是运行在同一执行环境中的应用程序容器和卷的集合。在 Kubernetes 集群中，Pods 而不是容器是最小的可部署构件。这意味着 Pod
+    中的所有容器总是运行在同一台机器上。
+- en: Each container within a Pod runs in its own cgroup, but they share a number
+    of Linux namespaces.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod 中的每个容器都在自己的 cgroup 中运行，但它们共享多个 Linux 命名空间。
+- en: Applications running in the same Pod share the same IP address and port space
+    (network namespace), have the same hostname (UTS namespace), and can communicate
+    using native interprocess communication channels over System V IPC or POSIX message
+    queues (IPC namespace). However, applications in different Pods are isolated from
+    each other; they have different IP addresses, hostnames, and more. Containers
+    in different Pods running on the same node might as well be on different servers.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在同一个 Pod 中运行的应用程序共享相同的 IP 地址和端口空间（网络命名空间），拥有相同的主机名（UTS 命名空间），并可以使用 System V
+    IPC 或 POSIX 消息队列（IPC 命名空间）进行本地进程间通信。然而，不同 Pod 中的应用程序是相互隔离的；它们拥有不同的 IP 地址、主机名等。在同一节点上运行的不同
+    Pods 中的容器实际上可能位于不同的服务器上。
+- en: Thinking with Pods
+  id: totrans-15
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 用 Pods 思考
+- en: One of the most common questions people ask when adopting Kubernetes is “What
+    should I put in a Pod?”
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当人们在采用 Kubernetes 时，最常见的问题之一是“我应该在一个 Pod 中放什么？”
+- en: Sometimes people see Pods and think, “Aha! A WordPress container and a MySQL
+    database container join together to make a WordPress instance. They should be
+    in the same Pod.” However, this kind of Pod is actually an example of an antipattern
+    for Pod construction. There are two reasons for this. First, WordPress and its
+    database are not truly symbiotic. If the WordPress container and the database
+    container land on different machines, they still can work together quite effectively,
+    since they communicate over a network connection. Secondly, you don’t necessarily
+    want to scale WordPress and the database as a unit. WordPress itself is mostly
+    stateless, so you may want to scale your WordPress frontends in response to frontend
+    load by creating more WordPress Pods. Scaling a MySQL database is much trickier,
+    and you would be much more likely to increase the resources dedicated to a single
+    MySQL Pod. If you group the WordPress and MySQL containers together in a single
+    Pod, you are forced to use the same scaling strategy for both containers, which
+    doesn’t fit well.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有时人们看到 Pods 并认为：“啊哈！一个 WordPress 容器和一个 MySQL 数据库容器结合在一起形成一个 WordPress 实例。它们应该放在同一个
+    Pod 中。” 然而，这种类型的 Pod 实际上是 Pod 构建的反模式示例。这有两个原因。首先，WordPress 和它的数据库并不是真正共生的。如果 WordPress
+    容器和数据库容器落在不同的机器上，它们仍然可以通过网络连接有效地进行通信。其次，你并不一定希望将 WordPress 和数据库作为一个单元进行扩展。WordPress
+    本身大部分是无状态的，因此你可能希望根据前端负载来扩展 WordPress 前端，创建更多的 WordPress Pods。扩展 MySQL 数据库要复杂得多，你更有可能增加单个
+    MySQL Pod 的资源。如果你将 WordPress 和 MySQL 容器放在同一个 Pod 中，你将被迫使用相同的扩展策略，这并不合适。
+- en: In general, the right question to ask yourself when designing Pods is “Will
+    these containers work correctly if they land on different machines?” If the answer
+    is no, a Pod is the correct grouping for the containers. If the answer is yes,
+    using multiple Pods is probably the correct solution. In the example at the beginning
+    of this chapter, the two containers interact via a local filesystem. It would
+    be impossible for them to operate correctly if the containers were scheduled on
+    different machines.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一般来说，在设计 Pods 时要问自己的正确问题是：“如果这些容器落在不同的机器上，它们是否能正常工作？” 如果答案是否定的，将容器放在同一个 Pod
+    中是正确的选择。如果答案是肯定的，使用多个 Pods 可能是正确的解决方案。在本章开头的示例中，这两个容器通过本地文件系统进行交互。如果这些容器被调度到不同的机器上，它们将无法正确运行。
+- en: In the remaining sections of this chapter, we will describe how to create, introspect,
+    manage, and delete Pods in Kubernetes.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章的剩余部分中，我们将描述如何在 Kubernetes 中创建、审视、管理和删除 Pods。
+- en: The Pod Manifest
+  id: totrans-20
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Pod 清单
+- en: Pods are described in a Pod *manifest*, which is just a text-file representation
+    of the Kubernetes API object. Kubernetes strongly believes in *declarative configuration*,
+    which means that you write down the desired state of the world in a configuration
+    file and then submit that configuration to a service that takes actions to ensure
+    the desired state becomes the actual state.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pods 在一个 Pod *清单* 中描述，这只是 Kubernetes API 对象的文本文件表示。Kubernetes 强烈信奉 *声明式配置*，这意味着你在配置文件中写下世界的期望状态，然后将该配置提交给一个服务，该服务会采取行动确保期望状态成为实际状态。
+- en: Note
+  id: totrans-22
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Declarative configuration is different from *imperative configuration*, where
+    you simply take a series of actions (for example, `apt-get install foo`) to modify
+    the state of a system. Years of production experience have taught us that maintaining
+    a written record of the system’s desired state leads to a more manageable, reliable
+    system. Declarative configuration has numerous advantages, such as enabling code
+    review for configurations and documenting the current state of the system for
+    distributed teams. Additionally, it is the basis for all of the self-healing behaviors
+    in Kubernetes that keep applications running without user action.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 声明性配置不同于*命令式配置*，在后者中，您只需执行一系列操作（例如`apt-get install foo`）来修改系统状态。多年的生产经验告诉我们，保持系统期望状态的书面记录可以使系统更易管理、更可靠。声明性配置有诸多优势，如使配置能够进行代码审查，并为分布式团队记录系统的当前状态。此外，它是
+    Kubernetes 中所有自我修复行为的基础，这些行为能够使应用程序在无用户干预的情况下保持运行。
+- en: The Kubernetes API server accepts and processes Pod manifests before storing
+    them in persistent storage (`etcd`). The scheduler also uses the Kubernetes API
+    to find Pods that haven’t been scheduled to a node. It then places the Pods onto
+    nodes depending on the resources and other constraints expressed in the Pod manifests.
+    The scheduler can place multiple Pods on the same machine as long as there are
+    sufficient resources. However, scheduling multiple replicas of the same application
+    onto the same machine is worse for reliability, since the machine is a single
+    failure domain. Consequently, the Kubernetes scheduler tries to ensure that Pods
+    from the same application are distributed onto different machines for reliability
+    in the presence of such failures. Once scheduled to a node, Pods don’t move and
+    must be explicitly destroyed and rescheduled.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes API 服务器在将 Pod 清单存储到持久存储（`etcd`）之前接受并处理它们。调度器还使用 Kubernetes API 查找尚未调度到节点的
+    Pod。然后，根据 Pod 清单中表达的资源和其他约束条件，将 Pod 放置在节点上。调度器可以将多个 Pod 放置在同一台机器上，只要资源充足。然而，将同一应用程序的多个副本调度到同一台机器上对可靠性不利，因为机器是单一故障域。因此，Kubernetes
+    调度器尝试确保同一应用程序的 Pod 被分布到不同的机器上，以增强在这种故障情况下的可靠性。一旦调度到节点上，Pod 就不会移动，必须显式销毁和重新调度。
+- en: Multiple instances of a Pod can be deployed by repeating the workflow described
+    here. However, ReplicaSets ([Chapter 9](ch09.xhtml#replica_set)) are better suited
+    for running multiple instances of a Pod. (It turns out they’re also better at
+    running a single Pod, but we’ll get into that later.)
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以通过重复此处描述的工作流部署 Pod 的多个实例。但是，复制集（[第 9 章](ch09.xhtml#replica_set)）更适合运行 Pod
+    的多个实例。（事实证明它们在运行单个 Pod 时也更好，但我们稍后再详细介绍。）
+- en: Creating a Pod
+  id: totrans-26
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 创建 Pod
+- en: 'The simplest way to create a Pod is via the imperative `kubectl run` command.
+    For example, to run our same `kuard` server, use:'
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建 Pod 的最简单方式是通过命令式的`kubectl run`命令。例如，要运行我们的同一个`kuard`服务器，请使用：
+- en: '[PRE0]'
+  id: totrans-28
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'You can see the status of this Pod by running:'
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以通过运行以下命令查看此 Pod 的状态：
+- en: '[PRE1]'
+  id: totrans-30
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: You may initially see the container as `Pending`, but eventually you will see
+    it transition to `Running`, which means that the Pod and its containers have been
+    successfully created.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最初，您可能会看到容器状态为`Pending`，但最终您将看到它转换为`Running`，这意味着 Pod 及其容器已成功创建。
+- en: 'For now, you can delete this Pod by running:'
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 目前，您可以通过运行以下命令删除此 Pod：
+- en: '[PRE2]'
+  id: totrans-33
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: We will now move on to writing a complete Pod manifest by hand.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们将继续手动编写完整的 Pod 清单。
+- en: Creating a Pod Manifest
+  id: totrans-35
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 创建 Pod 清单
+- en: You can write Pod manifests using YAML or JSON, but YAML is generally preferred
+    because it is slightly more human-editable and supports comments. Pod manifests
+    (and other Kubernetes API objects) should really be treated in the same way as
+    source code, and things like comments help explain the Pod to new team members.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用 YAML 或 JSON 编写 Pod 清单，但通常更喜欢使用 YAML，因为它稍微更容易人工编辑并支持注释。 Pod 清单（以及其他 Kubernetes
+    API 对象）应该像对待源代码一样，而注释之类的内容有助于向新团队成员解释 Pod。
+- en: 'Pod manifests include a couple of key fields and attributes: namely, a `metadata`
+    section for describing the Pod and its labels, a `spec` section for describing
+    volumes, and a list of containers that will run in the Pod.'
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod 清单包括几个关键字段和属性：即描述 Pod 及其标签的`metadata`部分，描述卷的`spec`部分以及将在 Pod 中运行的容器列表。
+- en: 'In [Chapter 2](ch02.xhtml#Containers), we deployed `kuard` using the following
+    Docker command:'
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[第 2 章](ch02.xhtml#Containers)中，我们使用以下 Docker 命令部署了`kuard`：
+- en: '[PRE3]'
+  id: totrans-39
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: You can achieve a similar result by instead writing [Example 5-1](#EXPOD) to
+    a file named *kuard-pod.yaml* and then using `kubectl` commands to load that manifest
+    to Kubernetes.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您也可以通过将 [示例 5-1](#EXPOD) 写入名为 *kuard-pod.yaml* 的文件中，然后使用 `kubectl` 命令将该清单加载到
+    Kubernetes 中，从而实现类似的结果。
+- en: Example 5-1\. kuard-pod.yaml
+  id: totrans-41
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 5-1\. kuard-pod.yaml
+- en: '[PRE4]'
+  id: totrans-42
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: Though it may initially seem more cumbersome to manage your application in this
+    manner, this written record of desired state is the best practice in the long
+    run, especially for large teams with many applications.
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然最初以这种方式管理应用可能会显得更加繁琐，但是这种期望状态的书面记录在长期来看是最佳实践，特别是对于具有多个应用程序的大型团队。
+- en: Running Pods
+  id: totrans-44
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 正在运行的 Pods
+- en: 'In the previous section, we created a Pod manifest that can be used to start
+    a Pod running `kuard`. Use the `kubectl apply` command to launch a single instance
+    of `kuard`:'
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在前一节中，我们创建了一个 Pod 清单，可用于启动运行 `kuard` 的 Pod。使用 `kubectl apply` 命令启动 `kuard` 的单个实例：
+- en: '[PRE5]'
+  id: totrans-46
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: The Pod manifest will be submitted to the Kubernetes API server. The Kubernetes
+    system will then schedule that Pod to run on a healthy node in the cluster, where
+    the `kubelet` daemon will monitor it. Don’t worry if you don’t understand all
+    the moving parts of Kubernetes right now; we’ll get into more details throughout
+    the book.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod 清单将被提交到 Kubernetes API 服务器。然后，Kubernetes 系统将安排该 Pod 在集群中的健康节点上运行，其中 `kubelet`
+    守护进程将对其进行监控。如果您现在不理解 Kubernetes 的所有组成部分，不要担心；我们将在本书中更详细地讨论这些内容。
+- en: Listing Pods
+  id: totrans-48
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 列出 Pods
+- en: 'Now that we have a Pod running, let’s go find out some more about it. Using
+    the `kubectl` command-line tool, we can list all Pods running in the cluster.
+    For now, this should only be the single Pod that we created in the previous step:'
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们有一个正在运行的 Pod，让我们去了解更多信息。使用 `kubectl` 命令行工具，我们可以列出在集群中运行的所有 Pods。目前，这应该只是我们在上一步创建的单个
+    Pod：
+- en: '[PRE6]'
+  id: totrans-50
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: You can see the name of the Pod (`kuard`) that we gave it in the previous YAML
+    file. In addition to the number of ready containers (`1/1`), the output also shows
+    the status, the number of times the Pod was restarted, and the age of the Pod.
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以看到 Pod 的名称 (`kuard`)，这是我们在前面的 YAML 文件中指定的。除了准备就绪的容器数量 (`1/1`) 外，输出还显示了状态、Pod
+    重新启动次数以及 Pod 的年龄。
+- en: 'If you ran this command immediately after the Pod was created, you might see:'
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果在 Pod 创建后立即运行此命令，您可能会看到：
+- en: '[PRE7]'
+  id: totrans-53
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: The `Pending` state indicates that the Pod has been submitted but hasn’t been
+    scheduled yet. If a more significant error occurs, such as an attempt to create
+    a Pod with a container image that doesn’t exist, it will also be listed in the
+    status field.
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`Pending` 状态表示 Pod 已被提交但尚未安排。如果发生更大的错误，例如尝试创建一个不存在容器镜像的 Pod，它也将在状态字段中列出。'
+- en: Note
+  id: totrans-55
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: By default, the `kubectl` command-line tool is concise in the information it
+    reports, but you can get more information via command-line flags. Adding `-o wide`
+    to any `kubectl` command will print out slightly more information (while still
+    keeping the information to a single line). Adding `-o json` or `-o yaml` will
+    print out the complete objects in JSON or YAML, respectively. If you ever want
+    to see an exhaustive, verbose logging of what `kubectl` is doing, you can add
+    the `--v=10` flag for comprehensive logging at the expense of readability.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，`kubectl` 命令行工具在报告信息时是简洁的，但您可以通过命令行标志获取更多信息。在任何 `kubectl` 命令中添加 `-o wide`
+    将会打印出略多一些的信息（同时保持信息在单行）。添加 `-o json` 或 `-o yaml` 将分别以 JSON 或 YAML 格式打印完整的对象。如果您想看到
+    `kubectl` 正在执行的详尽详细日志记录，可以添加 `--v=10` 标志进行全面的日志记录，尽管这会牺牲可读性。
+- en: Pod Details
+  id: totrans-57
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Pod 详细信息
+- en: Sometimes, the single-line view is insufficient because it is too terse. Additionally,
+    Kubernetes maintains numerous events about Pods that are present in the event
+    stream, not attached to the Pod object.
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有时，单行视图不足以说明问题，因为它过于简洁。此外，Kubernetes 在事件流中维护了许多关于 Pods 的事件，这些事件并未附加到 Pod 对象上。
+- en: 'To find out more information about a Pod (or any Kubernetes object), you can
+    use the `kubectl describe` command. For example, to describe the Pod we previously
+    created, you can run:'
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要了解有关 Pod（或任何 Kubernetes 对象）的更多信息，您可以使用 `kubectl describe` 命令。例如，要描述我们之前创建的
+    Pod，您可以运行：
+- en: '[PRE8]'
+  id: totrans-60
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: 'This outputs a bunch of information about the Pod in different sections. At
+    the top is basic information about the Pod:'
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这将在不同的部分输出有关 Pod 的大量信息。顶部是关于 Pod 的基本信息：
+- en: '[PRE9]'
+  id: totrans-62
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: 'Then there is information about the containers running in the Pod:'
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后是关于在 Pod 中运行的容器的信息：
+- en: '[PRE10]'
+  id: totrans-64
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: 'Finally, there are events related to the Pod, such as when it was scheduled,
+    when its image was pulled, and if/when it had to be restarted because of failing
+    health checks:'
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，与 Pod 相关的事件，例如其被调度的时间，其镜像被拉取的时间，以及如果/当由于健康检查失败而必须重新启动的时间：
+- en: '[PRE11]'
+  id: totrans-66
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: Deleting a Pod
+  id: totrans-67
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 删除 Pod
+- en: 'When it is time to delete a Pod, you can delete it either by name:'
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当需要删除一个 Pod 时，可以通过名称删除它：
+- en: '[PRE12]'
+  id: totrans-69
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: 'or you can use the same file that you used to create it:'
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 或者您可以使用创建它时使用的同一文件：
+- en: '[PRE13]'
+  id: totrans-71
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: When a Pod is deleted, it is *not* immediately killed. Instead, if you run `kubectl
+    get pods`, you will see that the Pod is in the `Terminating` state. All Pods have
+    a termination *grace period*. By default, this is 30 seconds. When a Pod is transitioned
+    to `Terminating`, it no longer receives new requests. In a serving scenario, the
+    grace period is important for reliability because it allows the Pod to finish
+    any active requests that it may be in the middle of processing before it is terminated.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当删除一个 Pod 时，它*不*会立即被终止。相反，如果运行 `kubectl get pods`，您会看到 Pod 处于`Terminating`状态。所有
+    Pod 都有一个终止*宽限期*。默认情况下，这是30秒。当 Pod 转换为`Terminating`状态时，它不再接收新请求。在服务场景中，宽限期对可靠性很重要，因为它允许
+    Pod 在终止之前完成正在处理的任何活动请求。
+- en: Warning
+  id: totrans-73
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: When you delete a Pod, any data stored in the containers associated with that
+    Pod will be deleted as well. If you want to persist data across multiple instances
+    of a Pod, you need to use Persistent​Vo⁠lumes, described at the end of this chapter.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 删除一个 Pod 时，与该 Pod 相关的容器中存储的任何数据也将被删除。如果要在多个 Pod 实例之间持久保存数据，需要使用本章末尾描述的持久卷。
+- en: Accessing Your Pod
+  id: totrans-75
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 访问您的 Pod
+- en: Now that your Pod is running, you’re going to want to access it for a variety
+    of reasons. You may want to load the web service that is running in the Pod. You
+    may want to view its logs to debug a problem that you are seeing, or even execute
+    other commands inside the Pod to help debug. The following sections detail various
+    ways you can interact with the code and data running inside your Pod.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在您的 Pod 正在运行，出于各种原因您可能想要访问它。您可能想要加载运行在 Pod 中的 web 服务。您可能希望查看其日志以调试您正在看到的问题，甚至在
+    Pod 内执行其他命令以帮助调试。以下各节详细介绍了您可以与运行在 Pod 中的代码和数据进行交互的各种方式。
+- en: Getting More Information with Logs
+  id: totrans-77
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用日志获取更多信息
+- en: 'When your application needs debugging, it’s helpful to be able to dig deeper
+    than `describe` to understand what the application is doing. Kubernetes provides
+    two commands for debugging running containers. The `kubectl logs` command downloads
+    the current logs from the running instance:'
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您的应用程序需要调试时，能够比`describe`更深入地了解应用程序正在执行的操作是很有帮助的。Kubernetes 提供了两个命令用于调试正在运行的容器。`kubectl
+    logs` 命令会从运行实例下载当前的日志：
+- en: '[PRE14]'
+  id: totrans-79
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: Adding the `-f` flag will cause the logs to stream continuously.
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 添加 `-f` 标志将导致日志连续流式传输。
+- en: The `kubectl logs` command always tries to get logs from the currently running
+    container. Adding the `--previous` flag will get logs from a previous instance
+    of the container. This is useful, for example, if your containers are continuously
+    restarting due to a problem at container startup.
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kubectl logs` 命令始终尝试获取当前正在运行的容器的日志。添加 `--previous` 标志将获取先前容器实例的日志。例如，在容器启动时由于问题而持续重启时，这是有用的。'
+- en: Note
+  id: totrans-82
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: While using `kubectl logs` is useful for occasional debugging of containers
+    in production environments, it’s generally useful to use a log aggregation service.
+    There are several open source log aggregation tools, like Fluentd and Elasticsearch,
+    as well as numerous cloud logging providers. These log aggregation services provide
+    greater capacity for storing a longer duration of logs as well as rich log searching
+    and filtering capabilities. Many also provide the ability to aggregate logs from
+    multiple Pods into a single view.
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然在生产环境中偶尔使用`kubectl logs`进行容器调试很有用，但通常最好使用日志聚合服务。有几种开源的日志聚合工具，如 Fluentd 和 Elasticsearch，以及众多的云日志提供商。这些日志聚合服务提供更大的日志存储容量和更长的日志持续时间，以及丰富的日志搜索和过滤功能。许多还提供从多个
+    Pod 聚合日志到单个视图的能力。
+- en: Running Commands in Your Container with exec
+  id: totrans-84
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用 exec 在您的容器中运行命令
+- en: 'Sometimes logs are insufficient, and to truly determine what’s going on, you
+    need to execute commands in the context of the container itself. To do this, you
+    can use:'
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有时日志不足以提供足够的信息，要真正确定发生了什么，您需要在容器本身的上下文中执行命令。为此，您可以使用：
+- en: '[PRE15]'
+  id: totrans-86
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: 'You can also get an interactive session by adding the `-it` flag:'
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您还可以通过添加 `-it` 标志获得交互式会话：
+- en: '[PRE16]'
+  id: totrans-88
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: Copying Files to and from Containers
+  id: totrans-89
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 复制文件到容器和从容器复制文件
+- en: In the previous chapter, we showed how to use the `kubectl cp` command to access
+    files in a Pod. Generally speaking, copying files into a container is an antipattern.
+    You really should treat the contents of a container as immutable. But occasionally
+    it’s the most immediate way to stop the bleeding and restore your service to health,
+    since it is quicker than building, pushing, and rolling out a new image. Once
+    you stop the bleeding, however, it is critically important that you immediately
+    go and do the image build and rollout, or you are guaranteed to forget the local
+    change that you made to your container and overwrite it in the subsequent regularly
+    scheduled rollout.
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在上一章中，我们展示了如何使用`kubectl cp`命令访问Pod中的文件。一般来说，将文件复制到容器是一种反模式。你真的应该将容器的内容视为不可变的。但偶尔这是停止出血并恢复服务健康的最直接方法，因为比构建、推送和部署新镜像更快。然而，一旦停止出血，立即进行镜像构建和部署非常重要，否则你可能会忘记你对容器做出的本地更改，并在后续的定期部署中覆盖它。
+- en: Health Checks
+  id: totrans-91
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 健康检查
+- en: When you run your application as a container in Kubernetes, it is automatically
+    kept alive for you using a *process health check*. This health check simply ensures
+    that the main process of your application is always running. If it isn’t, Kubernetes
+    restarts it.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当你将应用程序作为一个容器在Kubernetes中运行时，它会自动通过*进程健康检查*保持活动状态。这种健康检查简单地确保你的应用程序的主进程一直在运行。如果不是，Kubernetes将重新启动它。
+- en: However, in most cases, a simple process check is insufficient. For example,
+    if your process has deadlocked and is unable to serve requests, a process health
+    check will still believe that your application is healthy since its process is
+    still running.
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，在大多数情况下，简单的进程检查是不够的。例如，如果你的进程陷入了死锁并且无法响应请求，进程健康检查仍会认为你的应用程序是健康的，因为它的进程仍在运行。
+- en: To address this, Kubernetes introduced health checks for application *liveness*.
+    Liveness health checks run application-specific logic, like loading a web page,
+    to verify that the application is not just still running, but is functioning properly.
+    Since these liveness health checks are application-specific, you have to define
+    them in your Pod manifest.
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了解决这个问题，Kubernetes引入了应用程序**存活性**健康检查。存活性健康检查运行应用程序特定的逻辑，比如加载一个网页，来验证应用程序不仅仅是在运行，而且是正常运行的。由于这些存活性健康检查是应用程序特定的，你必须在你的Pod清单中定义它们。
+- en: Liveness Probe
+  id: totrans-95
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 存活探针
+- en: Once the `kuard` process is up and running, we need a way to confirm that it
+    is actually healthy and shouldn’t be restarted. Liveness probes are defined per
+    container, which means each container inside a Pod is health checked separately.
+    In [Example 5-2](#EXPODHEALTH), we add a liveness probe to our `kuard` container,
+    which runs an HTTP request against the `/healthy` path on our container.
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦`kuard`进程启动并运行，我们需要一种方法来确认它实际上是健康的，不应该重新启动。存活性探针是针对每个容器定义的，这意味着Pod中的每个容器都单独进行健康检查。在[示例 5-2](#EXPODHEALTH)中，我们为`kuard`容器添加了一个存活性探针，它对我们容器中的`/healthy`路径运行了一个HTTP请求。
+- en: Example 5-2\. kuard-pod-health.yaml
+  id: totrans-97
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 5-2\. kuard-pod-health.yaml
+- en: '[PRE17]'
+  id: totrans-98
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: The preceding Pod manifest uses an `httpGet` probe to perform an HTTP `GET`
+    request against the `/healthy` endpoint on port 8080 of the `kuard` container.
+    The probe sets an `initialDelaySeconds` of `5`, and thus will not be called until
+    5 seconds after all the containers in the Pod are created. The probe must respond
+    within the 1-second timeout, and the HTTP status code must be equal to or greater
+    than 200 and less than 400 to be considered successful. Kubernetes will call the
+    probe every 10 seconds. If more than three consecutive probes fail, the container
+    will fail and restart.
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 前面的Pod清单使用`httpGet`探针对`kuard`容器的8080端口上的`/healthy`端点执行HTTP `GET`请求。该探针设置了`initialDelaySeconds`为`5`，因此在Pod中的所有容器创建后将在5秒后调用。探针必须在1秒的超时时间内响应，并且HTTP状态码必须大于或等于200且小于400才算是成功。Kubernetes将每10秒调用一次该探针。如果连续失败的探针超过三次，容器将失败并重新启动。
+- en: 'You can see this in action by looking at the `kuard` status page. Create a
+    Pod using this manifest and then port-forward to that Pod:'
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可以通过查看`kuard`状态页面来看到这个过程。使用这个清单创建一个Pod，然后进行端口转发到该Pod：
+- en: '[PRE18]'
+  id: totrans-101
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: 'Point your browser to *http://localhost:8080*. Click the “Liveness Probe” tab.
+    You should see a table that lists all of the probes that this instance of `kuard`
+    has received. If you click the “Fail” link on that page, `kuard` will start to
+    fail health checks. Wait long enough, and Kubernetes will restart the container.
+    At that point, the display will reset and start over again. Details of the restart
+    can be found by running the command `kubectl describe pods kuard`. The “Events”
+    section will have text similar to the following:'
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将浏览器指向*http://localhost:8080*。点击“活跃性探测”选项卡。您应该看到一个列出此`kuard`实例接收到的所有探测器的表格。如果在该页面上点击“失败”链接，`kuard`将开始失败的健康检查。等待足够长的时间，Kubernetes将重新启动容器。此时，显示将重置并重新开始。可以通过运行命令`kubectl
+    describe pods kuard`找到重新启动的详细信息。 "事件"部分将包含类似以下文本：
+- en: '[PRE19]'
+  id: totrans-103
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: Note
+  id: totrans-104
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: 'While the default response to a failed liveness check is to restart the Pod,
+    the actual behavior is governed by the Pod’s `restartPolicy`. There are three
+    options for the restart policy: `Always` (the default), `OnFailure` (restart only
+    on liveness failure or nonzero process exit code), or `Never`.'
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管对于失败的活跃性检查的默认响应是重新启动Pod，但实际行为受Pod的`restartPolicy`管理。重启策略有三个选项：`Always`（默认），`OnFailure`（仅在活跃性失败或非零进程退出代码时重新启动），或`Never`。
+- en: Readiness Probe
+  id: totrans-106
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 就绪性探测
+- en: Of course, liveness isn’t the only kind of health check we want to perform.
+    Kubernetes makes a distinction between *liveness* and *readiness*. Liveness determines
+    if an application is running properly. Containers that fail liveness checks are
+    restarted. Readiness describes when a container is ready to serve user requests.
+    Containers that fail readiness checks are removed from service load balancers.
+    Readiness probes are configured similarly to liveness probes. We explore Kubernetes
+    services in detail in [Chapter 7](ch07.xhtml#service_discovery).
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当然，活跃性不是我们想执行的唯一一种健康检查。Kubernetes区分*liveness*和*readiness*。活跃性确定应用程序是否正常运行。未通过活跃性检查的容器将被重新启动。就绪性描述容器何时准备好为用户请求提供服务。未通过就绪性检查的容器将从服务负载均衡器中移除。就绪性探测与活跃性探测配置类似。我们在第7章详细探讨Kubernetes服务。
+- en: Combining the readiness and liveness probes helps ensure only healthy containers
+    are running within the cluster.
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 结合就绪性和活跃性探测有助于确保集群中只运行健康的容器。
+- en: Startup Probe
+  id: totrans-109
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 启动探测
+- en: Startup probes have recently been introduced to Kubernetes as an alternative
+    way of managing slow-starting containers. When a Pod is started, the startup probe
+    is run before any other probing of the Pod is started. The startup probe proceeds
+    until it either times out (in which case the Pod is restarted) or it succeeds,
+    at which time the liveness probe takes over. Startup probes enable you to poll
+    slowly for a slow-starting container while also enabling a responsive liveness
+    check once the slow-starting container has initialized.
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Startup probes作为管理启动缓慢容器的替代方式，最近被引入到Kubernetes中。当一个Pod启动时，启动探测器在任何其他探测之前运行。启动探测器持续进行，直到超时（此时Pod将被重启）或成功为止，此时活跃性探测接管。启动探测器使您能够在缓慢启动容器时慢慢轮询，同时在缓慢启动容器初始化后进行响应灵活的活跃性检查。
+- en: Advanced Probe Configuration
+  id: totrans-111
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 高级探测器配置
+- en: Probes in Kubernetes have a number of advanced options, including how long to
+    wait after Pod startup to start probing, how many failures should be considered
+    a true failure, and how many successes are necessary to reset the failure count.
+    All of these configurations receive default values when left unspecified, but
+    they may be necessary for more advanced use cases such as applications that are
+    inherently flaky or take a long time to start up.
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes中的探测器有许多高级选项，包括在Pod启动后等待多长时间开始探测，认定多少次失败为真正失败，以及多少次成功必须重置失败计数。所有这些配置在未指定时接收默认值，但对于诸如固有不稳定或启动时间较长的应用程序等更高级用例可能是必要的。
+- en: Other Types of Health Checks
+  id: totrans-113
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 其他类型的健康检查
+- en: In addition to HTTP checks, Kubernetes also supports `tcpSocket` health checks
+    that open a TCP socket; if the connection succeeds, the probe succeeds. This style
+    of probe is useful for non-HTTP applications, such as databases or other non–HTTP-based
+    APIs.
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了HTTP检查之外，Kubernetes还支持`tcpSocket`健康检查，打开TCP套接字；如果连接成功，则探测器成功。这种探测器样式适用于非HTTP应用程序，例如数据库或其他非基于HTTP的API。
+- en: Finally, Kubernetes allows `exec` probes. These execute a script or program
+    in the context of the container. Following typical convention, if this script
+    returns a zero exit code, the probe succeeds; otherwise, it fails. `exec` scripts
+    are often useful for custom application validation logic that doesn’t fit neatly
+    into an HTTP call.
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，Kubernetes 允许 `exec` 探针。这些在容器的上下文中执行脚本或程序。按照典型约定，如果此脚本返回零退出代码，则探针成功；否则，它失败。`exec`
+    脚本通常用于不适合简单 HTTP 调用的自定义应用程序验证逻辑。
+- en: Resource Management
+  id: totrans-116
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 资源管理
+- en: Most people move into containers and orchestrators like Kubernetes because of
+    the radical improvements in image packaging and reliable deployment they provide.
+    In addition to application-oriented primitives that simplify distributed system
+    development, equally important is that they allow you to increase the overall
+    utilization of the compute nodes that make up the cluster. The basic cost of operating
+    a machine, either virtual or physical, is basically constant regardless of whether
+    it is idle or fully loaded. Consequently, ensuring that these machines are maximally
+    active increases the efficiency of every dollar spent on infrastructure.
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大多数人转向像 Kubernetes 这样的容器和编排器，因为它们在图像打包和可靠部署方面显著提升。除了简化分布式系统开发的面向应用程序的原语外，同样重要的是它们允许你增加构成集群的计算节点的总体利用率。无论是虚拟还是物理机器，操作的基本成本基本上是恒定的，无论它是空闲还是完全负载。因此，确保这些机器尽可能活跃，可以增加在基础设施上花费的每一美元的效率。
+- en: Generally speaking, we measure this efficiency with the utilization metric.
+    *Utilization* is defined as the amount of a resource actively being used divided
+    by the amount of a resource that has been purchased. For example, if you purchase
+    a one-core machine, and your application uses one-tenth of a core, then your utilization
+    is 10%. With scheduling systems like Kubernetes managing resource packing, you
+    can drive your utilization to greater than 50%. To achieve this, you have to tell
+    Kubernetes about the resources your application requires so that Kubernetes can
+    find the optimal packing of containers onto machines.
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常，我们用利用率指标来衡量这种效率。*利用率*定义为正在使用的资源量除以已购买的资源量。例如，如果你购买了一个单核机器，你的应用程序使用了十分之一的核心，那么你的利用率为
+    10%。通过像 Kubernetes 这样的调度系统管理资源打包，你可以将利用率提高到超过 50%。为了实现这一点，你必须告诉 Kubernetes 应用程序需要的资源，以便
+    Kubernetes 可以找到将容器最优地打包到机器上的方法。
+- en: Kubernetes allows users to specify two different resource metrics. Resource
+    *requests* specify the minimum amount of a resource required to run the application.
+    Resource *limits* specify the maximum amount of a resource that an application
+    can consume. Let’s look at these in greater detail in the following sections.
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 允许用户指定两种不同的资源指标。资源*请求*指定运行应用程序所需的最小资源量。资源*限制*指定应用程序可以消耗的最大资源量。让我们在接下来的章节中更详细地看看这些内容。
+- en: Kubernetes recognizes a large number of different notations for specifying resources,
+    from literals (“12345”) to millicores (“100m”). Of important note is the distinction
+    between MB/GB/PB and MiB/GiB/PiB. The former is the familiar power of two units
+    (e.g., 1 MB == 1,024 KB) while the latter is power of 10 units (1MiB == 1000KiB).
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 识别许多不同的资源指定符号，从字面值（“12345”）到毫核（“100m”）。重要的是注意 MB/GB/PB 和 MiB/GiB/PiB
+    之间的区别。前者是熟悉的二次幂单位（例如，1 MB == 1,024 KB），而后者是十次幂单位（1 MiB == 1000 KiB）。
+- en: Note
+  id: totrans-121
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: A common source of errors is specifying milliunits via a lowercase *m* versus
+    megaunits via an uppercase *M*. Concretely, “400m” is 0.4 MB, not 400Mb, a significant
+    difference!
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 错误的常见来源是通过小写的*m*指定毫单位，与通过大写的*M*指定兆单位相比。具体来说，“400m”是 0.4 MB，而不是 400Mb，这是一个显著的区别！
+- en: 'Resource Requests: Minimum Required Resources'
+  id: totrans-123
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 资源请求：最小要求资源
+- en: When a Pod requests the resources required to run its containers, Kubernetes
+    guarantees that these resources are available to the Pod. The most commonly requested
+    resources are CPU and memory, but Kubernetes supports other resource types as
+    well, such as GPUs. For example, to request that the `kuard` container land on
+    a machine with half a CPU free and get 128 MB of memory allocated to it, we define
+    the Pod as shown in [Example 5-3](#EXPODRESREQ).
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当一个 Pod 请求其容器运行所需的资源时，Kubernetes 保证这些资源对该 Pod 可用。最常请求的资源是 CPU 和内存，但 Kubernetes
+    也支持其他类型的资源，比如 GPU。例如，如果要求 `kuard` 容器在一个拥有半个 CPU 空闲和分配了 128 MB 内存的机器上运行，我们可以按照
+    [示例 5-3](#EXPODRESREQ) 中定义的 Pod 进行设置。
+- en: Example 5-3\. kuard-pod-resreq.yaml
+  id: totrans-125
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 5-3\. kuard-pod-resreq.yaml
+- en: '[PRE20]'
+  id: totrans-126
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: Note
+  id: totrans-127
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Resources are requested per container, not per Pod. The total resources requested
+    by the Pod is the sum of all resources requested by all containers in the Pod
+    because the different containers often have very different CPU requirements. For
+    example, if a Pod contains a web server and data synchronizer, the web server
+    is user-facing and likely needs a great deal of CPU, while the data synchronizer
+    can make do with very little.
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 资源请求是针对每个容器而不是每个 Pod 进行的。Pod 请求的总资源是所有容器中所有请求的资源的总和，因为不同的容器通常具有非常不同的 CPU 需求。例如，如果一个
+    Pod 包含一个 Web 服务器和数据同步器，Web 服务器面向用户，可能需要大量 CPU，而数据同步器可以使用很少的 CPU。
+- en: Requests are used when scheduling Pods to nodes. The Kubernetes scheduler will
+    ensure that the sum of all requests of all Pods on a node does not exceed the
+    capacity of the node. Therefore, a Pod is guaranteed to have at least the requested
+    resources when running on the node. Importantly, “request” specifies a minimum.
+    It does not specify a maximum cap on the resources a Pod may use. To explore what
+    this means, let’s look at an example.
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在将 Pod 调度到节点时使用请求。Kubernetes 调度器将确保节点上所有 Pod 的所有请求的总和不超过节点的容量。因此，当在节点上运行时，Pod
+    至少保证具有请求的资源。重要的是，“请求”指定了一个最小值。它并不指定 Pod 可能使用的资源的最大限制。为了探索其含义，让我们看一个例子。
+- en: Imagine a container whose code attempts to use all available CPU cores. Suppose
+    that we create a Pod with this container that requests 0.5 CPU. Kubernetes schedules
+    this Pod onto a machine with a total of 2 CPU cores. As long as it is the only
+    Pod on the machine, it will consume all 2.0 of the available cores, despite only
+    requesting 0.5 CPU.
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设一个容器的代码尝试使用所有可用的 CPU 核心。假设我们创建了一个此容器的 Pod，请求了 0.5 CPU。Kubernetes 将此 Pod 调度到一个总共有
+    2 CPU 核心的机器上。只要它是机器上唯一的 Pod，它将消耗所有 2.0 个可用的核心，尽管只请求了 0.5 CPU。
+- en: If a second Pod with the same container and the same request of 0.5 CPU lands
+    on the machine, then each Pod will receive 1.0 cores. If a third, identical Pod
+    is scheduled, each Pod will receive 0.66 cores. Finally, if a fourth identical
+    Pod is scheduled, each Pod will receive the 0.5 core it requested, and the node
+    will be at capacity.
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果第二个具有相同容器和相同请求的 0.5 CPU 的 Pod 着陆在机器上，那么每个 Pod 将会收到 1.0 个核心。如果调度了第三个相同的 Pod，每个
+    Pod 将收到 0.66 个核心。最后，如果调度了第四个相同的 Pod，每个 Pod 将收到其请求的 0.5 个核心，并且节点将达到容量上限。
+- en: CPU requests are implemented using the `cpu-shares` functionality in the Linux
+    kernel.
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CPU 请求使用 Linux 内核中的 `cpu-shares` 功能实现。
+- en: Note
+  id: totrans-133
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Memory requests are handled similarly to CPU, but there is an important difference.
+    If a container is over its memory request, the OS can’t just remove memory from
+    the process, because it’s been allocated. Consequently, when the system runs out
+    of memory, the `kubelet` terminates containers whose memory usage is greater than
+    their requested memory. These containers are automatically restarted, but with
+    less available memory on the machine for the container to consume.
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 内存请求类似于 CPU，但有一个重要的区别。如果容器超过其内存请求，操作系统不能简单地从进程中移除内存，因为它已经被分配了。因此，当系统内存耗尽时，`kubelet`
+    将终止那些内存使用超过其请求内存的容器。这些容器会自动重启，但在机器上可用的内存少了，容器可以消耗的内存也减少了。
+- en: Since resource requests guarantee resource availability to a Pod, they are critical
+    to ensuring that containers have sufficient resources in high-load situations.
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于资源请求保证了 Pod 的资源可用性，因此在高负载情况下，它们对确保容器具有足够的资源至关重要。
+- en: Capping Resource Usage with Limits
+  id: totrans-136
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 通过限制资源使用
+- en: In addition to setting the resources required by a Pod, which establishes the
+    minimum resources available to it, you can also set a maximum on a its resource
+    usage via resource *limits*.
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了设置 Pod 所需的资源（以确保其最少可用资源），还可以通过资源*限制*设置其资源使用的最大值。
+- en: In our previous example, we created a `kuard` Pod that requested a minimum of
+    0.5 of a core and 128 MB of memory. In the Pod manifest in [Example 5-4](#EXPODRESLIM),
+    we extend this configuration to add a limit of 1.0 CPU and 256 MB of memory.
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在我们之前的例子中，我们创建了一个 `kuard` Pod，它请求了最少 0.5 个核心和 128 MB 的内存。在 [示例 5-4](#EXPODRESLIM)
+    中的 Pod 配置中，我们扩展了这个配置，添加了 1.0 个 CPU 和 256 MB 的内存的限制。
+- en: Example 5-4\. kuard-pod-reslim.yaml
+  id: totrans-139
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 5-4\. kuard-pod-reslim.yaml
+- en: '[PRE21]'
+  id: totrans-140
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: When you establish limits on a container, the kernel is configured to ensure
+    that consumption cannot exceed these limits. A container with a CPU limit of 0.5
+    cores will only ever get 0.5 cores, even if the CPU is otherwise idle. A container
+    with a memory limit of 256 MB will not be allowed additional memory; for example,
+    `malloc` will fail if its memory usage exceeds 256 MB.
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您在容器上设定限制时，内核会配置以确保消耗不会超过这些限制。例如，具有 0.5 核心 CPU 限制的容器将始终只能获得 0.5 核心，即使 CPU 处于空闲状态。具有
+    256 MB 内存限制的容器将不允许额外的内存使用；例如，如果其内存使用超过 256 MB，`malloc` 将会失败。
+- en: Persisting Data with Volumes
+  id: totrans-142
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用卷持久化数据
+- en: When a Pod is deleted or a container restarts, any and all data in the container’s
+    filesystem is also deleted. This is often a good thing, since you don’t want to
+    leave around cruft that happened to be written by your stateless web application.
+    In other cases, having access to persistent disk storage is an important part
+    of a healthy application. Kubernetes models such persistent storage.
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当 Pod 被删除或容器重新启动时，容器文件系统中的任何和所有数据也将被删除。这通常是一件好事，因为您不希望保留由无状态 Web 应用程序写入的杂物。在其他情况下，访问持久磁盘存储是健康应用程序的重要组成部分。Kubernetes
+    模型支持持久存储。
+- en: Using Volumes with Pods
+  id: totrans-144
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用卷与 Pod
+- en: To add a volume to a Pod manifest, there are two new stanzas to add to our configuration.
+    The first is a new `spec.volumes` section. This array defines all of the volumes
+    that may be accessed by containers in the Pod manifest. It’s important to note
+    that not all containers are required to mount all volumes defined in the Pod.
+    The second addition is the `volumeMounts` array in the container definition. This
+    array defines the volumes that are mounted into a particular container and the
+    path where each volume should be mounted. Note that two different containers in
+    a Pod can mount the same volume at different mount paths.
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要向 Pod 清单添加卷，需要在我们的配置中添加两个新的部分。第一个是新的 `spec.volumes` 部分。此数组定义了 Pod 清单中容器可以访问的所有卷。需要注意的是，并非所有容器都需要挂载
+    Pod 中定义的所有卷。第二个增加的是容器定义中的 `volumeMounts` 数组。此数组定义了挂载到特定容器中的卷及每个卷应挂载到的路径。请注意，Pod
+    中的两个不同容器可以将同一卷挂载到不同的挂载路径上。
+- en: The manifest in [Example 5-5](#EXPODVOL) defines a single new volume named `kuard-data`,
+    which the `kuard` container mounts to the `/data` path.
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[示例 5-5](#EXPODVOL) 中的清单定义了一个名为 `kuard-data` 的新卷，`kuard` 容器将其挂载到 `/data` 路径。'
+- en: Example 5-5\. kuard-pod-vol.yaml
+  id: totrans-147
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 5-5\. kuard-pod-vol.yaml
+- en: '[PRE22]'
+  id: totrans-148
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: Different Ways of Using Volumes with Pods
+  id: totrans-149
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用卷与 Pod 的不同方式
+- en: 'There are a variety of ways you can use data in your application. The following
+    are some of these ways and the recommended patterns for Kubernetes:'
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在应用程序中使用数据的各种方式。以下是一些这些方式及 Kubernetes 推荐的模式：
+- en: Communication/synchronization
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通信/同步
+- en: In the first example of a Pod, we saw how two containers used a shared volume
+    to serve a site while keeping it synchronized to a remote Git location ([Figure 5-1](#pod_example)).
+    To achieve this, the Pod uses an `emptyDir` volume. Such a volume is scoped to
+    the Pod’s lifespan, but it can be shared between two containers, forming the basis
+    for communication between our Git sync and web serving containers.
+  id: totrans-152
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Pod 的第一个示例中，我们看到两个容器使用共享卷来提供站点，并将其同步到远程 Git 位置（[图 5-1](#pod_example)）。为了实现这一点，Pod
+    使用了一个 `emptyDir` 卷。这样的卷仅限于 Pod 的生命周期，但可以在两个容器之间共享，为我们的 Git 同步和 Web 服务容器之间的通信奠定了基础。
+- en: Cache
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 缓存
+- en: An application may use a volume that is valuable for performance, but not required
+    for correct operation of the application. For example, perhaps the application
+    keeps prerendered thumbnails of larger images. Of course, they can be reconstructed
+    from the original images, but that makes serving the thumbnails more expensive.
+    You want such a cache to survive a container restart due to a health-check failure,
+    and thus `emptyDir` works well for the cache use case as well.
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用程序可能会使用性能优越但不是应用程序正确运行所必需的卷。例如，应用程序可能会保留大图像的预渲染缩略图。当然，可以从原始图像重新构建这些缩略图，但这样做会增加提供缩略图的成本。您希望这样的缓存在由于健康检查失败导致容器重新启动时仍然存在，因此
+    `emptyDir` 也非常适合缓存使用场景。
+- en: Persistent data
+  id: totrans-155
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 持久化数据
+- en: Sometimes you will use a volume for truly persistent data—data that is independent
+    of the lifespan of a particular Pod, and should move between nodes in the cluster
+    if a node fails or a Pod moves to a different machine. To achieve this, Kubernetes
+    supports a wide variety of remote network storage volumes, including widely supported
+    protocols like NFS and iSCSI as well as cloud provider network storage like Amazon
+    Elastic Block Store, Azure File and Azure Disk, and Google’s Persistent Disk.
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有时您将使用卷来存储真正持久的数据，即与特定Pod寿命无关的数据，并且如果节点失败或Pod移动到不同的机器，则应在集群中移动。为了实现这一点，Kubernetes支持各种远程网络存储卷，包括广泛支持的协议如NFS和iSCSI，以及云提供商的网络存储如Amazon
+    Elastic Block Store、Azure File和Azure Disk，以及Google的持久磁盘。
+- en: Mounting the host filesystem
+  id: totrans-157
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 挂载主机文件系统
+- en: Other applications don’t actually need a persistent volume, but they do need
+    some access to the underlying host filesystem. For example, they may need access
+    to the */dev* filesystem to perform raw block-level access to a device on the
+    system. For these cases, Kubernetes supports the `hostPath` volume, which can
+    mount arbitrary locations on the worker node into the container. [Example 5-5](#EXPODVOL)
+    uses the `hostPath` volume type. The volume created is */var/lib/kuard* on the
+    host.
+  id: totrans-158
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 其他应用程序实际上不需要持久卷，但它们确实需要访问底层主机文件系统的某些内容。例如，它们可能需要访问*/dev*文件系统，以便对系统上的设备进行原始块级访问。对于这些情况，Kubernetes支持`hostPath`卷类型，该卷可以将工作节点上的任意位置挂载到容器中。[示例5-5](#EXPODVOL)使用了`hostPath`卷类型。所创建的卷是主机上的*/var/lib/kuard*。
+- en: 'Here is an example of using an NFS server:'
+  id: totrans-159
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里是使用NFS服务器的示例：
+- en: '[PRE23]'
+  id: totrans-160
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: Persistent volumes are a deep topic. [Chapter 16](ch16.xhtml#storage_k8s) has
+    a more in-depth examination of the subject.
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 持久卷是一个深入的主题。[第16章](ch16.xhtml#storage_k8s)对该主题进行了更深入的探讨。
+- en: Putting It All Together
+  id: totrans-162
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 将所有内容整合在一起
+- en: Many applications are stateful, and as such we must preserve any data and ensure
+    access to the underlying storage volume regardless of what machine the application
+    runs on. As we saw earlier, this can be achieved using a persistent volume backed
+    by network-attached storage. We also want to ensure that a healthy instance of
+    the application is running at all times, which means we want to make sure the
+    container running `kuard` is ready before we expose it to clients.
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 许多应用程序是有状态的，因此我们必须保留任何数据并确保能够访问底层存储卷，无论应用程序在哪台机器上运行。正如我们之前所见，可以通过使用由网络附加存储支持的持久卷来实现这一点。我们还希望确保应用程序的健康实例始终运行，这意味着我们希望在将运行`kuard`的容器暴露给客户端之前，确保该容器准备就绪。
+- en: Through a combination of persistent volumes, readiness and liveness probes,
+    and resource restrictions, Kubernetes provides everything needed to run stateful
+    applications reliably. [Example 5-6](#EXPODFULL) pulls this all together into
+    one manifest.
+  id: totrans-164
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过持久卷、就绪和存活探针以及资源限制的组合，Kubernetes提供了运行有状态应用程序所需的一切。[示例5-6](#EXPODFULL)将所有内容整合到一个清单中。
+- en: Example 5-6\. kuard-pod-full.yaml
+  id: totrans-165
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 5-6\. kuard-pod-full.yaml
+- en: '[PRE24]'
+  id: totrans-166
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: The definition of the Pod has grown over the course of this chapter. Each new
+    capability added to your application also adds a new section to its definition.
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本章的过程中，Pod的定义已经增加。为您的应用程序添加的每个新功能也将为其定义添加一个新的部分。
+- en: Summary
+  id: totrans-168
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 总结
+- en: Pods represent the atomic unit of work in a Kubernetes cluster. They are comprised
+    of one or more containers working together symbiotically. To create one, you write
+    a Pod manifest and submit it to the Kubernetes API server by using the command-line
+    tool or (less frequently) by making HTTP and JSON calls to the server directly.
+  id: totrans-169
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod在Kubernetes集群中代表工作的原子单位。它们由一个或多个容器共同协作而组成。要创建一个Pod，您需要编写一个Pod清单，并通过命令行工具将其提交给Kubernetes
+    API服务器，或者（较少情况下）通过直接向服务器进行HTTP和JSON调用来提交。
+- en: Once you’ve submitted the manifest to the API server, the Kubernetes scheduler
+    finds a machine where the Pod can fit and schedules the Pod to that machine. After
+    it’s scheduled, the `kubelet` daemon on that machine is responsible for creating
+    the containers that correspond to the Pod, as well as performing any health checks
+    defined in the Pod manifest.
+  id: totrans-170
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您向API服务器提交清单后，Kubernetes调度程序会找到一个可以容纳Pod的机器，并将Pod调度到该机器上。在调度完成后，该机器上的`kubelet`守护程序负责创建与Pod对应的容器，并执行在Pod清单中定义的任何健康检查。
+- en: Once a Pod is scheduled to a node, no rescheduling occurs if that node fails.
+    Additionally, to create multiple replicas of the same Pod, you have to create
+    and name them manually. In [Chapter 9](ch09.xhtml#replica_set), we introduce the
+    ReplicaSet object and show how you can automate the creation of multiple identical
+    Pods and ensure that they are re-created in the event of a node machine failure.
+  id: totrans-171
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦将 Pod 调度到节点上，如果该节点失败，则不会重新调度。此外，要创建多个相同 Pod 的副本，您必须手动创建并命名它们。在[第9章](ch09.xhtml#replica_set)，我们介绍了
+    ReplicaSet 对象，并展示了如何自动创建多个相同的 Pod，并确保在节点机器故障时重新创建它们。

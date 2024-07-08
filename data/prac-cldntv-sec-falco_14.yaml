@@ -1,0 +1,807 @@
+- en: Chapter 11\. Using Falco for Cloud Security
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第11章。使用Falco进行云安全
+- en: 'Now that you’ve learned all you need to know about configuring and running
+    Falco, it’s time to focus on an important topic that can have a huge impact on
+    your security posture: cloud security.'
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在您已经学会了如何配置和运行Falco的所有必要知识，是时候关注一个对您的安全姿态有重大影响的重要主题了：云安全。
+- en: If you are reading this book, there is a good chance that some of your software
+    (or all of it!) runs in the cloud. Since AWS is the leading provider of cloud
+    services, there is also a good chance that your software is running there.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您正在阅读本书，那么您的一些软件（或者全部！）很可能在云中运行。由于AWS是云服务的领先提供者，您的软件很可能也在那里运行。
+- en: Public clouds are great environments to run software. Their support for elasticity,
+    flexibility, and automation makes building and running apps easier and more efficient.
+    However, cloud-based apps and the data they use are exposed to attacks from the
+    whole planet. They are also exposed to misconfigurations, mistakes, and malicious
+    behavior from internal teams.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 公共云环境非常适合运行软件。它们对弹性、灵活性和自动化的支持使得构建和运行应用程序更加容易和高效。然而，基于云的应用程序及其使用的数据面临来自全球的攻击。它们还容易受到来自内部团队的配置错误、失误和恶意行为的影响。
+- en: A comprehensive security posture needs to take many domains into account, including
+    applications, users (external and internal), and data. Failing to properly protect
+    any one of these domains will result in gaps and therefore in risk. For example,
+    protecting workloads that run in containers and hosts (which you can do effectively
+    with Falco) is not beneficial unless you also cover the cloud infrastructure where
+    these workloads run.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 综合安全姿态需要考虑许多领域，包括应用程序、用户（内部和外部）以及数据。如果不能正确保护这些领域中的任何一个，将会产生漏洞，从而导致风险。例如，保护在容器和主机中运行的工作负载（你可以通过Falco有效实现）如果不涵盖这些工作负载所运行的云基础设施，就不会有实际益处。
+- en: Fortunately, Falco can bridge this gap and help you achieve the coverage you
+    need. Let’s learn how!
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 幸运的是，Falco可以填补这一差距，并帮助您实现所需的覆盖范围。让我们来学习如何做到！
+- en: Why Falco for AWS Security?
+  id: totrans-6
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 为什么选择Falco用于AWS安全？
+- en: 'Cloud security is a fertile and constantly evolving space with many implementation
+    options. Architecturally, most of those options fall into two basic categories:'
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 云安全是一个肥沃且不断发展的领域，具有许多实施选项。从架构上讲，大多数选项都可以归为两种基本类别：
+- en: Tools that query cloud APIs or watch cloud data stores to detect misconfigurations
+    or vulnerabilities
+  id: totrans-8
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 查询云API或监视云数据存储以检测配置错误或漏洞的工具
+- en: Tools that stream cloud logs into a backend, index them, and let you query them
+  id: totrans-9
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 将云日志流式传输到后端并对其进行索引以及让您进行查询的工具
+- en: If your goal is to detect threats in cloud-based software, tools in category
+    1 won’t be very useful. Polling is great for detecting gaps and validating compliance,
+    but lacks the real-time nature required to detect threats and respond quickly.
+    Category 2 tools are powerful, but also tremendously expensive (especially in
+    environments like the public cloud, where tons of logs are produced) and not friendly
+    to deploy and use.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您的目标是检测基于云的软件中的威胁，那么第一类工具并不是非常有用。轮询对于检测漏洞和验证合规性很有用，但缺乏检测威胁并快速响应所需的实时性质。第二类工具功能强大，但在像公共云这样产生大量日志的环境中非常昂贵，并且部署和使用起来也不友好。
+- en: The Falco runtime security approach provides a very effective solution to this
+    problem. Falco’s philosophy is based on three key concepts. First, it parses data
+    in a streaming fashion to detect threats in real time. Second, it implements detection
+    on top of an engine that is lightweight to run and easy to deploy. Third, it offers
+    a compact rule language that is quick to learn but flexible and expressive. This
+    philosophy, as you’ve seen throughout the book, is very effective with system
+    calls and works equally well when applied to logs like those produced by AWS CloudTrail.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco的运行时安全方法为解决这一问题提供了非常有效的解决方案。Falco的理念基于三个关键概念。首先，它以流式处理方式解析数据，实时检测威胁。其次，它在轻量级易于运行和部署的引擎上实现检测。第三，它提供一种紧凑的规则语言，快速学习但灵活表达。正如您在整本书中看到的那样，这种理念在系统调用和像AWS
+    CloudTrail生成的日志中同样有效。
+- en: Falco consumes few resources and, most importantly, analyzes the data in a streaming
+    way—no need to perform expensive copies or wait until the data is indexed. Falco
+    looks at your data in real time and notifies you of problems in seconds. Getting
+    it up and running takes only a few minutes, as you saw in [Part I](part01.xhtml#i_the_basics)
+    of this book, and adopting it for both cloud logs and system calls allows a unified
+    approach to threat detection. Let’s look at how it works.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco 资源消耗极少，并且最重要的是，以流式方式分析数据——无需执行昂贵的复制或等待数据索引。Falco 实时查看您的数据，并在几秒钟内通知您存在的问题。正如您在本书的
+    [Part I](part01.xhtml#i_the_basics) 中看到的那样，只需几分钟即可使其运行，并将其用于云日志和系统调用允许了统一的威胁检测方法。让我们看看它是如何工作的。
+- en: Falco’s Architecture and AWS Security
+  id: totrans-13
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Falco 的架构与 AWS 安全
+- en: 'When deployed in the context of AWS infrastructure security, Falco implements
+    detections on top of a specific data source: the logs generated by AWS CloudTrail.
+    The way this works is shown in [Figure 11-1](#the_high_level_architecture_of_a_falco).'
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当部署在 AWS 基础设施安全环境中时，Falco 在 AWS CloudTrail 生成的日志之上实施检测。其工作原理如 [Figure 11-1](#the_high_level_architecture_of_a_falco)
+    所示。
+- en: '![](Images/pcns_1101.png)'
+  id: totrans-15
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/pcns_1101.png)'
+- en: Figure 11-1\. The high-level architecture of a Falco deployment for AWS security
+  id: totrans-16
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: Figure 11-1\. Falco 用于 AWS 安全的高级架构
+- en: CloudTrail is a log aggregation service offered by Amazon. It collects logs
+    from hundreds of AWS services and stores them in S3, using a consistent and well-documented
+    format. CloudTrail is easy to set up and offers a coherent layer that insulates
+    the customer from the complexities of collecting logs of users’ and services’
+    activity.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CloudTrail 是亚马逊提供的日志聚合服务。它从数百个 AWS 服务收集日志，并使用一致且有文档化的格式存储在 S3 中。CloudTrail 容易设置，并提供一致的层，使客户免受收集用户和服务活动日志的复杂性影响。
+- en: CloudTrail events are entries in JSON files that CloudTrail writes in the S3
+    bucket at regular intervals. Falco understands how to read and parse these events
+    thanks to the CloudTrail plugin ([Figure 11-2](#event_collection_with_the_cloudtrail_pl)),
+    which is created and maintained by the Falco community. (If you need a refresher
+    on what Falco plugins are and how they work, see [Chapter 4](ch04.xhtml#data_source).)
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CloudTrail 事件是 CloudTrail 定期写入 S3 存储桶中的 JSON 文件条目。Falco 通过 CloudTrail 插件（[Figure 11-2](#event_collection_with_the_cloudtrail_pl)）理解如何读取和解析这些事件，该插件由
+    Falco 社区创建和维护。（如果您需要了解 Falco 插件及其工作原理，请参阅 [Chapter 4](ch04.xhtml#data_source)。）
+- en: '![](Images/pcns_1102.png)'
+  id: totrans-19
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/pcns_1102.png)'
+- en: Figure 11-2\. Event collection with the CloudTrail plugin
+  id: totrans-20
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: Figure 11-2\. 使用 CloudTrail 插件进行事件收集
+- en: 'In addition to offering multiple methods to collect CloudTrail logs (more on
+    each of these methods later in the chapter), the CloudTrail plugin extends Falco
+    with AWS-specific fields, which you can use to create rules like this one:'
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了提供多种收集 CloudTrail 日志的方法（本章稍后详细介绍每种方法），CloudTrail 插件还使用 AWS 特定字段扩展了 Falco，您可以使用这些字段创建类似这样的规则：
+- en: '[PRE0]'
+  id: totrans-22
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: Once Falco’s CloudTrail plugin is configured with a CloudTrail trail as an input,
+    Falco will continuously analyze the trail’s upcoming data, providing real-time
+    anomaly and threat detection. It’s like having a security camera for your cloud
+    activity!
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦将 Falco 的 CloudTrail 插件配置为以 CloudTrail 跟踪作为输入，Falco 将持续分析跟踪的即将到来的数据，提供实时异常和威胁检测。这就像为您的云活动安装了安全摄像头！
+- en: Detection Examples
+  id: totrans-24
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 检测示例
+- en: 'Here are some of the things you can detect with Falco when it’s configured
+    for AWS security:'
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是配置为 AWS 安全时 Falco 可以检测到的一些事物：
+- en: Someone logs into the AWS console without multifactor authentication (MFA).
+  id: totrans-26
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 有人在 AWS 控制台上未使用多因素身份验证（MFA）登录。
+- en: Someone deactivates MFA for the root user.
+  id: totrans-27
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 有人为根用户停用了多因素身份验证（MFA）。
+- en: Someone creates a new AWS user or group.
+  id: totrans-28
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 有人创建了新的 AWS 用户或组。
+- en: Someone runs instances in a nonapproved region.
+  id: totrans-29
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 有人在非批准的区域运行实例。
+- en: Someone changes the permissions of an S3 bucket.
+  id: totrans-30
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 有人更改了 S3 存储桶的权限。
+- en: Someone disables CloudTrail logging.
+  id: totrans-31
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 有人禁用了 CloudTrail 日志记录。
+- en: For the full list, refer to the CloudTrail [rules file](https://oreil.ly/beQYF).
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要获取完整列表，请参考 CloudTrail [rules file](https://oreil.ly/beQYF)。
+- en: Configuring and Running Falco for CloudTrail Security
+  id: totrans-33
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 配置和运行 Falco 以保障 CloudTrail 安全
+- en: 'This part of the chapter will outline approaches to setting up cloud security
+    using Falco, describe the components, and guide you through configuring everything
+    properly. As we mentioned, Falco’s integration with CloudTrail happens through
+    the [CloudTrail plugin](https://oreil.ly/OWVgb). The plugin can be configured
+    to receive log files in three different ways:'
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本章的这部分将概述使用Falco设置云安全的方法，描述各组件，并指导您正确配置所有内容。正如我们提到的，Falco与CloudTrail的集成通过[CloudTrail插件](https://oreil.ly/OWVgb)完成。可以配置插件以三种不同方式接收日志文件：
+- en: A Simple Queue Service (SQS) queue that passes along Simple Notification Service
+    (SNS) notifications about new log files
+  id: totrans-35
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一个Simple Queue Service（SQS）队列，传递有关新日志文件的Simple Notification Service（SNS）通知
+- en: An S3 bucket
+  id: totrans-36
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一个S3存储桶
+- en: A local filesystem path
+  id: totrans-37
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 本地文件系统路径
+- en: Of these three methods, the first one is what you will use in the vast majority
+    of production situations, so we will focus on it first.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这三种方法中，第一种是您在绝大多数生产情况下将使用的方法，因此我们将首先重点介绍它。
+- en: Receiving Log Files Through an SQS Queue
+  id: totrans-39
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 通过SQS队列接收日志文件
+- en: This deployment method consists of leveraging SQS to notify Falco when new CloudTrail
+    logs are produced. Falco monitors the SQS queue and parses new logs in real time
+    when they arrive. The process is depicted in [Figure 11-3](#sqs_queue_collection_diagram).
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此部署方法利用SQS来通知Falco新的CloudTrail日志产生。当新日志到达时，Falco会监视SQS队列并实时解析这些日志。该过程如[图 11-3](#sqs_queue_collection_diagram)所示。
+- en: '![](Images/pcns_1103.png)'
+  id: totrans-41
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/pcns_1103.png)'
+- en: Figure 11-3\. SQS queue collection diagram
+  id: totrans-42
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 11-3\. SQS队列集合图示
+- en: 'The process of setting up Falco in this configuration involves three steps:'
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在此配置中设置Falco的过程包括三个步骤：
+- en: Creating the CloudTrail trail and configuring it with an SNS topic. The SNS
+    topic detects changes to the S3 bucket where the trail is depositing the files
+    and broadcasts them to the world.
+  id: totrans-44
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 创建CloudTrail跟踪并配置与SNS主题关联。SNS主题检测到跟踪将文件存储在其中的S3存储桶的更改并广播到全球。
+- en: Creating the SQS queue and attaching it to the SNS topic. This creates an endpoint
+    that Falco can use to detect the arrival of new data.
+  id: totrans-45
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 创建SQS队列并将其附加到SNS主题。这将创建一个Falco可以使用来检测新数据到达的端点。
+- en: Configuring Falco to receive the logs using the SQS queue.
+  id: totrans-46
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 配置Falco以使用SQS队列接收日志。
+- en: 'We will guide you with step-by-step instructions to set all of this up, so
+    you have full knowledge of the moving parts. Before doing that, however, we’ll
+    show you the easy shortcut: a Terraform module that will do the work for you.'
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们将通过逐步说明来指导您设置所有这些内容，以便您全面了解各个组成部分。但在此之前，我们将向您展示一个简单的快捷方式：一个Terraform模块将为您完成这些工作。
+- en: Terraform-based deployment
+  id: totrans-48
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 基于Terraform的部署
+- en: 'You can find the Terraform module on [GitHub](https://oreil.ly/4qvQX). Clone
+    the repository to your local machine and then execute the following commands:'
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在[GitHub](https://oreil.ly/4qvQX)上找到Terraform模块。将存储库克隆到本地计算机，然后执行以下命令：
+- en: '[PRE1]'
+  id: totrans-50
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: 'If all goes well, you should get output that looks like this:'
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果一切顺利，您应该获得类似于以下输出：
+- en: '[PRE2]'
+  id: totrans-52
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'You can now use `*<QUEUE_NAME>*` in your *falco.yaml* file:'
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您现在可以在*falco.yaml*文件中使用`*<QUEUE_NAME>*`了：
+- en: '[PRE3]'
+  id: totrans-54
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'Next, configure the `rules_file` section of *falco.yaml* to load the CloudTrail
+    rules:'
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，配置*falco.yaml*的`rules_file`部分以加载CloudTrail规则：
+- en: '[PRE4]'
+  id: totrans-56
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: and you’re ready to launch Falco!
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在您可以启动Falco了！
+- en: Manual deployment
+  id: totrans-58
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 手动部署
+- en: 'Here are the steps to follow to set up Falco with an SQS queue if you don’t
+    want to use the Terraform script. The first step is to create the trail. You can
+    do this as follows:'
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您不想使用Terraform脚本，以下是设置使用SQS队列的Falco的步骤。第一步是创建跟踪。您可以按以下步骤执行：
+- en: Go to the CloudTrail section of the AWS console.
+  id: totrans-60
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 转到AWS控制台的CloudTrail部分。
+- en: Click “Create trail.”
+  id: totrans-61
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 单击“创建跟踪”。
+- en: Name the trail *Falco.*
+  id: totrans-62
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 将跟踪命名为*Falco*。
+- en: As the storage location, you can either pick an existing trail or tell AWS to
+    create a new one.
+  id: totrans-63
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 作为存储位置，您可以选择一个现有的跟踪或告诉AWS创建一个新的跟踪。
+- en: Uncheck “Log file SSE-KMS encryption.” SSE encryption is something you should
+    definitely use as a good practice, but configuring it goes beyond the scope of
+    this chapter.
+  id: totrans-64
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 不选中“日志文件SSE-KMS加密”。SSE加密是您应该使用的良好实践，但配置它超出了本章的范围。
+- en: Check “SNS notification delivery.”
+  id: totrans-65
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 勾选“SNS通知交付”。
+- en: Under “Create a new SNS topic,” select New and name the topic *falco-cloudtrail-logs*.
+  id: totrans-66
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 在“创建新SNS主题”下，选择新建并命名主题*falco-cloudtrail-logs*。
+- en: Click Next.
+  id: totrans-67
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 单击下一步。
+- en: The “Choose log events” page lets you pick which logs you want to capture. The
+    default settings are enough for Falco to operate properly. Checking “Data events”
+    or “Exclude Amazon RDS Data API events” will allow you, if you desire, to craft
+    more granular rules on data events, like S3 bucket-level and object-level access.
+  id: totrans-68
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: “选择日志事件”页面让您选择要捕获的日志。默认设置足以使 Falco 正常运行。勾选“数据事件”或“排除 Amazon RDS 数据 API 事件”将允许您如有需要创建更精细的数据事件规则，例如
+    S3 存储桶级别和对象级别的访问。
+- en: Click Next.
+  id: totrans-69
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 点击下一步。
+- en: Click “Create trail.”
+  id: totrans-70
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 点击“创建跟踪”。
+- en: 'Next, create the SQS queue:'
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，创建 SQS 队列：
+- en: Go to the SQS section of the AWS console.
+  id: totrans-72
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 转到 AWS 控制台的 SQS 部分。
+- en: Click “Create queue.”
+  id: totrans-73
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 点击“创建队列”。
+- en: Name the queue *falco-queue*.
+  id: totrans-74
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 将队列命名为 *falco-queue*。
+- en: The default access policy will work as is with Falco. However, consider implementing
+    a less privileged access policy, for example using the [AWS Policy Generator](https://oreil.ly/fyxDD).
+  id: totrans-75
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: Falco 可以直接使用默认访问策略正常运行。但是，考虑实施一个更少权限的访问策略，例如使用 [AWS 策略生成器](https://oreil.ly/fyxDD)。
+- en: Click “Create queue” at the bottom of the page. This will bring you to the *falco-queue*
+    details page.
+  id: totrans-76
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 在页面底部点击“创建队列”。这将带您进入 *falco-queue* 详细信息页面。
+- en: Click “Subscribe to Amazon SNS topic.”
+  id: totrans-77
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 点击“订阅 Amazon SNS 主题”。
+- en: Select the topic whose name ends in *falco-cloudtrail-logs*.
+  id: totrans-78
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 选择名称以 *falco-cloudtrail-logs* 结尾的主题。
+- en: Click Save.
+  id: totrans-79
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 点击保存。
+- en: 'Now you need to configure Falco. This involves setting up AWS authentication
+    and configuring Falco itself. To read log files from an S3 bucket or SNS notifications
+    from an SQS queue Falco needs authentication credentials, and it needs to be configured
+    with an AWS region. Falco relies on the same authentication mechanisms used by
+    the [AWS Go SDK](https://oreil.ly/DmUSL): environment variables or shared configuration
+    files. Configure these as follows:'
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在您需要配置 Falco。这涉及设置 AWS 身份验证和配置 Falco 本身。要从 S3 存储桶读取日志文件或从 SQS 队列接收 SNS 通知，Falco
+    需要身份验证凭据，并且需要配置 AWS 区域。Falco 依赖于与 [AWS Go SDK](https://oreil.ly/DmUSL) 相同的身份验证机制：环境变量或共享配置文件。请按以下方式配置这些内容：
+- en: Environment variables
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 环境变量
+- en: 'Specify the AWS region with `AWS_REGION=*xxx*`, the access key ID with `AWS_ACCESS_KEY_ID=*xxx*`,
+    and the secret key with `AWS_SECRET_ACCESS_KEY=*xxx*`. Here’s a sample command
+    line:'
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 `AWS_REGION=*xxx*` 指定 AWS 区域，使用 `AWS_ACCESS_KEY_ID=*xxx*` 指定访问密钥 ID，使用 `AWS_SECRET_ACCESS_KEY=*xxx*`
+    指定秘密密钥。以下是一个示例命令行：
+- en: '[PRE5]'
+  id: totrans-83
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: Shared configuration files
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 共享配置文件
+- en: 'Specify the AWS region in a file at *$HOME/.aws/config* and the credentials
+    in a file at *$HOME/.aws/credentials*. Here are some examples of what these files
+    will look like:'
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 *$HOME/.aws/config* 文件中指定 AWS 区域，并在 *$HOME/.aws/credentials* 文件中指定凭证。以下是这些文件的示例内容：
+- en: '[PRE6]'
+  id: totrans-86
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: 'Now, set up Falco itself:'
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，设置 Falco 本身：
+- en: 'Add the following snippet to *falco.yaml* to configure SQS-based log collection:'
+  id: totrans-88
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 在 *falco.yaml* 中添加以下片段以配置基于 SQS 的日志收集：
+- en: '[PRE7]'
+  id: totrans-89
+  prefs:
+  - PREF_IND
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: 'Configure the `rules_file` section of *falco.yaml* to load the CloudTrail rules:'
+  id: totrans-90
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 配置 *falco.yaml* 中的 `rules_file` 部分以加载 CloudTrail 规则：
+- en: '[PRE8]'
+  id: totrans-91
+  prefs:
+  - PREF_IND
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: Start Falco.
+  id: totrans-92
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 启动 Falco。
+- en: '*Et voilà:* your AWS infrastructure is now protected!'
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*Et voilà:* 您的 AWS 基础设施现在受到保护！'
+- en: Reading Events from an S3 Bucket or the Local Filesystem
+  id: totrans-94
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 从 S3 存储桶或本地文件系统读取事件
+- en: While the SQS-based setup is recommended for real-time detection, Falco can
+    also read CloudTrail logs directly from the S3 bucket or from a copy of the logs
+    stored in the local filesystem. While the SQS setup processes “live” logs as they
+    arrive, the S3 and local filesystem setups read stored data. This means they effectively
+    operate in the past and cause Falco to exit when they reach the end of the currently
+    stored data. This approach can be valuable for a couple of reasons. First, it
+    allows you to iterate quickly during rule development. Second, it allows you to
+    run Falco “back in time” on CloudTrail logs that have already been stored (even
+    if they’ve been stored for a long time). Curious if (or when) somebody has changed
+    the permissions of a bucket during the last three weeks? Point Falco to the logs
+    and you can find out easily!
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然推荐使用基于 SQS 的设置进行实时检测，但 Falco 也可以直接从 S3 存储桶或本地文件系统中读取 CloudTrail 日志。基于 SQS
+    的设置在处理到达的“实时”日志时起作用，而 S3 和本地文件系统的设置则读取存储的数据。这意味着它们实际上是在过去运行，并且在到达当前存储数据的末尾时会导致
+    Falco 退出。这种方法在几个方面非常有价值。首先，它允许您在规则开发过程中快速迭代。其次，它允许您在 CloudTrail 日志上“回溯”运行 Falco（即使这些日志已存储了很长时间）。想知道在过去三周内是否有人更改了存储桶的权限？指向日志，您就可以轻松找出！
+- en: Let’s take a look at how to run Falco in this mode.
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们看看如何以此模式运行 Falco。
+- en: S3 bucket
+  id: totrans-97
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: S3 存储桶
+- en: First, you need to set up AWS authentication. We just described how to do this
+    for SQS access, and it works exactly the same for S3, so just go back and follow
+    the steps at the end of the previous section.
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，你需要设置 AWS 认证。我们刚刚描述了如何为 SQS 访问做这些设置，对于 S3 来说也是一样的，所以回到上一节的结尾，按照步骤操作即可。
+- en: 'Once you’ve configured AWS authentication, add the following snippet to *falco.yaml*:'
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 配置好 AWS 认证后，在 *falco.yaml* 中添加以下片段：
+- en: '[PRE9]'
+  id: totrans-100
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: Note how the `open_params` key is just the URI of the trail location on S3,
+    which you can easily obtain by navigating to the data in the S3 console and then
+    clicking “Copy S3 URI.” You don’t need to specify the whole bucket; you can point
+    to a subdirectory or even a specific log file.
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注意 `open_params` 键仅仅是 S3 上路径的 URI，你可以通过访问 S3 控制台中的数据并点击 “复制 S3 URI” 轻松获取。你不需要指定整个存储桶；你可以指向子目录甚至特定的日志文件。
+- en: 'Now you need to configure the `rules_file` section of *falco.yaml* to load
+    the CloudTrail rules:'
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在你需要配置 *falco.yaml* 中的 `rules_file` 部分以加载 CloudTrail 规则：
+- en: '[PRE10]'
+  id: totrans-103
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: After that, you can just run Falco. It will process every file below the provided
+    S3 URI and return when it’s done.
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 之后，你只需运行 Falco。它会处理提供的 S3 URI 下的每个文件，并在完成后返回。
+- en: Parsing the logs from a machine outside AWS, such as your laptop, might be pretty
+    slow, because the machine needs to download the data in order to process it. You
+    can speed things up by increasing the download concurrency (`s3DownloadConcurrency`
+    in the `init_config` key), or predownload the data locally using the AWS CLI and
+    then point Falco to the local logs (which we’ll describe next).
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从 AWS 外部的机器（比如你的笔记本电脑）解析日志可能会非常慢，因为机器需要下载数据以便处理。你可以通过增加下载并发数（在 `init_config`
+    键中的 `s3DownloadConcurrency`）来加快速度，或者预先使用 AWS CLI 将数据下载到本地，然后指向 Falco 到本地日志（接下来我们将描述）。
+- en: Local filesystem path
+  id: totrans-106
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 本地文件系统路径
+- en: 'You can process CloudTrail logs stored in the local filesystem by putting the
+    following configuration in *falco.yaml*:'
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可以通过将以下配置放入 *falco.yaml* 中来处理存储在本地文件系统中的 CloudTrail 日志：
+- en: '[PRE11]'
+  id: totrans-108
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: You can point to a single file or to a directory, in which case Falco will recursively
+    read all of the files in the directory.
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可以指向单个文件或目录，Falco 将递归读取目录中的所有文件。
+- en: 'You will also need to edit the `rules_file` section of *falco.yaml* to load
+    the CloudTrail rules:'
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你还需要编辑 *falco.yaml* 中的 `rules_file` 部分以加载 CloudTrail 规则：
+- en: '[PRE12]'
+  id: totrans-111
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: Once you’ve done that, just run Falco. It will process all of the files and
+    exit when it’s done.
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 完成以上步骤后，只需运行 Falco。它会处理所有文件并在完成后退出。
+- en: Extending Falco’s AWS Ruleset
+  id: totrans-113
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 扩展 Falco 的 AWS 规则集
+- en: Falco comes with a powerful set of CloudTrail-based rules. However, if you need
+    customization, the CloudTrail plugin exports a rich set of fields that you can
+    use to craft your own rules with a high level of granularity.
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco 提供了一个强大的基于 CloudTrail 的规则集。然而，如果需要定制，CloudTrail 插件导出了丰富的字段集，可以用于以高精度制定自己的规则。
+- en: 'Writing Falco rules will be extensively covered in [Chapter 13](ch13.xhtml#writing_falco_rules).
+    However, since that chapter is primarily focused on system call–based rules, here
+    are a couple of tips that will help you get started with cloud rules development:'
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Falco 规则的编写将在[第 13 章](ch13.xhtml#writing_falco_rules)中进行详细讨论。然而，由于该章节主要集中在基于系统调用的规则上，这里有一些可以帮助你开始云规则开发的提示：
+- en: 'CloudTrail rules need to include the following key: `source: aws_cloudtrail`.
+    This tells Falco that the fields in the rule condition and output must come from
+    the CloudTrail plugin.'
+  id: totrans-116
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 'CloudTrail 规则需要包含以下关键字：`source: aws_cloudtrail`。这告诉 Falco 规则条件和输出中的字段必须来自 CloudTrail
+    插件。'
+- en: You can obtain a list of fields you can use in a CloudTrail rule by using the
+    `--list=aws_cloudtrail` Falco command-line switch. Also, take a look at [Table 6-10](ch06.xhtml#cloudtrail_filter_class_fields)
+    in [Chapter 6](ch06.xhtml#fields_and_filters).
+  id: totrans-117
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 通过使用 `--list=aws_cloudtrail` Falco 命令行开关，你可以获取可以在 CloudTrail 规则中使用的字段列表。同时，请参阅[第
+    6 章](ch06.xhtml#fields_and_filters)中的 [Table 6-10](ch06.xhtml#cloudtrail_filter_class_fields)。
+- en: What About Other Clouds?
+  id: totrans-118
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 其他云平台呢？
+- en: AWS is a very important player in cloud computing, so Falco added support for
+    it first. However, at the time of writing the Falco community was working on adding
+    support for both Microsoft Azure and Google Cloud Platform. Expect more clouds
+    to be added in the long term!
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: AWS 是云计算中非常重要的一部分，所以 Falco 首先增加了对它的支持。然而，在撰写本文时，Falco 社区正在努力增加对 Microsoft Azure
+    和 Google Cloud Platform 的支持。预计长远来看会添加更多的云平台！
+- en: If you want to find out if Falco supports your cloud, check out the [plugins
+    repository on GitHub](https://oreil.ly/W20tv).
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您想了解Falco是否支持您的云平台，请查看[GitHub上的插件仓库](https://oreil.ly/W20tv)。
+- en: Conclusion
+  id: totrans-121
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 结论
+- en: In this chapter, you learned that Falco is about more than system calls and
+    containers, and how you can employ it to protect your cloud software and vastly
+    improve your security posture. In the next chapter we will switch to the output
+    side and show you how to collect and treat Falco events.
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，您了解到Falco不仅涉及系统调用和容器，还了解了如何利用它来保护您的云软件并大大提升安全姿态。在下一章中，我们将转向输出方面，并展示如何收集和处理Falco事件。

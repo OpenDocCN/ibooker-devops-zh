@@ -1,0 +1,1117 @@
+- en: Chapter 13\. Service Discovery
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第 13 章\. 服务发现
+- en: The *Service Discovery* pattern provides a stable endpoint through which consumers
+    of a service can access the instances providing the service. For this purpose,
+    Kubernetes provides multiple mechanisms, depending on whether the service consumers
+    and producers are located on or off the cluster.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*服务发现*模式提供了一个稳定的端点，通过这个端点，服务的消费者可以访问提供服务的实例。为此，Kubernetes 提供了多种机制，取决于服务的消费者和生产者是位于集群内还是集群外。'
+- en: Problem
+  id: totrans-2
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 问题
+- en: 'Applications deployed on Kubernetes rarely exist on their own, and usually
+    they have to interact with other services within the cluster or systems outside
+    the cluster. The interaction can be initiated internally within the service or
+    through external stimulus. Internally initiated interactions are usually performed
+    through a polling consumer: either after startup or later, an application connects
+    to another system and starts sending and receiving data. Typical examples are
+    an application running within a Pod that reaches a file server and starts consuming
+    files, or a message that connects to a message broker and starts receiving or
+    sending messages, or an application that uses a relational database or a key-value
+    store and starts reading or writing data.'
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 部署在 Kubernetes 上的应用程序很少独立存在，通常它们需要与集群内的其他服务或集群外的系统进行交互。交互可以在服务内部发起，也可以通过外部刺激。内部发起的交互通常通过轮询消费者进行：在启动后或稍后，应用程序连接到另一个系统并开始发送和接收数据。典型示例包括在
+    Pod 中运行的应用程序连接到文件服务器并开始消费文件，或者消息连接到消息代理并开始接收或发送消息，或者使用关系数据库或键值存储的应用程序开始读取或写入数据。
+- en: The critical distinction here is that the application running within the Pod
+    decides at some point to open an outgoing connection to another Pod or external
+    system and starts exchanging data in either direction. In this scenario, we don’t
+    have an external stimulus for the application, and we don’t need any additional
+    setup in Kubernetes.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里的关键区别在于 Pod 中运行的应用程序在某些时候决定打开对另一个 Pod 或外部系统的传出连接，并开始在任一方向上交换数据。在这种情况下，我们的应用程序没有外部刺激，并且在
+    Kubernetes 中我们不需要任何额外的设置。
+- en: To implement the patterns described in [Chapter 7, “Batch Job”](ch07.html#BatchJob),
+    or [Chapter 8, “Periodic Job”](ch08.html#PeriodicJob), we often use this technique.
+    In addition, long-running Pods in DaemonSets or ReplicaSets sometimes actively
+    connect to other systems over the network. The more common use case for Kubernetes
+    workloads occurs when we have long-running services expecting external stimulus,
+    most commonly in the form of incoming HTTP connections from other Pods within
+    the cluster or external systems. In these cases, service consumers need a mechanism
+    for discovering Pods that are dynamically placed by the scheduler and sometimes
+    elastically scaled up and down.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要实现 [第 7 章，“批处理作业”](ch07.html#BatchJob) 或 [第 8 章，“周期性作业”](ch08.html#PeriodicJob)
+    中描述的模式，我们经常使用这种技术。此外，在 DaemonSet 或 ReplicaSet 中运行的长期 Pod 有时会主动通过网络连接到其他系统。Kubernetes
+    工作负载的更常见用例是当我们有长期运行的服务期待外部刺激时，最常见的形式是来自集群内其他 Pod 或外部系统的传入 HTTP 连接。在这些情况下，服务消费者需要一种机制来发现由调度器动态放置并有时弹性缩放的
+    Pod。
+- en: It would be a significant challenge if we had to track, register, and discover
+    endpoints of dynamic Kubernetes Pods ourselves. That is why Kubernetes implements
+    the *Service Discovery* pattern through different mechanisms, which we explore
+    in this chapter.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果我们不得不自己跟踪、注册和发现动态 Kubernetes Pod 的端点，那将是一个巨大的挑战。这就是为什么 Kubernetes 通过不同的机制实现了*服务发现*模式，我们将在本章中探讨这些机制。
+- en: Solution
+  id: totrans-7
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 解决方案
+- en: If we look at the “Before Kubernetes Era,” the most common mechanism of service
+    discovery was through client-side discovery. In this architecture, when a service
+    consumer had to call another service that might be scaled to multiple instances,
+    the service consumer would have a discovery agent capable of looking at a registry
+    for service instances and then choosing one to call. Classically, that would be
+    done, for example, either with an embedded agent within the consumer service (such
+    as a ZooKeeper client, Consul client, or Ribbon) or with another colocated process
+    looking up the service in a registry, as shown in [Figure 13-1](#img-service-discovery-client).
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果我们看看“Kubernetes 之前的时代”，服务发现的最常见机制是通过客户端发现。在这种架构中，当服务消费者需要调用可能扩展到多个实例的另一个服务时，服务消费者会有一个能够查看注册表以查找服务实例并选择其中一个进行调用的发现代理。经典地，这可能通过消费者服务内嵌的代理（如
+    ZooKeeper 客户端、Consul 客户端或 Ribbon）或者通过另一个共同进程查找注册表中的服务来完成，如 [图 13-1](#img-service-discovery-client)
+    所示。
+- en: '![Client-side service discovery](assets/kup2_1301.png)'
+  id: totrans-9
+  prefs: []
+  type: TYPE_IMG
+  zh: '![客户端服务发现](assets/kup2_1301.png)'
+- en: Figure 13-1\. Client-side service discovery
+  id: totrans-10
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 13-1\. 客户端服务发现
+- en: In the “Post Kubernetes Era,” many of the nonfunctional responsibilities of
+    distributed systems such as placement, health checks, healing, and resource isolation
+    are moving into the platform, and so is service discovery and load balancing.
+    If we use the definitions from service-oriented architecture (SOA), a service
+    provider instance still has to register itself with a service registry while providing
+    the service capabilities, and a service consumer has to access the information
+    in the registry to reach the service.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在“Kubernetes 之后的时代”，分布式系统的许多非功能性责任，如放置、健康检查、治理和资源隔离，都移入了平台，服务发现和负载均衡也如此。如果我们使用面向服务的架构（SOA）中的定义，服务提供者实例仍然必须在提供服务能力的同时向服务注册表注册自己，而服务消费者必须访问注册表中的信息以达到服务。
+- en: In the Kubernetes world, all that happens behind the scenes so that a service
+    consumer calls a fixed virtual Service endpoint that can dynamically discover
+    service instances implemented as Pods. [Figure 13-2](#img-service-discovery-server)
+    shows how registration and lookup are embraced by Kubernetes.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 的世界中，所有这些都是在幕后进行的，以便服务消费者调用一个固定的虚拟服务端点，该端点可以动态发现作为 Pod 实现的服务实例。[图 13-2](#img-service-discovery-server)
+    展示了 Kubernetes 如何实现注册和查找。
+- en: '![Server-side service discovery on Kubernetes](assets/kup2_1302.png)'
+  id: totrans-13
+  prefs: []
+  type: TYPE_IMG
+  zh: '![在 Kubernetes 上的服务器端服务发现](assets/kup2_1302.png)'
+- en: Figure 13-2\. Server-side service discovery
+  id: totrans-14
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 13-2\. 服务器端服务发现
+- en: At first glance, *Service Discovery* may seem like a simple pattern. However,
+    multiple mechanisms can be used to implement this pattern, which depends on whether
+    a service consumer is within or outside the cluster and whether the service provider
+    is within or outside the cluster.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 乍一看，*服务发现* 可能看起来是一个简单的模式。然而，可以使用多种机制来实现这种模式，这取决于服务消费者是在集群内还是外部，以及服务提供者是在集群内还是外部。
+- en: Internal Service Discovery
+  id: totrans-16
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 内部服务发现
+- en: Let’s assume we have a web application and want to run it on Kubernetes. As
+    soon as we create a Deployment with a few replicas, the scheduler places the Pods
+    on the suitable nodes, and each Pod gets a cluster-internal IP address assigned
+    before starting up. If another client service within a different Pod wishes to
+    consume the web application endpoints, there isn’t an easy way to know the IP
+    addresses of the service provider Pods in advance.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设我们有一个 web 应用程序，想要在 Kubernetes 上运行。一旦我们创建了一个带有几个副本的 Deployment，调度器将 Pod 放置在适合的节点上，并在启动之前为每个
+    Pod 分配一个集群内部 IP 地址。如果另一个 Pod 中的客户端服务希望消费 web 应用程序的端点，则没有一种简单的方法可以提前知道服务提供者 Pod
+    的 IP 地址。
+- en: This challenge is what the Kubernetes Service resource addresses. It provides
+    a constant and stable entry point for a collection of Pods offering the same functionality.
+    The easiest way to create a Service is through `kubectl expose`, which creates
+    a Service for a Pod or multiple Pods of a Deployment or ReplicaSet. The command
+    creates a virtual IP address referred to as the `clusterIP`, and it pulls both
+    Pod selectors and port numbers from the resources to create the Service definition.
+    However, to have full control over the definition, we create the Service manually,
+    as shown in [Example 13-1](#ex-service-discovery-service).
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个挑战正是 Kubernetes 服务资源所要解决的。它为提供相同功能的一组 Pod 提供了一个恒定和稳定的入口点。创建服务的最简单方法是通过 `kubectl
+    expose`，它为部署或副本集的一个或多个 Pod 创建服务。该命令创建一个虚拟 IP 地址，称为 `clusterIP`，并从资源中提取 Pod 选择器和端口号来创建服务定义。然而，为了对定义拥有完全控制，我们可以像示例
+    [13-1](#ex-service-discovery-service) 中展示的那样手动创建服务。
+- en: Example 13-1\. A simple Service
+  id: totrans-19
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 13-1\. 一个简单的服务
+- en: '[PRE0]'
+  id: totrans-20
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: '[![1](assets/1.png)](#co_service_discovery_CO1-1)'
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_service_discovery_CO1-1)'
+- en: Selector matching Pod labels.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 选择匹配 Pod 标签。
+- en: '[![2](assets/2.png)](#co_service_discovery_CO1-2)'
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_service_discovery_CO1-2)'
+- en: Port over which this Service can be contacted.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以联系到该服务的端口。
+- en: '[![3](assets/3.png)](#co_service_discovery_CO1-3)'
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_service_discovery_CO1-3)'
+- en: Port on which the Pods are listening.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod 正在监听的端口。
+- en: 'The definition in this example will create a Service named `random-generator`
+    (the name is important for discovery later) and `type: ClusterIP` (which is the
+    default) that accepts TCP connections on port 80 and routes them to port 8080
+    on all the matching Pods with the selector `app: random-generator`. It doesn’t
+    matter when or how the Pods are created—any matching Pod becomes a routing target,
+    as illustrated in [Figure 13-3](#img-service-discovery-internal).'
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '在本示例中的定义将创建一个名为`random-generator`的服务（名称对于后续的发现很重要），并且`type: ClusterIP`（这是默认设置），接受端口80上的TCP连接并将其路由到所有具有选择器`app:
+    random-generator`的匹配Pod上的端口8080。无论Pod何时或如何创建，任何匹配的Pod都成为路由目标，如[图 13-3](#img-service-discovery-internal)所示。'
+- en: '![Internal service discovery](assets/kup2_1303.png)'
+  id: totrans-28
+  prefs: []
+  type: TYPE_IMG
+  zh: '![内部服务发现](assets/kup2_1303.png)'
+- en: Figure 13-3\. Internal service discovery
+  id: totrans-29
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 13-3\. 内部服务发现
+- en: 'The essential points to remember here are that once a Service is created, it
+    gets a `clusterIP` assigned that is accessible only from within the Kubernetes
+    cluster (hence the name), and that IP remains unchanged as long as the Service
+    definition exists. However, how can other applications within the cluster figure
+    out what this dynamically allocated `clusterIP` is? There are two ways:'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这里需要记住的关键点是，一旦创建服务，它会被分配一个 `clusterIP`，只能从 Kubernetes 集群内部访问（因此得名），并且只要服务定义存在，该
+    IP 就保持不变。但是，集群内的其他应用程序如何找出这个动态分配的 `clusterIP` 呢？有两种方法：
+- en: Discovery through environment variables
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过环境变量进行发现
+- en: When Kubernetes starts a Pod, its environment variables get populated with the
+    details of all Services that exist up to that moment. For example, our `random-generator`
+    Service listening on port 80 gets injected into any newly starting Pod, as the
+    environment variables shown in [Example 13-2](#ex-service-discovery-env) demonstrate.
+    The application running that Pod would know the name of the Service it needs to
+    consume and can be coded to read these environment variables. This lookup is a
+    simple mechanism that can be used from applications written in any language and
+    is also easy to emulate outside the Kubernetes cluster for development and testing
+    purposes. The main issue with this mechanism is the temporal dependency on Service
+    creation. Since environment variables cannot be injected into already-running
+    Pods, the Service coordinates are available only for Pods started after the Service
+    is created in Kubernetes. That requires the Service to be defined before starting
+    the Pods that depend on the Service—or if this is not the case, the Pods need
+    to be restarted.
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当 Kubernetes 启动一个 Pod 时，它的环境变量将被填充为所有到目前为止存在的服务的细节。例如，我们的`random-generator`服务在端口80上监听，并注入到任何新启动的
+    Pod 中，正如示例 [13-2](#ex-service-discovery-env) 中展示的环境变量一样。运行该 Pod 的应用程序将知道它需要消费的服务名称，并可以编码以读取这些环境变量。这种查找是一种简单的机制，可用于任何语言编写的应用程序，并且在
+    Kubernetes 集群外进行开发和测试时也很容易模拟。这种机制的主要问题是对服务创建的时间依赖性。由于无法将环境变量注入到已运行的 Pod 中，因此仅在在
+    Kubernetes 中创建服务后启动的 Pod 才能使用服务坐标。这要求在启动依赖于服务的 Pod 之前定义服务，或者如果情况不是这样，则需要重新启动 Pod。
+- en: Example 13-2\. Service-related environment variables set automatically in Pod
+  id: totrans-33
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 13-2. 在 Pod 中自动设置的与服务相关的环境变量
+- en: '[PRE1]'
+  id: totrans-34
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: Discovery through DNS lookup
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过 DNS 查找进行发现
+- en: Kubernetes runs a DNS server that all the Pods are automatically configured
+    to use. Moreover, when a new Service is created, it automatically gets a new DNS
+    entry that all Pods can start using. Assuming a client knows the name of the Service
+    it wants to access, it can reach the Service by a fully qualified domain name
+    (FQDN) such as `random-generator.default.svc.cluster.local`. Here, `random-generator`
+    is the name of the Service, `default` is the name of the namespace, `svc` indicates
+    it is a Service resource, and `cluster.local` is the cluster-specific suffix.
+    We can omit the cluster suffix if desired, and the namespace as well when accessing
+    the Service from the same namespace.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 运行一个 DNS 服务器，所有 Pod 都会自动配置为使用它。此外，当创建新服务时，它会自动获得一个新的 DNS 记录条目，所有
+    Pod 都可以开始使用。假设客户端知道要访问的服务的名称，它可以通过完全限定域名（FQDN）来访问服务，例如`random-generator.default.svc.cluster.local`。这里，`random-generator`是服务的名称，`default`是命名空间的名称，`svc`表示它是一个服务资源，`cluster.local`是集群特定的后缀。如果需要，我们可以省略集群后缀，以及在同一命名空间内访问服务时省略命名空间。
+- en: The DNS discovery mechanism doesn’t suffer from the drawbacks of the environment-variable-based
+    mechanism, as the DNS server allows lookup of all Services to all Pods as soon
+    as a Service is defined. However, you may still need to use the environment variables
+    to look up the port number to use if it is a nonstandard one or unknown by the
+    service consumer.
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: DNS 发现机制不会受到基于环境变量的机制的缺点的影响，因为 DNS 服务器允许所有 Pod 立即查找所有服务，只要服务定义了。但是，如果服务消费者需要使用非标准或未知的端口号，仍然可能需要使用环境变量来查找要使用的端口号。
+- en: 'Here are some other high-level characteristics of the Service with `type: ClusterIP`
+    that other types build upon:'
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '这里是`type: ClusterIP`的服务的一些其他高级特性，其他类型也建立在此基础之上：'
+- en: Multiple ports
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 多个端口
+- en: A single Service definition can support multiple source and target ports. For
+    example, if your Pod supports both HTTP on port 8080 and HTTPS on port 8443, there
+    is no need to define two Services. A single Service can expose both ports on 80
+    and 443, for example.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 单个服务定义可以支持多个源端口和目标端口。例如，如果您的 Pod 同时支持端口 8080 上的 HTTP 和端口 8443 上的 HTTPS，则无需定义两个服务。一个单独的服务可以在端口
+    80 和 443 上同时公开这两个端口，例如。
+- en: Session affinity
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 会话亲和性
+- en: 'When there is a new request, the Service randomly picks a Pod to connect to
+    by default. That can be changed with `sessionAffinity: ClientIP`, which makes
+    all requests originating from the same client IP stick to the same Pod. Remember
+    that Kubernetes Services performs L4 transport layer load balancing, and it cannot
+    look into the network packets and perform application-level load balancing such
+    as HTTP cookie-based session affinity.'
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '当有新的请求时，默认情况下，服务会随机选择一个 Pod 进行连接。这可以通过`sessionAffinity: ClientIP`来改变，这样来自同一客户端
+    IP 的所有请求将粘附到同一个 Pod 上。请记住，Kubernetes 服务执行 L4 传输层负载平衡，无法查看网络数据包并执行如基于 HTTP Cookie
+    的会话亲和性等应用级别负载平衡。'
+- en: Readiness probes
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: readiness 探测
+- en: In [Chapter 4, “Health Probe”](ch04.html#HealthProbe), you learned how to define
+    a `readinessProbe` for a container. If a Pod has defined readiness checks, and
+    they are failing, the Pod is removed from the list of Service endpoints to call
+    even if the label selector matches the Pod.
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[第 4 章，“健康探测”](ch04.html#HealthProbe)中，您学习了如何为容器定义`readinessProbe`。如果一个 Pod
+    定义了 readiness 检查，并且它们失败了，即使标签选择器匹配该 Pod，该 Pod 也会从服务终端点列表中移除。
+- en: Virtual IP
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虚拟 IP
+- en: 'When we create a Service with `type: ClusterIP`, it gets a stable virtual IP
+    address. However, this IP address does not correspond to any network interface
+    and doesn’t exist in reality. It is the kube-proxy that runs on every node that
+    picks this new Service and updates the iptables of the node with rules to catch
+    the network packets destined for this virtual IP address and replaces it with
+    a selected Pod IP address. The rules in the iptables do not add ICMP rules, but
+    only the protocol specified in the Service definition, such as TCP or UDP. As
+    a consequence, it is not possible to `ping` the IP address of the Service as that
+    operation uses the ICMP.'
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '当我们创建一个`type: ClusterIP`的服务时，它会获得一个稳定的虚拟 IP 地址。但是，这个 IP 地址不对应任何网络接口，也不存在于现实中。每个节点上运行的
+    kube-proxy 会选择这个新服务，并更新节点的 iptables，添加规则以捕获发送到此虚拟 IP 地址的网络数据包，并替换为选定的 Pod IP 地址。iptables
+    中的规则不会添加 ICMP 规则，而只会添加在服务定义中指定的协议，如 TCP 或 UDP。因此，不可能`ping`服务的 IP 地址，因为该操作使用 ICMP。'
+- en: Choosing ClusterIP
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 选择 ClusterIP
+- en: During Service creation, we can specify an IP to use with the field `.spec.clusterIP`.
+    It must be a valid IP address and within a predefined range. While not recommended,
+    this option can turn out to be handy when dealing with legacy applications configured
+    to use a specific IP address, or if there is an existing DNS entry we wish to
+    reuse.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在创建服务时，我们可以通过字段`.spec.clusterIP`指定要使用的IP。它必须是有效的IP地址，并且在预定义范围内。虽然不建议这样做，但在处理配置为使用特定IP地址的遗留应用程序或希望重用现有DNS条目时，此选项可能会很方便。
+- en: 'Kubernetes Services with `type: ClusterIP` are accessible only from within
+    the cluster; they are used for discovery of Pods by matching selectors and are
+    the most commonly used type. Next, we will look at other types of Services that
+    allow discovery of endpoints that are manually specified.'
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '带有`type: ClusterIP`的Kubernetes服务仅限于集群内访问；它们用于通过匹配选择器发现Pod，并且是最常用的类型。接下来，我们将介绍其他类型的服务，这些服务允许发现手动指定的端点。'
+- en: Manual Service Discovery
+  id: totrans-50
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 手动服务发现
+- en: When we create a Service with `selector`, Kubernetes tracks the list of matching
+    and ready-to-serve Pods in the list of endpoint resources. For [Example 13-1](#ex-service-discovery-service),
+    you can check all endpoints created on behalf of the Service with `kubectl get
+    endpoints random-generator`. Instead of redirecting connections to Pods within
+    the cluster, we could also redirect connections to external IP addresses and ports.
+    We can do that by omitting the `selector` definition of a Service and manually
+    creating endpoint resources, as shown in [Example 13-3](#ex-service-discovery-service-plain).
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当我们创建一个带有`selector`的服务时，Kubernetes会在端点资源列表中跟踪匹配和准备就绪的Pod列表。对于[示例 13-1](#ex-service-discovery-service)，您可以使用`kubectl
+    get endpoints random-generator`检查代表服务创建的所有端点。除了将连接重定向到集群内的Pod之外，我们还可以将连接重定向到外部IP地址和端口。我们可以通过省略服务的`selector`定义，并手动创建端点资源来实现这一点，就像[示例
+    13-3](#ex-service-discovery-service-plain)中所示。
+- en: Example 13-3\. Service without selector
+  id: totrans-52
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 13-3\. 没有选择器的服务
+- en: '[PRE2]'
+  id: totrans-53
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: Next, in [Example 13-4](#ex-service-discovery-endpoints), we define an endpoint
+    resource with the same name as the Service and containing the target IPs and ports.
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，在[示例 13-4](#ex-service-discovery-endpoints)中，我们定义了一个包含目标IP和端口的端点资源，其名称与服务相同。
+- en: Example 13-4\. Endpoints for an external service
+  id: totrans-55
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 13-4\. 外部服务的端点
+- en: '[PRE3]'
+  id: totrans-56
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: '[![1](assets/1.png)](#co_service_discovery_CO2-1)'
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_service_discovery_CO2-1)'
+- en: Name must match the Service that accesses these endpoints.
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 名称必须与访问这些端点的服务匹配。
+- en: This Service is also accessible only within the cluster and can be consumed
+    in the same way as the previous ones, through environment variables or DNS lookup.
+    The difference is that the list of endpoints is manually maintained and those
+    values usually point to IP addresses outside the cluster, as demonstrated in [Figure 13-4](#img-service-discovery-manual-discovery).
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此服务也仅限于集群内访问，并且可以通过环境变量或DNS查找方式消耗。不同之处在于端点列表是手动维护的，并且这些值通常指向集群外的IP地址，如[图 13-4](#img-service-discovery-manual-discovery)所示。
+- en: While connecting to an external resource is this mechanism’s most common use,
+    it is not the only one. Endpoints can hold IP addresses of Pods but not virtual
+    IP addresses of other Services. One good thing about the Service is that it allows
+    you to add and remove selectors and point to external or internal providers without
+    deleting the resource definition that would lead to a Service IP address change.
+    So service consumers can continue using the same Service IP address they first
+    pointed to while the actual service provider implementation is migrated from on-premises
+    to Kubernetes without affecting the client.
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管连接到外部资源是此机制最常见的用途，但这并不是唯一的用途。端点可以保存Pod的IP地址，但不能保存其他服务的虚拟IP地址。服务的一个好处是，它允许您添加和删除选择器，并指向外部或内部提供者，而无需删除导致服务IP地址更改的资源定义。因此，服务消费者可以继续使用首次指向的相同服务IP地址，而实际的服务提供者实现则可以从本地迁移到Kubernetes，而不影响客户端。
+- en: '![Manual service discovery](assets/kup2_1304.png)'
+  id: totrans-61
+  prefs: []
+  type: TYPE_IMG
+  zh: '![手动服务发现](assets/kup2_1304.png)'
+- en: Figure 13-4\. Manual service discovery
+  id: totrans-62
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 13-4\. 手动服务发现
+- en: In this category of manual destination configuration, there is one more type
+    of Service, as shown in [Example 13-5](#ex-service-discovery-external-name).
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这种手动目标配置类别中，还有一种服务类型，如[示例 13-5](#ex-service-discovery-external-name)所示。
+- en: Example 13-5\. Service with an external destination
+  id: totrans-64
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 13-5\. 带有外部目标的服务
+- en: '[PRE4]'
+  id: totrans-65
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: This Service definition does not have a `selector` either, but its type is `ExternalName`.
+    That is an important difference from an implementation point of view. This Service
+    definition maps to the content pointed by `externalName` using DNS only, or more
+    specifically, `database-service.<namespace>.svc.cluster.local` will now point
+    to `my.database.example.com`. It is a way of creating an alias for an external
+    endpoint using DNS CNAME rather than going through the proxy with an IP address.
+    But fundamentally, it is another way of providing a Kubernetes abstraction for
+    endpoints located outside the cluster.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此服务定义也没有`selector`，但其类型为`ExternalName`。这与实现角度来看是一个重要的区别。此服务定义使用DNS将`externalName`指向的内容映射为`database-service.<namespace>.svc.cluster.local`，现在指向`my.database.example.com`。这是使用DNS
+    CNAME创建外部端点的别名的一种方式，而不是通过IP地址通过代理。但从根本上说，这是提供给位于集群外部的端点的Kubernetes抽象的另一种方式。
+- en: Service Discovery from Outside the Cluster
+  id: totrans-67
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 从集群外部进行服务发现
+- en: The service discovery mechanisms discussed so far in this chapter all use a
+    virtual IP address that points to Pods or external endpoints, and the virtual
+    IP address itself is accessible only from within the Kubernetes cluster. However,
+    a Kubernetes cluster doesn’t run disconnected from the rest of the world, and
+    in addition to connecting to external resources from Pods, very often the opposite
+    is also required—external applications wanting to reach to endpoints provided
+    by the Pods. Let’s see how to make Pods accessible for clients living outside
+    the cluster.
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本章讨论的服务发现机制都使用指向Pod或外部端点的虚拟IP地址，虚拟IP地址本身只能从Kubernetes集群内部访问。然而，Kubernetes集群并不与世界脱节，除了从Pod连接到外部资源之外，非常常见的情况是相反的——外部应用程序希望到达由Pod提供的端点。让我们看看如何使Pod对位于集群外部的客户端可访问。
+- en: 'The first method to create a Service and expose it outside of the cluster is
+    through `type: NodePort`. The definition in [Example 13-6](#ex-service-discovery-node-port)
+    creates a Service as earlier, serving Pods that match the selector `app: random-generator`,
+    accepting connections on port 80 on the virtual IP address and routing each to
+    port 8080 of the selected Pod. However, in addition to all of that, this definition
+    also reserves port 30036 on all the nodes and forwards incoming connections to
+    the Service. This reservation makes the Service accessible internally through
+    the virtual IP address, as well as externally through a dedicated port on every
+    node.'
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '创建服务并将其暴露在集群外的第一种方法是通过`type: NodePort`。在[示例 13-6](#ex-service-discovery-node-port)中的定义与之前创建的服务相同，为匹配选择器`app:
+    random-generator`的Pod提供服务，接受端口80上的连接，并将每个连接路由到所选Pod的端口8080。然而，除此之外，该定义还在所有节点上预留了端口30036，并将传入的连接转发到该服务。这一预留使得服务可以通过虚拟IP地址在内部访问，同时也可以通过每个节点上的专用端口在外部访问。'
+- en: Example 13-6\. Service with type NodePort
+  id: totrans-70
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 13-6\. 类型为NodePort的服务
+- en: '[PRE5]'
+  id: totrans-71
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: '[![1](assets/1.png)](#co_service_discovery_CO3-1)'
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_service_discovery_CO3-1)'
+- en: Open port on all nodes.
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在所有节点上打开端口。
+- en: '[![2](assets/2.png)](#co_service_discovery_CO3-2)'
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_service_discovery_CO3-2)'
+- en: Specify a fixed port (which needs to be available) or leave this out to get
+    a randomly selected port assigned.
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 指定一个固定端口（需要可用）或者省略以分配一个随机选择的端口。
+- en: While this method of exposing services (illustrated in [Figure 13-5](#img-service-discovery-node-port))
+    may seem like a good approach, it has drawbacks.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然这种暴露服务的方法（如[图 13-5](#img-service-discovery-node-port)所示）看起来是一种不错的方法，但它也有缺点。
+- en: '![Node port Service Discovery](assets/kup2_1305.png)'
+  id: totrans-77
+  prefs: []
+  type: TYPE_IMG
+  zh: '![节点端口服务发现](assets/kup2_1305.png)'
+- en: Figure 13-5\. Node port service discovery
+  id: totrans-78
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 13-5\. 节点端口服务发现
+- en: 'Let’s see some of its distinguishing characteristics:'
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们看一些它的显著特点：
+- en: Port number
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 端口号
+- en: 'Instead of picking a specific port with `nodePort: 30036`, you can let Kubernetes
+    pick a free port within its range.'
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '不使用`nodePort: 30036`选择特定端口，可以让Kubernetes在其范围内选择一个空闲端口。'
+- en: Firewall rules
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 防火墙规则
+- en: Since this method opens a port on all the nodes, you may have to configure additional
+    firewall rules to let external clients access the node ports.
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于此方法在所有节点上开放端口，您可能需要配置额外的防火墙规则以允许外部客户端访问节点端口。
+- en: Node selection
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 节点选择
+- en: An external client can open connection to any node in the cluster. However,
+    if the node is not available, it is the responsibility of the client application
+    to connect to another healthy node. For this purpose, it may be a good idea to
+    put a load balancer in front of the nodes that picks healthy nodes and performs
+    failover.
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 外部客户端可以连接到集群中的任何节点。但是，如果节点不可用，客户端应用程序有责任连接到另一个健康的节点。为此，最好在节点前放置一个负载均衡器，选择健康节点并执行故障转移。
+- en: Pods selection
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod选择
+- en: 'When a client opens a connection through the node port, it is routed to a randomly
+    chosen Pod that may be on the same node where the connection was open or a different
+    node. It is possible to avoid this extra hop and always force Kubernetes to pick
+    a Pod on the node where the connection was opened by adding `externalTrafficPolicy:
+    Local` to the Service definition. When this option is set, Kubernetes does not
+    allow you to connect to Pods located on other nodes, which can be an issue. To
+    resolve that, you have to either make sure there are Pods placed on every node
+    (e.g., by using daemon services) or make sure the client knows which nodes have
+    healthy Pods placed on them.'
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '当客户端通过节点端口打开连接时，它会被路由到一个随机选择的Pod，该Pod可能位于打开连接的同一节点上，也可能位于另一个节点上。通过向服务定义中添加`externalTrafficPolicy:
+    Local`，可以避免这种额外的跳转，并始终强制Kubernetes选择在打开连接的节点上的Pod。设置此选项后，Kubernetes不允许您连接到其他节点上的Pod，这可能会成为一个问题。为了解决这个问题，您必须确保每个节点上都有Pod（例如，通过使用守护服务），或者确保客户端知道哪些节点上有健康的Pod。'
+- en: Source addresses
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 源地址
+- en: 'There are some peculiarities around the source addresses of packets sent to
+    different types of Services. Specifically, when we use type `NodePort`, client
+    addresses are source NAT’d, which means the source IP addresses of the network
+    packets containing the client IP address are replaced with the node’s internal
+    addresses. For example, when a client application sends a packet to node 1, it
+    replaces the source address with its node address, replaces the destination address
+    with the Pod’s address, and forwards the packet to node 2, where the Pod is located.
+    When the Pod receives the network packet, the source address is not equal to the
+    original client’s address but is the same as node 1’s address. To prevent this
+    from happening, we can set `externalTrafficPolicy: Local` as described earlier
+    and forward traffic only to Pods located on node 1.'
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '发送到不同类型服务的数据包的源地址存在一些特殊性。具体来说，当我们使用类型`NodePort`时，客户端地址会被源NAT化，这意味着包含客户端IP地址的网络数据包的源IP地址会被替换为节点的内部地址。例如，当客户端应用程序向节点1发送数据包时，它会将源地址替换为自己的节点地址，将目标地址替换为Pod的地址，并将数据包转发到Pod所在的节点2。当Pod接收到网络数据包时，源地址不等于原始客户端的地址，而是与节点1的地址相同。为了防止这种情况发生，我们可以像前面描述的那样设置`externalTrafficPolicy:
+    Local`，只将流量转发到位于节点1上的Pod。'
+- en: 'Another way to perform Service Discovery for external clients is through a
+    load balancer. You have seen how a `type: NodePort` Service builds on top of a
+    regular Service with `type: ClusterIP` by also opening a port on every node. The
+    limitation of this approach is that we still need a load balancer for client applications
+    to pick a healthy node. The Service type `LoadBalancer` addresses this limitation.'
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '为外部客户端执行服务发现的另一种方法是通过负载均衡器。您已经看到`type: NodePort`服务是如何在常规`type: ClusterIP`服务的基础上构建的，同时在每个节点上开放一个端口。这种方法的局限性在于我们仍然需要一个负载均衡器，以便客户端应用程序选择一个健康的节点。`LoadBalancer`服务类型解决了这个限制。'
+- en: 'In addition to creating a regular Service, and opening a port on every node,
+    as with `type: NodePort`, it also exposes the service externally using a cloud
+    provider’s load balancer. [Figure 13-6](#img-service-discovery-load-balancer)
+    shows this setup: a proprietary load balancer serves as a gateway to the Kubernetes
+    cluster.'
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '除了创建常规服务并在每个节点上开放一个端口，就像`type: NodePort`一样，它还使用云提供商的负载均衡器将服务外部暴露。[图13-6](#img-service-discovery-load-balancer)展示了这种设置：专有负载均衡器作为Kubernetes集群的网关。'
+- en: '![Load balancer Service Discovery](assets/kup2_1306.png)'
+  id: totrans-92
+  prefs: []
+  type: TYPE_IMG
+  zh: '![负载均衡器服务发现](assets/kup2_1306.png)'
+- en: Figure 13-6\. Load balancer service discovery
+  id: totrans-93
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图13-6\. 负载均衡器服务发现
+- en: So this type of Service works only when the cloud provider has Kubernetes support
+    and provisions a load balancer. We can create a Service with a load balancer by
+    specifying the type `LoadBalancer`. Kubernetes then will add IP addresses to the
+    `.spec` and `.status` fields, as shown in [Example 13-7](#ex-service-discovery-load-balancer).
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，这种类型的服务仅在云提供商支持Kubernetes并提供负载均衡器时才起作用。我们可以通过指定`LoadBalancer`类型创建一个带有负载均衡器的服务。然后Kubernetes将在`.spec`和`.status`字段中添加IP地址，如[示例
+    13-7](#ex-service-discovery-load-balancer)所示。
+- en: Example 13-7\. Service of type LoadBalancer
+  id: totrans-95
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 13-7\. 类型为LoadBalancer的服务
+- en: '[PRE6]'
+  id: totrans-96
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: '[![1](assets/1.png)](#co_service_discovery_CO4-1)'
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_service_discovery_CO4-1)'
+- en: Kubernetes assigns `clusterIP` and `loadBalancerIP` when they are available.
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes在可用时分配`clusterIP`和`loadBalancerIP`。
+- en: '[![2](assets/2.png)](#co_service_discovery_CO4-2)'
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_service_discovery_CO4-2)'
+- en: The `status` field is managed by Kubernetes and adds the Ingress IP.
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`status`字段由Kubernetes管理，并添加Ingress IP。'
+- en: With this definition in place, an external client application can open a connection
+    to the load balancer, which picks a node and locates the Pod. The exact way that
+    load-balancer provisioning and service discovery are performed varies among cloud
+    providers. Some cloud providers will allow you to define the load-balancer address
+    and some will not. Some offer mechanisms for preserving the source address, and
+    some replace that with the load-balancer address. You should check the specific
+    implementation provided by your cloud provider of choice.
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有了这个定义，外部客户端应用程序可以打开到负载均衡器的连接，负载均衡器选择一个节点并定位Pod。负载均衡器的配置和服务发现的确切方式在各个云提供商之间有所不同。一些云提供商允许您定义负载均衡器地址，而另一些则不允许。一些提供机制以保留源地址，而一些则用负载均衡器地址替换它。您应该检查您选择的云提供商提供的具体实现。
+- en: Note
+  id: totrans-102
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: 'Yet another type of Service is available: *headless* services, for which you
+    don’t request a dedicated IP address. You create a headless service by specifying
+    `clusterIP None` within the Service’s `spec` section. For headless services, the
+    backing Pods are added to the internal DNS server and are most useful for implementing
+    Services to StatefulSets, as described in detail in [Chapter 12, “Stateful Service”](ch12.html#StatefulService).'
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 还有另一种类型的服务可用：*headless*服务，您不需要请求专用IP地址。您可以通过在服务的`spec`部分中指定`clusterIP None`来创建一个headless服务。对于headless服务，支持的Pods将添加到内部DNS服务器中，最适合用于实现StatefulSets服务，详细信息请参见[第12章，“有状态服务”](ch12.html#StatefulService)。
+- en: Application Layer Service Discovery
+  id: totrans-104
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 应用层服务发现
+- en: Unlike the mechanisms discussed so far, Ingress is not a service type but a
+    separate Kubernetes resource that sits in front of Services and acts as a smart
+    router and entry point to the cluster. Ingress typically provides HTTP-based access
+    to Services through externally reachable URLs, load balancing, TLS termination,
+    and name-based virtual hosting, but there are also other specialized Ingress implementations.
+    For Ingress to work, the cluster must have one or more Ingress controllers running.
+    A simple Ingress that exposes a single Service is shown in [Example 13-8](#ex-service-discovery-ingress).
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与迄今为止讨论的机制不同，Ingress不是一种服务类型，而是一个独立的Kubernetes资源，位于服务前面，作为智能路由器和集群入口。Ingress通常通过外部可访问的URL提供基于HTTP的服务访问，包括负载平衡、TLS终止和基于名称的虚拟主机，但也有其他专门的Ingress实现。要使Ingress正常工作，集群必须运行一个或多个Ingress控制器。一个展示单一服务的简单Ingress示例如[示例
+    13-8](#ex-service-discovery-ingress)所示。
+- en: Example 13-8\. An Ingress definition
+  id: totrans-106
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 13-8\. Ingress定义
+- en: '[PRE7]'
+  id: totrans-107
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: 'Depending on the infrastructure Kubernetes is running on, and the Ingress controller
+    implementation, this definition allocates an externally accessible IP address
+    and exposes the `random-generator` Service on port 80\. But this is not very different
+    from a Service with `type: LoadBalancer`, which requires an external IP address
+    per Service definition. The real power of Ingress comes from reusing a single
+    external load balancer and IP to service multiple Services and reduce the infrastructure
+    costs. A simple fan-out configuration for routing a single IP address to multiple
+    Services based on HTTP URI paths looks like [Example 13-9](#ex-service-discovery-ingress-with-mapping).'
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '根据运行Kubernetes的基础设施和Ingress控制器的实现方式，此定义分配一个外部可访问的IP地址，并在端口80上公开`random-generator`服务。但这与具有`type:
+    LoadBalancer`的服务并没有太大的不同，后者需要每个服务定义一个外部IP地址。Ingress的真正优势在于重用单个外部负载均衡器和IP来服务多个服务，并降低基础设施成本。一个简单的扇出配置，根据HTTP
+    URI路径将单个IP地址路由到多个服务，看起来像[示例 13-9](#ex-service-discovery-ingress-with-mapping)。'
+- en: Example 13-9\. A definition for Nginx Ingress controller
+  id: totrans-109
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 13-9\. Nginx Ingress 控制器的定义
+- en: '[PRE8]'
+  id: totrans-110
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: '[![1](assets/1.png)](#co_service_discovery_CO5-1)'
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_service_discovery_CO5-1)'
+- en: Dedicated rules for the Ingress controller for dispatching requests based on
+    the request path.
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Ingress 控制器专用规则，根据请求路径分发请求。
+- en: '[![2](assets/2.png)](#co_service_discovery_CO5-2)'
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_service_discovery_CO5-2)'
+- en: Redirect every request to Service `random-generator`…​
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将每个请求重定向到 Service `random-generator`…​
+- en: '[![3](assets/3.png)](#co_service_discovery_CO5-3)'
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_service_discovery_CO5-3)'
+- en: …​ except `/cluster-status`, which goes to another Service.
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: …​ 除了 `/cluster-status`，它将转到另一个 Service。
+- en: Since every Ingress controller implementation is different, apart from the usual
+    Ingress definition, a controller may require additional configuration, which is
+    passed through annotations. Assuming the Ingress is configured correctly, the
+    preceding definition would provision a load balancer and get an external IP address
+    that services two Services under two different paths, as shown in [Figure 13-7](#img-service-discovery-ingress).
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设 Ingress 配置正确，除了常规的 Ingress 定义外，控制器可能需要通过注释传递额外的配置。前述定义将配置一个负载均衡器，并获得一个外部
+    IP 地址，该 IP 地址服务于两个路径下的两个服务，如 [图 13-7](#img-service-discovery-ingress) 所示。
+- en: Ingress is the most powerful and at the same time most complex service discovery
+    mechanism on Kubernetes. It is most useful for exposing multiple services under
+    the same IP address and when all services use the same L7 (typically HTTP) protocol.
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Ingress 是 Kubernetes 上最强大同时也是最复杂的服务发现机制。它最适用于在同一 IP 地址下暴露多个服务，并且所有服务使用相同的 L7（通常是
+    HTTP）协议。
+- en: '![Application layer service discovery](assets/kup2_1307.png)'
+  id: totrans-119
+  prefs: []
+  type: TYPE_IMG
+  zh: '![应用层服务发现](assets/kup2_1307.png)'
+- en: Figure 13-7\. Application layer service discovery
+  id: totrans-120
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 13-7\. 应用层服务发现
+- en: Discussion
+  id: totrans-121
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 讨论
+- en: In this chapter, we covered the favorite service discovery mechanisms on Kubernetes.
+    Discovery of dynamic Pods from within the cluster is always achieved through the
+    Service resource, though different options can lead to different implementations.
+    The Service abstraction is a high-level cloud native way of configuring low-level
+    details such as virtual IP addresses, iptables, DNS records, or environment variables.
+    Service discovery from outside the cluster builds on top of the Service abstraction
+    and focuses on exposing the Services to the outside world. While a `NodePort`
+    provides the basics of exposing Services, a highly available setup requires integration
+    with the platform infrastructure provider.
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们介绍了 Kubernetes 上最受欢迎的服务发现机制。从集群内部动态 Pod 的发现始终通过 Service 资源实现，尽管不同的选项可能导致不同的实现方式。Service
+    抽象是一种高级的云本地化配置方式，用于配置如虚拟 IP 地址、iptables、DNS 记录或环境变量等低级细节。从集群外部进行服务发现建立在 Service
+    抽象之上，重点是将服务暴露给外部世界。虽然 `NodePort` 提供了暴露服务的基础功能，但高可用设置需要与平台基础设施提供商集成。
+- en: '[Table 13-1](#table-service-discovery-types) summarizes the various ways service
+    discovery is implemented in Kubernetes. This table aims to organize the various
+    service discovery mechanisms in this chapter from more straightforward to more
+    complex. We hope it can help you build a mental model and understand them better.'
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[表格 13-1](#table-service-discovery-types) 总结了 Kubernetes 中实现服务发现的各种方式。本表旨在将本章中的各种服务发现机制从简单到复杂进行整理。希望它能帮助您建立心理模型并更好地理解它们。'
+- en: Table 13-1\. Service Discovery mechanisms
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表格 13-1\. 服务发现机制
+- en: '| Name | Configuration | Client type | Summary |'
+  id: totrans-125
+  prefs: []
+  type: TYPE_TB
+  zh: '| 名称 | 配置 | 客户端类型 | 摘要 |'
+- en: '| --- | --- | --- | --- |'
+  id: totrans-126
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- | --- |'
+- en: '| ClusterIP |'
+  id: totrans-127
+  prefs: []
+  type: TYPE_TB
+  zh: '| ClusterIP |'
+- en: '`type: ClusterIP`'
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`type: ClusterIP`'
+- en: '`.spec.selector`'
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`.spec.selector`'
+- en: '| Internal | The most common internal discovery mechanism |'
+  id: totrans-130
+  prefs: []
+  type: TYPE_TB
+  zh: '| 内部 | 最常见的内部发现机制 |'
+- en: '| Manual IP |'
+  id: totrans-131
+  prefs: []
+  type: TYPE_TB
+  zh: '| 手动 IP |'
+- en: '`type: ClusterIP`'
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`type: ClusterIP`'
+- en: '`kind: Endpoints`'
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`kind: Endpoints`'
+- en: '| Internal | External IP discovery |'
+  id: totrans-134
+  prefs: []
+  type: TYPE_TB
+  zh: '| 内部 | 外部 IP 发现 |'
+- en: '| Manual FQDN |'
+  id: totrans-135
+  prefs: []
+  type: TYPE_TB
+  zh: '| 手动 FQDN |'
+- en: '`type: ExternalName`'
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`type: ExternalName`'
+- en: '`.spec.externalName`'
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`.spec.externalName`'
+- en: '| Internal | External FQDN discovery |'
+  id: totrans-138
+  prefs: []
+  type: TYPE_TB
+  zh: '| 内部 | 外部 FQDN 发现 |'
+- en: '| Headless Service |'
+  id: totrans-139
+  prefs: []
+  type: TYPE_TB
+  zh: '| 无头服务 |'
+- en: '`type: ClusterIP`'
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`type: ClusterIP`'
+- en: '`.spec.clusterIP: None`'
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`.spec.clusterIP: None`'
+- en: '| Internal | DNS-based discovery without a virtual IP |'
+  id: totrans-142
+  prefs: []
+  type: TYPE_TB
+  zh: '| 内部 | 基于 DNS 的发现，没有虚拟 IP |'
+- en: '| NodePort | `type: NodePort` | External | Preferred for non-HTTP traffic |'
+  id: totrans-143
+  prefs: []
+  type: TYPE_TB
+  zh: '| NodePort | `type: NodePort` | 外部 | 适用于非HTTP流量的首选方式 |'
+- en: '| LoadBalancer | `type: LoadBalancer` | External | Requires supporting cloud
+    infrastructure |'
+  id: totrans-144
+  prefs: []
+  type: TYPE_TB
+  zh: '| LoadBalancer | `type: LoadBalancer` | 外部 | 需要支持的云基础设施 |'
+- en: '| Ingress | `kind: Ingress` | External | L7/HTTP-based smart routing mechanism
+    |'
+  id: totrans-145
+  prefs: []
+  type: TYPE_TB
+  zh: '| Ingress | `kind: Ingress` | 外部 | 基于 L7/HTTP 的智能路由机制 |'
+- en: This chapter gave a comprehensive overview of all the core concepts in Kubernetes
+    for accessing and discovering services. However, the journey does not stop here.
+    With the *Knative* project, new primitives on top of Kubernetes have been introduced,
+    which help application developers with advanced serving and eventing.
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本章全面概述了 Kubernetes 中用于访问和发现服务的所有核心概念。然而，旅程并不止步于此。通过 *Knative* 项目，引入了在 Kubernetes
+    之上帮助应用程序开发人员进行高级服务和事件处理的新原语。
+- en: In the context of the *Service Discovery* pattern, the *Knative Serving* subproject
+    is of particular interest as it introduces a new Service resource with the same
+    kind as the Services introduced here (but with a different API group). Knative
+    Serving provides support for application revision but also for a very flexible
+    scaling of services behind a load balancer. We give a short shout-out to Knative
+    Serving in [“Knative”](ch29.html#elastic-scale-knative), but a full discussion
+    of Knative is beyond the scope of this book. In [“More Information”](ch29.html#elastic-scale-more-information),
+    you will find links that point to detailed information about Knative.
+  id: totrans-147
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在*服务发现*模式下，*Knative Serving*子项目特别引人注目，因为它引入了一个新的与此处介绍的服务相同类型的服务资源（但具有不同的 API
+    组）。Knative Serving 不仅支持应用程序修订，还支持在负载均衡器后面对服务进行非常灵活的扩展。我们在[“Knative”](ch29.html#elastic-scale-knative)中简要介绍了一下
+    Knative Serving，但详细讨论超出了本书的范围。在[“更多信息”](ch29.html#elastic-scale-more-information)中，您将找到指向有关
+    Knative 的详细信息的链接。
+- en: More Information
+  id: totrans-148
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 更多信息
+- en: '[Service Discovery Example](https://oreil.ly/nagmD)'
+  id: totrans-149
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[服务发现示例](https://oreil.ly/nagmD)'
+- en: '[Kubernetes Service](https://oreil.ly/AEDi5)'
+  id: totrans-150
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Kubernetes 服务](https://oreil.ly/AEDi5)'
+- en: '[DNS for Services and Pods](https://oreil.ly/WRT5H)'
+  id: totrans-151
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[服务和 Pod 的 DNS](https://oreil.ly/WRT5H)'
+- en: '[Debug Services](https://oreil.ly/voVbw)'
+  id: totrans-152
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[调试服务](https://oreil.ly/voVbw)'
+- en: '[Using Source IP](https://oreil.ly/mGjzg)'
+  id: totrans-153
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[使用源 IP](https://oreil.ly/mGjzg)'
+- en: '[Create an External Load Balancer](https://oreil.ly/pzOiM)'
+  id: totrans-154
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[创建外部负载均衡器](https://oreil.ly/pzOiM)'
+- en: '[Ingress](https://oreil.ly/Idv2c)'
+  id: totrans-155
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Ingress](https://oreil.ly/Idv2c)'
+- en: '[Kubernetes NodePort Versus LoadBalancer Versus Ingress? When Should I Use
+    What?](https://oreil.ly/W4i8U)'
+  id: totrans-156
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Kubernetes NodePort与LoadBalancer与Ingress？何时应该使用什么？](https://oreil.ly/W4i8U)'
+- en: '[Kubernetes Ingress Versus OpenShift Route](https://oreil.ly/fXicP)'
+  id: totrans-157
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Kubernetes Ingress与OpenShift Route](https://oreil.ly/fXicP)'

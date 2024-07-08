@@ -1,0 +1,289 @@
+- en: Chapter 16\. Sidecar
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第16章\. Sidecar
+- en: A sidecar container extends and enhances the functionality of a preexisting
+    container without changing it. The *Sidecar* pattern is one of the fundamental
+    container patterns that allows single-purpose containers to cooperate closely
+    together. In this chapter, you’ll learn all about the basic sidecar concept. The
+    specialized follow-up patterns, *Adapter* and *Ambassador*, are discussed in Chapters
+    [17](ch17.html#Adapter) and [18](ch18.html#Ambassador), respectively.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个 sidecar 容器可以在不更改现有容器的情况下扩展和增强其功能。*Sidecar* 模式是允许单一用途容器紧密协作的基本容器模式之一。在本章中，您将学习有关基本
+    sidecar 概念的所有内容。专门的后续模式 *Adapter* 和 *Ambassador* 分别在第[17](ch17.html#Adapter)章和第[18](ch18.html#Ambassador)章中讨论。
+- en: Problem
+  id: totrans-2
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 问题
+- en: Containers are a popular packaging technology that allow developers and system
+    administrators to build, ship, and run applications in a unified way. A container
+    represents a natural boundary for a unit of functionality with a distinct runtime,
+    release cycle, API, and team owning it. A proper container behaves like a single
+    Linux process—solves one problem and does it well—and is created with the idea
+    of replaceability and reuse. This last part is essential as it allows us to build
+    applications more quickly by leveraging existing specialized containers.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器是一种流行的打包技术，允许开发人员和系统管理员以统一的方式构建、发布和运行应用程序。容器代表着功能单元的自然边界，具有独特的运行时、发布周期、API
+    和团队所有权。一个合适的容器就像一个单独的 Linux 进程一样——解决一个问题，并且做得很好——并且是可替换和可重用的概念创建的。这最后一部分至关重要，因为它允许我们通过利用现有的专门容器来更快地构建应用程序。
+- en: Today, to make an HTTP call, we don’t have to write a client library but can
+    use an existing one. In the same way, to serve a website, we don’t have to create
+    a container for a web server but can use an existing one. This approach allows
+    developers to avoid reinventing the wheel and create an ecosystem with a smaller
+    number of better-quality containers to maintain. However, having single-purpose
+    reusable containers requires ways of extending the functionality of a container
+    and a means for collaboration among containers. The sidecar pattern describes
+    this kind of collaboration, where a container enhances the functionality of another
+    preexisting container.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如今，要进行 HTTP 调用，我们不必编写客户端库，而是可以使用现有的库。同样，要为网站提供服务，我们不必为 web 服务器创建容器，而是可以使用现有的容器。这种方法使开发人员可以避免重复发明轮子，并创建一个维护较少、质量更好的容器生态系统。然而，拥有单一用途的可重用容器需要扩展容器功能的方式以及容器之间协作的手段。sidecar
+    模式描述了这种协作方式，其中一个容器增强另一个现有容器的功能。
+- en: Solution
+  id: totrans-5
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 解决方案
+- en: In [Chapter 1](ch01.html#kubernetes-core-concepts), we described how the Pod
+    primitive allows us to combine multiple containers into a single unit. Behind
+    the scenes, at runtime, a Pod is a container as well, but it starts as a paused
+    process (literally with the `pause` command) before all other containers in the
+    Pod. It is not doing anything other than holding all the Linux namespaces the
+    application containers use to interact throughout the Pod’s lifetime. Apart from
+    this implementation detail, what is more interesting is all the characteristics
+    that the Pod abstraction provides.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[第一章](ch01.html#kubernetes-core-concepts)中，我们描述了 Pod 原语如何允许我们将多个容器组合成一个单元。在幕后，在运行时，Pod
+    也是一个容器，但它是以暂停的状态启动的（确切地说是通过 `pause` 命令），在所有其他容器之前启动。它除了在整个 Pod 生命周期内持有应用程序容器使用的所有
+    Linux 命名空间之外，什么也不做。除了这个实现细节，更有趣的是 Pod 抽象提供的所有特性。
+- en: The Pod is such a fundamental primitive that it is present in many cloud native
+    platforms under different names but always with similar capabilities. A Pod as
+    the deployment unit puts certain runtime constraints on the containers belonging
+    to it. For example, all containers end up deployed to the same node, and they
+    share the same Pod lifecycle. In addition, a Pod allows its containers to share
+    volumes and communicate over the local network or host IPC. These are the reasons
+    users put a group of containers into a Pod. *Sidecar* (sometimes also called *Sidekick*)
+    is used to describe the scenario of a container being put into a Pod to extend
+    and enhance another container’s behavior.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod 是一种基本的原语，在许多云原生平台中以不同的名称存在，但都具有类似的功能。作为部署单元的 Pod 对其内的容器施加了特定的运行时约束。例如，所有容器都部署在同一节点上，并且它们共享相同的
+    Pod 生命周期。此外，Pod 允许其内的容器共享卷，并且可以通过本地网络或主机 IPC 进行通信。这些是用户将一组容器放入 Pod 中的原因。*Sidecar*（有时也称为
+    *Sidekick*）用于描述将一个容器放入 Pod 中以扩展和增强另一个容器行为的场景。
+- en: A typical example demonstrating this pattern is of an HTTP server and a Git
+    synchronizer. The HTTP server container is focused only on serving files over
+    HTTP and does not know how or where the files are coming from. Similarly, the
+    Git synchronizer container’s only goal is to sync data from a Git server to the
+    local filesystem. It does not care what happens once synced—its only concern is
+    keeping the local folder in sync with the remote Git server. [Example 16-1](#example-sidecar)
+    shows a Pod definition with these two containers configured to use a volume for
+    file exchange.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 典型的示例展示了 HTTP 服务器和 Git 同步器的模式。HTTP 服务器容器专注于仅通过 HTTP 提供文件服务，并不知道文件如何或从何处获取。类似地，Git
+    同步器容器的唯一目标是将数据从 Git 服务器同步到本地文件系统。一旦同步完成，它并不关心接下来发生的事情，它唯一关心的是保持本地文件夹与远程 Git 服务器同步。[Example 16-1](#example-sidecar)
+    展示了一个 Pod 定义，配置了这两个容器以使用卷进行文件交换。
+- en: Example 16-1\. Pod with a sidecar
+  id: totrans-9
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 16-1\. 带有 Sidecar 的 Pod
+- en: '[PRE0]'
+  id: totrans-10
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: '[![1](assets/1.png)](#co_sidecar_CO1-1)'
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_sidecar_CO1-1)'
+- en: Main application container serving files over HTTP.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 主应用容器通过 HTTP 提供文件服务。
+- en: '[![2](assets/2.png)](#co_sidecar_CO1-3)'
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_sidecar_CO1-3)'
+- en: Sidecar container running in parallel and pulling data from a Git server.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Sidecar 容器并行运行，并从 Git 服务器拉取数据。
+- en: '[![3](assets/3.png)](#co_sidecar_CO1-2)'
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_sidecar_CO1-2)'
+- en: Shared location for exchanging data between the sidecar and main application
+    container as mounted in the `app` and `poll` containers, respectively.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用于在 `app` 和 `poll` 容器中作为共享位置交换数据的位置。
+- en: This example shows how the Git synchronizer enhances the HTTP server’s behavior
+    with content to serve and keeps it synchronized. We could also say that both containers
+    collaborate and are equally important, but in a *Sidecar* pattern, there is a
+    main container and a helper container that enhance the collective behavior. Typically,
+    the main container is the first one listed in the containers list, and it represents
+    the default container (e.g., when we run the command `kubectl exec`).
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此示例显示了 Git 同步器如何增强 HTTP 服务器的行为以及保持同步。我们也可以说这两个容器是协作且同等重要的，但在 *Sidecar* 模式中，存在一个主容器和一个辅助容器来增强集体行为。通常，主容器是容器列表中列出的第一个，并且代表默认容器（例如，当我们运行命令
+    `kubectl exec` 时）。
+- en: This simple pattern, illustrated in [Figure 16-1](#img-sidecar), allows runtime
+    collaboration of containers and at the same time enables separation of concerns
+    for both containers, which might be owned by separate teams, using different programming
+    languages, with different release cycles, etc. It also promotes replaceability
+    and reuse of containers as the HTTP server, and the Git synchronizer can be reused
+    in other applications and different configuration either as a single container
+    in a Pod or again in collaboration with other containers.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种简单的模式，如图 [Figure 16-1](#img-sidecar) 所示，允许容器在运行时进行协作，同时为两个容器分离关注点，这些容器可能由不同团队拥有，使用不同的编程语言，具有不同的发布周期等。它还促进了容器的可替代性和重用性，例如
+    HTTP 服务器和 Git 同步器可以在其他应用程序和不同配置中重复使用，可以作为 Pod 中的单个容器或与其他容器协作。
+- en: '![Sidecar Pattern](assets/kup2_1601.png)'
+  id: totrans-19
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Sidecar 模式](assets/kup2_1601.png)'
+- en: Figure 16-1\. Sidecar pattern
+  id: totrans-20
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 16-1\. Sidecar 模式
+- en: Discussion
+  id: totrans-21
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 讨论
+- en: Previously we said that container images are like classes, and containers are
+    like the objects in object-oriented programming (OOP). If we continue this analogy,
+    extending a container to enhance its functionality is similar to inheritance in
+    OOP, and having multiple containers collaborating in a Pod is similar to composition
+    in OOP. While both approaches allow code reuse, inheritance involves tighter coupling
+    between containers and represents an “is-a” relationship between containers.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 之前我们说过，容器镜像就像类，容器就像面向对象编程（OOP）中的对象。如果我们继续这个类比，扩展容器以增强其功能类似于OOP中的继承，而在Pod中协作多个容器则类似于OOP中的组合。虽然两种方法都允许代码重用，但继承涉及容器之间更紧密的耦合，并代表容器之间的“是一个”关系。
+- en: On the other hand, a composition in a Pod represents a “has-a” relationship,
+    and it is more flexible because it doesn’t couple containers together at build
+    time, giving you the ability to later swap containers in the Pod definition. With
+    the composition approach, you have multiple containers (processes) running, health
+    checked, restarted, and consuming resources, as the main application container
+    does. Modern sidecar containers are small and consume minimal resources, but you
+    have to decide whether it is worth running a separate process or whether it is
+    better to merge it into the main container.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一方面，Pod中的组合表示一种“拥有关系”，更灵活，因为它不会在构建时将容器耦合在一起，这使您可以稍后在Pod定义中交换容器。使用组合方法，您可以运行多个（进程）容器，像主应用程序容器一样进行健康检查、重启和资源消耗。现代边车容器体积小，消耗资源少，但您必须决定是否值得运行单独的进程，还是将其合并到主容器中。
+- en: 'We see two dominating approaches for using sidecars: transparent sidecars that
+    are invisible to the application, and explicit sidecars that the main application
+    interacts with over well-defined APIs. Envoy proxy is an example of a transparent
+    sidecar that runs alongside the main container and abstracts the network by providing
+    common features such as Transport Layer Security (TLS), load balancing, automatic
+    retries, circuit breaking, global rate limiting, observability of L7 traffic,
+    distributed tracing, and more. All of these features become available to the application
+    by transparently attaching the sidecar container and intercepting all the incoming
+    and outgoing traffic to the main container. This is similar to aspect-oriented
+    programming, in that with additional containers, we introduce orthogonal capabilities
+    to the Pod without touching the main container.'
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们看到两种主流的使用边车的方法：透明边车对应用程序是不可见的，显式边车则通过定义良好的API与主应用程序交互。使节代理是透明边车的一个例子，它与主容器一起运行，并通过提供诸如传输层安全性（TLS）、负载均衡、自动重试、断路器、全局速率限制、L7流量的可观察性、分布式跟踪等共同功能来抽象网络。通过透明地附加边车容器并拦截主容器的所有传入和传出流量，所有这些功能对应用程序都是可用的。这与面向方面的编程类似，在此编程模型中，通过额外的容器，我们向Pod引入了正交的能力，而不必触及主容器。
+- en: An example of an explicit proxy that uses the sidecar architecture is Dapr.
+    A Dapr sidecar container is injected into a Pod and offers features such as reliable
+    service invocation, publish-subscribe, bindings to external systems, state abstraction,
+    observability, distributed tracing, and more. The primary difference between Dapr
+    and Envoy proxy is that Dapr does not intercept all the networking traffic going
+    in and out of the application. Rather, Dapr features are exposed over HTTP and
+    gRPC APIs, which the application invokes or subscribes to.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用边车架构的显式代理示例是Dapr。Dapr边车容器被注入到Pod中，并提供可靠的服务调用、发布-订阅、对外系统的绑定、状态抽象、可观察性、分布式跟踪等功能。Dapr与Envoy代理的主要区别在于，Dapr不拦截应用程序的所有网络流量。相反，Dapr的特性通过HTTP和gRPC
+    API暴露给应用程序调用或订阅。
+- en: More Information
+  id: totrans-26
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 更多信息
+- en: '[Sidecar Example](https://oreil.ly/bMAvz)'
+  id: totrans-27
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[边车示例](https://oreil.ly/bMAvz)'
+- en: '[Pods](https://oreil.ly/7cII-)'
+  id: totrans-28
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Pods](https://oreil.ly/7cII-)'
+- en: '[Design Patterns for Container-Based Distributed Systems](https://oreil.ly/1XqCg)'
+  id: totrans-29
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[基于容器的分布式系统设计模式](https://oreil.ly/1XqCg)'
+- en: '[Prana: A Sidecar for Your Netflix PaaS-Based Applications and Services](https://oreil.ly/1KMw1)'
+  id: totrans-30
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Prana：用于Netflix PaaS应用程序和服务的边车](https://oreil.ly/1KMw1)'
+- en: '[Tin-Can Phone: Patterns to Add Authorization and Encryption to Legacy Applications](https://oreil.ly/8Cq95)'
+  id: totrans-31
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[锡罐电话：向遗留应用程序添加授权和加密的模式](https://oreil.ly/8Cq95)'
+- en: '[Envoy](https://oreil.ly/0FF-r)'
+  id: totrans-32
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[使节](https://oreil.ly/0FF-r)'
+- en: '[Dapr](https://dapr.io)'
+  id: totrans-33
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Dapr](https://dapr.io)'
+- en: '[The Almighty Pause Container](https://oreil.ly/kkhYD)'
+  id: totrans-34
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[全能暂停容器](https://oreil.ly/kkhYD)'
+- en: '[Sidecar Pattern](https://oreil.ly/KYe39)'
+  id: totrans-35
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[边车模式](https://oreil.ly/KYe39)'

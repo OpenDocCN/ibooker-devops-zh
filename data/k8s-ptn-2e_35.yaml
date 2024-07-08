@@ -1,0 +1,1230 @@
+- en: Chapter 28\. Operator
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第 28 章\. 操作者
+- en: An operator is a controller that uses a CRD to encapsulate operational knowledge
+    for a specific application in an algorithmic and automated form. The *Operator*
+    pattern allows us to extend the *Controller* pattern from the preceding chapter
+    for more flexibility and greater expressiveness.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 操作者是一个控制器，使用 CRD 将特定应用程序的操作知识封装为算法化和自动化形式。*操作者* 模式允许我们扩展前一章中的 *控制器* 模式，以提供更大的灵活性和表达能力。
+- en: Problem
+  id: totrans-2
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 问题
+- en: You learned in [Chapter 27, “Controller”](ch27.html#Controller), how to extend
+    the Kubernetes platform in a simple and decoupled way. However, for extended use
+    cases, plain custom controllers are not powerful enough, as they are limited to
+    watching and managing Kubernetes intrinsic resources only. Moreover, sometimes
+    we want to add new concepts to the Kubernetes platform, which requires additional
+    domain objects. For example, let’s say we chose Prometheus as our monitoring solution
+    and want to add it as a monitoring facility to Kubernetes in a well-defined way.
+    Wouldn’t it be wonderful to have a Prometheus resource describing our monitoring
+    setup and all the deployment details, similar to how we define other Kubernetes
+    resources? Moreover, could we have resources relating to services we have to monitor
+    (e.g., with a label selector)?
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您在 [Chapter 27, “Controller”](ch27.html#Controller) 中学到了如何以简单和解耦的方式扩展 Kubernetes
+    平台。然而，对于扩展用例，普通的自定义控制器并不够强大，因为它们仅限于监视和管理 Kubernetes 内部资源。此外，有时我们希望向 Kubernetes
+    平台添加新概念，这需要额外的领域对象。例如，假设我们选择 Prometheus 作为监控解决方案，并希望以明确定义的方式将其添加为 Kubernetes 的监控设施。如果我们能够有一个
+    Prometheus 资源来描述我们的监控设置及所有部署细节，类似于我们定义其他 Kubernetes 资源的方式，那不是很棒吗？此外，我们是否可以有与我们需要监控的服务相关的资源（例如，具有标签选择器）？
+- en: These situations are precisely the kind of use cases where CustomResourceDefinition
+    (CRD) resources are very helpful. They allow extensions of the Kubernetes API,
+    by adding custom resources to your Kubernetes cluster and using them as if they
+    were native resources. Custom resources, together with a controller acting on
+    these resources, form the *Operator* pattern.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些情况恰恰是 CRD 资源非常有帮助的用例。它们通过将自定义资源添加到您的 Kubernetes 集群中，并像使用本地资源一样使用它们，扩展了 Kubernetes
+    API。自定义资源与操作这些资源的控制器一起形成 *操作者* 模式。
+- en: 'This [quote by Jimmy Zelinskie](https://oreil.ly/bFEU-) probably describes
+    the characteristics of operators best:'
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这句[Jimmy Zelinskie 的引用](https://oreil.ly/bFEU-)可能最能描述操作者的特征：
+- en: 'An operator is a Kubernetes controller that understands two domains: Kubernetes
+    and something else. By combining knowledge of both areas, it can automate tasks
+    that usually require a human operator that understands both domains.'
+  id: totrans-6
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 操作者是一个 Kubernetes 控制器，它理解两个领域：Kubernetes 和其他领域。通过结合这两个领域的知识，它可以自动化通常需要理解这两个领域的人类操作者来执行的任务。
+- en: Solution
+  id: totrans-7
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 解决方案
+- en: As you saw in [Chapter 27, “Controller”](ch27.html#Controller), we can efficiently
+    react to state changes of default Kubernetes resources. Now that you understand
+    one half of the *Operator* pattern, let’s have a look at the other half—representing
+    custom resources on Kubernetes using CRD resources.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如您在 [Chapter 27, “Controller”](ch27.html#Controller) 中看到的那样，我们可以有效地对默认 Kubernetes
+    资源的状态变化做出反应。现在您了解了 *操作者* 模式的一半，让我们看看另一半——使用 CRD 资源在 Kubernetes 上表示自定义资源。
+- en: Custom Resource Definitions
+  id: totrans-9
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 自定义资源定义（CRD）
+- en: With a CRD, we can extend Kubernetes to manage our domain concepts on the Kubernetes
+    platform. Custom resources are managed like any other resource, through the Kubernetes
+    API, and are eventually stored in the backend store etcd.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过 CRD，我们可以扩展 Kubernetes 来管理我们在 Kubernetes 平台上的领域概念。自定义资源像其他资源一样通过 Kubernetes
+    API 进行管理，并最终存储在后端存储 etcd 中。
+- en: The preceding scenario is actually implemented with these new custom resources
+    by the CoreOS Prometheus operator to allow seamless integration of Prometheus
+    to Kubernetes. The Prometheus CRD is defined in [Example 28-1](#ex-operator-crd),
+    which also explains most of the available fields for a CRD.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 前述场景实际上是由 CoreOS Prometheus 操作者利用这些新的自定义资源实现的，以实现将 Prometheus 无缝集成到 Kubernetes
+    中。Prometheus CRD 在 [Example 28-1](#ex-operator-crd) 中定义，并且解释了 CRD 的大多数可用字段。
+- en: Example 28-1\. CustomResourceDefinition
+  id: totrans-12
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: Example 28-1\. CustomResourceDefinition
+- en: '[PRE0]'
+  id: totrans-13
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: '[![1](assets/1.png)](#co_operator_CO1-1)'
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_operator_CO1-1)'
+- en: Name.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 名称。
+- en: '[![2](assets/2.png)](#co_operator_CO1-2)'
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_operator_CO1-2)'
+- en: API group it belongs to.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 属于的 API 组。
+- en: '[![3](assets/3.png)](#co_operator_CO1-3)'
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_operator_CO1-3)'
+- en: Kind used to identify instances of this resource.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kind 用于标识此资源的实例。
+- en: '[![4](assets/4.png)](#co_operator_CO1-4)'
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_operator_CO1-4)'
+- en: Naming rule for creating the plural form, used for specifying a list of those
+    objects.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建复数形式的命名规则，用于指定这些对象的列表。
+- en: '[![5](assets/5.png)](#co_operator_CO1-5)'
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#co_operator_CO1-5)'
+- en: Scope—whether the resource can be created cluster-wide or is specific to a namespace.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 范围 —— 资源是可以在整个集群中创建还是仅限于命名空间。
+- en: '[![6](assets/6.png)](#co_operator_CO1-6)'
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![6](assets/6.png)](#co_operator_CO1-6)'
+- en: Versions available for this CRD.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此 CRD 可用的版本。
+- en: '[![7](assets/7.png)](#co_operator_CO1-7)'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![7](assets/7.png)](#co_operator_CO1-7)'
+- en: Name of a supported version.
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 支持版本的名称。
+- en: '[![8](assets/8.png)](#co_operator_CO1-8)'
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![8](assets/8.png)](#co_operator_CO1-8)'
+- en: Exactly one version has to be the storage version used for storing the definition
+    in the backend.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 必须有一个版本作为后端存储定义中使用的存储版本。
+- en: '[![9](assets/9.png)](#co_operator_CO1-9)'
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![9](assets/9.png)](#co_operator_CO1-9)'
+- en: Whether this version is served via the REST API.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此版本是否通过 REST API 提供。
+- en: '[![10](assets/10.png)](#co_operator_CO1-10)'
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![10](assets/10.png)](#co_operator_CO1-10)'
+- en: OpenAPI V3 schema for validation (not shown here).
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用于验证的 OpenAPI V3 模式（此处未显示）。
+- en: An OpenAPI V3 schema can also be specified to allow Kubernetes to validate a
+    custom resource. For simple use cases, this schema can be omitted, but for production-grade
+    CRDs, the schema should be provided so that configuration errors can be detected
+    early.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 还可以指定一个 OpenAPI V3 模式，以允许 Kubernetes 验证自定义资源。对于简单的用例，可以省略此模式，但对于生产级别的 CRD，应提供此模式，以便早期检测配置错误。
+- en: Additionally, Kubernetes allows us to specify two possible subresources for
+    our CRD via the spec field `subresources`:^([1](ch28.html#idm45902082939568))
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此外，Kubernetes 允许我们通过 spec 字段的 `subresources` 指定 CRD 的两种可能子资源：^([1](ch28.html#idm45902082939568))
+- en: scale
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 缩放
+- en: 'With this property, a CRD can specify how it manages its replica count. This
+    field can be used to declare the JSON path, where the number of desired replicas
+    of this custom resource is specified: the path to the property that holds the
+    actual number of running replicas and an optional path to a label selector that
+    can be used to find copies of custom resource instances. This label selector is
+    usually optional but is required if you want to use this custom resource with
+    the HorizontalPodAutoscaler explained in [Chapter 29, “Elastic Scale”](ch29.html#ElasticScale).'
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过此属性，CRD 可以指定如何管理其副本数量。此字段可用于声明 JSON 路径，指定此自定义资源的期望副本数的路径：保存实际运行副本数量的属性路径，以及一个可选的标签选择器路径，该选择器可用于查找自定义资源实例的副本。通常情况下，此标签选择器是可选的，但如果要将此自定义资源与
+    [第29章，“弹性扩展”](ch29.html#ElasticScale) 中解释的 HorizontalPodAutoscaler 一起使用，则是必需的。
+- en: status
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 状态
+- en: When this property is set, a new API call becomes available that allows you
+    to update only the `status` field of a resource. This API call can be secured
+    individually and allows the operator to reflect the *actual* status of the resource,
+    which might differ from the *declared* state in the `spec` field. When a custom
+    resource is updated as a whole, any sent `status` section is ignored, as is the
+    case with standard Kubernetes resources.
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 设置此属性后，将可以使用新的 API 调用仅更新资源的 `status` 字段。此 API 调用可以单独进行安全保护，并允许操作员反映资源的*实际*状态，这可能与
+    `spec` 字段中声明的状态不同。当整体更新自定义资源时，任何发送的 `status` 部分都将被忽略，这与标准 Kubernetes 资源的情况类似。
+- en: '[Example 28-2](#ex-operator-crd-subresource) shows a potential subresource
+    path as is also used for a regular Pod.'
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[示例 28-2](#ex-operator-crd-subresource) 展示了一个潜在的子资源路径，也用于常规 Pod。'
+- en: Example 28-2\. Subresource definition for a CustomResourceDefinition
+  id: totrans-41
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 28-2\. 用于 CustomResourceDefinition 的子资源定义
+- en: '[PRE1]'
+  id: totrans-42
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: '[![1](assets/1.png)](#co_operator_CO2-1)'
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_operator_CO2-1)'
+- en: JSON path to the number of declared replicas.
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: JSON 路径到声明副本的数量。
+- en: '[![2](assets/2.png)](#co_operator_CO2-2)'
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_operator_CO2-2)'
+- en: JSON path to the number of active replicas.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: JSON 路径到活动副本的数量。
+- en: '[![3](assets/3.png)](#co_operator_CO2-3)'
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_operator_CO2-3)'
+- en: JSON path to a label selector to query for the number of active replicas.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: JSON 路径到查询活动副本数量的标签选择器。
+- en: Once we define a CRD, we can easily create such a resource, as shown in [Example 28-3](#ex-operator-cr-example).
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦定义了 CRD，我们可以轻松创建这样的资源，就像 [示例 28-3](#ex-operator-cr-example) 中所示。
+- en: Example 28-3\. A Prometheus custom resource
+  id: totrans-50
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 28-3\. Prometheus 自定义资源
+- en: '[PRE2]'
+  id: totrans-51
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: The `metadata` section has the same format and validation rules as any other
+    Kubernetes resource. The `spec` contains the CRD-specific content, and Kubernetes
+    validates against the given validation rule from the CRD.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`metadata` 部分具有与任何其他 Kubernetes 资源相同的格式和验证规则。 `spec` 包含特定于 CRD 的内容，并且 Kubernetes
+    根据 CRD 中给定的验证规则进行验证。'
+- en: Custom resources alone are not of much use without an active component to act
+    on them. To give them some meaning, we need again our well-known controller, which
+    watches the lifecycle of these resources and acts according to the declarations
+    found within the resources.
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 单独的自定义资源没有太大的用处，除非有一个主动组件来对其进行操作。为了赋予它们意义，我们再次需要我们众所周知的控制器，它监视这些资源的生命周期，并根据资源中的声明采取行动。
+- en: Controller and Operator Classification
+  id: totrans-54
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 控制器和操作员分类
+- en: 'Before we dive into writing our operator, let’s look at a few kinds of classifications
+    for controllers, operators, and especially CRDs. Based on the operator’s action,
+    broadly, the classifications are as follows:'
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在我们深入编写我们的操作员之前，让我们先看看控制器、操作员，尤其是 CRD 的几种分类。根据操作员的操作，广义上，这些分类如下：
+- en: Installation CRDs
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安装 CRD
+- en: Meant for installing and operating applications on the Kubernetes platform.
+    Typical examples are the Prometheus CRDs, which we can use for installing and
+    managing Prometheus itself.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用于在 Kubernetes 平台上安装和操作应用程序。典型的例子是 Prometheus CRD，我们可以用它来安装和管理 Prometheus 本身。
+- en: Application CRDs
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应用程序 CRD
+- en: In contrast, these are used to represent an application-specific domain concept.
+    This kind of CRD allows applications deep integration with Kubernetes, which involves
+    combining Kubernetes with an application-specific domain behavior. For example,
+    the ServiceMonitor CRD is used by the Prometheus operator to register specific
+    Kubernetes Services to be scraped by a Prometheus server. The Prometheus operator
+    takes care of adapting the Prometheus server configuration accordingly.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 相比之下，这些用于表示特定于应用程序领域的概念。这种类型的 CRD 允许应用程序与 Kubernetes 进行深度集成，涉及将 Kubernetes 与应用程序特定的领域行为结合起来。例如，ServiceMonitor
+    CRD 被 Prometheus 操作员用来注册特定的 Kubernetes 服务，以便 Prometheus 服务器进行抓取。Prometheus 操作员负责相应地调整
+    Prometheus 服务器的配置。
+- en: Note
+  id: totrans-60
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Note that an operator can act on different kinds of CRDs as the Prometheus operator
+    does in this case. The boundary between these two categories of CRDs is blurry.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注意，在这种情况下，Prometheus 操作员可以作用于不同类型的 CRD。这两类 CRD 之间的边界不太明确。
+- en: In our categorization of controller and operator, an operator is-a controller
+    that uses CRDs.^([2](ch28.html#idm45902082785568)) However, even this distinction
+    is a bit fuzzy as there are variations in between.
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在我们对控制器和操作员的分类中，操作员是使用 CRD 的一种控制器。^([2](ch28.html#idm45902082785568)) 然而，即使这种区分也有些模糊，因为它们之间存在变化。
+- en: One example is a controller, which uses a ConfigMap as a kind of replacement
+    for a CRD. This approach makes sense in scenarios where default Kubernetes resources
+    are not enough but creating CRDs is not feasible either. In this case, ConfigMap
+    is an excellent middle ground, allowing encapsulation of domain logic within the
+    content of a ConfigMap. An advantage of using a plain ConfigMap is that you don’t
+    need to have the cluster-admin rights you need when registering a CRD. In certain
+    cluster setups, it is just not possible for you to register such a CRD (e.g.,
+    when running on public clusters like OpenShift Online).
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个例子是一个控制器，它将 ConfigMap 用作 CRD 的一种替代。这种方法在默认的 Kubernetes 资源不足以满足需求，但创建 CRD 又不可行的场景中是有意义的。在这种情况下，ConfigMap
+    是一个很好的中间地带，允许在 ConfigMap 的内容中封装领域逻辑。使用普通 ConfigMap 的一个优点是，你无需像注册 CRD 那样拥有集群管理员权限。在某些集群设置中，你可能根本无法注册这样的
+    CRD（例如在像 OpenShift Online 这样的公共集群上运行时）。
+- en: However, you can still use the concept of *Observe-Analyze-Act* when you replace
+    a CRD with a plain ConfigMap that you use as your domain-specific configuration.
+    The drawback is that you don’t get essential tool support like `kubectl get` for
+    CRDs; you have no validation on the API Server level and no support for API versioning.
+    Also, you don’t have much influence on how you model the `status` field of a ConfigMap,
+    whereas for a CRD, you are free to define your status model as you wish.^([3](ch28.html#idm45902082739712))
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，即使你用一个普通的 ConfigMap 替换 CRD，并将其用作你的特定领域配置时，你仍然可以使用“观察-分析-操作”的概念。缺点是，你不会像对于
+    CRD 那样得到诸如 `kubectl get` 这样的重要工具支持；你在 API 服务器级别上没有验证，也不支持 API 版本控制。此外，对于 ConfigMap
+    的 `status` 字段建模，你没有太多的影响力，而对于 CRD，你可以自由定义自己希望的状态模型。
+- en: Another advantage of CRDs is that you have a fine-grained permission model based
+    on the kind of CRD, which you can tune individually, as is explained in [Chapter 26,
+    “Access Control”](ch26.html#AccessControl). This kind of RBAC security is not
+    possible when all your domain configuration is encapsulated in ConfigMaps, as
+    all ConfigMaps in a namespace share the same permission setup.
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CRD的另一个优点是，您可以基于CRD的类型拥有精细的权限模型，可以单独调整，正如在[第26章，“访问控制”](ch26.html#AccessControl)中所解释的那样。当您的所有域配置封装在ConfigMaps中时，这种RBAC安全性是不可能的，因为一个命名空间中的所有ConfigMaps共享相同的权限设置。
+- en: From an implementation point of view, it matters whether we implement a controller
+    by restricting its usage to vanilla Kubernetes objects or whether we have custom
+    resources managed by the controller. In the former case, we already have all types
+    available in the Kubernetes client library of our choice. For the CRD case, we
+    don’t have the type information out of the box, and we can either use a schemaless
+    approach for managing CRD resources or define the custom types on our own, possibly
+    based on an OpenAPI schema contained in the CRD definition. Support for typed
+    CRDs varies by client library and framework used.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从实现的角度来看，重要的是我们是将控制器实现为限制其使用到普通的Kubernetes对象，还是拥有控制器管理的自定义资源。在前一种情况下，我们已经在选择的Kubernetes客户端库中拥有了所有类型。对于CRD情况，我们不能直接获得类型信息，可以选择使用无模式的方法来管理CRD资源，或者根据CRD定义中包含的OpenAPI模式自定义定义自定义类型。支持有类型CRD的程度因客户端库和使用的框架而异。
+- en: '[Figure 28-1](#img-operator-spectrum) shows our controller and operator categorization
+    starting from simpler resource definition options to more advanced with the boundary
+    between controller and operator being the use of custom resources.'
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图28-1](#img-operator-spectrum)展示了我们从更简单的资源定义选项开始分类的控制器和操作者，到更高级的边界，其中控制器和操作者之间的边界是使用自定义资源。'
+- en: '![Spectrum of controllers and operators](assets/kup2_2801.png)'
+  id: totrans-68
+  prefs: []
+  type: TYPE_IMG
+  zh: '![控制器和操作者的光谱](assets/kup2_2801.png)'
+- en: Figure 28-1\. Spectrum of controllers and operators
+  id: totrans-69
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图28-1. 控制器和操作者的光谱
+- en: For operators, there is even a more advanced Kubernetes extension hook option.
+    When Kubernetes-managed CRDs are not sufficient to represent a problem domain,
+    you can extend the Kubernetes API with its own aggregation layer. We can add a
+    custom-implemented `APIService` resource as a new URL path to the Kubernetes API.
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于运算符来说，甚至有更高级的Kubernetes扩展钩子选项。当Kubernetes管理的CRD无法充分表示问题域时，您可以通过其自己的聚合层扩展Kubernetes
+    API。我们可以将自定义实现的`APIService`资源添加为Kubernetes API的新URL路径。
+- en: To connect a Service that is backed by a Pod with the `APIService`, you can
+    use a resource like that shown in [Example 28-4](#ex-operator-api-service).
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要连接由Pod支持的Service与`APIService`，您可以使用类似于[示例 28-4](#ex-operator-api-service)中显示的资源。
+- en: Example 28-4\. API aggregation with a custom APIService
+  id: totrans-72
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 28-4. 使用自定义APIService进行API聚合
+- en: '[PRE3]'
+  id: totrans-73
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: Besides the Service and Pod implementation, we need some additional security
+    configuration for setting up the ServiceAccount under which the Pod is running.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了服务和Pod的实现之外，我们还需要一些额外的安全配置来设置Pod运行的ServiceAccount。
+- en: After it is set up, every request to the API Server `https://<api server ip>/apis/sample-api.k8spatterns.io/v1alpha1/namespaces/<ns>/...`
+    is directed to our custom Service implementation. It’s up to this custom Service
+    implementation to handle these requests, including persisting the resources managed
+    via this API. This approach is different from the preceding CRD case, where Kubernetes
+    itself completely manages the custom resources.
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 设置完成后，每个对API服务器`https://<api server ip>/apis/sample-api.k8spatterns.io/v1alpha1/namespaces/<ns>/...`的请求都将定向到我们自定义的服务实现。由此自定义服务实现处理这些请求，包括持久化通过此API管理的资源。这种方法与前面的CRD情况不同，其中Kubernetes本身完全管理自定义资源。
+- en: With a custom API Server, you have many more degrees of freedom, which allows
+    you to go beyond watching resource lifecycle events. On the other hand, you also
+    have to implement much more logic, so for typical use cases, an operator dealing
+    with plain CRDs is often good enough.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过自定义API服务器，您可以获得更多的自由度，这使您能够超越观察资源生命周期事件。另一方面，您还必须实现更多的逻辑，因此对于典型的用例来说，处理普通CRD的操作者通常已经足够好。
+- en: A detailed exploration of the API Server capabilities is beyond the scope of
+    this chapter. The [official documentation](https://oreil.ly/eCcU9) as well as
+    a complete [sample-apiserver](https://oreil.ly/qPCX7) have more detailed information.
+    Also, you can use the [apiserver-builder](https://oreil.ly/G_qud) library, which
+    helps with implementing API Server aggregation.
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: API服务器功能的详细探索超出了本章的范围。[官方文档](https://oreil.ly/eCcU9)以及完整的[sample-apiserver](https://oreil.ly/qPCX7)有更详细的信息。此外，您可以使用[apiserver-builder](https://oreil.ly/G_qud)库，它有助于实现API服务器聚合。
+- en: Now, let’s see how you can develop and deploy operators with CRDs.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，让我们看看如何使用CRDs开发和部署操作员。
+- en: Operator Development and Deployment
+  id: totrans-79
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 操作员开发和部署
+- en: 'Several toolkits and frameworks are available for developing operators. The
+    three main projects aiding in the creation of operators are as follows:'
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有几个工具包和框架可用于开发操作员。在创建操作员方面，三个主要项目如下：
+- en: Kubebuilder developed under the SIG API Machinery of Kubernetes itself
+  id: totrans-81
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Kubebuilder由Kubernetes自身的SIG API Machinery开发
+- en: Operator Framework, a CNCF project
+  id: totrans-82
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 操作员框架，一个CNCF项目
+- en: Metacontroller from Google Cloud Platform
+  id: totrans-83
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 来自Google Cloud Platform的Metacontroller
+- en: We touch on each of these very briefly to give you a good starting point for
+    developing and maintaining your own Operators.
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们简要介绍每个子组件，为您开发和维护自己的操作员提供一个良好的起点。
+- en: Kubebuilder
+  id: totrans-85
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: Kubebuilder
+- en: '*Kubebuilder*, a project by the SIG API Machinery,^([4](ch28.html#idm45902082690816))
+    is a framework and library for creating Kubernetes APIs via CustomResourceDefinitions.'
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*Kubebuilder*，由SIG API Machinery的一个项目，^([4](ch28.html#idm45902082690816)) 是通过CustomResourceDefinitions创建Kubernetes
+    API的框架和库。'
+- en: It comes with outstanding [documentation](https://oreil.ly/cmYBo) that also
+    covers general aspects for programming Kubernetes. Kubebuilder’s focus is on creating
+    Golang-based operators by adding higher-level abstractions on top of the Kubernetes
+    API to remove some of the overhead. It also offers scaffolding of new projects
+    and supports multiple CRDs that can be watched by a single operator. Other projects
+    can consume Kubebuilder as a library, and it also offers a plugin architecture
+    to extend the support to languages and platforms beyond Golang. For programming
+    against the Kubernetes API, Kubebuilder is an excellent starting point.
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 它配备了出色的[文档](https://oreil.ly/cmYBo)，还涵盖了编程Kubernetes的一般方面。Kubebuilder的重点是通过在Kubernetes
+    API顶部添加更高级别的抽象来创建基于Golang的操作员，以消除部分开销。它还提供新项目的脚手架支持，并支持单个操作员可以监视的多个CRD。其他项目可以将Kubebuilder作为库消费，它还提供了插件架构以扩展对Golang以外的语言和平台的支持。对于针对Kubernetes
+    API的编程，Kubebuilder是一个很好的起点。
+- en: Operator framework
+  id: totrans-88
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 操作员框架
+- en: 'The Operator Framework provides extensive support for developing operators.
+    It offers several subcomponents:'
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 操作员框架为开发操作员提供了广泛支持。它提供了几个子组件：
+- en: The *Operator SDK* provides a high-level API for accessing a Kubernetes cluster
+    and a scaffolding to start an operator project.
+  id: totrans-90
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '*操作员SDK*提供了访问Kubernetes集群的高级API和启动操作员项目的脚手架。'
+- en: The *Operator Lifecycle Manager* manages the release and updates of operators
+    and their CRDs. You can think of it as a kind of “operator operator.”
+  id: totrans-91
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '*操作员生命周期管理器*管理操作员及其CRD的发布和更新。您可以将其视为一种“操作员操作员”。'
+- en: '*Operator Hub* is a publicly available catalog of operators dedicated to sharing
+    operators built by the community.'
+  id: totrans-92
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '*操作员中心*是一个公开可用的操作员目录，专门用于分享社区构建的操作员。'
+- en: Note
+  id: totrans-93
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: 'In the first edition of this book in 2019, we mentioned the high feature overlap
+    of Kubebuilder and the Operator-SDK, and we speculated that both projects might
+    eventually merge. It turned out that instead of a full merge, a different strategy
+    was chosen by the community: all the overlapping parts have been moved to Kubebuilder,
+    and the Operator-SDK uses Kubebuilder now as a dependency. This move is a good
+    example of the power and self-healing effect of community-driven open source projects.
+    The [article](https://oreil.ly/0GM5e) “What Are the Differences Between Kubebuilder
+    and Operator-SDK?” contains more information about the relationship between Kubebuilder
+    and the Operator-SDK. The *Operator-SDK* offers everything needed for developing
+    and maintaining Kubernetes operators. It is built on top of Kubebuilder and uses
+    it directly for scaffolding and managing operators written in Golang. Beyond that,
+    it benefits from Kubebuilder’s plugin system for creating operators based on other
+    technologies. As of 2023, the Operator-SDK provides plugins for creating operators
+    based on Ansible playbooks or Helm Charts and Java-based operators that use a
+    Quarkus runtime. When scaffolding a project, the SDK also adds the appropriate
+    hooks for integration with the Operator Lifecycle Manager and the Operator Hub.'
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 2019 年的第一版书籍中，我们提到 Kubebuilder 和 Operator-SDK 的高度特性重叠，并推测这两个项目最终可能会合并。事实证明，社区选择了一种不同的策略：所有重叠部分已移至
+    Kubebuilder，而 Operator-SDK 现在将 Kubebuilder 作为依赖项使用。这一举措是社区驱动的开源项目的力量和自我修复效果的良好例子。关于
+    Kubebuilder 和 Operator-SDK 之间关系的文章提供了更多信息，可参阅 [文章](https://oreil.ly/0GM5e) “Kubebuilder
+    和 Operator-SDK 之间的区别是什么？”。Operator-SDK 提供了开发和维护 Kubernetes 运算符所需的一切。它建立在 Kubebuilder
+    之上，直接使用 Kubebuilder 进行 Golang 编写的运算符的脚手架和管理。此外，它还利用 Kubebuilder 的插件系统，用于基于其他技术创建运算符。截至
+    2023 年，Operator-SDK 还提供用于基于 Ansible Playbook 或 Helm Charts 以及使用 Quarkus 运行时的 Java
+    运算符的插件。在脚手架项目时，SDK 还添加了与 Operator Lifecycle Manager 和 Operator Hub 集成的适当钩子。
+- en: The *Operator Lifecycle Manager* (OLM) provides valuable help when using operators.
+    One issue with CRDs is that these resources can be registered only cluster-wide
+    and require cluster-admin permissions. While regular Kubernetes users can typically
+    manage all aspects of the namespaces they have granted access to, they can’t just
+    use operators without interaction with a cluster administrator.
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运算符生命周期管理器（OLM）在使用运算符时提供了宝贵的帮助。CRD 的一个问题是，这些资源只能在整个集群范围内注册，并且需要集群管理员权限。虽然普通的
+    Kubernetes 用户通常可以管理他们被授予访问权限的所有命名空间的所有方面，但他们不能仅仅通过与集群管理员的交互来使用运算符。
+- en: To streamline this interaction, the OLM is a cluster service running in the
+    background under a service account with permission to install CRDs. A dedicated
+    CRD called ClusterServiceVersion (CSV) is registered along with the OLM and allows
+    us to specify the Deployment of an operator together with references to the CRD
+    definitions associated with this operator. As soon as we have created such a CSV,
+    one part of the OLM waits for that CRD and all its dependent CRDs to be registered.
+    If this is the case, the OLM deploys the operator specified in the CSV. Then,
+    another part of the OLM can be used to register these CRDs on behalf of a nonprivileged
+    user. This approach is an elegant way to allow regular cluster users to install
+    their operators.
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了简化这种交互，OLM 是在后台以服务账号运行的集群服务，具有安装 CRD 权限。专用的 CRD 名为 ClusterServiceVersion（CSV）与
+    OLM 注册，并允许我们指定部署运算符及其关联的 CRD 定义。一旦创建了这样的 CSV，OLM 的一部分就会等待该 CRD 及其所有依赖的 CRD 注册完毕。如果情况属实，OLM
+    将部署 CSV 中指定的运算符。然后，OLM 的另一部分可用于代表非特权用户注册这些 CRD。这种方法是允许普通集群用户安装其运算符的一种优雅方式。
+- en: Operators can be easily published at the [Operator Hub](https://oreil.ly/K2t68).
+    Operator Hub makes it easy to discover and install operators. The metadata-like
+    name, icon, description, and more is extracted from the operator’s CSV and rendered
+    in a friendly web UI. Operator Hub also introduces the concept of *channels* that
+    allow you to provide different streams like “stable” or “alpha,” to which users
+    can subscribe for automatic updates of various maturity levels.
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运算符可以轻松发布到 [Operator Hub](https://oreil.ly/K2t68)。Operator Hub 可以方便地发现和安装运算符。从运算符的
+    CSV 中提取的类似元数据的名称、图标、描述等内容，将在友好的 Web UI 中呈现。Operator Hub 还引入了 *channels* 的概念，允许您提供不同的流（如“稳定版”或“Alpha版”），用户可以订阅以获取各种成熟度级别的自动更新。
+- en: Metacontroller
+  id: totrans-98
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: Metacontroller
+- en: Metacontroller is very different from the other two operator building frameworks
+    as it extends Kubernetes with APIs that encapsulate the common parts of writing
+    custom controllers. It acts similarly to Kubernetes Controller Manager by running
+    multiple controllers that are not hardcoded but are defined dynamically through
+    Metacontroller-specific CRDs. In other words, it’s a delegating controller that
+    calls out to the service providing the actual controller logic.
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Metacontroller 与其他两个操作器构建框架非常不同，因为它通过扩展 Kubernetes 的 API 来封装编写自定义控制器的常见部分。它的工作方式类似于
+    Kubernetes 控制器管理器，通过运行多个控制器来动态定义，而非硬编码，这些控制器是通过 Metacontroller 特定的 CRD 进行定义的。换句话说，它是一个委托控制器，调用服务提供实际控制器逻辑。
+- en: Another way to describe Metacontroller is as declarative behavior. While CRDs
+    allow us to store new types in Kubernetes APIs, Metacontroller makes it easy to
+    define the behavior for standard or custom resources declaratively.
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一种描述 Metacontroller 的方式是作为声明性行为。虽然 CRD 允许我们在 Kubernetes API 中存储新类型，但 Metacontroller
+    使得定义标准或自定义资源的行为变得容易。
+- en: When we define a controller through Metacontroller, we have to provide a function
+    that contains only the business logic specific to our controller. Metacontroller
+    handles all interactions with the Kubernetes APIs, runs a reconciliation loop
+    on our behalf, and calls our function through a webhook. The webhook gets called
+    with a well-defined payload describing the CRD event. As the function returns
+    the value, we return a definition of the Kubernetes resources that should be created
+    (or deleted) on behalf of our controller function.
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当我们通过 Metacontroller 定义控制器时，我们必须提供一个仅包含特定于我们控制器的业务逻辑的函数。Metacontroller 处理与 Kubernetes
+    API 的所有交互，代表我们运行协调循环，并通过 Webhook 调用我们的函数。Webhook 会以定义良好的负载调用，描述 CRD 事件。当函数返回值时，我们返回应创建（或删除）的
+    Kubernetes 资源的定义，代表我们的控制器函数。
+- en: This delegation allows us to write functions in any language that can understand
+    HTTP and JSON and that do not have any dependency on the Kubernetes API or its
+    client libraries. The functions can be hosted on Kubernetes, or externally on
+    a Functions-as-a-Service provider, or somewhere else.
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这种委托允许我们在任何能理解 HTTP 和 JSON 的语言中编写函数，而且不依赖于 Kubernetes API 或其客户端库。这些函数可以托管在 Kubernetes
+    上，也可以托管在 Functions-as-a-Service 提供程序上，或者其他地方。
+- en: We cannot go into many details here, but if your use case involves extending
+    and customizing Kubernetes with simple automation or orchestration, and you don’t
+    need any extra functionality, you should have a look at Metacontroller, especially
+    when you want to implement your business logic in a language other than Go. Some
+    controller examples will demonstrate how to implement StatefulSet, Blue-Green
+    Deployment, Indexed Job, and Service per Pod by using Metacontroller only.
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这里我们无法详细展开，但如果您的使用情况涉及通过简单的自动化或编排扩展和定制 Kubernetes，并且不需要任何额外的功能，则应该看看 Metacontroller，特别是当您希望使用
+    Go 以外的语言实现业务逻辑时。一些控制器示例将演示如何仅使用 Metacontroller 实现 StatefulSet、Blue-Green 部署、Indexed
+    Job 和 Service per Pod。
+- en: Example
+  id: totrans-104
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 示例
+- en: Let’s look at a concrete operator example. We extend our example in [Chapter 27,
+    “Controller”](ch27.html#Controller), and introduce a CRD of the type ConfigWatcher.
+    An instance of this CRD then specifies a reference to the ConfigMap to watch and
+    specifies which Pods to restart if this ConfigMap changes. With this approach,
+    we remove the dependency of the ConfigMap on the Pods, as we don’t have to modify
+    the ConfigMap itself to add triggering annotations. Also, with our simple annotation-based
+    approach in the Controller example, we can connect only a ConfigMap to a single
+    application too. With a CRD, arbitrary combinations of ConfigMaps and Pods are
+    possible.
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们看一个具体的操作器示例。我们在 [Chapter 27, “Controller”](ch27.html#Controller) 中扩展我们的示例，并引入了一种名为
+    ConfigWatcher 的 CRD 类型。此 CRD 的实例然后指定要监视的 ConfigMap 的引用，并指定如果此 ConfigMap 更改时应重启哪些
+    Pod。通过这种方法，我们消除了 ConfigMap 对 Pod 的依赖，因为我们不必修改 ConfigMap 本身以添加触发注解。此外，在控制器示例中，我们的简单基于注解的方法也可以将单个
+    ConfigMap 连接到单个应用程序。使用 CRD，可以实现 ConfigMap 和 Pod 的任意组合。
+- en: This ConfigWatcher custom resource is shown in [Example 28-5](#ex-operator-cr-config-watcher).
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Example 28-5](#ex-operator-cr-config-watcher) 中展示了 ConfigWatcher 自定义资源。'
+- en: Example 28-5\. Simple ConfigWatcher resource
+  id: totrans-107
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: Example 28-5\. 简单的 ConfigWatcher 资源
+- en: '[PRE4]'
+  id: totrans-108
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: '[![1](assets/1.png)](#co_operator_CO3-1)'
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_operator_CO3-1)'
+- en: Reference to ConfigMap to watch.
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 参考要监视的 ConfigMap。
+- en: '[![2](assets/2.png)](#co_operator_CO3-2)'
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_operator_CO3-2)'
+- en: Label selector to determine Pods to restart.
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用标签选择器确定要重启的 Pod。
+- en: In this definition, the attribute `configMap` references the name of the `ConfigMap`
+    to watch. The field `podSelector` is a collection of labels and their values,
+    which identify the Pods to restart.
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这个定义中，属性`configMap`引用要监视的`ConfigMap`的名称。字段`podSelector`是一组标签及其值，用于识别要重启的Pod。
+- en: We define the type of this custom resource with a CRD (shown in [Example 28-6](#ex-operator-crd-config-watcher)).
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们使用CRD定义这个自定义资源的类型（显示在[Example 28-6](#ex-operator-crd-config-watcher)中）。
+- en: Example 28-6\. ConfigWatcher CRD
+  id: totrans-115
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: Example 28-6\. ConfigWatcher CRD
+- en: '[PRE5]'
+  id: totrans-116
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: '[![1](assets/1.png)](#co_operator_CO4-1)'
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_operator_CO4-1)'
+- en: Connected to a namespace.
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 连接到一个命名空间。
+- en: '[![2](assets/2.png)](#co_operator_CO4-2)'
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_operator_CO4-2)'
+- en: Dedicated API group.
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 专用API组。
+- en: '[![3](assets/3.png)](#co_operator_CO4-3)'
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_operator_CO4-3)'
+- en: Unique kind of this CRD.
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此CRD的唯一类型。
+- en: '[![4](assets/4.png)](#co_operator_CO4-4)'
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_operator_CO4-4)'
+- en: Labels of the resource as used in tools like `kubectl`.
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 资源的标签如在`kubectl`等工具中使用。
+- en: '[![5](assets/5.png)](#co_operator_CO4-5)'
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#co_operator_CO4-5)'
+- en: Initial version.
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 初始版本。
+- en: '[![6](assets/6.png)](#co_operator_CO4-6)'
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![6](assets/6.png)](#co_operator_CO4-6)'
+- en: OpenAPI V3 schema specification for this CRD.
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个CRD的OpenAPI V3模式规范。
+- en: For our operator to be able to manage custom resources of this type, we need
+    to attach a ServiceAccount with the proper permissions to our operator’s Deployment.
+    For this task, we introduce a dedicated Role used later in a RoleBinding to attach
+    it to the ServiceAccount in [Example 28-7](#ex-operator-role). We explain the
+    concept and usage of ServiceAccounts, Roles, and RoleBindings in much more details
+    in [Chapter 26, “Access Control”](ch26.html#AccessControl). For now, it is sufficient
+    to know that the Role definition in [Example 28-6](#ex-operator-crd-config-watcher)
+    grants permission for all API operations to any instance of ConfigWatcher resources.
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了使我们的操作员能够管理此类型的自定义资源，我们需要将一个带有适当权限的ServiceAccount附加到操作员的Deployment上。为此任务，我们引入了一个专用角色，稍后在RoleBinding中使用它将其附加到ServiceAccount中的[Example 28-7](#ex-operator-role)中。我们在[Chapter 26,
+    “Access Control”](ch26.html#AccessControl)中更详细地解释了ServiceAccounts、Roles和RoleBindings的概念和用法。现在，只需知道[Example 28-6](#ex-operator-crd-config-watcher)中的角色定义授予对任何ConfigWatcher资源实例的所有API操作权限即可。
+- en: Example 28-7\. Role definition allowing access to custom resource
+  id: totrans-130
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: Example 28-7\. 角色定义允许访问自定义资源
+- en: '[PRE6]'
+  id: totrans-131
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: With these CRDs in place, we can now define custom resources as in [Example 28-5](#ex-operator-cr-config-watcher).
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有了这些CRD，我们现在可以像[Example 28-5](#ex-operator-cr-config-watcher)中那样定义自定义资源。
+- en: To make sense of these resources, we have to implement a controller that evaluates
+    these resources and triggers a Pod restart when the ConfigMap changes.
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要理解这些资源，我们必须实现一个控制器，评估这些资源并在ConfigMap更改时触发Pod重启。
+- en: We expand here on our controller script in [Example 27-2](ch27.html#ex-controller-script)
+    and adapt the event loop in the controller script.
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在这里扩展了[Example 27-2](ch27.html#ex-controller-script)中的控制器脚本，并调整了控制器脚本中的事件循环。
+- en: In the case of a ConfigMap update, instead of checking for a specific annotation,
+    we do a query on all resources of the kind ConfigWatcher and check whether the
+    modified ConfigMap is included as a `configMap` value. [Example 28-8](#ex-operator-watch-config-controller-script)
+    shows the reconciliation loop. Refer to our Git repository for the full example,
+    which also includes detailed instructions for installing this operator.
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在ConfigMap更新的情况下，我们不再检查特定注解，而是查询所有ConfigWatcher类型的资源，并检查修改后的ConfigMap是否包含作为`configMap`值的资源。[Example 28-8](#ex-operator-watch-config-controller-script)展示了协调循环。有关完整示例，请参阅我们的Git仓库，其中还包括安装此操作员的详细说明。
+- en: Example 28-8\. WatchConfig controller reconciliation loop
+  id: totrans-136
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: Example 28-8\. WatchConfig控制器协调循环
+- en: '[PRE7]'
+  id: totrans-137
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: '[![1](assets/1.png)](#co_operator_CO5-1)'
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_operator_CO5-1)'
+- en: Start a watch stream to watch for ConfigMap changes for a given namespace.
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 启动一个观察流以监视给定命名空间的ConfigMap更改。
+- en: '[![2](assets/2.png)](#co_operator_CO5-2)'
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_operator_CO5-2)'
+- en: Check for a `MODIFIED` event only.
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 仅检查`MODIFIED`事件。
+- en: '[![3](assets/3.png)](#co_operator_CO5-3)'
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_operator_CO5-3)'
+- en: Get a list of all installed ConfigWatcher custom resources.
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 获取所有安装的ConfigWatcher自定义资源的列表。
+- en: '[![4](assets/4.png)](#co_operator_CO5-4)'
+  id: totrans-144
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_operator_CO5-4)'
+- en: Extract from this list all ConfigWatcher elements that refer to this ConfigMap.
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从列表中提取所有引用此ConfigMap的ConfigWatcher元素。
+- en: '[![5](assets/5.png)](#co_operator_CO5-5)'
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#co_operator_CO5-5)'
+- en: For every ConfigWatcher found, delete the configured Pod via a selector. The
+    logic for calculating a label selector as well as the deletion of the Pods are
+    omitted here for clarity. Refer to the example code in our Git repository for
+    the full implementation.
+  id: totrans-147
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于每个找到的 ConfigWatcher，通过选择器删除配置的 Pod。这里为了清晰起见省略了计算标签选择器和删除 Pod 的逻辑。请参考我们的 Git
+    仓库中的示例代码进行完整实现。
+- en: As for the controller example, this controller can be tested with a sample web
+    application that is provided in our example Git repository. The only difference
+    with this Deployment is that we use an unannotated ConfigMap for the application
+    configuration.
+  id: totrans-148
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 至于控制器示例，这个控制器可以通过我们示例 Git 仓库提供的样例 Web 应用程序进行测试。与此 Deployment 的唯一区别是，我们使用未注释的
+    ConfigMap 作为应用程序配置。
+- en: Although our operator is quite functional, it is also clear that our shell script-based
+    operator is still quite simple and doesn’t cover edge or error cases. You can
+    find many more interesting, production-grade examples in the wild.
+  id: totrans-149
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管我们的运算符功能相当完善，但很明显，我们基于 shell 脚本的运算符仍然相当简单，不涵盖边缘或错误情况。你可以在实际应用中找到更多有趣的生产级示例。
+- en: The canonical place to find real-world operators is [Operator Hub](https://oreil.ly/K2t68).
+    The operators in this catalog are all based on the concepts covered in this chapter.
+    We have already seen how a Prometheus operator can manage Prometheus installations.
+    Another Golang-based operator is the etcd operator for managing an etcd key-value
+    store and automating operational tasks like backing up and restoring the database.
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 [Operator Hub](https://oreil.ly/K2t68) 找到真实运算符的标准位置。这个目录中的运算符都基于本章涵盖的概念。我们已经看到
+    Prometheus 运算符如何管理 Prometheus 的安装。另一个基于 Golang 的运算符是 etcd 运算符，用于管理 etcd 键值存储并自动化操作任务，如数据库的备份和恢复。
+- en: If you are looking for an operator written in the Java programming language,
+    the [*Strimzi Operator*](https://oreil.ly/S1olv) is an excellent example of an
+    operator that manages a complex messaging system like Apache Kafka on Kubernetes.
+    Another good starting point for Java-based operators is the *Java Operator Plugin*,
+    part of the Operator-SDK. As of 2023, it is still a young initiative; the best
+    entry point for learning more about creating Java-based operators is the [tutorial](https://oreil.ly/pEPen)
+    that explains the process to create a fully working operator.
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你正在寻找用 Java 编程语言编写的运算符，[*Strimzi Operator*](https://oreil.ly/S1olv) 是一个管理像
+    Apache Kafka 这样复杂消息系统的运算符的绝佳示例。另一个用于 Java 的运算符的好起点是 Operator-SDK 的 *Java Operator
+    Plugin*。截至 2023 年，它仍然是一个年轻的倡议；了解如何创建基于 Java 的运算符的最佳入口是解释创建完全可工作运算符的 [教程](https://oreil.ly/pEPen)。
+- en: Discussion
+  id: totrans-152
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 讨论
+- en: While we have learned how to extend the Kubernetes platform, operators are still
+    not a silver bullet. Before using an operator, you should carefully look at your
+    use case to determine whether it fits the Kubernetes paradigm.
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然我们已经学习了如何扩展 Kubernetes 平台，但运算符并不是万能的解决方案。在使用运算符之前，你应该仔细查看你的使用情况，确定它是否适合 Kubernetes
+    的范式。
+- en: In many cases, a plain controller working with standard resources is good enough.
+    This approach has the advantage that it doesn’t need any cluster-admin permission
+    to register a CRD, but it has its limitations when it comes to security and validation.
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在许多情况下，一个使用标准资源工作的普通控制器就足够了。这种方法的优势在于注册 CRD 不需要任何集群管理员权限，但在安全性和验证方面存在一些限制。
+- en: An operator is a good fit for modeling a custom domain logic that fits nicely
+    with the declarative Kubernetes way of handling resources with reactive controllers.
+  id: totrans-155
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运算符非常适合建模与声明式 Kubernetes 资源处理方式紧密配合的自定义领域逻辑，具有响应式控制器。
+- en: 'More specifically, consider using an operator with CRDs for your application
+    domain for any of the following situations:'
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 具体来说，考虑在你的应用程序域中使用带有 CRDs 的运算符的任何以下情况：
+- en: You want tight integration into the already-existing Kubernetes tooling like
+    `kubectl`.
+  id: totrans-157
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 你希望与已经存在的 Kubernetes 工具集成紧密，例如 `kubectl`。
+- en: You are working on a greenfield project where you can design the application
+    from the ground up.
+  id: totrans-158
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 你正在进行一个全新项目，可以从头开始设计应用程序。
+- en: You benefit from Kubernetes concepts like resource paths, API groups, API versioning,
+    and especially namespaces.
+  id: totrans-159
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 你受益于 Kubernetes 概念，如资源路径、API 组、API 版本控制，特别是命名空间。
+- en: You want to have good client support for accessing the API with watches, authentication,
+    role-based authorization, and selectors for metadata.
+  id: totrans-160
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 你希望为访问 API 提供良好的客户端支持，包括监视、身份验证、基于角色的授权以及元数据的选择器。
+- en: If your custom use case fits these criteria, but you need more flexibility in
+    how custom resources can be implemented and persisted, consider using a custom
+    API Server. However, you should also not consider Kubernetes extension points
+    as the golden hammer for everything.
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您的自定义用例符合这些标准，但需要更灵活地实现和持久化自定义资源，考虑使用自定义 API 服务器。但是，您也不应将 Kubernetes 扩展点视为解决所有问题的灵丹妙药。
+- en: If your use case is not declarative, if the data to manage does not fit into
+    the Kubernetes resource model, or you don’t need a tight integration into the
+    platform, you are probably better off writing your standalone API and exposing
+    it with a classical Service or Ingress object.
+  id: totrans-162
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您的用例不是声明式的，如果要管理的数据不适合 Kubernetes 资源模型，或者您不需要与平台紧密集成，可能更适合编写独立的 API 并使用经典的
+    Service 或 Ingress 对象进行公开。
+- en: The [Kubernetes documentation](https://oreil.ly/WdqWi) itself also has a chapter
+    for suggestions on when to use a controller, operator, API aggregation, or custom
+    API implementation.
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Kubernetes 文档](https://oreil.ly/WdqWi)本身还有一个章节，建议何时使用控制器、运算符、API 聚合或自定义 API
+    实现。'
+- en: More Information
+  id: totrans-164
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 更多信息
+- en: '[Operator Example](https://oreil.ly/iN2B4)'
+  id: totrans-165
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[运算符示例](https://oreil.ly/iN2B4)'
+- en: '[OpenAPI V3](https://oreil.ly/aIGNA)'
+  id: totrans-166
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[OpenAPI V3](https://oreil.ly/aIGNA)'
+- en: '[Kubebuilder](https://oreil.ly/GeHKy)'
+  id: totrans-167
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Kubebuilder](https://oreil.ly/GeHKy)'
+- en: '[Operator Framework](https://oreil.ly/5JWcN)'
+  id: totrans-168
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Operator Framework](https://oreil.ly/5JWcN)'
+- en: '[Metacontroller](https://oreil.ly/etanj)'
+  id: totrans-169
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Metacontroller](https://oreil.ly/etanj)'
+- en: '[Client Libraries](https://oreil.ly/1iiab)'
+  id: totrans-170
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[客户端库](https://oreil.ly/1iiab)'
+- en: '[Extend the Kubernetes API with CustomResourceDefinitions](https://oreil.ly/8ungP)'
+  id: totrans-171
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[使用 CustomResourceDefinitions 扩展 Kubernetes API](https://oreil.ly/8ungP)'
+- en: '[Custom Resources](https://oreil.ly/0xhlw)'
+  id: totrans-172
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[自定义资源](https://oreil.ly/0xhlw)'
+- en: '[Sample-Controller](https://oreil.ly/kyIsL)'
+  id: totrans-173
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Sample-Controller](https://oreil.ly/kyIsL)'
+- en: '[What Are Red Hat OpenShift Operators?](https://oreil.ly/voY92)'
+  id: totrans-174
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[什么是 Red Hat OpenShift 运算符？](https://oreil.ly/voY92)'
+- en: ^([1](ch28.html#idm45902082939568-marker)) Kubernetes subresources are additional
+    API endpoints that provide further functionality within a resource type.
+  id: totrans-175
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([1](ch28.html#idm45902082939568-marker)) Kubernetes 子资源是提供资源类型内进一步功能的额外 API
+    端点。
+- en: ^([2](ch28.html#idm45902082785568-marker)) [is-a](https://oreil.ly/hZykR) emphasizes
+    the inheritance relationship between operator and controller, that an operator
+    has all characteristics of a controller plus a bit more.
+  id: totrans-176
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([2](ch28.html#idm45902082785568-marker)) [是-一个](https://oreil.ly/hZykR)强调运算符和控制器之间的继承关系，即运算符具有控制器的所有特性加上更多一点。
+- en: ^([3](ch28.html#idm45902082739712-marker)) However, you should be aware of common
+    [API conventions](https://oreil.ly/klv65) for `status` and other fields when designing
+    your CRDs. Following common community conventions makes it easier for people and
+    tooling to read your new API objects.
+  id: totrans-177
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([3](ch28.html#idm45902082739712-marker)) 但是，在设计您的 CRD 时，您应该注意常见的[API 约定](https://oreil.ly/klv65)，特别是
+    `status` 和其他字段。遵循常见的社区约定可以使人们和工具更容易读取您的新 API 对象。
+- en: ^([4](ch28.html#idm45902082690816-marker)) Special Interest Groups (SIGs) are
+    how the Kubernetes community organizes feature areas. You can find a list of current
+    SIGs on the [Kubernetes community site](https://oreil.ly/q6qd9).
+  id: totrans-178
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([4](ch28.html#idm45902082690816-marker)) 特别兴趣小组（SIGs）是 Kubernetes 社区组织特性领域的方式。您可以在
+    [Kubernetes 社区网站](https://oreil.ly/q6qd9)找到当前 SIGs 的列表。

@@ -1,0 +1,604 @@
+- en: Chapter 21\. Multicluster Application Deployments
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第21章。多集群应用部署
+- en: Twenty chapters into this book, it should be clear that Kubernetes can be a
+    complex topic, though of course we hope that if you have made it this far, it
+    is less murky than it was. Given the complexities of building and running an application
+    in a single Kubernetes cluster, why would you incur the added complexity of designing
+    and deploying your application into multiple clusters?
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本书共有二十章，应该明白 Kubernetes 可以是一个复杂的主题，当然，希望如果您已经读到这里，它比起初要清晰些。考虑到在单个 Kubernetes
+    集群中构建和运行应用程序的复杂性，为什么要增加设计和部署应用程序到多个集群的复杂性呢？
+- en: The truth is that the demands of the real world mean that multicluster application
+    deployment is a reality for most applications. There are many reasons for this,
+    and it is likely that your application fits under at least one of these requirements.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 事实上，现实世界的需求意味着大多数应用程序需要进行多集群应用部署。这有许多原因，很可能您的应用程序至少符合其中一个要求。
+- en: The first requirement is one of redundancy and resiliency. Whether in the cloud
+    or on-premise, a single datacenter is generally a single failure domain. Whether
+    it is a hunter using a fiber-optic cable for target practice, a power outage from
+    an ice storm, or simply a botched software rollout, any application deployed to
+    a single location can fail completely and leave your users without recourse. In
+    many cases, a single Kubernetes cluster is tied to a single location and thus
+    is a single failure domain.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 第一个要求是冗余和弹性的需求。无论是在云端还是本地，单个数据中心通常是一个单一故障域。无论是猎人使用光纤电缆作为靶子的练习，还是冰风暴导致的停电，或者仅仅是软件发布的失败，部署到单个位置的任何应用程序都可能完全失败，使用户无法获得任何补救措施。在许多情况下，单个
+    Kubernetes 集群都与单个位置绑定，因此是一个单一故障域。
+- en: In some cases, especially in cloud environments, the Kubernetes cluster is designed
+    to be *regional*. Regional clusters span across multiple independent zones and
+    are thus resilient to the problems in the underlying infrastructure previously
+    described. It would be tempting then to assume that such regional clusters are
+    sufficient for resiliency and they might be except for the fact that Kubernetes
+    itself can be a single point of failure. Any single Kubernetes cluster is tied
+    to a specific version of Kubernetes (e.g., 1.21.3), and it is very possible for
+    an upgrade of the cluster to break your application. From time to time Kubernetes
+    deprecates APIs or changes the behavior of those APIs. These changes are infrequent,
+    and the Kubernetes community takes care to make sure that they are communicated
+    ahead of time. Additionally, despite a great deal of testing, bugs do creep into
+    a release from time to time. Though it is unlikely for any one issue to affect
+    your application, viewed over the lifespan of most applications (years), it’s
+    probable that your application will be affected at some point. For most applications,
+    that’s not aa\n acceptable risk.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在某些情况下，特别是在云环境中，Kubernetes 集群被设计为*区域性*。区域性集群跨越多个独立区域，因此对于之前描述的基础设施问题具有弹性。因此很容易认为这样的区域性集群足以保证弹性，除了
+    Kubernetes 本身可能成为单点故障的事实。任何单个 Kubernetes 集群都与特定版本的 Kubernetes 绑定（例如，1.21.3），升级集群可能会导致应用程序出现问题。有时
+    Kubernetes 会弃用 API 或更改这些 API 的行为。这些变更不频繁，Kubernetes 社区会提前进行沟通确保变更顺利进行。此外，尽管经过大量测试，但偶尔仍会在发布版本中引入错误。尽管任何一个问题影响您的应用程序的可能性不大，但在大多数应用程序的生命周期（几年）内，您的应用程序很可能会受到某种程度的影响。对于大多数应用程序来说，这是不可接受的风险。
+- en: In addition to resiliency requirements, another strong driver of multicluster
+    deployments is some business or application need for regional affinity. For example,
+    game servers have a strong need to be near the players to reduce network latency
+    and improve the playing experience. Other applications may be subject to legal
+    or regulatory requirements that demand that data be located within specific geographic
+    regions. Since any Kubernetes cluster is tied to a specific place, these needs
+    for application deployment to specific geographies mean that applications must
+    span multiple clusters.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了弹性要求外，多集群部署的另一个强大驱动因素是对区域关联的业务或应用需求。例如，游戏服务器需要靠近玩家以减少网络延迟并提高游戏体验。其他应用可能受到法律或监管要求的限制，要求数据位于特定的地理区域内。由于任何
+    Kubernetes 集群都与特定位置绑定，这些应用部署到特定地理位置的需求意味着应用必须跨越多个集群。
+- en: Finally, though there are numerous ways to isolate users within a single cluster
+    (e.g., namespaces, RBAC, node pools—collections of Kubernetes nodes that are organized
+    for different capabilities or workloads), a Kubernetes cluster is still largely
+    a single cooperative space. For some teams and some products, the risks of a different
+    team impacting their application, even by accident, are not worth it, and they
+    would rather take on the complexity of managing multiple clusters.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，尽管在单个集群中有多种隔离用户的方法（例如命名空间、RBAC、节点池——为不同能力或工作负载组织的 Kubernetes 节点集合），但 Kubernetes
+    集群仍然基本上是一个单一的合作空间。对于一些团队和产品来说，不同团队甚至会因为意外影响他们的应用的风险不值得，他们宁愿承担管理多个集群的复杂性。
+- en: At this point, you can see that regardless of your application, it’s very likely
+    that either now or sometime in the near future, your application will need to
+    span multiple clusters. The rest of this chapter will help you understand how
+    to accomplish that.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到了这一点，你可以看到，无论你的应用程序如何，很可能现在或在不久的将来，你的应用程序都需要跨多个集群。本章的其余部分将帮助你理解如何实现这一点。
+- en: Before You Even Begin
+  id: totrans-8
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 在你开始之前
+- en: It is critical that you have the right foundations in place in a single cluster
+    deployment before you consider moving to multiple clusters. There is inevitably
+    a list of to-do items that everyone has for their setup, but such shortcuts and
+    problems are magnified in a multicluster deployment. Similarly, fixing foundational
+    problems in your infrastructure is 10 times harder when you have 10 clusters.
+    Furthermore, if adding an additional cluster incurs significant extra work, you
+    will resist adding additional clusters, when (for all of the reasons already given)
+    it is the right thing to do for your application.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在考虑迁移到多集群部署之前，确保单个集群部署具备正确的基础架构至关重要。每个人对他们的设置都有一份必须做的清单，但是这些捷径和问题在多集群部署中被放大。同样地，在拥有10个集群时，修复基础设施中的问题会变得十分困难。此外，如果增加额外的集群需要付出显著的额外工作，你可能会抗拒增加额外的集群，尽管（因为前面提到的种种原因）这对你的应用来说是正确的做法。
+- en: When we say “foundations,” what do we mean? The most important part to get right
+    is automation. Importantly, this includes both automation to deploy your application(s),
+    but also automation to create and manage the clusters themselves. When you have
+    a single cluster, it is consistent with itself by definition. However, when you
+    add clusters, you add the possibility of version skew between all of the pieces
+    of your cluster. You could have clusters with different Kubernetes versions, different
+    versions of your monitoring and logging agents, or even something as basic as
+    the container runtime. All of this variance should be viewed as something that
+    makes your life harder. Differences in your infrastructure make your system “weirder.”
+    Knowledge gained in one cluster does not transfer over to other clusters, and
+    problems sometimes occur seemingly at random in certain places because of this
+    variability. One of the most important parts of maintaining a stable foundation
+    is maintaining consistency across all of your clusters.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当我们说“基础架构”时，我们指的是什么？正确的自动化是最重要的部分。重要的是，这不仅包括部署应用程序的自动化，还包括创建和管理集群本身的自动化。当你只有一个集群时，它从定义上来说是一致的。然而，当你增加集群时，你增加了集群中各个组件版本不一致的可能性。你可能会拥有不同版本的
+    Kubernetes、不同版本的监控和日志代理，甚至是容器运行时的基本差异。所有这些变化都会使你的生活更加困难。基础设施的差异使得你的系统变得“更加奇怪”。在一个集群中获得的知识并不能转移到其他集群，有时因为这种差异性，问题似乎会在某些地方随机发生。保持稳定基础的一个最重要的部分就是确保所有集群的一致性。
+- en: The only way to achieve this consistency is automation. You may think, “I always
+    create clusters this way,” but experience has taught us that this is simply not
+    true. The next chapter discusses at length the value of infrastructure as code
+    for managing your applications, but the same things apply to managing your clusters.
+    Don’t use a GUI or CLI tool to create your cluster. It may seem cumbersome at
+    first to push all changes through source control and CI/CD, but the stable foundation
+    pays significant dividends.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 实现这种一致性的唯一途径是自动化。你可能会想，“我总是以这种方式创建集群”，但经验告诉我们，这并不正确。下一章将详细讨论基础设施即代码对于管理你的应用程序的价值，但同样适用于管理你的集群。不要使用
+    GUI 或 CLI 工具来创建你的集群。起初通过源代码控制和 CI/CD 推送所有更改可能看起来很麻烦，但稳定的基础会带来显著的回报。
+- en: The same is true of the foundational components that you deploy into your clusters.
+    These components include monitoring, logging, and security scanners, which need
+    to be present before any application is deployed. These tools also need to be
+    managed using infrastructure as code tools like Helm and deployed using automation.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 部署到您的集群中的基础组件也是如此。这些组件包括监控、日志记录和安全扫描器，在部署任何应用程序之前都必须存在。这些工具还需要使用Helm等基础设施即代码工具进行管理，并使用自动化进行部署。
+- en: Moving beyond the shape of your clusters, there are other aspects of consistency
+    that are necessary. The first is using a single identity system for all of your
+    clusters. Though Kubernetes supports simple certificate-based authentication,
+    we strongly suggest using integrations with a global identity provider, such as
+    Azure Active Directory or any other OpenID Connect–compatible identity provider.
+    Ensuring that everyone uses the same identity when accessing all of the clusters
+    is a critical part of maintaining security best practices and avoiding dangerous
+    behaviors like sharing certificates. Additionally, most of these identity providers
+    make available additional security controls like two-factor authentication, which
+    enhance the security of your clusters.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 超越集群形状的内容，还有其他必要的一致性方面。首先是为所有集群使用单一身份系统。虽然Kubernetes支持简单的基于证书的身份验证，但我们强烈建议使用与全球身份提供者（如Azure
+    Active Directory或任何其他支持OpenID Connect的身份提供者）集成。确保每个人访问所有集群时都使用相同的身份是维护安全最佳实践并避免危险行为（如共享证书）的关键部分。此外，大多数这些身份提供者还提供额外的安全控制，如双因素身份验证，可以增强集群的安全性。
+- en: Just like identity, it is also critical to ensure consistent access control
+    to your clusters. In most clouds, this means using a cloud-based RBAC, where the
+    RBAC roles and bindings are stored in a central cloud location rather than in
+    the clusters themselves. Defining RBAC in a single location prevents mistakes
+    like leaving permissions behind in one of your clusters or failing to add permissions
+    to some single cluster. Unfortunately, if you are defining RBAC for on-premise
+    clusters, the situation is somewhat more complicated than it is for identity.
+    There are some solutions (e.g., Azure Arc for Kubernetes) that can provide RBAC
+    for on-premise clusters, but if such a service is not available in your environment,
+    defining RBAC in source control and using infrastructure as code to apply the
+    rules to all of your clusters can ensure consistent privileges are applied across
+    your fleet.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 就像身份验证一样，确保集群的一致访问控制也非常关键。在大多数云平台中，这意味着使用基于云的RBAC，在这种情况下，RBAC角色和绑定存储在中央云位置，而不是在集群本身。在单一位置定义RBAC可以防止诸如在某个集群中留下权限或未能向某个单一集群添加权限等错误。不幸的是，如果要为本地集群定义RBAC，则情况比身份验证要复杂得多。有一些解决方案（例如，用于Kubernetes的Azure
+    Arc）可以为本地集群提供RBAC，但如果您的环境中没有此类服务，则在源代码控制中定义RBAC并使用基础设施即代码将规则应用于所有集群可以确保跨整个部署中应用一致的特权。
+- en: Similarly, when you think about defining policy for your clusters, it’s critical
+    to define those policies in a single place and have a single dashboard for viewing
+    the compliance state of all clusters. As with RBAC, such global services are often
+    available via your cloud provider, but for on-premise there are limited options.
+    Using infrastructure as code for policies as well can help close this gap and
+    ensure that you can define your policies in a single place.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 同样地，当您考虑为集群定义策略时，定义这些策略并在单一位置上具有用于查看所有集群符合状态的单一仪表板非常关键。与RBAC一样，此类全局服务通常通过您的云提供商提供，但对于本地部署，选项有限。同样可以使用基础设施即代码工具来帮助填补此差距，并确保您可以在单一位置定义您的策略。
+- en: Just like setting up the right unit testing and build infrastructure is critical
+    to your application development, setting up the right foundation for managing
+    multiple Kubernetes clusters sets the stage for stable application deployments
+    across a broad fleet of infrastructure. In the coming sections, we’ll talk about
+    how to build your application to operate successfully in a multicluster environment.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 就像设置正确的单元测试和构建基础设施对应用程序开发至关重要一样，为管理多个Kubernetes集群设置正确的基础设施为在广泛的基础设施群中稳定部署应用程序奠定了基础。在接下来的部分中，我们将讨论如何构建您的应用程序以在多集群环境中成功运行。
+- en: Starting at the Top with a Load-Balancing Approach
+  id: totrans-17
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 从顶部开始使用负载平衡方法
+- en: Once you begin to think about deploying your application into multiple locations,
+    it becomes essential to think about how users get access to it. Typically this
+    is through a domain name (e.g., my.company.com). Though we will spend a great
+    deal of time discussing how to construct your application for operation in multiple
+    locations, a more important place to start is how access is implemented. This
+    is both because obviously enabling people to use your application is essential,
+    but also because the design of how people access your application can improve
+    your ability to quickly respond and reroute traffic in the case of unexpected
+    load or failures.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦开始考虑将应用部署到多个位置，就变得必要考虑用户如何访问它。通常通过域名来实现这一点（例如，my.company.com）。虽然我们将花费大量时间讨论如何构建你的应用程序以在多个位置运行，但更重要的起点是如何实施访问。这是因为显然使人们能够使用你的应用程序是至关重要的，但也因为设计人们如何访问你的应用程序可以提高你在意外负载或故障情况下快速响应和重新路由流量的能力。
+- en: Access to your application starts with a domain name. This means that the start
+    of your multicluster load-balancing strategy starts with a DNS lookup. This DNS
+    lookup is the first choice in your load-balancing strategy. In many traditional
+    load-balancing approaches, this DNS lookup was used for routing traffic to specific
+    locations. This is generally referred to as “GeoDNS.” In GeoDNS, the IP address
+    returned by the DNS lookup is tied to the physical location of the client. The
+    IP address is generally the regional cluster that is closest to the client.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 访问你的应用程序始于一个域名。这意味着你的多集群负载均衡策略的开始是一个 DNS 查询。这个 DNS 查询是你负载均衡策略的第一个选择。在许多传统的负载均衡方法中，这个
+    DNS 查询被用于将流量路由到特定的位置。这通常被称为“GeoDNS”。在 GeoDNS 中，DNS 查询返回的 IP 地址与客户端的物理位置相关联。IP
+    地址通常是离客户端最近的区域集群。
+- en: Though GeoDNS is still prevalent in many applications and may be the only possible
+    approach for on-premise applications, it has a number of drawbacks. The first
+    is that DNS is cached in various places throughout the internet and though you
+    can set the time-to-live (TTL) for a DNS lookup, there are many places where this
+    TTL is ignored in pursuit of higher performance. In a steady state operation,
+    this caching isn’t a big deal since DNS is generally pretty stable regardless
+    of the TTL. However, it becomes a very big deal when you need to move traffic
+    from one cluster to another; for example, in response to an outage in a particular
+    datacenter. In such urgent cases, the fact that DNS lookups are cached can significantly
+    extend the duration and impact of the outage. Additionally, since GeoDNS is guessing
+    your physical location based on your client’s IP address, it is frequently confused
+    and guesses the wrong locations when many different clients egress their traffic
+    from the same firewall’s IP address despite being in many different geographic
+    locations.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然 GeoDNS 在许多应用中仍然流行，并且对于本地应用可能是唯一可行的方法，但它有一些缺点。第一个缺点是 DNS 在互联网的各个地方都有缓存，虽然你可以设置
+    DNS 查询的生存时间（TTL），但在追求更高性能时，许多地方会忽略这个 TTL。在稳定状态下运行时，这种缓存并不是什么大问题，因为 DNS 通常是相当稳定的，无论
+    TTL 是多少。然而，当你需要将流量从一个集群移动到另一个集群时，比如响应特定数据中心的故障时，这就成为一个非常大的问题。在这种紧急情况下，DNS 查询被缓存的事实可能会显著延长停机的持续时间和影响。此外，由于
+    GeoDNS 根据客户端的 IP 地址猜测你的物理位置，当许多不同的客户端从同一防火墙 IP 地址出口其流量时，尽管它们位于许多不同的地理位置，GeoDNS
+    经常会感到困惑并猜测错误的位置。
+- en: The other alternative to using DNS to select your cluster is a load-balancing
+    technique known as *anycast*. With anycast networking, a single static IP address
+    is advertised from multiple locations around the internet using core routing protocols.
+    While traditionally we think of an IP address mapping to a single machine, with
+    anycast networking the IP address is actually a virtual IP address that is routed
+    to a different location depending on your network location. Your traffic is routed
+    to the “closest” location based on the distance in terms of network performance
+    rather than geographic distance. Anycast networking generally produces better
+    results, but it is not always available in all environments.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用于选择你的集群的另一种替代方法是一种称为*任播*的负载均衡技术。使用任播网络，单个静态 IP 地址通过核心路由协议从互联网的多个位置进行广告。传统上我们认为
+    IP 地址映射到单个机器，但是使用任播网络，IP 地址实际上是一个虚拟 IP 地址，根据你的网络位置被路由到不同的位置。你的流量根据网络性能的距离而不是地理距离被路由到“最近”的位置。任播网络通常能产生更好的结果，但并不总是在所有环境中都可用。
+- en: One final consideration as you design your load balancing is whether the load
+    balancing happens at the TCP or HTTP level. So far we have only discussed TCP-level
+    balancing, but for web-based applications there are significant benefits for load-balancing
+    at the HTTP layer. If you are writing an HTTP-based application (as most applications
+    these days are), then using a global HTTP-aware load balancer enables you to be
+    aware of more details of the client communication. For example, you can make load-balancing
+    decisions based on cookies that have been set in the browser. Additionally, a
+    load balancer that is aware of the protocol can make smarter routing decisions
+    since it sees each HTTP request instead of just a stream of bytes across a TCP
+    connection.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在设计负载平衡时的最后一个考虑因素是负载平衡是在TCP层还是HTTP层进行的。到目前为止，我们只讨论了TCP级别的负载平衡，但对于基于Web的应用程序来说，在HTTP层进行负载平衡有显著的好处。如果您正在编写基于HTTP的应用程序（大多数应用程序都是这样的），那么使用全局HTTP感知负载均衡器使您能够了解更多客户端通信的细节。例如，您可以根据浏览器中设置的cookie做出负载平衡决策。此外，了解协议的负载均衡器可以做出更智能的路由决策，因为它看到每个HTTP请求，而不仅仅是通过TCP连接的字节流。
+- en: Regardless of which approach you choose, ultimately the location of your service
+    is mapped from a global DNS endpoint to a collection of regional IP addresses
+    representing the entry point to your service. These IP addresses are generally
+    the IP address of a Kubernetes Service or Ingress resource that you have learned
+    about in previous chapters of the book. Once the user traffic hits that endpoint,
+    it will flow through your cluster based on the design of your application.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 无论您选择哪种方法，最终您的服务位置都将从全局DNS端点映射到代表服务入口点的一组区域IP地址。这些IP地址通常是您在本书前几章中了解到的Kubernetes服务或入口资源的IP地址。一旦用户流量到达该端点，它将根据您的应用程序设计流经您的集群。
+- en: Building Applications for Multiple Clusters
+  id: totrans-24
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 构建多集群应用程序
+- en: Once you have load balancing sorted out, the next challenge for designing a
+    multicluster application is thinking about state. Ideally, your application doesn’t
+    require state, or all of the state is read-only. In such circumstances, there
+    is little that you need to do to support multiple cluster deployments. Your application
+    can be deployed individually to each of your clusters, a load balancer added to
+    the top, and your multicluster deployment is complete. Unfortunately, for most
+    applications there is state that must be managed in a consistent way across the
+    replicas of your application. If you don’t handle state correctly, your users
+    will end up with a confusing, flawed experience.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦您解决了负载平衡问题，设计多集群应用程序的下一个挑战是考虑状态。理想情况下，您的应用程序不需要状态，或者所有状态都是只读的。在这种情况下，您几乎不需要做任何事情来支持多个集群部署。您的应用程序可以单独部署到每个集群中，顶部添加一个负载均衡器，您的多集群部署就完成了。不幸的是，对于大多数应用程序来说，存在必须以一致方式在应用程序副本之间管理的状态。如果您没有正确处理状态，您的用户将得到一个令人困惑且有缺陷的体验。
+- en: 'To understand how replicated state impacts user experience, let’s use a simple
+    retail shop as an example. It’s obvious to see that if you only store a customer’s
+    order in one of your multiple clusters, the customer may have the unsettling experience
+    of being unable to see their order when their requests move to a different region,
+    either because of load balancing, or because they physically move geographies.
+    So it is clear that a user’s state needs to be replicated across regions. It may
+    be somewhat less clear that the approach to replication also can impact the customer
+    experience. The challenges of replicated data and customer experience is succinctly
+    captured by this question: “Can I read my own write?” It may seem obvious that
+    the answer should be “Yes,” but achieving this is harder than it seems. Consider
+    for example a customer who places an order on their computer, but then immediately
+    tries to view it on their phone. They may be coming at your application from two
+    entirely different networks and consequently landing on two completly different
+    clusters. A user’s expectation around their ability to see an order that they
+    just placed is an example of data *consistency*.'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要理解复制状态如何影响用户体验，让我们以一个简单的零售商店为例。很明显，如果您只在多个集群中的一个中存储客户订单，当他们的请求移到不同的区域时，客户可能会无法看到他们的订单，无论是因为负载平衡还是因为他们实际上移动了地理位置。因此，用户的状态需要在各个区域之间复制。复制方法也可能影响客户体验，尽管这可能不那么明显。复制数据和客户体验的挑战被这个问题简洁地概括为：“我能读取我自己的写入吗？”看起来答案显而易见应该是“是的”，但实现这一点比看起来更难。例如，考虑一个在他们的电脑上下订单，然后立即在他们的手机上查看订单的客户。他们可能从完全不同的网络访问您的应用程序，因此可能会登陆到完全不同的集群上。用户关于他们能否查看刚刚下的订单的期望是一致性的一个例子。
+- en: 'Consistency governs how you think about replicating data. We assume that we
+    want our data to be consistent; that is, that we will be able to read the same
+    data regardless of where we read it from. But the complicating factor is time:
+    how quickly must our data be consistent? And do we get any sort of error indication
+    when it is not consistent? There are two basic models of consistency: *strong
+    consistency*, which guarantees that a write doesn’t succeed until it has been
+    successfully replicated, and *eventual consistency*, where a write always succeeds
+    immediately and is only guaranteed to be successfully replicated at some later
+    point in time. Some systems also provide the ability for the client to choose
+    their consistency needs per request. For example, Azure Cosmos DB implements *bounded
+    consistency*, where there are some assurances about how stale data may be in an
+    eventually consistent system. Google Cloud Spanner enables clients to specify
+    that they are willing to tolerate stale reads in exchange for better performance.'
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一致性决定了您如何考虑复制数据。我们假设我们希望我们的数据是一致的；也就是说，无论我们从哪里读取数据，我们都能读取到相同的数据。但是，时间是一个复杂的因素：我们的数据必须多快才能保持一致？当数据不一致时，我们会得到任何错误指示吗？一致性有两种基本模型：*强一致性*保证了写操作直到成功复制之前都不会成功，而*最终一致性*则是写操作总是立即成功，并且只有在以后的某个时间点才保证成功复制。一些系统还允许客户端根据请求选择它们的一致性需求。例如，Azure
+    Cosmos DB实现了*有界一致性*，在这种最终一致性系统中对过期数据的一些保证。Google Cloud Spanner使客户端能够指定他们愿意容忍旧数据读取，以换取更好的性能。
+- en: It might seem that everyone would choose strong consistency, as it is clearly
+    an easier model to reason about because the data is always the same everywhere.
+    But strong consistency comes at a price. It takes much more effort to guarantee
+    the replication at the time of the write, and many more writes will fail when
+    replication isn’t possible. Strong consistency is more expensive and can support
+    many fewer simultaneous transactions relative to eventual consistency. Eventual
+    consistency is cheaper and can support a much higher write load, but it is more
+    complicated for the application developer and may expose some edge conditions
+    to the end user. Many storage systems support only a single concurrency model.
+    Those that support multiple concurrency models require that it be specified when
+    the storage system is created. Your choice of concurrency model also has significant
+    implications for your application’s design and is difficult to change. Consequently,
+    choosing your consistency model is an important first step before designing your
+    application for multiple environments.
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 看起来每个人都会选择强一致性，因为它显然更容易理解，因为数据在任何地方都是相同的。但是强一致性是有代价的。在写入时保证复制需要更多的工作，当无法复制时，许多写入将失败。强一致性更昂贵，相对于最终一致性可以支持更少的并发事务。最终一致性更便宜，并且可以支持更高的写入负载，但对于应用程序开发者来说更为复杂，可能会向最终用户暴露一些边缘条件。许多存储系统仅支持单一并发模型。那些支持多个并发模型的存储系统要求在创建存储系统时指定。您选择的并发模型对应用程序的设计有重大影响，并且难以更改。因此，在为多个环境设计应用程序之前，选择一致性模型是一个重要的第一步。
+- en: Note
+  id: totrans-29
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Deploying and managing replicated stateful storage is a complicated task that
+    requires a dedicated team with domain expertise to set up, maintain, and monitor.
+    You should strongly consider using cloud-based storage for a replicated data store
+    so that this burden is carried by the depth of a large team at the cloud provider
+    rather than your own teams. In an on-premise environment, you can also offload
+    support of storage to a company that has focused expertise on running the storage
+    solution that you choose. Only when you are at large scale does it make sense
+    to invest in building your own team to manage storage.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 部署和管理复制的有状态存储是一项复杂的任务，需要一个专门的团队具有领域专业知识来设置、维护和监控。您应该强烈考虑使用基于云的存储来进行复制数据存储，这样负担将由云提供商庞大的团队深度承担，而不是您自己的团队。在本地环境中，您还可以将存储的支持转移到专注于运行您选择的存储解决方案的公司。只有在大规模时，投资于构建自己的团队来管理存储才有意义。
+- en: Once you have determined your storage layer, the next step is to build up your
+    application design.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦确定了存储层，下一步是构建应用程序设计。
+- en: 'Replicated Silos: The Simplest Cross-Regional Model'
+  id: totrans-32
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 复制的孤立体：最简单的跨区域模型
+- en: The simplest way to replicate your application across multiple clusters and
+    multiple regions is simply to copy your application into every region. Each instance
+    of your application is an exact clone and looks exactly alike no matter which
+    cluster it is running in. Because there is a load balancer at the top spreading
+    customer requests, and you have implemented data replication in the places where
+    you need state, your application doesn’t need to change much to support this model.
+    Depending on the consistency model that you choose for your data, you will need
+    to deal with the fact that data may not be replicated quickly between regions,
+    but, especially if you opt for strong consistency, this won’t require major application
+    refactoring.
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将您的应用程序简单复制到多个集群和多个区域的最简单方法只是将您的应用程序复制到每个区域。您的应用程序的每个实例都是一个完全相同的克隆，无论在哪个集群中运行，它看起来完全相同。由于顶部有一个负载均衡器分布客户请求，并且您已经在需要状态的地方实现了数据复制，您的应用程序不需要太多更改来支持这种模型。根据您选择的数据一致性模型，您需要处理的事实是数据在区域之间可能不会被快速复制，但是，特别是如果您选择强一致性，这不需要进行主要的应用程序重构。
+- en: When you design your application this way, each region is its own silo. All
+    of the data that it needs is present within the region, and once a request enters
+    that region, it is served entirely by the containers running in that one cluster.
+    This has significant benefits in terms of reduced complexity, but as is always
+    the case, this comes at the cost of efficiency.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您以这种方式设计应用程序时，每个区域都是其自身的孤立体。它需要的所有数据都存在于该区域内，一旦请求进入该区域，它将完全由运行在那个集群中的容器提供服务。这在减少复杂性方面具有显著的好处，但像通常情况一样，这也是以效率为代价。
+- en: To understand how the silo approach impacts efficiency, consider an application
+    that is distributed to a large number of geographic regions around the world in
+    order to deliver very low latency to their users. The reality of the world is
+    that some geographic regions have large populations and some regions have small
+    populations. If every silo in each cluster of the application is exactly the same,
+    then every silo has to be sized to meet the needs of the largest geographic region.
+    The result of this is that most replicas of the application in regional clusters
+    are massively overprovisioned and thus cost efficiency for the application is
+    low. The obvious solution to this excess cost is to reduce the size of the resources
+    used by the application in the smaller geographic regions. While it might seem
+    easy to resize your application, it’s not always feasible due to bottlenecks or
+    other requirements (e.g., maintaining at least three replicas).
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要理解分离式方法如何影响效率，请考虑一个分布在世界各地大量地理区域的应用程序，以便为其用户提供非常低的延迟。世界的现实是，某些地理区域有大量人口，而某些地区则人口较少。如果应用程序中每个簇的每个分离式都完全相同，那么每个分离式都必须大小适应最大的地理区域的需求。这样做的结果是，地区簇中应用程序的大多数副本都被大量超量配置，因此应用程序的成本效率较低。这种多余成本的明显解决方案是减少在较小地理区域使用的资源大小。虽然调整应用程序大小可能看起来很容易，但由于瓶颈或其他要求（例如，至少保持三个副本），这并不总是可行。
+- en: Especially when taking an existing application from single cluster to multicluster,
+    a replicated silos design is the easiest approach to use, but it is worth understanding
+    that it comes with costs that may be sustainable initially but eventually will
+    require your application to be refactored.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 特别是将现有应用程序从单一集群转移到多集群时，复制的分离式设计是最简单的方法，但值得理解的是，它会带来成本，这些成本可能最初可以承受，但最终会要求重新设计您的应用程序。
+- en: 'Sharding: Regional Data'
+  id: totrans-37
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 分片：区域数据
+- en: As your application scales, one of the pain points that you are likely to encounter
+    with a regional silo approach is that globally replicating all of your data becomes
+    increasingly expensive and also increasingly wasteful. While replicating data
+    for reliability is a good thing, it is unlikely that all of the data for your
+    application needs to be colocated in every cluster where you deploy your application.
+    Most users will only access your application from a small number of geographic
+    regions.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您的应用程序扩展时，您可能会遇到的一个痛点是，采用区域分离方法全球复制所有数据变得越来越昂贵，也越来越浪费。虽然为了可靠性复制数据是一件好事，但不太可能所有应用程序数据都需要在部署应用程序的每个集群中共同存在。大多数用户只会从少数几个地理区域访问您的应用程序。
+- en: Additionally, as your application grows around the world you may encounter regulatory
+    and other legal requirements around data locality. There may be external restrictions
+    on where you can store a user’s data depending on their nationality or other considerations.
+    The combination of these requirements means that eventually you will need to think
+    about regional data sharding. Sharding your data across regions means that not
+    all data is present in all of the clusters where your application is present and
+    this (obviously) impacts the design of your application.
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此外，随着您的应用程序在全球范围内的增长，您可能会遇到关于数据本地性的法规和其他法律要求。根据用户的国籍或其他考虑因素，可能会存在关于存储用户数据位置的外部限制。这些要求的结合意味着最终您将需要考虑区域数据分片。在不同区域分片您的数据意味着您的应用程序在所有集群中并非所有数据都存在，这（显然）会影响您的应用程序设计。
+- en: As an example of what this looks like, imagine that our application is deployed
+    into six regional clusters (A, B, C, D, E, F). We take the dataset for our application
+    and break the data into three subsets or *shards* (1, 2, 3).
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以此作为例子，想象一下我们的应用程序部署到了六个区域集群（A、B、C、D、E、F）。我们将应用程序的数据集拆分为三个子集或*片段*（1、2、3）。
+- en: 'Our data shard deployment then might look as follows:'
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们的数据片段部署可能如下所示：
+- en: '|  | A | B | C | D | E | F |'
+  id: totrans-42
+  prefs: []
+  type: TYPE_TB
+  zh: '|  | A | B | C | D | E | F |'
+- en: '| 1 | ✓ | - | - | ✓ | - | - |'
+  id: totrans-43
+  prefs: []
+  type: TYPE_TB
+  zh: '| 1 | ✓ | - | - | ✓ | - | - |'
+- en: '| 2 | - | ✓ | - | - | ✓ | - |'
+  id: totrans-44
+  prefs: []
+  type: TYPE_TB
+  zh: '| 2 | - | ✓ | - | - | ✓ | - |'
+- en: '| 3 | - | - | ✓ | - | - | ✓ |'
+  id: totrans-45
+  prefs: []
+  type: TYPE_TB
+  zh: '| 3 | - | - | ✓ | - | - | ✓ |'
+- en: Each shard is present in two regions for redundancy, but each regional cluster
+    can only serve one-third of the data. This means that you have to add an additional
+    routing layer to your service whenever you need to access the data. The routing
+    layer is responsible for determining whether the request needs to go to a local
+    or cross-regional data shard.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个分片在两个区域中都有冗余性，但每个区域集群只能提供三分之一的数据。这意味着每当您需要访问数据时，您必须为服务添加额外的路由层。路由层负责确定请求是否需要发送到本地或跨区域数据分片。
+- en: While it might be tempting to simply implement this data routing as part of
+    a client library that is linked into your main application, we strongly recommend
+    that the data routing be built as a separate microservice. Introducing a new microservice
+    might seem to introduce complexity, but it actually introduces an abstraction
+    that simplifies things. Instead of every service in your application worrying
+    about data routing, you have a single service that encapsulates those concerns
+    and all other services simply access the data service. Applications that are separated
+    into independent microservices provide significant flexibility in multicluster
+    environments.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管将这种数据路由作为链接到主应用程序的客户端库的一部分实现可能很诱人，但我们强烈建议将数据路由作为单独的微服务构建。引入新的微服务可能会增加复杂性，但实际上它引入了一个简化事物的抽象层。而不是您应用程序中的每个服务都担心数据路由，您只需一个服务封装这些关注点，而其他服务只需访问数据服务。将应用程序分解为独立的微服务提供了在多集群环境中显著灵活性。
+- en: 'Better Flexibility: Microservice Routing'
+  id: totrans-48
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 更好的灵活性：微服务路由
+- en: When we discussed the regional silo approach to multicluster application development,
+    we gave an example of how it might reduce the cost-efficiency of your deployed
+    multicluster application. But there are other impacts to flexibility as well.
+    In creating the silo, you are creating at a larger scale the same sort of monoliths
+    that containers and Kubernetes seek to break up. Furthermore, you are forcing
+    every microservice within an application to scale at the same time to the same
+    number of regions.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当我们讨论多集群应用程序开发的区域隔离方法时，我们举了一个例子，说明它可能会降低部署的多集群应用程序的成本效率。但灵活性也会受到其他影响。在创建这种隔离时，您正在以更大规模创建容器和
+    Kubernetes 试图打破的单块体。此外，您正在强迫应用程序内的每个微服务同时扩展到相同数量的区域。
+- en: If your application is small and contained, this may make sense, but as your
+    services become larger, and especially when they may start being shared between
+    multiple applications, the monolithic approach to multicluster begins to significantly
+    impact your flexibility. If a cluster is the unit of deployment and all of your
+    CI/CD is tied to that cluster, you will force every team to adhere to the same
+    rollout process and schedule even if it is a bad fit.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您的应用程序小而集中，这可能有道理，但随着服务变得越来越大，特别是当它们可能开始在多个应用程序之间共享时，单片式的多集群方法开始显著影响您的灵活性。如果集群是部署单位，并且所有的CI/CD都与该集群相关联，那么即使这种匹配不合适，您也会强迫每个团队遵循相同的部署流程和时间表。
+- en: For a concrete example of this, suppose you have one very large application
+    that is deployed to thirty clusters, and a small new application under development.
+    It doesn’t make sense to force the small team developing a new application to
+    immediately reach the scale of your larger application, but if you are too rigid
+    in your application design, this can be exactly what happens.
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以具体示例来说，假设您有一个部署到三十个集群的非常大的应用程序，以及正在开发中的一个小型新应用程序。强迫小团队立即达到大型应用程序的规模是不合理的，但如果在应用设计上过于死板，这可能正是会发生的事情。
+- en: A better approach is to treat each microservice within your application as a
+    public-facing service in terms of its application design. It may never be expected
+    to actually be public facing, but it should have its own global load balancer
+    as described in the previous sections, and it should manage its own data replication
+    service. For all intents and purposes, the different microservices should be independent
+    of each other. When a service calls into a different service, its load is balanced
+    in the same way that an external load would be. With this abstraction in place,
+    each team can scale and deploy their multicluster service independently, just
+    like they do within a single cluster.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 更好的方法是将应用程序中的每个微服务在应用程序设计上视为一个面向公共的服务。虽然可能永远不会真正期望其成为公共服务，但它应该像前面部分所描述的那样拥有自己的全局负载均衡器，并且应该管理其自身的数据复制服务。在所有意图和目的上，不同的微服务应该彼此独立。当一个服务调用另一个服务时，其负载在与外部负载相同的方式下平衡。有了这种抽象，每个团队可以独立扩展和部署他们的多集群服务，就像他们在单个集群内做的那样。
+- en: Of course, doing this for every single microservice within an application can
+    become a significant burden on your teams and can also increase costs via the
+    maintenance of a load balancer for each service and also possibly cross-regional
+    network traffic. Like everything in software design, there is a trade-off between
+    complexity and performance, and you will need to determine for your application
+    the right places to add the isolation of a service boundary, and where it makes
+    sense to group services into a replicated silo. Just like microservices in the
+    single cluster context, this design is likely to change and adapt as your application
+    changes and grows. Expecting (and designing) with this fluidity in mind will help
+    ensure that your application can adapt without requiring massive refactoring.
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当然，为应用程序中的每个微服务都这样做可能会给您的团队带来重大负担，并且可能会通过每个服务的负载均衡器维护以及可能的跨区域网络流量增加成本。像软件设计中的一切一样，复杂性与性能之间存在权衡，您需要确定适合您的应用程序在哪些地方增加服务边界的隔离，并且在何处将服务组合成复制的隔离空间是有意义的。就像单集群上下文中的微服务一样，这种设计很可能随着应用程序的变化和增长而变化和适应。期望（并设计）这种流动性将有助于确保您的应用程序可以适应而无需进行大规模的重构。
+- en: Summary
+  id: totrans-54
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 概要
+- en: Though deploying your application to multiple clusters adds complexity, the
+    requirements and user expectations in the real world make this complexity necessary
+    for most applications that you build. Designing your application and your infrastructure
+    from the ground up to support multicluster application deployments will greatly
+    increase the reliability of your application and significantly reduce the probability
+    of a costly refactor as your application grows. One of the most important pieces
+    of a multicluster deployment is managing the configuration and deployment of the
+    application to the cluster. Whether your application is regional or multicluster,
+    the following chapter will help ensure that you can quickly and reliably deploy
+    it.
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管将您的应用程序部署到多个集群会增加复杂性，但现实世界中的需求和用户期望使这种复杂性对于大多数您构建的应用程序都是必要的。从头开始设计您的应用程序和基础设施以支持多集群应用程序部署将极大地增强您的应用程序的可靠性，并显著降低应用程序增长时重构的概率。多集群部署的最重要部分之一是管理应用程序的配置和部署到集群。无论您的应用程序是区域性的还是多集群的，下一章将帮助确保您能够快速和可靠地部署它。

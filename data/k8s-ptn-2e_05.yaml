@@ -1,0 +1,559 @@
+- en: Chapter 3\. Declarative Deployment
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第3章。声明式部署
+- en: The heart of the *Declarative Deployment* pattern is the Kubernetes Deployment
+    resource. This abstraction encapsulates the upgrade and rollback processes of
+    a group of containers and makes its execution a repeatable and automated activity.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*声明式部署* 模式的核心是 Kubernetes 的 Deployment 资源。这种抽象封装了一组容器的升级和回滚过程，并使其执行成为可重复和自动化的活动。'
+- en: Problem
+  id: totrans-2
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 问题
+- en: We can provision isolated environments as namespaces in a self-service manner
+    and place the applications in these environments with minimal human intervention
+    through the scheduler. But with a growing number of microservices, continually
+    updating and replacing them with newer versions becomes an increasing burden too.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以自助方式在命名空间中为隔离环境提供资源，并通过调度程序将应用程序放置在这些环境中，几乎不需要人为干预。但随着微服务数量的增加，持续更新并用新版本替换它们也成为了越来越大的负担。
+- en: Upgrading a service to a next version involves activities such as starting the
+    new version of the Pod, stopping the old version of a Pod gracefully, waiting
+    and verifying that it has launched successfully, and sometimes rolling it all
+    back to the previous version in the case of failure. These activities are performed
+    either by allowing some downtime but not running concurrent service versions,
+    or with no downtime but increased resource usage due to both versions of the service
+    running during the update process. Performing these steps manually can lead to
+    human errors, and scripting properly can require a significant amount of effort,
+    both of which quickly turn the release process into a bottleneck.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将服务升级到下一个版本涉及到启动新版本的 Pod、优雅地停止旧版本的 Pod、等待并验证其成功启动，有时在失败时回滚到先前版本。这些活动通过允许一些停机时间但不运行并发服务版本，或者在更新过程中由于两个版本的服务同时运行而导致资源使用增加来执行。手动执行这些步骤可能会导致人为错误，并且正确地脚本化可能需要大量的工作量，这些很快就会将发布过程变成瓶颈。
+- en: Solution
+  id: totrans-5
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 解决方案
+- en: Luckily, Kubernetes has automated application upgrades as well. Using the concept
+    of *Deployment*, we can describe how our application should be updated, using
+    different strategies and tuning the various aspects of the update process. If
+    you consider that you do multiple Deployments for every microservice instance
+    per release cycle (which, depending on the team and project, can span from minutes
+    to several months), this is another effort-saving automation by Kubernetes.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 幸运的是，Kubernetes 也实现了应用程序的自动化升级。使用 *Deployment* 的概念，我们可以描述应用程序如何更新，使用不同的策略并调整更新过程的各个方面。如果考虑到每个微服务实例的每个发布周期都要执行多次
+    Deployment（这取决于团队和项目，可以从几分钟到几个月不等），这也是 Kubernetes 提供的另一种节省工作的自动化。
+- en: In [Chapter 2, “Predictable Demands”](ch02.html#PredictableDemands), we saw
+    that, to do its job effectively, the scheduler requires sufficient resources on
+    the host system, appropriate placement policies, and containers with adequately
+    defined resource profiles. Similarly, for a Deployment to do its job correctly,
+    it expects the containers to be good cloud native citizens. At the very core of
+    a Deployment is the ability to start and stop a set of Pods predictably. For this
+    to work as expected, the containers themselves usually listen and honor lifecycle
+    events (such as SIGTERM; see [Chapter 5, “Managed Lifecycle”](ch05.html#ManagedLifecycle))
+    and also provide health-check endpoints as described in [Chapter 4, “Health Probe”](ch04.html#HealthProbe),
+    which indicate whether they started successfully.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 [第2章，“可预测需求”](ch02.html#PredictableDemands) 中，我们看到，为了有效地执行其工作，调度程序需要主机系统上充足的资源、适当的放置策略以及具有充分定义的资源配置文件的容器。类似地，为了正确执行
+    Deployment 的工作，它期望容器成为良好的云原生公民。在 Deployment 的核心是可预测地启动和停止一组 Pod 的能力。为了让这一切正常工作，容器本身通常会监听并遵循生命周期事件（如
+    SIGTERM；参见 [第5章，“托管生命周期”](ch05.html#ManagedLifecycle)）并提供健康检查端点，如 [第4章，“健康探测”](ch04.html#HealthProbe)
+    中描述的那样，指示它们是否成功启动。
+- en: If a container covers these two areas accurately, the platform can cleanly shut
+    down old containers and replace them by starting updated instances. Then all the
+    remaining aspects of an update process can be defined in a declarative way and
+    executed as one atomic action with predefined steps and an expected outcome. Let’s
+    see the options for a container update behavior.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果一个容器准确覆盖了这两个方面，平台就可以干净地关闭旧容器并通过启动更新实例来替换它们。然后，更新过程的所有其他方面都可以以声明方式定义，并作为一个具有预定义步骤和预期结果的原子操作执行。让我们看看容器更新行为的选项。
+- en: Rolling Deployment
+  id: totrans-9
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 滚动部署
+- en: The declarative way of updating applications in Kubernetes is through the concept
+    of Deployment. Behind the scenes, the Deployment creates a ReplicaSet that supports
+    set-based label selectors. Also, the Deployment abstraction allows you to shape
+    the update process behavior with strategies such as `RollingUpdate` (default)
+    and `Recreate`. [Example 3-1](#ex-rolling-update) shows the important bits for
+    configuring a Deployment for a rolling update strategy.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 中，更新应用程序的声明方式是通过 Deployment 的概念。在幕后，Deployment 创建支持基于集合的标签选择器的
+    ReplicaSet。此外，Deployment 抽象允许您使用 `RollingUpdate`（默认）和 `Recreate` 等策略来塑造更新过程的行为。[示例 3-1](#ex-rolling-update)
+    显示了为滚动更新策略配置 Deployment 的重要部分。
+- en: Example 3-1\. Deployment for a rolling update
+  id: totrans-11
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 3-1\. 滚动更新的 Deployment
+- en: '[PRE0]'
+  id: totrans-12
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: '[![1](assets/1.png)](#co_declarative_deployment_CO1-1)'
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_declarative_deployment_CO1-1)'
+- en: Declaration of three replicas. You need more than one replica for a rolling
+    update to make sense.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 三个副本的声明。进行滚动更新需要多于一个副本才有意义。
+- en: '[![2](assets/2.png)](#co_declarative_deployment_CO1-2)'
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_declarative_deployment_CO1-2)'
+- en: Number of Pods that can be run temporarily in addition to the replicas specified
+    during an update. In this example, it could be a maximum of four replicas.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在更新期间，除了指定的副本数之外，可以临时运行的 Pod 数量。在这个例子中，最多可以有四个副本。
+- en: '[![3](assets/3.png)](#co_declarative_deployment_CO1-3)'
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_declarative_deployment_CO1-3)'
+- en: Number of Pods that may be unavailable during the update. Here it could be that
+    only two Pods are available at a time during the update.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在更新期间可能不可用的 Pod 数量。在这种情况下，更新期间可能一次只有两个 Pod 可用。
+- en: '[![4](assets/4.png)](#co_declarative_deployment_CO1-4)'
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_declarative_deployment_CO1-4)'
+- en: Duration in seconds of all readiness probes for a rolled-out Pod needs to be
+    healthy until the rollout continues.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有就绪探针在滚出的 Pod 上必须健康的秒数，直到推出继续。
+- en: '[![5](assets/5.png)](#co_declarative_deployment_CO1-5)'
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#co_declarative_deployment_CO1-5)'
+- en: Readiness probes that are very important for a rolling deployment to ensure
+    zero downtime—don’t forget them (see [Chapter 4, “Health Probe”](ch04.html#HealthProbe)).
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于滚动部署而言，健康探针至关重要，以确保零停机时间—不要忘记它们（见[第 4 章，“健康探针”](ch04.html#HealthProbe)）。
+- en: '`RollingUpdate` strategy behavior ensures there is no downtime during the update
+    process. Behind the scenes, the Deployment implementation performs similar moves
+    by creating new ReplicaSets and replacing old containers with new ones. One enhancement
+    here is that with Deployment, it is possible to control the rate of a new container
+    rollout. The Deployment object allows you to control the range of available and
+    excess Pods through `maxSurge` and `maxUnavailable` fields.'
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`RollingUpdate` 策略的行为确保更新过程中没有停机时间。在幕后，Deployment 实现通过创建新的 ReplicaSets 并替换旧容器来执行类似的操作。这里的一个增强功能是，使用
+    Deployment，可以通过 `maxSurge` 和 `maxUnavailable` 字段控制新容器的推出速率。'
+- en: These two fields can be either absolute numbers of Pods or relative percentages
+    that are applied to the configured number of replicas for the Deployment and are
+    rounded up (`maxSurge`) or down (`maxUnavailable`) to the next integer value.
+    By default, `maxSurge` and `maxUnavailable` are both set to 25%.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这两个字段可以是 Pods 的绝对数或相对百分比，应用于 Deployment 配置的副本数，并向上（`maxSurge`）或向下（`maxUnavailable`）舍入到下一个整数值。默认情况下，`maxSurge`
+    和 `maxUnavailable` 都设置为 25%。
+- en: Another important parameter that influences the rollout behavior is `minReadySeconds`.
+    This field specifies the duration in seconds that the readiness probes of a Pod
+    need to be successful until the Pod itself is considered to be available in a
+    rollout. Increasing this value guarantees that your application Pod is successfully
+    running for some time before continuing with the rollout. Also, a larger `minReadySeconds`
+    interval helps in debugging and exploring the new version. A `kubectl rollout
+    pause` might be easier to leverage when the intervals between the update steps
+    are larger.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个影响推出行为的重要参数是 `minReadySeconds`。此字段指定 Pod 的准备探针需要成功运行的秒数，直到 Pod 自身在推出中被视为可用。增加此值可确保应用程序
+    Pod 在继续推出之前成功运行一段时间。此外，较大的 `minReadySeconds` 间隔有助于调试和探索新版本。当更新步骤之间的间隔较大时，可能更容易利用
+    `kubectl rollout pause`。
+- en: '[Figure 3-1](#img-deploy-rolling) shows the rolling update process.'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 3-1](#img-deploy-rolling) 展示了滚动更新过程。'
+- en: '![Rolling deployment](assets/kup2_0301.png)'
+  id: totrans-27
+  prefs: []
+  type: TYPE_IMG
+  zh: '![滚动部署](assets/kup2_0301.png)'
+- en: Figure 3-1\. Rolling deployment
+  id: totrans-28
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-1\. 滚动部署
+- en: 'To trigger a declarative update, you have three options:'
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要触发声明性更新，您有三个选项：
+- en: Replace the whole Deployment with the new version’s Deployment with `kubectl
+    replace`.
+  id: totrans-30
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用 `kubectl replace` 用新版本的 Deployment 替换整个 Deployment。
+- en: Patch (`kubectl patch`) or interactively edit (`kubectl edit`) the Deployment
+    to set the new container image of the new version.
+  id: totrans-31
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用 `kubectl patch` 或交互式编辑 (`kubectl edit`) Deployment 来设置新版本的容器镜像。
+- en: Use `kubectl set image` to set the new image in the Deployment.
+  id: totrans-32
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用 `kubectl set image` 在 Deployment 中设置新的镜像。
+- en: See also the [full example](https://oreil.ly/xSsID) in our repository, which
+    demonstrates the usage of these commands and shows you how to monitor or roll
+    back an upgrade with `kubectl rollout`.
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另请参阅我们仓库中的 [完整示例](https://oreil.ly/xSsID)，该示例演示了这些命令的用法，并展示了如何使用 `kubectl rollout`
+    监控或回滚升级。
+- en: 'In addition to addressing the drawbacks of the imperative way of deploying
+    services, the Deployment has the following benefits:'
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了解决部署服务的命令式方法的缺点之外，Deployment 还具有以下优点：
+- en: Deployment is a Kubernetes resource object whose status is entirely managed
+    by Kubernetes internally. The whole update process is performed on the server
+    side without client interaction.
+  id: totrans-35
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Deployment 是 Kubernetes 资源对象，其状态完全由 Kubernetes 在内部管理。整个更新过程在服务器端执行，无需客户端交互。
+- en: The declarative nature of Deployment specifies how the deployed state should
+    look rather than the steps necessary to get there.
+  id: totrans-36
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Deployment 的声明性质指定了部署状态应该如何看起来，而不是达到那个状态所需的步骤。
+- en: The Deployment definition is an executable object and more than just documentation.
+    It can be tried and tested on multiple environments before reaching production.
+  id: totrans-37
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Deployment 定义是一个可执行的对象，不仅仅是文档。它可以在达到生产环境之前在多个环境中进行试验和测试。
+- en: The update process is also wholly recorded and versioned with options to pause,
+    continue, and roll back to previous versions.
+  id: totrans-38
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 更新过程也完全记录和版本化，包括暂停、继续和回滚到以前的版本的选项。
+- en: Fixed Deployment
+  id: totrans-39
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 固定部署
+- en: A `RollingUpdate` strategy is useful for ensuring zero downtime during the update
+    process. However, the side effect of this approach is that during the update process,
+    two versions of the container are running at the same time. That may cause issues
+    for the service consumers, especially when the update process has introduced backward-incompatible
+    changes in the service APIs and the client is not capable of dealing with them.
+    For this kind of scenario, you can use the `Recreate` strategy, which is illustrated
+    in [Figure 3-2](#img-deploy-fixed).
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`RollingUpdate` 策略对于确保更新过程中零停机时间很有用。然而，这种方法的副作用是在更新过程中可能会同时运行两个版本的容器。这可能会对服务消费者造成问题，特别是当更新过程在服务
+    API 中引入了不兼容的变化，而客户端无法处理这些变化时。对于这种情况，可以使用 `Recreate` 策略，如 [图3-2](#img-deploy-fixed)
+    所示，它可以解决这些问题。'
+- en: '![Fixed deployment using a Recreate strategy](assets/kup2_0302.png)'
+  id: totrans-41
+  prefs: []
+  type: TYPE_IMG
+  zh: '![使用 Recreate 策略进行固定部署](assets/kup2_0302.png)'
+- en: Figure 3-2\. Fixed deployment using a `Recreate` strategy
+  id: totrans-42
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图3-2\. 使用 `Recreate` 策略进行固定部署
+- en: The `Recreate` strategy has the effect of setting `maxUnavailable` to the number
+    of declared replicas. This means it first kills all containers from the current
+    version and then starts all new containers simultaneously when the old containers
+    are evicted. The result of this sequence is that downtime occurs while all containers
+    with old versions are stopped, and no new containers are ready to handle incoming
+    requests. On the positive side, two different versions of the containers won’t
+    be running at the same time, so service consumers can connect only one version
+    at a time.
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`Recreate` 策略的效果是将 `maxUnavailable` 设置为声明的副本数。这意味着它首先终止当前版本的所有容器，然后在旧容器被驱逐时同时启动所有新容器。这个序列的结果是在停止所有旧版本容器的同时发生停机时间，而且没有新容器准备好处理传入请求。积极的一面是，两个不同版本的容器不会同时运行，因此服务消费者一次只能连接一个版本。'
+- en: Blue-Green Release
+  id: totrans-44
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 蓝绿发布
+- en: The *Blue-Green deployment* is a release strategy used for deploying software
+    in a production environment by minimizing downtime and reducing risk. The Kubernetes
+    Deployment abstraction is a fundamental concept that lets you define how Kubernetes
+    transitions immutable containers from one version to another. We can use the Deployment
+    primitive as a building block, together with other Kubernetes primitives, to implement
+    this more advanced release strategy.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*蓝绿部署* 是一种用于在生产环境中部署软件的发布策略，通过最小化停机时间和降低风险来实现。Kubernetes 的部署抽象是一个基本概念，它允许您定义
+    Kubernetes 如何从一个版本过渡到另一个版本的不可变容器。我们可以将部署原语作为构建块，与其他 Kubernetes 原语一起实现这种更高级的发布策略。'
+- en: A Blue-Green deployment needs to be done manually if no extensions like a service
+    mesh or Knative are used, though. Technically, it works by creating a second Deployment,
+    with the latest version of the containers (let’s call it *green*) not serving
+    any requests yet. At this stage, the old Pod replicas from the original Deployment
+    (called *blue*) are still running and serving live requests.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 蓝绿部署如果没有像服务网格或 Knative 这样的扩展，需要手动完成。从技术上讲，它通过创建第二个部署来运行最新版本的容器（我们称之为 *绿色*），但此时这些容器尚未处理任何请求。在此阶段，原始部署中的旧
+    Pod 副本（称为 *蓝色*）仍在运行并处理活动请求。
+- en: Once we are confident that the new version of the Pods is healthy and ready
+    to handle live requests, we switch the traffic from old Pod replicas to the new
+    replicas. You can do this in Kubernetes by updating the Service selector to match
+    the new containers (labeled with green). As demonstrated in [Figure 3-3](#img-deploy-blue-green),
+    once the green (v1.1) containers handle all the traffic, the blue (v1.0) containers
+    can be deleted and the resources freed for future Blue-Green deployments.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦我们确信新版本的 Pod 已经健康且准备好处理实时请求，我们就会将流量从旧 Pod 副本切换到新的副本。在 Kubernetes 中，可以通过更新服务的选择器来匹配新容器（标记为绿色）来完成此操作。如图
+    [3-3](#img-deploy-blue-green) 所示，一旦绿色（v1.1）容器处理了所有流量，蓝色（v1.0）容器就可以被删除，释放资源供未来的蓝绿部署使用。
+- en: '![Blue-Green release](assets/kup2_0303.png)'
+  id: totrans-48
+  prefs: []
+  type: TYPE_IMG
+  zh: '![蓝绿部署](assets/kup2_0303.png)'
+- en: Figure 3-3\. Blue-Green release
+  id: totrans-49
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-3\. 蓝绿部署
+- en: A benefit of the Blue-Green approach is that only one version of the application
+    is serving requests at a time, which reduces the complexity of handling multiple
+    concurrent versions by the Service consumers. The downside is that it requires
+    twice the application capacity while both blue and green containers are up and
+    running. Also, significant complications can occur with long-running processes
+    and database state drifts during the transitions.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 蓝绿部署的一个好处是一次只有一个应用程序版本在提供请求，这降低了通过服务消费者处理多个并发版本的复杂性。缺点是在蓝色和绿色容器都在运行时，需要两倍的应用程序容量。此外，在过渡期间，长时间运行的进程和数据库状态漂移可能会导致重大的复杂性。
+- en: Canary Release
+  id: totrans-51
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 金丝雀发布
+- en: '*Canary release* is a way to softly deploy a new version of an application
+    into production by replacing only a small subset of old instances with new ones.
+    This technique reduces the risk of introducing a new version into production by
+    letting only some of the consumers reach the updated version. When we’re happy
+    with the new version of our service and how it performed with a small sample of
+    users, we can replace all the old instances with the new version in an additional
+    step after this canary release. [Figure 3-4](#img-deploy-canary) shows a canary
+    release in action.'
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*金丝雀发布* 是一种通过仅替换少部分旧实例来温和地将新版本的应用程序部署到生产环境的方式。这种技术通过让只有一部分消费者能访问更新版本，来减少引入新版本到生产环境中的风险。当我们对服务的新版本和它在一小部分用户中的表现感到满意时，我们可以在此金丝雀发布后的附加步骤中，将所有旧实例替换为新版本。图
+    [3-4](#img-deploy-canary) 展示了金丝雀发布的实施过程。'
+- en: In Kubernetes, this technique can be implemented by creating a new Deployment
+    with a small replica count that can be used as the canary instance. At this stage,
+    the Service should direct some of the consumers to the updated Pod instances.
+    After the canary release and once we are confident that everything with the new
+    ReplicaSet works as expected, we scale the new ReplicaSet up, and the old ReplicaSet
+    down to zero. In a way, we’re performing a controlled and user-tested incremental
+    rollout.
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 中，可以通过创建具有小副本计数的新部署来实现此技术，该部署可用作金丝雀实例。在此阶段，服务应将一些消费者定向到更新的 Pod
+    实例。金丝雀发布后，一旦我们确信新的 ReplicaSet 的所有工作都如预期那样正常运行，我们就会将新的 ReplicaSet 扩展起来，将旧的 ReplicaSet
+    缩减到零。在某种程度上，我们正在执行一个受控且经过用户测试的增量部署。
+- en: '![Canary release](assets/kup2_0304.png)'
+  id: totrans-54
+  prefs: []
+  type: TYPE_IMG
+  zh: '![金丝雀发布](assets/kup2_0304.png)'
+- en: Figure 3-4\. Canary release
+  id: totrans-55
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-4\. 金丝雀发布
+- en: Discussion
+  id: totrans-56
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 讨论
+- en: The Deployment primitive is an example of Kubernetes turning the tedious process
+    of manually updating applications into a declarative activity that can be repeated
+    and automated. The out-of-the-box deployment strategies (rolling and recreate)
+    control the replacement of old containers by new ones, and the advanced release
+    strategies (Blue-Green and canary) control how the new version becomes available
+    to service consumers. The latter two release strategies are based on a human decision
+    for the transition trigger and as a consequence are not fully automated by Kubernetes
+    but require human interaction. [Figure 3-5](#img-deploy-overview) summarizes of
+    the deployment and release strategies, showing instance counts during transitions.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 部署原语是 Kubernetes 将手动更新应用程序这一繁琐过程转变为声明性活动的一个例子，可重复和自动化。开箱即用的部署策略（滚动和重新创建）控制新旧容器的替换，而高级发布策略（蓝绿部署和金丝雀发布）则控制新版本如何对服务消费者可用。后两种发布策略基于人类决策作为过渡触发器，因此
+    Kubernetes 并未完全自动化，而需要人类交互。[图 3-5](#img-deploy-overview) 总结了部署和发布策略，展示了过渡期间的实例计数。
+- en: '![Deployment and release strategies](assets/kup2_0305.png)'
+  id: totrans-58
+  prefs: []
+  type: TYPE_IMG
+  zh: '![部署和发布策略](assets/kup2_0305.png)'
+- en: Figure 3-5\. Deployment and release strategies
+  id: totrans-59
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 3-5\. 部署和发布策略
+- en: All software is different, and deploying complex systems usually requires additional
+    steps and checks. The techniques discussed in this chapter cover the Pod update
+    process, but do not include updating and rolling back other Pod dependencies such
+    as ConfigMaps, Secrets, or other dependent services.
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有软件都是不同的，部署复杂系统通常需要额外的步骤和检查。本章讨论的技术涵盖了 Pod 更新过程，但不包括更新和回滚其他 Pod 依赖项，如 ConfigMaps、Secrets
+    或其他相关服务。
+- en: One approach that works today is to create a script to manage the update process
+    of services and their dependencies using the Deployment and other primitives discussed
+    in this book. However, this imperative approach that describes the individual
+    update steps does not match the declarative nature of Kubernetes.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 今天一种可行的方法是创建一个脚本来管理使用本书讨论的部署和其他原语更新服务及其依赖关系的过程。然而，这种描述单个更新步骤的命令式方法并不符合 Kubernetes
+    的声明性特性。
+- en: As an alternative, higher-level declarative approaches have emerged on top of
+    Kubernetes. The most important platforms are described in the sidebar that follows.
+    Those techniques work with operators (see [Chapter 28, “Operator”](ch28.html#Operator))
+    that take a declarative description of the rollout process and perform the necessary
+    actions on the server side, some of them also including automatic rollbacks in
+    case of an update error. For advanced, production-ready rollout scenarios, it
+    is recommended to look at one of those extensions.
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为替代，出现了在 Kubernetes 之上的更高级别的声明性方法。在下文中描述了最重要的平台。这些技术与运算符（参见[第 28 章，“运算符”](ch28.html#Operator)）一起工作，它们采用部署过程的声明性描述，并在服务器端执行必要的操作，其中一些还包括在更新错误时自动回滚。对于高级、生产就绪的发布场景，建议查看其中一个扩展。
+- en: Regardless of the deployment strategy you are using, it is essential for Kubernetes
+    to know when your application Pods are up and running to perform the required
+    sequence of steps to reach the defined target deployment state. The next pattern,
+    *Health Probe*, in [Chapter 4](ch04.html#HealthProbe) describes how your application
+    can communicate its health state to Kubernetes.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 无论您使用哪种部署策略，对于 Kubernetes 来说，了解应用程序 Pod 何时处于运行状态非常重要，以执行达到定义的目标部署状态所需的步骤序列。下一模式，*健康探针*，在[第 4 章](ch04.html#HealthProbe)描述了您的应用程序如何向
+    Kubernetes 通报其健康状态。
+- en: More Information
+  id: totrans-64
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 更多信息
+- en: '[Declarative Deployment Example](https://oreil.ly/xSsID)'
+  id: totrans-65
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[声明性部署示例](https://oreil.ly/xSsID)'
+- en: '[Performing a Rolling Update](https://oreil.ly/paEA0)'
+  id: totrans-66
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[执行滚动更新](https://oreil.ly/paEA0)'
+- en: '[Deployments](https://oreil.ly/NKEnH)'
+  id: totrans-67
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[部署](https://oreil.ly/NKEnH)'
+- en: '[Run a Stateless Application Using a Deployment](https://oreil.ly/wb7D5)'
+  id: totrans-68
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[使用部署运行无状态应用程序](https://oreil.ly/wb7D5)'
+- en: '[Blue-Green Deployment](https://oreil.ly/sbN9T)'
+  id: totrans-69
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[蓝绿部署](https://oreil.ly/sbN9T)'
+- en: '[Canary Release](https://oreil.ly/Z-vFT)'
+  id: totrans-70
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[金丝雀发布](https://oreil.ly/Z-vFT)'
+- en: '[Flagger: Deployment Strategies](https://oreil.ly/JGL4C)'
+  id: totrans-71
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Flagger: 部署策略](https://oreil.ly/JGL4C)'
+- en: '[Argo Rollouts](https://oreil.ly/0lzcD)'
+  id: totrans-72
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Argo Rollouts](https://oreil.ly/0lzcD)'
+- en: '[Knative: Traffic Management](https://oreil.ly/PAwMQ)'
+  id: totrans-73
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Knative: 流量管理](https://oreil.ly/PAwMQ)'

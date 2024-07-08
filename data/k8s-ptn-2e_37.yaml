@@ -1,0 +1,1545 @@
+- en: Chapter 30\. Image Builder
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第30章 镜像构建器
+- en: Kubernetes is a general-purpose orchestration engine, suitable not only for
+    running applications but also for building container images. The *Image Builder*
+    pattern explains why it makes sense to build the container images within the cluster
+    and what techniques exist today for creating images within Kubernetes.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes是一个通用的编排引擎，不仅适用于运行应用程序，还适用于构建容器镜像。*镜像构建器*模式解释了为什么在集群内构建容器镜像是有意义的，以及今天在Kubernetes中存在哪些创建镜像的技术。
+- en: Problem
+  id: totrans-2
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 问题
+- en: All the patterns in this book so far have been about operating applications
+    on Kubernetes. You’ve learned how to develop and prepare applications to be good
+    cloud native citizens. However, what about *building* the application itself?
+    The classic approach is to build container images outside the cluster, push them
+    to a registry, and refer to them in the Kubernetes Deployment descriptors. However,
+    building within the cluster has several advantages.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，本书中的所有模式都是关于在Kubernetes上运行应用程序的。您已经学会了如何开发和准备应用程序以成为良好的云原生公民。但是，*构建*应用程序本身呢？传统的方法是在集群外构建容器镜像，将其推送到注册表，并在Kubernetes部署描述符中引用它们。然而，在集群内构建具有几个优势。
+- en: If your company policies allow, having only one cluster for everything is advantageous.
+    Building and running applications in one place can considerably reduce maintenance
+    costs. It also simplifies capacity planning and reduces platform resource overhead.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您公司的政策允许，只有一个集群对一切都是有利的。在一个地方构建和运行应用程序可以大大减少维护成本。它还简化了容量规划并减少了平台资源的开销。
+- en: Typically, continuous integration (CI) systems like Jenkins are used to build
+    images. Building with a CI system is a scheduling problem for efficiently finding
+    free computing resources for build jobs. At the heart of Kubernetes is a highly
+    sophisticated scheduler that is a perfect fit for this kind of scheduling challenge.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常使用像Jenkins这样的持续集成（CI）系统来构建镜像。使用CI系统进行构建是一个调度问题，需要有效地为构建作业找到空闲的计算资源。Kubernetes的核心是一个高度复杂的调度器，非常适合解决这类调度挑战。
+- en: Once we move to continuous delivery (CD), where we transition from *building*
+    images to *running* containers, if the build happens within the same cluster,
+    both phases share the same infrastructure and ease transition. For example, let’s
+    assume that a new security vulnerability is discovered in a base image used for
+    all applications. As soon as your team has fixed this issue, you have to rebuild
+    all the application images that depend on this base image and update your running
+    applications with the new image. When implementing this *Image Builder* pattern,
+    the cluster knows both—the build of an image and its deployment—and can automatically
+    do a redeployment if a base image changes. In [“OpenShift Build”](#image-builder-openshift),
+    we’ll see how OpenShift implements such automation.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦我们转向持续交付（CD），从*构建*镜像转向*运行*容器，如果构建发生在同一个集群内，两个阶段共享相同的基础设施，并且容易过渡。例如，假设发现了一个新的安全漏洞在所有应用程序使用的基础镜像中。当您的团队解决了这个问题后，您必须重建所有依赖于此基础镜像的应用程序镜像，并使用新镜像更新正在运行的应用程序。在实现*镜像构建器*模式时，集群同时知道镜像的构建和部署，如果基础镜像发生变化，可以自动重新部署。在[“OpenShift
+    Build”](#image-builder-openshift)，我们将看到OpenShift如何实现这样的自动化。
+- en: Having seen the benefits of building images on the platform, let’s look at what
+    techniques exist for creating images in a Kubernetes cluster.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在平台上看到构建镜像的好处后，让我们看看在Kubernetes集群中创建镜像的技术有哪些存在。
+- en: Solution
+  id: totrans-8
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 解决方案
+- en: As of 2023, a whole zoo of in-cluster container image-build techniques exists.
+    While all target the same goal of building images, each tool adds a twist, making
+    it unique and suitable for specific situations.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 截至2023年，存在一整套在集群中构建容器镜像的技术。虽然所有技术的目标都是构建镜像，但每种工具都添加了一些独特的功能，使其适用于特定的情况。
+- en: '[Figure 30-1](#img-image-builder-levels) contains the essential image-building
+    techniques as of 2023 for building container images within a Kubernetes cluster.'
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图30-1](#img-image-builder-levels) 包含了截至2023年在Kubernetes集群中构建容器镜像的基本技术。'
+- en: '![kup2 3001](assets/kup2_3001.png)'
+  id: totrans-11
+  prefs: []
+  type: TYPE_IMG
+  zh: '![kup2 3001](assets/kup2_3001.png)'
+- en: Figure 30-1\. Container image builds within Kubernetes
+  id: totrans-12
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图30-1 Kubernetes内的容器镜像构建
+- en: This chapter contains a brief overview of most of these techniques. You can
+    find more details about these tools by following the links in [“More Information”](#image-builder-more-information).
+    Please note that while many of the tools described here are matured and used in
+    production projects, there are no guarantees that some of those projects still
+    exist when you read these lines. Before using one, you should check whether the
+    project is still alive and supported.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本章节简要概述了大多数这些技术。你可以通过跟随[“更多信息”](#image-builder-more-information)中的链接找到关于这些工具更多的细节。请注意，尽管这里描述的许多工具已经成熟并用于生产项目中，但不能保证在您阅读这些文字时这些项目仍然存在。在使用之前，您应该检查项目是否仍然活跃并得到支持。
+- en: 'Categorizing these tools is not straightforward as they are partly overlapping
+    or dependent on one another. Each of these tools has a unique focus, but for in-cluster
+    builds, we can identify these high-level categories:'
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对这些工具进行分类并不简单，因为它们在某种程度上重叠或相互依赖。每个工具都有其独特的重点，但对于集群内构建，我们可以识别出以下高级分类：
+- en: Container image builder
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器镜像构建器
+- en: These tools create container images within the cluster. There is some overlap
+    of these tools, and they vary, but all of them can run without privileged access.
+    You can also run these tools outside the cluster as CLI programs. The sole purpose
+    of these builders is to create a container image, but they don’t care about application
+    redeployments.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些工具在集群内创建容器镜像。这些工具之间存在一定的重叠，各有所异，但全部都可以在非特权访问的情况下运行。你也可以将这些工具作为 CLI 程序在集群外运行。这些构建器的唯一目的是创建容器镜像，但它们并不关心应用程序的重新部署。
+- en: Build orchestration
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 构建编排
+- en: These tools operate on a higher level of abstraction and eventually trigger
+    the container image builder for creating images. They also support build-related
+    tasks like updating the deployment descriptors after the image has been built.
+    CI/CD systems, as described previously, are typical examples of orchestrators.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些工具在更高的抽象层上运作，并最终触发容器镜像构建器来创建镜像。它们还支持构建相关任务，如在构建完镜像后更新部署描述符。如前所述的 CI/CD 系统是编排器的典型例子。
+- en: Container Image Builder
+  id: totrans-19
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 容器镜像构建器
+- en: One of the essential prerequisites for building images from within a cluster
+    is creating images without having privileged access to the node host. Various
+    tools exists that fulfill this prerequisite, and they can be roughly categorized
+    according to how the container image is specified and built.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从集群内部构建镜像的一个基本前提是在没有特权访问节点主机的情况下创建镜像。存在各种工具满足此前提条件，并且可以根据容器镜像的规范和构建方式进行粗略分类。
+- en: Dockerfile-Based builders
+  id: totrans-21
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 基于 Dockerfile 的构建器
+- en: 'The following builders are based on the well-known Dockerfile format for defining
+    the build instructions. All of them are compatible on a Dockerfile level, and
+    they either work completely without talking to a background daemon or talk via
+    a REST API remotely with a build process that is running in a nonprivileged mode:'
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下列构建器基于众所周知的 Dockerfile 格式来定义构建指令。它们在 Dockerfile 级别上是兼容的，并且要么完全不依赖与后台守护程序交互，要么通过
+    REST API 与在非特权模式下运行的构建进程远程交流：
+- en: Buildah and Podman
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Buildah 和 Podman
+- en: Buildah and its sister Podman are potent tools for building OCI-compliant images
+    without a Docker daemon. They create images locally within the container before
+    pushing them to an image registry. Buildah and Podman overlap in functionality,
+    with Buildah focusing on building container images (though Podman can also create
+    container images by wrapping the Buildah API). The difference is shaped more clearly
+    in this [README](https://oreil.ly/kSgHk).
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Buildah 及其姊妹项目 Podman 是强大的工具，用于构建符合 OCI 规范的镜像，而无需 Docker 守护程序。它们在容器内部创建镜像，然后将其推送到镜像注册表中。Buildah
+    和 Podman 在功能上有重叠，Buildah 专注于构建容器镜像（尽管 Podman 也可以通过包装 Buildah API 创建容器镜像）。在这篇[自述文件](https://oreil.ly/kSgHk)中更清楚地描述了它们的区别。
+- en: Kaniko
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kaniko
+- en: Kaniko is one backbone of the Google Cloud Build service and is deliberately
+    targeted for running as a build container in Kubernetes. Within the build container,
+    Kaniko still runs with UID 0, but the Pod holding the container itself is nonprivileged.
+    This requirement prevents the usage of Kaniko in clusters that disallow running
+    as a root user in a container, like in OpenShift. We see Kaniko in action in [“Build
+    Pod”](#image-builder-build-pod).
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kaniko 是 Google Cloud Build 服务的一个支柱，并且专门用于在 Kubernetes 中作为构建容器运行。在构建容器内部，Kaniko
+    仍然以 UID 0 运行，但持有容器本身的 Pod 是非特权的。这一要求阻止了在禁止容器中以 root 用户身份运行的集群中使用 Kaniko，比如 OpenShift。我们可以在[“构建
+    Pod”](#image-builder-build-pod)中看到 Kaniko 的实际应用。
+- en: BuildKit
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: BuildKit
+- en: Docker extracted its build engine into a separate project, BuildKit, which can
+    be used independently of Docker. It inherits from Docker its client-server architecture
+    with a BuildKit daemon running in the background, waiting for build jobs. Usually,
+    this daemon runs directly in the container that triggers the build, but it can
+    also run in a Kubernetes cluster to allow distributed rootless builds. BuildKit
+    introduces a Low-Level Build (LLB) definition format supported by multiple frontends.
+    LLB allows complex build graphs and can be used for arbitrary complex build definitions.
+    BuildKit also supports features that go beyond the original Dockerfile specification.
+    In addition to Dockerfiles, BuildKit can use other frontends to define the container
+    image’s content via LLB.
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Docker 将其构建引擎拆分为一个独立的项目，BuildKit，可以独立于 Docker 使用。它继承了 Docker 的客户端-服务器架构，通过后台运行的
+    BuildKit 守护进程等待构建作业。通常情况下，这个守护进程直接在触发构建的容器中运行，但也可以在 Kubernetes 集群中运行，以支持分布式无根构建。BuildKit
+    引入了低级构建（LLB）定义格式，并支持多个前端。LLB 允许复杂的构建图，并可以用于任意复杂的构建定义。BuildKit 还支持超出原始 Dockerfile
+    规范的功能。除了 Dockerfile 外，BuildKit 还可以使用其他前端通过 LLB 定义容器镜像的内容。
+- en: Multilanguage builders
+  id: totrans-29
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 多语言构建器
+- en: Many developers care only that their application gets packaged as container
+    images and not so much about how this is done. To cover this use case, multilanguage
+    builders exist to support many programming platforms. They detect an existing
+    project, like a Spring Boot application or generic Python build, and select an
+    opinionated image build flow accordingly.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 许多开发者只关心他们的应用程序被打包为容器镜像，而不太关心这是如何完成的。为了满足这种情况，存在多语言构建器以支持多种编程平台。它们检测现有项目，如 Spring
+    Boot 应用程序或通用的 Python 构建，并选择一个有意见的镜像构建流程。
+- en: '*Buildpacks* have been around since 2012 and were initially introduced by Heroku
+    to allow you to push developer’s code directly to their platform. Cloud Foundry
+    picked up that idea and created a fork of buildpacks that eventually led to the
+    infamous `cf push` idiom that many considered the gold standard of Platform as
+    a Service (PaaS). In 2018, the different forks of Buildpacks united under the
+    umbrella of the CNCF and are now known as *Cloud Native Buildpacks* (CNB). Besides
+    individual buildpacks for different programming languages, CNB introduce a lifecycle
+    for transforming source code to executable container images.'
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*Buildpacks* 自 2012 年以来存在，并最初由 Heroku 引入，允许将开发者的代码直接推送到其平台。Cloud Foundry 接纳了这个思路，并创建了
+    Buildpack 的分支，最终形成了被广泛认为是平台即服务（PaaS）黄金标准的 `cf push` 成语。2018 年，各种 Buildpack 的分支统一在
+    CNCF 的旗下，并被称为 *Cloud Native Buildpacks* (CNB)。除了为不同的编程语言提供个别的构建包外，CNB 还引入了一个生命周期，用于将源代码转换为可执行的容器镜像。'
+- en: The lifecycle can roughly be divided into three main phases:^([1](ch30.html#idm45902080790064))
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 生命周期大致可以分为三个主要阶段：^([1](ch30.html#idm45902080790064))
+- en: In the *detect* phase, CNB iterate over a list of configured buildpacks. Each
+    buildpack can decide whether it fits for the given source code. For example, a
+    Java-based buildpack will raise its hand when it detects a Maven *pom.xml*.
+  id: totrans-33
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在 *detect* 阶段，CNB 会迭代一个配置好的构建包列表。每个构建包可以决定它是否适合给定的源代码。例如，基于 Java 的构建包在检测到 Maven
+    的 *pom.xml* 后会响应。
+- en: All buildpacks that survived the detect phase will be called in the *build*
+    phase to provide their part for the final, possibly compiled artifact. For example,
+    a buildpack for a Node.js application calls `npm install` to fetch all required
+    dependencies.
+  id: totrans-34
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 所有在 detect 阶段存活下来的构建包将在 *build* 阶段被调用，为最终的、可能已编译的工件提供它们的部分。例如，Node.js 应用的构建包会调用
+    `npm install` 来获取所有必需的依赖项。
+- en: The last step in the CNB lifecycle is an *export* to the final OCI image that
+    gets pushed to a registry.
+  id: totrans-35
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: CNB 生命周期的最后一步是将结果 *export* 到最终的 OCI 镜像，并将其推送到注册表。
+- en: CNB target two personas. The primary audience includes *Developers* who want
+    to deploy their code onto Kubernetes or any other container-based platform. The
+    other is *Buildpack Authors*, who create individual buildpacks and group them
+    into so-called *builders*. You can choose from a list of prefactored buildpacks
+    and builders or create your own for you and your team. Developers can then pick
+    up those buildpacks by referencing them when running the CNB lifecycle on their
+    source code. Several tools are available for executing this lifecycle; you’ll
+    find a complete list at the [Cloud Native Buildpacks site](https://oreil.ly/B07Et).
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CNB针对两种用户群体。主要受众包括*开发者*，他们希望将他们的代码部署到Kubernetes或任何其他基于容器的平台上。另一个是*Buildpack作者*，他们创建单个Buildpack，并将它们组合成所谓的*builders*。您可以从预制的Buildpacks和builders列表中进行选择，或者为您和您的团队创建自己的Buildpacks。然后，开发者可以通过在其源代码上运行CNB生命周期时引用它们来选择这些Buildpacks。有多种工具可用于执行此生命周期；您可以在[Cloud
+    Native Buildpacks网站](https://oreil.ly/B07Et)上找到完整的列表。
+- en: 'For using CNB within a Kubernetes cluster, the following tasks are helpful:'
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于在Kubernetes集群中使用CNB，以下任务非常有帮助：
+- en: '`pack` is a CLI command to configure and execute the CNB lifecycle locally.
+    It requires access to an OCI container runtime engine like Docker or Podman to
+    run Builder images that hold the list of buildpacks to use.'
+  id: totrans-38
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`pack` 是一个CLI命令，用于在本地配置和执行CNB生命周期。它需要访问像Docker或Podman这样的OCI容器运行时引擎来运行包含要使用的Buildpacks列表的Builder镜像。'
+- en: CI steps like Tekton build tasks or GitHub actions that call the lifecycle directly
+    from a configured Builder image.
+  id: totrans-39
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 像Tekton构建任务或通过GitHub actions直接调用从配置的Builder镜像中调用生命周期的CI步骤。
+- en: '`kpack` comes with an Operator that allows you to configure and run buildpacks
+    within a Kubernetes cluster. All the core concepts of CNB, like Builder or Buildpacks,
+    are reflected directly as CustomResourceDefinitions. `kpack` is not yet part of
+    the CNB project itself, but as of 2023 is about to be absorbed.'
+  id: totrans-40
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`kpack`配备了一个操作器，允许您在Kubernetes集群中配置和运行buildpacks。CNB的所有核心概念，如Builder或Buildpacks，都直接反映为CustomResourceDefinitions。`kpack`目前尚未成为CNB项目的一部分，但自2023年以来即将被吸收。'
+- en: Many other platforms and projects have adopted CNB as their build platform of
+    choice. For example, Knative Functions use CNB under the hood to transform Function
+    code to container images before they get deployed as Knative services.
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 许多其他平台和项目已经采用CNB作为其首选的构建平台。例如，Knative Functions在将Function代码转换为容器镜像并部署为Knative服务之前，使用CNB作为其内部的转换工具。
+- en: '*OpenShift’s Source-to-Image* (S2I) is another opinionated building method
+    with builder images. S2I takes you directly from your application’s source code
+    to executable container images. We will look closely at S2I in [“OpenShift Build”](#image-builder-openshift).'
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*OpenShift的Source-to-Image*（S2I）是另一种具有见解的构建方法，使用builder镜像。S2I直接从您的应用程序源代码生成可执行的容器镜像。我们将在[“OpenShift构建”](#image-builder-openshift)中详细研究S2I。'
+- en: Specialized builders
+  id: totrans-43
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 专门的builders
+- en: 'Finally, specialized builders with an opinionated way of creating images exist
+    for specific situations. While their scope is narrow, their strong opinion allows
+    for a highly optimized build flow that increases flexibility and decreases build
+    times. All these builders perform a rootless build. They create the container
+    image without running arbitrary commands as with a Dockerfile `RUN` directive.
+    They create the image layers locally with the application artifacts and push them
+    directly to a container image registry:'
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后，专门的builders具有一种有见解的创建镜像的方式，适用于特定情况。虽然它们的范围狭窄，但它们的强烈意见允许高度优化的构建流程，增加灵活性并减少构建时间。所有这些builders都执行无根权限构建。它们在本地创建包含应用程序工件的容器镜像层，并直接推送到容器镜像注册表：
+- en: Jib
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Jib
+- en: Jib is a pure Java library and build extension that integrates nicely with Java
+    build tools like Maven or Gradle. It creates separate image layers directly for
+    the Java build artifacts, its dependencies, and other static resources to optimize
+    image rebuild times. Like the other builders, it speaks directly with a container
+    image registry for the resulting images.
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Jib是一个纯Java库和构建扩展，与Java构建工具（如Maven或Gradle）很好地集成。它直接为Java构建工件、依赖项和其他静态资源创建单独的镜像层，以优化镜像重建时间。与其他构建工具一样，它直接与容器镜像注册表通信，用于生成的镜像。
+- en: ko
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ko
+- en: For creating images from Golang sources, ko is a great tool. It can directly
+    create images from remote Git repositories and update Pod specifications to point
+    to the image after it has been built and pushed to a registry.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于从Golang源代码创建镜像，ko是一个很好的工具。它可以直接从远程Git存储库创建镜像，并在构建和推送到注册表后更新Pod规范以指向该镜像。
+- en: Apko
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Apko
+- en: Apko is a unique builder that uses Alpine’s Apk packages as building blocks
+    instead of Dockerfile scripts. This strategy allows for the easy reuse of building
+    blocks when creating multiple similar images.
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Apko 是一种独特的构建器，它使用 Alpine 的 Apk 包作为构建块，而不是 Dockerfile 脚本。这种策略允许在创建多个相似镜像时轻松重用构建块。
+- en: This list is only a selection of the many specialized build techniques. All
+    of them have a very narrow scope of what they can build. The advantage of this
+    opinionated approach is that they can optimize build time and image size because
+    they know precisely about the domain in which they operate and can make strong
+    assumptions.
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此列表仅选择了许多专业化构建技术中的一部分。它们都对它们可以构建的内容有着非常狭窄的范围。这种主观化方法的优势在于，它们可以优化构建时间和镜像大小，因为它们精确地了解它们操作的领域，并能做出明确的假设。
+- en: Now that we have seen some ways to build container images, let’s jump one abstraction
+    level higher and see how we can embed the actual build in a broader context.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经看到了一些构建容器镜像的方法，让我们跳到更高的抽象级别，看看如何在更广泛的上下文中嵌入实际的构建。
+- en: Build Orchestrators
+  id: totrans-53
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 构建编排器
+- en: Build orchestrators are CI and CD platforms like Tekton, Argo CD, or Flux. Those
+    platforms cover your application’s entire automated management lifecycle, including
+    building, testing, releasing, deploying, security scanning, and much more. There
+    are excellent books that cover those platforms and bring it all together, so we
+    won’t go into the details here.
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 构建编排器是诸如 Tekton、Argo CD 或 Flux 等 CI 和 CD 平台。这些平台涵盖了应用程序的整个自动化管理生命周期，包括构建、测试、发布、部署、安全扫描等。有一些优秀的书籍涵盖了这些平台并将其整合在一起，所以我们在这里不会详细介绍。
+- en: 'In addition to general-purpose CI and CD platforms, we can use more specialized
+    orchestrators to create container images:'
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了通用的 CI 和 CD 平台外，我们还可以使用更专业的编排器来创建容器镜像：
+- en: OpenShift builds
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: OpenShift 构建
+- en: One of the oldest and most mature ways of building images in a Kubernetes cluster
+    is the *OpenShift build* subsystem. It allows you to build images in several ways.
+    We take a closer look at the OpenShift way of building images in [“OpenShift Build”](#image-builder-openshift).
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 集群中构建镜像的最古老和最成熟的方法之一是 *OpenShift 构建* 子系统。它允许您以多种方式构建镜像。我们将在[“OpenShift
+    构建”](#image-builder-openshift)中更详细地了解 OpenShift 构建镜像的方式。
+- en: kbld
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: kbld
+- en: 'kbld is part of Carvel, a toolset for building, configuring, and deploying
+    on Kubernetes. kbld is responsible for building containers with one of the builder
+    technologies we described in [“Container Image Builder”](#image-builder-builders)
+    and updating resource descriptors with a reference to the images that have been
+    built. The technique for updating the YAML files is very similar to how ko works:
+    kbld looks for `image` fields and sets their values to the coordinates of the
+    freshly built image.'
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: kbld 是 Carvel 工具集的一部分，用于在 Kubernetes 上构建、配置和部署。kbld 负责使用我们在[“容器镜像构建器”](#image-builder-builders)中描述的构建技术之一构建容器，并更新资源描述符，引用已构建的镜像。更新
+    YAML 文件的技术与 ko 的工作方式非常相似：kbld 查找`image`字段，并将它们的值设置为新构建镜像的坐标。
+- en: Kubernetes Job
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 作业
+- en: You can also use standard Kubernetes Jobs for triggering builds with any of
+    the image builders from [“Container Image Builder”](#image-builder-builders).
+    Jobs are described in detail in [Chapter 7, “Batch Job”](ch07.html#BatchJob).
+    Such a Job wraps a build Pod specification for defining the runtime parts. The
+    build Pod picks up the source code from a remote source repository and uses one
+    of the in-cluster builders to create the appropriate image. We’ll see such a Pod
+    in action in [“Build Pod”](#image-builder-build-pod).
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您还可以使用标准的 Kubernetes 作业触发[“容器镜像构建器”](#image-builder-builders)中的任何一个构建器进行构建。详细描述作业的内容在[第
+    7 章，“批处理作业”](ch07.html#BatchJob)中。这样的作业包装了一个构建 Pod 规范，用于定义运行时部分。构建 Pod 从远程源代码库获取源代码，并使用集群内的一个构建器创建适当的镜像。我们将在[“构建
+    Pod”](#image-builder-build-pod)中看到这样的 Pod 在运行中的情况。
+- en: Build Pod
+  id: totrans-62
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 构建 Pod
+- en: To carve out the essential ingredients of typical in-cluster builds, let’s start
+    minimally and use a Kubernetes Pod for performing a complete build and deploy
+    cycle. These build steps are illustrated in [Figure 30-2](#img-build-pod).
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要挖掘典型的集群内构建的基本要素，让我们从最小化开始，使用 Kubernetes Pod 执行完整的构建和部署周期。这些构建步骤在[图 30-2](#img-build-pod)中有所说明。
+- en: '![kup2 3002](assets/kup2_3002.png)'
+  id: totrans-64
+  prefs: []
+  type: TYPE_IMG
+  zh: '![kup2 3002](assets/kup2_3002.png)'
+- en: Figure 30-2\. In-cluster container image build with a build Pod
+  id: totrans-65
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 30-2\. 集群内使用构建 Pod 构建容器镜像
+- en: 'The following tasks are representative of all build orchestrators and cover
+    all aspects of creating container images:'
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以下任务代表了所有构建编排器的特征，并涵盖了创建容器镜像的所有方面：
+- en: Check out the source code from a given remote Git repository.
+  id: totrans-67
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 从给定的远程Git仓库检出源代码。
+- en: For a compiled language, perform a local build within the container.
+  id: totrans-68
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 对于编译语言，在容器内执行本地构建。
+- en: Build the application with one of the techniques described in [“Container Image
+    Builder”](#image-builder-builders).
+  id: totrans-69
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 使用[“容器镜像构建器”](#image-builder-builders)中描述的一种技术构建应用程序。
+- en: Push the image to a remote image registry.
+  id: totrans-70
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 将镜像推送到远程镜像注册表。
+- en: Optionally, update a deployment with the new image reference, which will trigger
+    a redeployment of the application following the strategies described in [Chapter 3,
+    “Declarative Deployment”](ch03.html#DeclarativeDeployment).
+  id: totrans-71
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 可选地，使用新的镜像引用更新部署，这将触发按[第3章，“声明式部署”](ch03.html#DeclarativeDeployment)描述的策略重新部署应用程序。
+- en: The build Pod in our example uses init containers as described in [Chapter 15,
+    “Init Container”](ch15.html#InitContainer), to ensure that the build steps are
+    running one after the other. In a real-world scenario, you would use a CI system
+    like Tekton to specify and execute these tasks sequentially.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在我们的示例中，构建Pod使用了如[第15章，“初始化容器”](ch15.html#InitContainer)所述的初始化容器，以确保构建步骤按顺序运行。在实际场景中，您会使用像Tekton这样的CI系统来指定和顺序执行这些任务。
+- en: The complete build Pod definition is shown in [Example 30-1](#ex-image-builder-build-pod).
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 完整的构建Pod定义显示在[示例30-1](#ex-image-builder-build-pod)中。
+- en: Example 30-1\. Build Pod using Kaniko
+  id: totrans-74
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 30-1\. 使用Kaniko构建Pod
+- en: '[PRE0]'
+  id: totrans-75
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: '[![1](assets/1.png)](#co_image_builder_CO1-1)'
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_image_builder_CO1-1)'
+- en: Init container for fetching the source code from a remote Git repository.
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用于从远程Git仓库获取源代码的初始化容器。
+- en: '[![2](assets/2.png)](#co_image_builder_CO1-2)'
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_image_builder_CO1-2)'
+- en: Volume in which to store the source code.
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 存储源代码的卷。
+- en: '[![3](assets/3.png)](#co_image_builder_CO1-3)'
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_image_builder_CO1-3)'
+- en: Kaniko as build container, storing the created image as a reference in the shared
+    workspace.
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kaniko作为构建容器，将创建的镜像作为共享工作空间中的引用存储。
+- en: '[![4](assets/4.png)](#co_image_builder_CO1-4)'
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_image_builder_CO1-4)'
+- en: Build is running unprivileged.
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 构建正在以非特权方式运行。
+- en: '[![5](assets/5.png)](#co_image_builder_CO1-5)'
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#co_image_builder_CO1-5)'
+- en: Secret for pushing to Docker Hub registry mounted at a well-known path so that
+    Kaniko can find it.
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将用于推送到Docker Hub注册表的秘密挂载在一个已知路径上，以便Kaniko可以找到它。
+- en: '[![6](assets/6.png)](#co_image_builder_CO1-6)'
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![6](assets/6.png)](#co_image_builder_CO1-6)'
+- en: Mounting shared workspace for getting the source code.
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 挂载共享工作空间以获取源代码。
+- en: '[![7](assets/7.png)](#co_image_builder_CO1-7)'
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![7](assets/7.png)](#co_image_builder_CO1-7)'
+- en: Container for updating the deployment `random` with the image reference from
+    the Kaniko build.
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用Kaniko构建的镜像引用更新部署`random`的容器。
+- en: '[![8](assets/8.png)](#co_image_builder_CO1-8)'
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![8](assets/8.png)](#co_image_builder_CO1-8)'
+- en: Secret volume with the Docker Hub credentials.
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 带有Docker Hub凭证的秘密卷。
+- en: '[![9](assets/9.png)](#co_image_builder_CO1-9)'
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![9](assets/9.png)](#co_image_builder_CO1-9)'
+- en: Definition of a shared volume as an empty directory on the node’s local filesystem.
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将共享卷定义为节点本地文件系统上的空目录。
+- en: '[![10](assets/10.png)](#co_image_builder_CO1-10)'
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![10](assets/10.png)](#co_image_builder_CO1-10)'
+- en: ServiceAccount that is allowed to patch a Deployment resource.
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 允许修补部署资源的ServiceAccount。
+- en: '[![11](assets/11.png)](#co_image_builder_CO1-11)'
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![11](assets/11.png)](#co_image_builder_CO1-11)'
+- en: Never restart this Pod.
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 永不重新启动此Pod。
+- en: This example is quite involved, so let’s break it down into three main parts.
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个示例比较复杂，让我们将其分解为三个主要部分。
+- en: First, before being able to build a container image, the application code needs
+    to be fetched. In most cases, the source code is picked up from a remote Git repository,
+    but other techniques are available. For development purposes, it is convenient
+    to get the source code from your local machine so that you don’t have to go over
+    a remote source repository and mess up your commit history with triggering commits.
+    Because the build happens within a cluster, that source code must be uploaded
+    somehow to your build container. Another possibility is to distribute the source
+    code packaged in a container image and distribute it via a container image registry.
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，在能够构建容器镜像之前，需要获取应用程序代码。在大多数情况下，源代码从远程Git仓库获取，但也有其他技术可用。为了开发方便，可以从本地机器获取源代码，这样就不必访问远程源代码仓库，并避免通过触发提交来搞乱提交历史。由于构建发生在集群内部，因此必须以某种方式将该源代码上传到构建容器中。另一种可能性是通过容器镜像打包和分发源代码，并通过容器镜像注册表分发。
+- en: In [Example 30-1](#ex-image-builder-build-pod), we use an init container to
+    fetch the source code from our source Git repository and store it in a shared
+    Pod volume `source` of type `emptyDir` so that it can later be picked up by the
+    build process container.
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[示例30-1](#ex-image-builder-build-pod)中，我们使用一个初始化容器从源Git存储库中获取源代码，并将其存储在类型为`emptyDir`的共享Pod卷`source`中，以便后续构建过程可以获取它。
+- en: Second, after the application code is retrieved, the actual build happens. In
+    our example, we use [Kaniko](https://oreil.ly/SQeYa), which uses a regular Dockerfile
+    and can run entirely unprivileged. We again use an init container to ensure that
+    the build starts only after the source code has been fully fetched. The container
+    image is created locally on disk, and we also configure Kaniko to push the resulting
+    image to a remote Docker registry.
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来，在检索应用程序代码之后，实际的构建过程开始。在我们的示例中，我们使用[Kaniko](https://oreil.ly/SQeYa)，它使用常规的Dockerfile，并且可以完全无特权地运行。我们再次使用一个初始化容器，以确保只有在完全获取源代码后才开始构建。容器镜像会在本地磁盘上创建，并且我们还配置了Kaniko将生成的镜像推送到远程Docker注册表。
+- en: The credentials for pushing to the registry are picked up from a Kubernetes
+    Secret. We describe Secrets in detail in [Chapter 20, “Configuration Resource”](ch20.html#ConfigurationResource).
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用于推送到注册表的凭据从Kubernetes Secret中获取。我们在[第20章，“配置资源”](ch20.html#ConfigurationResource)中详细解释了Secrets。
+- en: 'Luckily, for the particular case of authentication against a Docker registry,
+    we have direct support from `kubectl` for creating such a secret that stores this
+    configuration in a well-known format:'
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 幸运的是，对于针对Docker注册表的认证的特定情况，我们可以直接从`kubectl`获得支持，以创建存储此配置的密钥，其格式是众所周知的。
+- en: '[PRE1]'
+  id: totrans-104
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: For [Example 30-1](#ex-image-builder-build-pod), such a secret is mounted into
+    the build container under a given path so that Kaniko can pick it up when pushing
+    the created image. In [Chapter 25, “Secure Configuration”](ch25.html#SecureConfiguration),
+    we explain how such a secret can be stored securely so that it can’t be forged.
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于[示例30-1](#ex-image-builder-build-pod)，将此类密钥挂载到给定路径下的构建容器中，以便Kaniko在创建镜像时可以获取它。在[第25章，“安全配置”](ch25.html#SecureConfiguration)中，我们解释了如何安全地存储此类密钥，以防止伪造。
+- en: The final step is to update an existing Deployment with the newly created image.
+    This task is now performed in the actual application container of the Pod.^([2](ch30.html#idm45902080225920))
+    The referenced image is from our example repository and contains just a `kubectl`
+    binary that patches the specified Deployment with the new image name with the
+    following call, shown in [Example 30-2](#ex-image-builder-deploy).
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最后一步是使用新创建的镜像更新现有的Deployment。现在，在Pod的实际应用程序容器中执行此任务。^([2](ch30.html#idm45902080225920))
+    所引用的镜像来自我们的示例仓库，仅包含一个`kubectl`二进制文件，该文件通过以下调用修补指定的Deployment以使用新的镜像名称，如[示例30-2](#ex-image-builder-deploy)所示。
+- en: Example 30-2\. Update image field in Deployment
+  id: totrans-107
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例30-2\. 更新Deployment中的镜像字段
+- en: '[PRE2]'
+  id: totrans-108
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: '[![1](assets/1.png)](#co_image_builder_CO2-1)'
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_image_builder_CO2-1)'
+- en: Pickup image name stored by the previous build step in the file */opt/image-name*.
+    This file is provided as the first argument to this script.
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 检索之前构建步骤中存储的镜像名称，位于文件*/opt/image-name*中。此文件作为该脚本的第一个参数提供。
+- en: '[![2](assets/2.png)](#co_image_builder_CO2-2)'
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_image_builder_CO2-2)'
+- en: JSON path to update the Pod spec with the new image reference.
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用于更新Pod规范以使用新镜像引用的JSON路径。
+- en: '[![3](assets/3.png)](#co_image_builder_CO2-3)'
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_image_builder_CO2-3)'
+- en: Patch the deployment given as the second argument (`random` in our example)
+    and trigger a new rollout.
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为给定的第二个参数（在我们的示例中是`random`）打补丁，并触发新的滚动更新。
+- en: The Pod’s assigned ServiceAccount `build-pod` is set up so it can write to this
+    Deployment. Assigning permissions to a ServiceAccount is described fully in [Chapter 26,
+    “Access Control”](ch26.html#AccessControl). When the image reference is updated
+    in the Deployment, a rollout as described in [Chapter 3, “Declarative Deployment”](ch03.html#DeclarativeDeployment),
+    is performed.
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod分配的ServiceAccount `build-pod` 已设置为可以写入此Deployment。有关为ServiceAccount分配权限的说明，请参阅[第26章，“访问控制”](ch26.html#AccessControl)。在Deployment中更新镜像引用后，会执行如[第3章，“声明式部署”](ch03.html#DeclarativeDeployment)所述的滚动更新。
+- en: You can find the fully working setup in the book’s [example repository](https://oreil.ly/jVF6h).
+    The build Pod is the simplest way to orchestrate an in-cluster build and redeployment.
+    As mentioned, it is meant for illustrative purposes only.
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在书籍的[示例仓库](https://oreil.ly/jVF6h)中找到完全可用的设置。构建Pod是在集群内进行构建和重部署的最简单方式。如前所述，它仅用于说明目的。
+- en: For real-world use cases, you should use a CI/CD solution like Tekton or a whole
+    build orchestration platform like OpenShift Build, which we describe now.
+  id: totrans-117
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于真实世界的用例，您应该使用像 Tekton 这样的 CI/CD 解决方案或整个构建编排平台，如我们现在描述的 OpenShift 构建。
+- en: OpenShift Build
+  id: totrans-118
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: OpenShift 构建
+- en: Red Hat OpenShift is an enterprise distribution of Kubernetes. Besides supporting
+    everything Kubernetes supports, it adds a few enterprise-related features like
+    an integrated container image registry, single sign-on support, and a new user
+    interface, and it also adds a native image building capability to Kubernetes.
+    [OKD](https://www.okd.io) is the upstream open source community edition distribution
+    that contains all the OpenShift features.
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 红帽 OpenShift 是 Kubernetes 的企业分发版。除了支持 Kubernetes 支持的一切外，它还增加了一些企业相关功能，如集成容器镜像注册表、单点登录支持和新用户界面，并为
+    Kubernetes 添加了本地镜像构建能力。[OKD](https://www.okd.io) 是上游开源社区版分发，包含所有 OpenShift 特性。
+- en: 'OpenShift build was the first cluster-integrated way of directly building images
+    managed by Kubernetes. It supports multiple strategies for building images:'
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: OpenShift 构建是通过 Kubernetes 直接构建图像的首个集群集成方式。它支持多种构建图像的策略：
+- en: Source-to-Image (S2I)
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 源到镜像（S2I）
+- en: Takes the source code of an application and creates the runnable artifact with
+    the help of a language-specific S2I builder image and then pushes the images to
+    the integrated registry.
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 获取应用程序源代码，并利用特定于语言的 S2I 构建器镜像创建可运行的构件，然后将图像推送到集成注册表。
+- en: Docker builds
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Docker 构建
+- en: Use a Dockerfile plus a context directory and creates an image as a Docker daemon
+    would do.
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用一个 Dockerfile 加上一个上下文目录，并像 Docker 守护程序一样创建一个镜像。
+- en: Pipeline builds
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 流水线构建
+- en: Map build-to-build jobs of an internally managed Tekton by allowing the user
+    to configure a Tekton pipeline.
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过允许用户配置 Tekton 流水线来映射内部管理的 Tekton 的构建作业之间的映射。
+- en: Custom builds
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 自定义构建
+- en: Give you full control over how you create your image. Within a custom build,
+    you have to create the image on your own within the build container and push it
+    to a registry.
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为您提供如何创建图像的完全控制权。在自定义构建中，您必须在构建容器内自行创建图像并将其推送到注册表。
+- en: 'The input for doing the builds can come from different sources:'
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 执行构建的输入可以来自不同的来源：
+- en: Git
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Git
+- en: Repository specified via a remote URL from where the source is fetched.
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过远程 URL 指定的仓库，从中提取源代码。
+- en: Dockerfile
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Dockerfile
+- en: A Dockerfile that is directly stored as part of the build configuration resource.
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个 Dockerfile 直接存储为构建配置资源的一部分。
+- en: Image
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 镜像
+- en: Another container image from which files are extracted for the current build.
+    This source type allows for *chained builds*, as shown in [Example 30-4](#ex-image-builder-chained).
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个容器镜像，从中提取文件以进行当前构建。此源类型允许 *链式构建*，如 [Example 30-4](#ex-image-builder-chained)
+    所示。
+- en: Secret
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 密钥
+- en: Resource for providing confidential information for the build.
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为构建提供机密信息的资源。
+- en: Binary
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 二进制
+- en: Source to provide all input from the outside. This input has to be provided
+    when starting the build.
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 来自外部的所有输入的来源。必须在启动构建时提供此输入。
+- en: The choice of which input sources we can use in which way depends on the build
+    strategy. *Binary* and *Git* are mutually exclusive source types. All other sources
+    can be combined or used on a standalone basis. We will see later in [Example 30-3](#ex-image-builder-s2i)
+    how this works.
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以在构建策略中使用哪些输入来源的选择取决于构建策略。*二进制* 和 *Git* 是互斥的源类型。所有其他源可以组合或单独使用。我们稍后将在 [Example 30-3](#ex-image-builder-s2i)
+    中看到这是如何工作的。
+- en: All the build information is defined in a central resource object called BuildConfig.
+    We can create this resource either by directly applying it to the cluster or by
+    using the CLI tool `oc`, which is the OpenShift equivalent of `kubectl`. `oc`
+    supports build-specific commands for defining and triggering a build.
+  id: totrans-141
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有构建信息都定义在一个名为 BuildConfig 的中心资源对象中。我们可以通过直接将其应用于集群或使用 CLI 工具 `oc`（OpenShift
+    版本的 `kubectl`）来创建此资源。`oc` 支持用于定义和触发构建的特定于构建的命令。
+- en: Before we look at BuildConfig, we need to understand two additional concepts
+    specific to OpenShift.
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在我们查看 BuildConfig 之前，我们需要了解两个与 OpenShift 特定的附加概念。
+- en: An ImageStream is an OpenShift resource that references one or more container
+    images. It is a bit similar to a Docker repository, which also contains multiple
+    images with different tags. OpenShift maps an actual tagged image to an ImageStreamTag
+    resource so that an ImageStream (repository) has a list of references to ImageStreamTags
+    (tagged images). Why is this extra abstraction required? Because it allows OpenShift
+    to emit events when an image is updated in the registry for an ImageStreamTag.
+    Images are created during builds or when an image is pushed to the OpenShift internal
+    registry. That way, the build or deployment controllers can listen to these events
+    and trigger a new build or start a deployment.
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ImageStream 是一个 OpenShift 资源，引用一个或多个容器镜像。这有点类似于 Docker 仓库，后者也包含具有不同标签的多个镜像。OpenShift
+    将实际标记的镜像映射到 ImageStreamTag 资源，以便 ImageStream（仓库）具有对 ImageStreamTags（已标记镜像）的引用列表。为什么需要这种额外的抽象？因为它允许
+    OpenShift 在镜像在注册表中更新为 ImageStreamTag 时发出事件。图像在构建期间创建或将图像推送到 OpenShift 内部注册表时创建。这样，构建或部署控制器可以监听这些事件并触发新的构建或开始部署。
+- en: Note
+  id: totrans-144
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注：
+- en: To connect an ImageStream to a deployment, OpenShift uses the DeploymentConfig
+    resource instead of the Kubernetes Deployment resource, which can only use container
+    image references directly. However, you can still use vanilla Deployment resources
+    in OpenShift with ImageStreams by adding some [OpenShift-specific annotations](https://oreil.ly/Tu9GA).
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要将 ImageStream 连接到部署，OpenShift 使用 DeploymentConfig 资源，而不是直接使用 Kubernetes 的 Deployment
+    资源来使用容器镜像引用。但是，您仍然可以通过添加一些[OpenShift 特定的注解](https://oreil.ly/Tu9GA)在 OpenShift
+    中使用普通的 Deployment 资源与 ImageStreams。
+- en: The other concept is a *trigger*, which we can consider as a kind of listener
+    to events. One possible trigger is `imageChange`, which reacts to the event published
+    because of an ImageStreamTag change. As a reaction, such a trigger can, for example,
+    cause the rebuild of another image or redeployment of the Pods using this image.
+    You can read more about triggers and the kinds of triggers available in addition
+    to the `imageChange` trigger in the [OpenShift documentation](https://oreil.ly/J4qTQ).
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个概念是*触发器*，我们可以将其视为事件的一种监听器。一个可能的触发器是`imageChange`，它对因 ImageStreamTag 更改而发布的事件做出反应。作为响应，这样的触发器可以导致另一个镜像的重新构建或使用此镜像重新部署
+    Pods。您可以在[OpenShift 文档](https://oreil.ly/J4qTQ)中了解有关触发器及其可用类型的更多信息。
+- en: Source-to-Image
+  id: totrans-147
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: Source-to-Image
+- en: 'Let’s have a quick look at what an S2I builder image looks like. We won’t go
+    into too many details here, but an S2I builder image is a standard container image
+    that contains a set of S2I scripts. It is very similar to Cloud Native Buildpacks
+    but with a much simpler lifecycle that knows two mandatory commands:'
+  id: totrans-148
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们快速看一下 S2I 构建器镜像的样子。我们不会在这里详细展开，但 S2I 构建器镜像是一个标准的容器镜像，其中包含一组 S2I 脚本。它与 Cloud
+    Native Buildpacks 非常相似，但生命周期简单得多，只知道两个必需的命令：
+- en: '`assemble`'
+  id: totrans-149
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`assemble`'
+- en: The script that gets called when the build starts. Its task is to take the source
+    given by one of the configured inputs, compile it if necessary, and copy the final
+    artifacts to the proper locations.
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 构建开始时调用的脚本。它的任务是获取一个配置输入源提供的源代码，必要时进行编译，并将最终产物复制到适当的位置。
+- en: '`run`'
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`run`'
+- en: Used as an entry point for this image. OpenShift calls this script when it deploys
+    the image. This run script uses the generated artifacts to deliver the application
+    services.
+  id: totrans-152
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用作此镜像的入口点。OpenShift 在部署镜像时调用此脚本。此运行脚本使用生成的产物来提供应用服务。
+- en: Optionally, you can also script to provide a usage message, saving the generated
+    artifacts for so-called *incremental builds* that are accessible by the `assemble`
+    script in a subsequent build run, or add some sanity checks.
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可选地，您还可以编写脚本以提供使用消息，保存所谓的*增量构建*中的生成产物，这些产物可在后续构建运行中由`assemble`脚本访问，或者添加一些健全性检查。
+- en: 'Let’s have a closer look at an S2I build in [Figure 30-3](#img-image-builder-s2i).
+    An S2I build has two ingredients: a builder image and a source input. Both are
+    brought together by the S2I build system when a build is started—either because
+    a trigger event was received or because we started it manually. When the build
+    image has finished by, for example, compiling the source code, the container is
+    committed to an image and pushed to the configured ImageStreamTag. This image
+    contains the compiled and prepared artifacts, and the image’s `run` script is
+    set as the entry point.'
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们仔细看看[图30-3](#img-image-builder-s2i)中的S2I构建。S2I构建包含两个组成部分：构建器镜像和源输入。当启动构建时，S2I构建系统将两者结合在一起——无论是因为接收到触发事件还是手动启动。例如，当构建镜像完成编译源代码时，容器将提交为一个镜像，并推送到配置的ImageStreamTag。此镜像包含已编译和准备好的构件，并将镜像的`run`脚本设置为入口点。
+- en: '![kup2 3003](assets/kup2_3003.png)'
+  id: totrans-155
+  prefs: []
+  type: TYPE_IMG
+  zh: '![kup2 3003](assets/kup2_3003.png)'
+- en: Figure 30-3\. S2I build with Git source as input
+  id: totrans-156
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图30-3\. 使用Git源作为输入的S2I构建
+- en: '[Example 30-3](#ex-image-builder-s2i) shows a simple Java S2I build with a
+    Java S2I image. This build takes a source, the builder image, and produces an
+    output image that is pushed to an ImageStreamTag. It can be started manually via
+    `oc start-build` or automatically when the builder image changes.'
+  id: totrans-157
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[示例30-3](#ex-image-builder-s2i)展示了一个简单的Java S2I构建，使用了Java S2I镜像。该构建接受一个源和构建器镜像，并生成一个推送到ImageStreamTag的输出镜像。可以通过`oc
+    start-build`手动启动它，或者在构建器镜像变更时自动启动。'
+- en: Example 30-3\. S2I Build using a Java builder image
+  id: totrans-158
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例30-3\. 使用Java构建器镜像的S2I构建
+- en: '[PRE3]'
+  id: totrans-159
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: '[![1](assets/1.png)](#co_image_builder_CO3-1)'
+  id: totrans-160
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_image_builder_CO3-1)'
+- en: Reference to the source code to fetch; in this case, pick it up from GitHub.
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 引用源代码以获取；在本例中，从GitHub中提取。
+- en: '[![2](assets/2.png)](#co_image_builder_CO3-2)'
+  id: totrans-162
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_image_builder_CO3-2)'
+- en: '`sourceStrategy` switches to S2I mode, and the builder image is picked up directly
+    from Docker Hub.'
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`sourceStrategy`切换到S2I模式，并直接从Docker Hub中选择构建器镜像。'
+- en: '[![3](assets/3.png)](#co_image_builder_CO3-3)'
+  id: totrans-164
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_image_builder_CO3-3)'
+- en: The ImageStreamTag to update with the generated image. It’s the committed builder
+    container after the `assemble` script has run.
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要更新的ImageStreamTag是生成的镜像。这是在运行`assemble`脚本后提交的构建器容器。
+- en: '[![4](assets/4.png)](#co_image_builder_CO3-4)'
+  id: totrans-166
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_image_builder_CO3-4)'
+- en: Rebuild automatically when the source code in the repository changes.
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当仓库中的源代码更改时，自动重新构建。
+- en: S2I is a robust mechanism for creating application images, and it is more secure
+    than plain Docker builds because the build process is under full control of trusted
+    builder images. However, this approach still has some drawbacks.
+  id: totrans-168
+  prefs: []
+  type: TYPE_NORMAL
+  zh: S2I是创建应用程序镜像的强大机制，比纯Docker构建更安全，因为构建过程完全受信任的构建器镜像控制。但是，这种方法仍然存在一些缺点。
+- en: For complex applications, S2I can be slow, especially when the build needs to
+    load many dependencies. Without any optimization, S2I loads all dependencies afresh
+    for every build. In the case of a Java application built with Maven, there is
+    no caching as when doing local builds. To avoid downloading half of the internet
+    again and again, it is recommended that you set up a cluster-internal Maven repository
+    that serves as a cache. The builder image then has to be configured to access
+    this common repository instead of downloading the artifacts from remote repositories.
+  id: totrans-169
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于复杂的应用程序，S2I可能会很慢，特别是当构建需要加载许多依赖项时。如果没有任何优化，S2I将在每次构建时重新加载所有依赖项。对于使用Maven构建的Java应用程序，不存在像本地构建时的缓存。为了避免反复下载半个互联网，建议您设置一个集群内部的Maven仓库，用作缓存。然后，必须配置构建器镜像以访问此公共存储库，而不是从远程存储库下载构件。
+- en: Another way to decrease the build time is to use *incremental builds* with S2I,
+    which allows you to reuse artifacts created or downloaded in a previous S2I build.
+    However, a lot of data is copied over from the previously generated image to the
+    current build container, and the performance benefits are typically not much better
+    than using a cluster-local proxy that holds the dependencies.
+  id: totrans-170
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 减少构建时间的另一种方法是使用S2I的*增量构建*，它允许您重用先前S2I构建中创建或下载的构件。然而，大量数据会从先前生成的镜像复制到当前构建容器中，性能收益通常不会比使用保存依赖项的集群本地代理更好。
+- en: Another drawback of S2I is that the generated image also contains the whole
+    build environment.^([3](ch30.html#idm45902079913104)) This fact increases not
+    only the size of the application image but also the surface for a potential attack,
+    as builder tools can become vulnerable too.
+  id: totrans-171
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个S2I的缺点是生成的镜像还包含整个构建环境。^([3](ch30.html#idm45902079913104))这个事实不仅增加了应用镜像的大小，也增加了潜在攻击的面积，因为构建工具也可能变得脆弱。
+- en: To get rid of unneeded builder tools like Maven, OpenShift offers *chained builds*,
+    which take the result of an S2I build and create a slim runtime image. We look
+    at chained builds in [“Chained builds”](#image-builder-chained).
+  id: totrans-172
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了摆脱不必要的构建工具如Maven，OpenShift提供了*串行构建*，它接收S2I构建的结果并创建一个精简的运行时镜像。我们将在[“串行构建”](#image-builder-chained)中查看串行构建。
+- en: Docker builds
+  id: totrans-173
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: Docker构建
+- en: OpenShift also supports Docker builds directly within the cluster. Docker builds
+    work by mounting the Docker daemon’s socket directly in the build container, which
+    is then used for a `docker build`. The source for a Docker build is a Dockerfile
+    and a directory holding the context. You can also use an `Image` source that refers
+    an arbitrary image and from which files can be copied into the Docker build context
+    directory. As mentioned in the next section, this technique, together with triggers,
+    can be used for chained builds.
+  id: totrans-174
+  prefs: []
+  type: TYPE_NORMAL
+  zh: OpenShift还支持直接在集群内进行Docker构建。Docker构建通过直接挂载Docker守护程序的套接字到构建容器中来工作，然后用于`docker
+    build`。Docker构建的源是一个Dockerfile和一个保存上下文的目录。您还可以使用一个引用任意镜像的`Image`源，从中可以将文件复制到Docker构建上下文目录中。正如下一节中提到的，这种技术与触发器一起可以用于串行构建。
+- en: Alternatively, you can use a standard multistage Dockerfile to separate the
+    build and runtime parts. Our [example repository](https://oreil.ly/mn4vg) contains
+    a fully working multistage Docker build example that results in the same image
+    as the chained build described in the next section.
+  id: totrans-175
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 或者，您可以使用标准的多阶段Dockerfile来分离构建和运行时部分。我们的[示例存储库](https://oreil.ly/mn4vg)包含一个完整工作的多阶段Docker构建示例，其结果与下一节描述的串行构建相同。
+- en: Chained builds
+  id: totrans-176
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 串行构建
+- en: The mechanics of a chained build are shown in [Figure 30-4](#img-image-builder-chained).
+    A chained build consists of an initial S2I build, which creates the runtime artifact
+    such as a binary executable. This artifact is then picked up from the generated
+    image by a second build, typically a Docker build.
+  id: totrans-177
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 图 30-4展示了串行构建的机制。串行构建包括一个初始的S2I构建，该构建创建运行时的构件，如二进制可执行文件。这个构件然后被第二个构建所使用，通常是一个Docker构建。
+- en: '![kup2 3004](assets/kup2_3004.png)'
+  id: totrans-178
+  prefs: []
+  type: TYPE_IMG
+  zh: '![kup2 3004](assets/kup2_3004.png)'
+- en: Figure 30-4\. Chained build with S2I for compiling and Docker build for application
+    image
+  id: totrans-179
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 30-4\. 使用S2I进行编译和Docker构建创建应用镜像的串行构建
+- en: '[Example 30-4](#ex-image-builder-chained) shows the setup of this second build
+    config, which uses the JAR file generated in [Example 30-3](#ex-image-builder-s2i).
+    The image that is eventually pushed to the ImageStream `random-generator-runtime`
+    can be used in a DeploymentConfig to run the application.'
+  id: totrans-180
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[示例 30-4](#ex-image-builder-chained)展示了第二个构建配置的设置，该配置使用在[示例 30-3](#ex-image-builder-s2i)中生成的JAR文件。最终推送到ImageStream
+    `random-generator-runtime`的镜像可以在DeploymentConfig中用于运行应用程序。'
+- en: Note
+  id: totrans-181
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The trigger used in [Example 30-4](#ex-image-builder-chained) monitors the result
+    of the S2I build. This trigger causes a rebuild of this runtime image whenever
+    we run an S2I build so that both ImageStreams are always in sync.
+  id: totrans-182
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在[示例 30-4](#ex-image-builder-chained)中使用的触发器监视S2I构建的结果。这个触发器导致每次运行S2I构建时都重新构建这个运行时镜像，以便保持两个ImageStream始终同步。
+- en: Example 30-4\. Docker build for creating the application image
+  id: totrans-183
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 30-4\. 用于创建应用镜像的Docker构建
+- en: '[PRE4]'
+  id: totrans-184
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: '[![1](assets/1.png)](#co_image_builder_CO4-1)'
+  id: totrans-185
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_image_builder_CO4-1)'
+- en: Image source references the ImageStream that contains the result of the S2I
+    build run and selects a directory within the image that contains the compiled
+    JAR archive.
+  id: totrans-186
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Image源引用了包含S2I构建运行结果的ImageStream，并选择了镜像中包含已编译JAR存档的目录。
+- en: '[![2](assets/2.png)](#co_image_builder_CO4-2)'
+  id: totrans-187
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_image_builder_CO4-2)'
+- en: Dockerfile source for the Docker build that copies the JAR archive from the
+    ImageStream generated by the S2I build.
+  id: totrans-188
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Dockerfile源用于从S2I构建生成的ImageStream复制JAR存档的Docker构建。
+- en: '[![3](assets/3.png)](#co_image_builder_CO4-3)'
+  id: totrans-189
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_image_builder_CO4-3)'
+- en: The `strategy` selects a Docker build.
+  id: totrans-190
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`strategy`选择了一个Docker构建。'
+- en: '[![4](assets/4.png)](#co_image_builder_CO4-4)'
+  id: totrans-191
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_image_builder_CO4-4)'
+- en: Rebuild automatically when the S2I result ImageStream changes—after a successful
+    S2I run to compile the JAR archive.
+  id: totrans-192
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当 S2I 结果 ImageStream 变化后自动重新构建 —— 在成功的 S2I 运行后编译 JAR 归档。
+- en: '[![5](assets/5.png)](#co_image_builder_CO4-5)'
+  id: totrans-193
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#co_image_builder_CO4-5)'
+- en: Register listener for image updates, and do a redeploy when a new image has
+    been added to the ImageStream.
+  id: totrans-194
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注册监听器以获取图像更新，并在 ImageStream 添加新图像时重新部署。
+- en: You can find the full example with installation instructions in our [example
+    repository](https://oreil.ly/mn4vg).
+  id: totrans-195
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在我们的[示例存储库](https://oreil.ly/mn4vg)中找到带有安装说明的完整示例。
+- en: As mentioned, OpenShift build, along with its most prominent S2I mode, is one
+    of the oldest and most mature ways to safely build container images within an
+    OpenShift cluster.
+  id: totrans-196
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如前所述，OpenShift 构建以及其最突出的 S2I 模式是在 OpenShift 集群内安全构建容器镜像的最古老和最成熟的方式之一。
+- en: Discussion
+  id: totrans-197
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 讨论
+- en: 'You have seen two ways to build container images within a cluster. The plain
+    build Pod illustrates the most crucial tasks that every build system needs to
+    execute: fetching the source code, creating a runnable artifact from your source
+    code, creating a container image containing the application’s artifacts, pushing
+    this image to an image registry, and finally updating any deployments so that
+    it picks up the newly created image from that registry. This example is not meant
+    for direct production use as it contains too many manual steps that existing build
+    orchestrators cover more effectively.'
+  id: totrans-198
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在集群内构建容器镜像的两种方式已经介绍完毕。普通构建 Pod 展示了每个构建系统需要执行的最关键任务：从源代码获取、从您的源代码创建可运行的 artifact、创建包含应用程序
+    artifact 的容器镜像、将此镜像推送到镜像注册表，最后更新任何部署，以从该注册表中获取新创建的镜像。这个例子并不适合直接生产使用，因为它包含太多现有构建编排工具更有效地处理的手动步骤。
+- en: The OpenShift build system nicely demonstrates one of the main benefits of building
+    and running an application in the same cluster. With OpenShift’s ImageStream triggers,
+    you can connect multiple builds and redeploy your application if a build updates
+    your application’s container image. Better integration between build and deployment
+    is a step forward to the holy grail of CD. OpenShift builds with S2I are a proven
+    and established technology, but S2I is usable only when using the OpenShift distribution
+    of Kubernetes.
+  id: totrans-199
+  prefs: []
+  type: TYPE_NORMAL
+  zh: OpenShift 构建系统很好地展示了在同一集群中构建和运行应用程序的主要优势之一。通过 OpenShift 的 ImageStream 触发器，您可以连接多个构建并重新部署您的应用程序，如果一个构建更新了您应用程序的容器镜像。构建与部署之间更好的集成是持续交付的重要一步。OpenShift
+    使用 S2I 的构建是一种经过验证和成熟的技术，但只有在使用 Kubernetes 的 OpenShift 分发时才能使用 S2I。
+- en: The landscape of in-cluster build tools as of 2023 is rich and contains many
+    exciting techniques that partly overlap. As a result, you can expect some consolidation,
+    but new tooling will arise over time, so we’ll see more implementations of the
+    *Image Builder* pattern emerge.
+  id: totrans-200
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 截至 2023 年的集群内构建工具的景观非常丰富，并包含许多令人兴奋的技术部分重叠。因此，您可以预期会有一些整合，但随着时间的推移，新的工具将会出现，因此我们将看到更多实现*镜像构建器*模式的实现。
+- en: More Information
+  id: totrans-201
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 更多信息
+- en: '[Image Builder Example](https://oreil.ly/39C_l)'
+  id: totrans-202
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[镜像构建器示例](https://oreil.ly/39C_l)'
+- en: 'Image Builders:'
+  id: totrans-203
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 镜像构建器：
+- en: '[Buildah](https://oreil.ly/AY7ml)'
+  id: totrans-204
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Buildah](https://oreil.ly/AY7ml)'
+- en: '[Kaniko](https://oreil.ly/SQeYa)'
+  id: totrans-205
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Kaniko](https://oreil.ly/SQeYa)'
+- en: '[What Is BuildKit?](https://oreil.ly/N28Dn)'
+  id: totrans-206
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[BuildKit 是什么？](https://oreil.ly/N28Dn)'
+- en: '[Building Multi-Architecture Images with Buildpacks](https://oreil.ly/sBth1)'
+  id: totrans-207
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[使用 Buildpacks 构建多架构图像](https://oreil.ly/sBth1)'
+- en: '[Jib](https://oreil.ly/jy9KH)'
+  id: totrans-208
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Jib](https://oreil.ly/jy9KH)'
+- en: '[Pack](https://oreil.ly/iILs7)'
+  id: totrans-209
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Pack](https://oreil.ly/iILs7)'
+- en: '[Kpack](https://oreil.ly/LpGvB)'
+  id: totrans-210
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Kpack](https://oreil.ly/LpGvB)'
+- en: '[Ko](https://oreil.ly/9hARS)'
+  id: totrans-211
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Ko](https://oreil.ly/9hARS)'
+- en: '[Apko: A Better Way to Build Containers?](https://oreil.ly/5227Q)'
+  id: totrans-212
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Apko：构建容器的更好方式？](https://oreil.ly/5227Q)'
+- en: 'Build Orchestrators:'
+  id: totrans-213
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 构建编排器：
+- en: '[OpenShift Builds](https://oreil.ly/dIii_)'
+  id: totrans-214
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[OpenShift 构建](https://oreil.ly/dIii_)'
+- en: '[Kbld](https://oreil.ly/Uako8)'
+  id: totrans-215
+  prefs:
+  - PREF_IND
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Kbld](https://oreil.ly/Uako8)'
+- en: '[Multistage Build](https://oreil.ly/8-zKu)'
+  id: totrans-216
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[多阶段构建](https://oreil.ly/8-zKu)'
+- en: '[Chaining S2I Builds](https://oreil.ly/3MPXZ)'
+  id: totrans-217
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[链接 S2I 构建](https://oreil.ly/3MPXZ)'
+- en: '[Build Triggers Overview](https://oreil.ly/jcFx7)'
+  id: totrans-218
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[构建触发器概述](https://oreil.ly/jcFx7)'
+- en: '[Source-to-Image Specification](https://oreil.ly/0B2cc)'
+  id: totrans-219
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[源到镜像规范](https://oreil.ly/0B2cc)'
+- en: '[Incremental S2I Builds](https://oreil.ly/YbUen)'
+  id: totrans-220
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[增量 S2I 构建](https://oreil.ly/YbUen)'
+- en: '[Building Container Images in Kubernetes: It’s Been a Journey!](https://oreil.ly/0ijOJ)'
+  id: totrans-221
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[在 Kubernetes 中构建容器镜像：一场漫长的旅程！](https://oreil.ly/0ijOJ)'
+- en: '[Build Multi-Architecture Container Images Using Kubernetes](https://oreil.ly/0Neln)'
+  id: totrans-222
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[使用 Kubernetes 构建多架构容器镜像](https://oreil.ly/0Neln)'
+- en: '[Best Practices for Running Buildah in a Container](https://oreil.ly/8E76m)'
+  id: totrans-223
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[在容器中运行 Buildah 的最佳实践](https://oreil.ly/8E76m)'
+- en: ^([1](ch30.html#idm45902080790064-marker)) CNB cover more phases. The entire
+    lifecycle is explained on the [Buildpacks site](https://oreil.ly/8l69J).
+  id: totrans-224
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([1](ch30.html#idm45902080790064-marker)) CNB 覆盖更多阶段。整个生命周期在[构建包网站](https://oreil.ly/8l69J)上有详细解释。
+- en: ^([2](ch30.html#idm45902080225920-marker)) We could have also chosen an init
+    container again here and used a no-op application container, but since the application
+    containers start only after all init containers have been finished, it doesn’t
+    matter much where we put the container. In all cases, the three specified containers
+    run after one another.
+  id: totrans-225
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([2](ch30.html#idm45902080225920-marker)) 在这里，我们也可以再次选择一个初始化容器，并使用一个无操作的应用程序容器，但由于应用程序容器仅在所有初始化容器完成后才启动，因此放置容器的位置并不重要。在所有情况下，三个指定的容器都是依次运行的。
+- en: ^([3](ch30.html#idm45902079913104-marker)) This is different from Cloud Native
+    Buildpacks, which use a separate runtime image in its stack for carrying the final
+    artifact.
+  id: totrans-226
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([3](ch30.html#idm45902079913104-marker)) 这与云原生构建包不同，后者在其堆栈中使用单独的运行时镜像来承载最终的构件。

@@ -1,0 +1,649 @@
+- en: Chapter 23\. Process Containment
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第 23 章：进程约束
+- en: This chapter describes techniques that help apply the principle of least privilege
+    to constrain a process to the minimum privileges it needs to run. The *Process
+    Containment* pattern helps make applications more secure by limiting the attack
+    surface and creating a line of defense. It also prevents any rogue process from
+    running out of its designated boundary.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本章描述了帮助将最小权限原则应用于将进程限制到其运行所需最小权限的技术。*进程约束* 模式通过限制攻击面和创建防线，使应用程序更加安全。它还防止任何流氓进程超出其指定边界运行。
+- en: Problem
+  id: totrans-2
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 问题
+- en: One of the primary attack vectors for Kubernetes workloads is through the application
+    code. Many techniques can help improve code security. For example, static code
+    analysis tools can check the source code for security flaws. Dynamic scanning
+    tools can simulate malicious attackers with the goal of breaking into the system
+    through well-known service attacks such as SQL injection (SQLi), cross-site request
+    forgery (CSRF), and cross-site scripting (XSS). Then there are tools for regularly
+    scanning the application’s dependencies for security vulnerabilities. As part
+    of the image build process, the containers are scanned for known vulnerabilities.
+    This is usually done by checking the base image and all its packages against a
+    database that tracks vulnerable packages. These are only a few of the steps involved
+    in creating secure applications and protecting against malicious actors, compromised
+    users, unsafe container images, or dependencies with vulnerabilities.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 工作负载的主要攻击向量之一是通过应用程序代码。许多技术可以帮助改进代码安全性。例如，静态代码分析工具可以检查源代码中的安全漏洞。动态扫描工具可以模拟恶意攻击者，旨在通过已知服务攻击，如
+    SQL 注入（SQLi）、跨站请求伪造（CSRF）和跨站脚本（XSS）攻击来入侵系统。然后还有工具定期扫描应用程序的依赖项，查找安全漏洞。作为镜像构建过程的一部分，会扫描已知漏洞的容器。通常通过检查基础镜像及其所有软件包与跟踪有漏洞软件包的数据库来完成这一步骤。这些只是创建安全应用程序和防范恶意行为者、受损用户、不安全容器映像或有漏洞依赖项所涉及的步骤之一。
+- en: Regardless of how many checks are in place, new code and new dependencies can
+    introduce new vulnerabilities, and there is no way to guarantee the complete absence
+    of risks. Without runtime process-level security controls in place, a malicious
+    actor can breach the application code and attempt to take control of the host
+    or the entire Kubernetes cluster. The mechanisms we will explore in this chapter
+    demonstrate how to limit a container only to the permissions it needs to run and
+    apply the least-privilege principle. This way, Kubernetes configurations act as
+    another line of defense, containing any rogue process and preventing it from running
+    outside its designated boundary.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 无论有多少检查措施，新的代码和新的依赖项都可能引入新的漏洞，无法保证完全没有风险存在。如果没有运行时进程级安全控制措施，恶意行为者可以入侵应用程序代码，试图控制主机或整个
+    Kubernetes 集群。本章中将探讨的机制展示了如何将容器限制在其运行所需的权限范围内，并应用最小权限原则。通过这种方式，Kubernetes 配置作为另一道防线，限制任何流氓进程并防止其超出指定边界运行。
+- en: Solution
+  id: totrans-5
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 解决方案
+- en: Typically, a container runtime such as Docker assigns the default runtime permissions
+    a container will have. When the container is managed by Kubernetes, the security
+    configurations that will be applied to a container are controlled by Kubernetes
+    and exposed to the user through the security context configurations of the Pod
+    and the container specs. The Pod-level configurations apply to the Pod’s volumes
+    and all containers in the Pod, whereas container-level configurations apply to
+    a single container. When the same configurations are set at both Pod and container
+    levels, the values in the container spec take precedence.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常，诸如 Docker 这样的容器运行时会分配容器将具有的默认运行时权限。当容器由 Kubernetes 管理时，将应用于容器的安全配置由 Kubernetes
+    控制，并通过 Pod 的安全上下文配置和容器规范向用户公开。Pod 级别的配置适用于 Pod 的卷和所有容器，而容器级别的配置则适用于单个容器。当在 Pod
+    和容器级别同时设置相同配置时，容器规范中的值优先生效。
+- en: As a developer creating cloud native applications, you typically should not
+    need to deal with many fine-grained security configurations but instead have them
+    validated and enforced as global policy. Fine-grained tuning is usually required
+    when creating specialized infrastructure containers such as build systems and
+    other plugins that need broader access to the underlying nodes. Therefore, we
+    will review only the common security configurations that would be useful for running
+    typical cloud native applications on Kubernetes.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为创建云原生应用程序的开发人员，通常不需要处理许多细粒度的安全配置，而是应将它们作为全局策略进行验证和强制执行。在创建专用基础设施容器（如构建系统和其他需要对底层节点具有更广泛访问权限的插件）时通常需要进行细粒度调整。因此，我们将仅审查对在
+    Kubernetes 上运行典型云原生应用程序有用的常见安全配置。
+- en: Running Containers with a Non-Root User
+  id: totrans-8
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 以非 root 用户身份运行容器
+- en: Container images have a user, and can optionally have a group, to run the container
+    process. These users and groups are used to control access to files, directories,
+    and volume mounts. With some other containers, no user is created and the container
+    image runs as root by default. In others, a user is created in the container image,
+    but it is not set as the default user to run. These situations can be rectified
+    by overriding the user at runtime using `securityContext`, as shown in [Example 23-1](#process-containment-user-permissions).
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器镜像具有一个用户，并且可以选择性地具有一个组，用于运行容器进程。这些用户和组用于控制对文件、目录和卷挂载的访问权限。在某些其他容器中，不会创建用户，并且容器镜像默认以
+    root 用户身份运行。在其他情况下，容器镜像中创建了一个用户，但未设置为默认要运行的用户。可以通过在运行时使用`securityContext`覆盖用户来纠正这些情况，如[示例
+    23-1](#process-containment-user-permissions)所示。
+- en: Example 23-1\. Setting a user and group for the containers of a Pod
+  id: totrans-10
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 23-1。为 Pod 的容器设置用户和组
+- en: '[PRE0]'
+  id: totrans-11
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: '[![1](assets/1.png)](#co_process_containment_CO1-1)'
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_process_containment_CO1-1)'
+- en: Indicates the UID to run the container process.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 指示要运行容器进程的 UID。
+- en: '[![2](assets/2.png)](#co_process_containment_CO1-2)'
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_process_containment_CO1-2)'
+- en: Specifies the GID to run the container process.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 指定要运行容器进程的 GID。
+- en: The configuration forces any container in the Pod to run with user ID 1000 and
+    group ID 2000\. This is useful when you want to swap the user that is specified
+    in the container image. But there is also a danger in setting these values and
+    making runtime decisions about which user to run the image. Often the user is
+    set in conjunction with the directory structure containing files that have the
+    same ownership IDs specified in the container image. To avoid having runtime failures
+    due to lack of permissions, you should check the container image file and run
+    the container with the user ID and group ID defined. This is one way to prevent
+    a container from running as root, and matching it to the expected user in the
+    image.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 该配置强制 Pod 中的任何容器以用户 ID 1000 和组 ID 2000 运行。当您想要交换容器镜像中指定的用户时，这是有用的。但是在设置这些值并在运行时决定要运行镜像的用户时也存在风险。通常，用户与包含具有与容器镜像中指定的所有权
+    ID 相同的文件的目录结构一起设置。为了避免由于权限不足而导致运行时失败，您应该检查容器镜像文件，并使用定义的用户 ID 和组 ID 运行容器。这是防止容器以
+    root 用户身份运行并将其匹配到镜像中预期用户的一种方式。
+- en: Instead of specifying a user ID to ensure that a container is not running as
+    root, a less intrusive way is to set the `.spec.securityContext.runAsNonRoot`
+    flag to `true`. When set, the Kubelet will validate at runtime and prevent any
+    container from starting with a root user—that is, a user with UID 0\. This latter
+    mechanism doesn’t change the user, but only ensures that a container is running
+    as a non-root user. If you need to run as root to access files or volumes in the
+    container, you can limit the exposure to root by running an init container that
+    can run as root for a short time, and you can change the file access modes, before
+    applications containers start up as non-root.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不需要指定用户 ID 来确保容器不以 root 用户身份运行，一种更不具侵入性的方法是将`.spec.securityContext.runAsNonRoot`标志设置为`true`。设置后，Kubelet
+    将在运行时验证并阻止任何以 root 用户（即 UID 0 的用户）启动的容器。这种机制不会改变用户，只是确保容器以非 root 用户身份运行。如果需要以
+    root 用户身份运行以访问容器中的文件或卷，可以通过运行一个可以短暂以 root 用户身份运行的 init 容器来限制对 root 的暴露，并在应用容器启动为非
+    root 用户之前更改文件访问模式。
+- en: A container may not run as root, but it is possible to obtain root-like capabilities
+    through privilege escalation. This is most similar to using the `sudo` command
+    on Linux and executing commands with the root privileges. The way to prevent this
+    in containers is by setting `.spec.containers[].securityContext.allowPrivilege​Es⁠calation`
+    to `false`. This configuration typically has no side effects because if an application
+    is designed to run as non-root, it should not require privilege escalation during
+    its lifetime.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器可能不以 root 用户身份运行，但通过特权升级可以获得类似 root 的能力。这与在 Linux 上使用 `sudo` 命令并以 root 权限执行命令最为类似。在容器中防止这种情况的方法是将
+    `.spec.containers[].securityContext.allowPrivilege​Es⁠calation` 设置为 `false`。这种配置通常没有副作用，因为如果一个应用程序设计为以非
+    root 用户身份运行，它在其生命周期中不应该需要特权升级。
+- en: The root user has special permissions and privileges in a Linux system, and
+    preventing the root user from owning container processes, escalating privileges
+    to become root, or limiting the root user lifetime with init containers will help
+    prevent container breakout attacks and ensure adherence to the general security
+    practices.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Linux 系统中，root 用户具有特殊的权限和特权，阻止 root 用户拥有容器进程、提升权限以成为 root 或通过 init 容器限制 root
+    用户的生命周期，将有助于防止容器逃逸攻击，并确保遵循一般的安全实践。
+- en: Restricting Container Capabilities
+  id: totrans-20
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 限制容器的能力
+- en: In essence, a container is a process that runs on a node, and it can have the
+    same privileges a process can have. If the process requires a kernel-level call,
+    it needs to have the privileges to do so in order to succeed. You can do this
+    either by running the container as root, which grants all privileges to the container,
+    or by assigning specific capabilities required for the application to function.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本质上，一个容器是在节点上运行的一个进程，它可以拥有进程具备的相同特权。如果进程需要进行内核级别的调用，它需要拥有相应的特权才能成功执行。可以通过两种方式实现这一点：要么以
+    root 用户身份运行容器，从而授予容器所有特权；要么分配应用程序运行所需的特定能力。
+- en: Containers with the `.spec.containers[].securityContext.privileged` flag set
+    are essentially equivalent to root on the host and bypass the kernel permission
+    checks. From a security point of view, this option bundles your container with
+    the host system rather than isolating it. Therefore, this flag is typically set
+    for containers with administrative capabilities—for example, to manipulate the
+    network stack or access hardware devices. It is a better approach to avoid using
+    privileged containers altogether and give specific kernel capabilities to containers
+    that need them. In Linux, the privileges traditionally associated with the root
+    user are divided into distinct capabilities, which can be independently enabled
+    and disabled. Finding out what capabilities your container has is not straightforward.
+    You can employ a whitelisting approach and start your container without any capabilities
+    and gradually add capabilities when needed for every use case within the container.
+    You might need the help of your security team, or you can use tools such as SELinux
+    in permissive mode and check the audit logs of your application to discover what
+    capabilities it needs, if any.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 设置了 `.spec.containers[].securityContext.privileged` 标志的容器本质上相当于主机上的 root 用户，并绕过了内核权限检查。从安全角度来看，这个选项将您的容器与主机系统捆绑在一起，而不是隔离它们。因此，此标志通常为具有管理能力的容器设置，例如操纵网络堆栈或访问硬件设备。避免使用特权容器，并为需要的容器赋予特定的内核能力是更好的方法。在
+    Linux 中，通常与 root 用户相关联的权限被分为不同的能力，可以独立地启用和禁用。查找容器具有哪些能力并不简单。您可以采用白名单方法，在不具备任何能力的情况下启动容器，并根据容器内每个用例逐渐添加所需的能力。您可能需要安全团队的帮助，或者可以使用
+    SELinux 等工具以宽容模式，并检查应用程序的审计日志，以了解它是否需要某些能力。
+- en: To make containers more secure, you should provide them with the least amount
+    of privileges needed to run. The container runtime assigns a set of default privileges
+    (capabilities) to the container. Contrary to what you might expect, if the `.spec.containers[].securityContext.capabilities`
+    section is left empty, the default set of capabilities defined by the container
+    runtime are far more generous than most processes need, opening them up to exploits.
+    A good security practice for locking down the container attack surface is to drop
+    all privileges and add only the ones you need, as shown in [Example 23-2](#process-containment-permissions).
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了使容器更加安全，应该尽量减少所需运行权限。容器运行时会为容器分配一组默认权限（能力）。与您的预期相反，如果`.spec.containers[].securityContext.capabilities`部分为空，则容器运行时定义的默认能力集通常比大多数进程需要的要丰富得多，这将使其容易受到攻击。锁定容器攻击面的良好安全实践是丢弃所有权限，并仅添加所需权限，如[示例 23-2](#process-containment-permissions)所示。
+- en: Example 23-2\. Setting Pod permissions
+  id: totrans-24
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 23-2\. 设置 Pod 权限
+- en: '[PRE1]'
+  id: totrans-25
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: '[![1](assets/1.png)](#co_process_containment_CO2-1)'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_process_containment_CO2-1)'
+- en: Removes all default capabilities assigned to the container by the container
+    runtime.
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 移除容器运行时为容器分配的所有默认能力。
+- en: '[![2](assets/2.png)](#co_process_containment_CO2-2)'
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_process_containment_CO2-2)'
+- en: Adds back only the `NET_BIND_SERVICE` capability.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 仅添加回`NET_BIND_SERVICE`能力。
+- en: In this example, we drop all the capabilities and add back only the `NET_BIND_SERVICE`
+    capability, which allows binding to privileged ports with numbers lower than 1024\.
+    An alternative approach for addressing this scenario is to replace the container
+    with one that binds to an unprivileged port number.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在此示例中，我们丢弃所有能力，并仅添加回`NET_BIND_SERVICE`能力，该能力允许绑定到低于 1024 的特权端口号。解决此场景的另一种方法是使用绑定到非特权端口号的容器替换该容器。
+- en: A Pod is more likely to be compromised if its Security Context is not configured
+    or is too permissive. Limiting the capabilities of containers to the very minimum
+    acts as an additional line of defense against known attacks. A malicious actor
+    who breaches an application would have a harder time taking control of the host
+    when the container process is not privileged or when the capabilities are severely
+    limited.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果未配置 Pod 的安全上下文或设置过于宽松，则该 Pod 更容易被攻击者利用。将容器的能力限制到最低限度可以作为对已知攻击的额外防线。当容器进程不具有特权或其能力受到严格限制时，恶意用户在攻击应用程序后更难控制主机。
+- en: Avoiding a Mutable Container Filesystem
+  id: totrans-32
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 避免可变容器文件系统
+- en: In general, containerized applications should not be able to write to the container
+    filesystem because containers are ephemeral and any state will be lost upon restart.
+    As discussed in [Chapter 11, “Stateless Service”](ch11.html#StatelessService),
+    state should be written to external persistence methods such as database or filesystems.
+    Logs should be written to stdout or forward to a remote log collector. Such an
+    application can limit the attack surface of the container further by having a
+    read-only container filesystem. A read-only filesystem will prevent any rogue
+    user from tampering with the application configuration or installing additional
+    executables on the disk that can be used for further exploits. The way to do that
+    is to set `.spec.containers[].securityContext.readOnlyRootFile` to `true`, which
+    will mount the container’s root filesystem as read-only. This prevents any writes
+    to the container’s root filesystem at runtime and enforces the principle of immutable
+    infrastructure.
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常情况下，容器化应用程序不应能够写入容器文件系统，因为容器是临时的，任何状态在重启后都将丢失。正如[第 11 章，“无状态服务”](ch11.html#StatelessService)中所讨论的，状态应写入外部持久性方法，例如数据库或文件系统。日志应写入标准输出或转发到远程日志收集器。此类应用程序可以通过具有只读容器文件系统进一步限制容器的攻击面。只读文件系统将防止任何恶意用户篡改应用程序配置或在磁盘上安装其他可用于进一步利用的可执行文件。实现此目的的方法是将`.spec.containers[].securityContext.readOnlyRootFile`设置为`true`，这将在运行时将容器的根文件系统挂载为只读。这样可以防止对容器根文件系统的任何写入，并执行不可变基础设施的原则。
+- en: The complete list of values in the `securityContext` field has many more items
+    and can vary between Pod and container configurations. It is beyond the scope
+    of this book to cover all security configurations. The two other must-check security
+    context options are `seccompProfile` and `seLinuxOptions`. The first one is a
+    Linux kernel feature that can be used to limit the process running in a container
+    to call only a subset of the available system calls. These system calls are configured
+    as profiles and applied to a container or Pod.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`securityContext`字段中的完整值列表有许多其他项，并且可以在 Pod 和容器配置之间有所不同。本书的范围超出了覆盖所有安全配置的范围。另外两个必须检查的安全上下文选项是`seccompProfile`和`seLinuxOptions`。前者是
+    Linux 内核功能，可用于限制容器中运行的进程仅调用可用系统调用的子集。这些系统调用配置为配置文件，并应用于容器或 Pod。'
+- en: The latter option, `seLinuxOptions`, can assign custom SELinux labels to all
+    containers within the Pod as well as the volume. SELinux uses policies to define
+    which processes can access other labeled objects in the system. In Kubernetes,
+    it is typically used to label the container image in such a way as to restrict
+    the process to access only files within the image. When SELinux is supported on
+    the host environment, it can be strictly enforced to deny access, or it can be
+    configured in permissive mode to log access violations.
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 后一选项，`seLinuxOptions`，可以为 Pod 内所有容器以及卷分配自定义 SELinux 标签。SELinux使用策略来定义哪些进程可以访问系统中的其他标记对象。在
+    Kubernetes 中，它通常用于以限制的方式标记容器镜像，以便进程仅访问镜像内的文件。当主机环境支持 SELinux 时，可以严格执行以拒绝访问，或者可以配置为宽松模式以记录访问违规。
+- en: Configuring these fields for every Pod or container causes them to be prone
+    to human errors. Unfortunately, setting them is usually the responsibility of
+    the workload authors who are not typically the security subject-matter experts
+    in the organization. That is why there are also cluster-level, policy-driven means
+    defined by cluster administrators for ensuring all Pods in a namespace meet the
+    minimum security standards. Let’s briefly review that next.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为每个 Pod 或容器配置这些字段会导致它们容易受到人为错误的影响。不幸的是，设置它们通常是工作负载作者的责任，这些作者通常不是组织中的安全专家。这就是为什么还有集群级别、由集群管理员定义的基于策略驱动的手段，用于确保命名空间中的所有
+    Pods 符合最低安全标准。接下来让我们简要回顾一下。
+- en: Enforcing Security Policies
+  id: totrans-37
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 强制执行安全策略
+- en: 'So far, we’ve explored setting security parameters of the container runtime
+    using the `securityContext` definition as part of the Pod and container specifications.
+    These specifications are created individually per Pod and usually indirectly through
+    higher abstractions such as Deployments, Jobs, and CronJobs. But how can a cluster
+    administrator or a security expert ensure that a collection of Pods follows certain
+    security standards? The answer is in the Kubernetes Pod Security Standards (PSS)
+    and Pod Security Admission (PSA) controller. PSS defines a common understanding
+    and consistent language around security policies, and PSA helps enforce them.
+    This way, the policies are independent of the underlying enforcement mechanism
+    and can be applied through PSS or other third-party tools. These policies are
+    grouped in three security profiles that are cumulative, from highly permissive
+    to highly restrictive, as follows:'
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，我们已经探讨了使用`securityContext`定义作为 Pod 和容器规范的一部分来设置容器运行时的安全参数。这些规范是针对每个 Pod
+    单独创建的，并且通常是通过更高层次的抽象（如 Deployments、Jobs 和 CronJobs）间接创建的。但是，集群管理员或安全专家如何确保一组 Pods
+    遵循某些安全标准呢？答案在于 Kubernetes Pod 安全标准（PSS）和 Pod 安全 Admission（PSA）控制器。PSS定义了关于安全策略的共同理解和一致语言，而PSA则有助于强制执行这些策略。这种方式，策略独立于底层执行机制，并且可以通过PSS或其他第三方工具应用。这些策略分为三个安全配置文件，从高度允许到高度限制，如下所示：
+- en: Privileged
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 特权
+- en: This is an unrestricted profile with the widest possible level of permissions.
+    It is purposely left open and offers allow-by-default mechanisms for trusted users
+    and infrastructure workloads.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是一个权限最广的不受限制的配置文件。它被故意保持开放，并为信任用户和基础设施工作负载提供默认允许机制。
+- en: Baseline
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 基线
+- en: This profile is for common noncritical application workloads. It has a minimally
+    restrictive policy and provides a balance between ease of adoption and prevention
+    from known privilege escalations. For example, it won’t allow privileged containers,
+    certain security capabilities, and even other configurations outside of the `securityContext`
+    field.
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个配置文件适用于普通的非关键应用工作负载。它具有最小限制策略，并在采纳度和预防已知特权升级之间提供了平衡。例如，它不允许特权容器、某些安全功能以及`securityContext`字段外的其他配置。
+- en: Restricted
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 受限制
+- en: This is the most restrictive profile that follows the latest security-hardening
+    best practices at the expense of adoption. It is meant for security-critical applications,
+    as well as lower-trust users. On top of the Baseline profile, it puts restrictions
+    on the fields we reviewed earlier, such as `allowPrivilegeEscalation`, `runAsNonRoot`,
+    `runAsUser`, and other container configurations.
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是遵循最新安全强化最佳实践的最严格配置文件，以牺牲采纳度为代价。它适用于安全关键应用程序以及较低信任级别的用户。在基线配置文件的基础上，它对我们之前审查的字段施加了限制，如`allowPrivilegeEscalation`、`runAsNonRoot`、`runAsUser`以及其他容器配置。
+- en: 'PodSecurityPolicy was the legacy security-policy-enforcement mechanism that
+    was replaced with PSA in Kubernetes v1.25\. Going forward, you can use a third-party
+    admission plugin or the built-in PSA controller to enforce the security standards
+    for each namespace. The security standards are applied to a Kubernetes namespace
+    using labels that define the standard level as described earlier and one or more
+    actions to take when a potential violation is detected. Following are the actions
+    you can take:'
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: PodSecurityPolicy 是 Kubernetes v1.25 中替换为 PSA 的遗留安全策略实施机制。未来，您可以使用第三方接入插件或内置的
+    PSA 控制器为每个命名空间强制执行安全标准。安全标准通过标签应用于 Kubernetes 命名空间，定义了前述标准级别以及在检测到潜在违规时采取的一个或多个操作。以下是您可以采取的操作：
+- en: Warn
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 警告
+- en: The policy violations are allowed with a user-facing warning.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 策略违规将允许用户显示警告。
+- en: Audit
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 审计
+- en: The policy violations are allowed with an auditing log entry recorded.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 策略违规将允许带有审计日志条目的 Pod。
+- en: Enforce
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 强制执行
+- en: Any policy violations will cause the Pod to be rejected.
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 任何策略违规都将导致 Pod 被拒绝。
+- en: With these options defined, [Example 23-3](#process-containment-standard-enformcent)
+    creates a namespace that rejects any Pods that don’t satisfy the *baseline* standard,
+    and also generates a warning for Pods that don’t meet the *restricted* standards
+    requirements.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有了这些定义的选项，[示例 23-3](#process-containment-standard-enformcent) 创建了一个拒绝任何不符合 *基线*
+    标准的 Pods 的命名空间，并为不满足 *受限制* 标准要求的 Pods 生成警告。
+- en: Example 23-3\. Set security standards for a namespace
+  id: totrans-53
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 23-3\. 为命名空间设置安全标准
+- en: '[PRE2]'
+  id: totrans-54
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: '[![1](assets/1.png)](#co_process_containment_CO3-1)'
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_process_containment_CO3-1)'
+- en: Label hinting to the PSA controller to reject Pods that violate the *baseline*
+    standard.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 标签提示 PSA 控制器拒绝违反 *基线* 标准的 Pods。
+- en: '[![2](assets/2.png)](#co_process_containment_CO3-2)'
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_process_containment_CO3-2)'
+- en: Version of the security-standard requirements to use (optional).
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安全标准要求的版本（可选）。
+- en: '[![3](assets/3.png)](#co_process_containment_CO3-3)'
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_process_containment_CO3-3)'
+- en: Label hinting to the PSA controller to warn about Pods that violate the *restricted*
+    standard.
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 标签提示 PSA 控制器警告违反 *受限制* 标准的 Pods。
+- en: This example creates a new namespace and configures the security standards to
+    apply to all Pods that will be created in this namespace. It is also possible
+    to update the configuration of a namespace or apply the policy to one or all existing
+    namespaces. For details on how to do this in the least distributive way, check
+    out [“More Information”](#ch23moreinfo).
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此示例创建一个新的命名空间，并配置安全标准，以应用于此命名空间中将创建的所有 Pods。还可以更新命名空间的配置或将策略应用于一个或所有现有命名空间。有关如何以最少分布方式执行此操作的详细信息，请查看[“更多信息”](#ch23moreinfo)。
+- en: Discussion
+  id: totrans-62
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 讨论
+- en: One of the common security challenges with Kubernetes is running legacy applications
+    that are not implemented or containerized with Kubernetes security controls in
+    mind. Running a privileged container can be a challenge on Kubernetes distributions
+    or environments with strict security policies. Understanding how Kubernetes does
+    process containment at runtime and configures security boundaries, as shown in
+    [Figure 23-1](#img-process-containment), will help you create applications that
+    run on Kubernetes more securely. It is important to realize that a container is
+    not only a packaging format and not only a resource isolation mechanism, but when
+    configured properly, it is also a security fence.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 中的一个常见安全挑战是运行传统应用程序，这些应用程序在设计或容器化时未考虑 Kubernetes 安全控制。在 Kubernetes
+    发行版或具有严格安全策略的环境中运行特权容器可能会面临挑战。了解 Kubernetes 如何在运行时进行进程限制并配置安全边界，如[图 23-1](#img-process-containment)所示，将帮助您更安全地创建在
+    Kubernetes 上运行的应用程序。重要的是要意识到容器不仅仅是一种打包格式和资源隔离机制，当正确配置时，它还是一道安全防护墙。
+- en: '![A containerized process is contained and only certain operations allowed
+    to reach the node](assets/kup2_2301.png)'
+  id: totrans-64
+  prefs: []
+  type: TYPE_IMG
+  zh: '![容器化进程被限制，并且仅允许特定操作访问节点](assets/kup2_2301.png)'
+- en: Figure 23-1\. Process Containment pattern
+  id: totrans-65
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 23-1\. 进程限制模式
+- en: The tendency of shifting left the security considerations and testing practices,
+    including deploying into Kubernetes with the production security standards, is
+    getting more popular. Such practices help identify and tackle security issues
+    earlier in the development cycle and prevent last-minute surprises.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 将安全考虑和测试实践向左移的倾向，包括使用生产安全标准在 Kubernetes 中部署，越来越受欢迎。这些做法有助于在开发周期的早期识别和解决安全问题，避免最后一刻的意外。
+- en: Note
+  id: totrans-67
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: '*Shifting left* is all about doing things earlier rather than later. It’s about
+    going leftward on the time ray that describes a development and deployment process.
+    In our context, shift left implies that the developer already thinks about operational
+    security when developing the application. See more details about the Shift Left
+    model on [Devopedia](https://oreil.ly/cdw3f).'
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*左移* 是指尽早而非晚做事情。它是指在描述开发和部署过程的时间轴上向左移动。在我们的背景下，左移意味着开发人员在开发应用程序时已经考虑到操作安全性。在[Devopedia](https://oreil.ly/cdw3f)上查看有关左移模型的更多细节。'
+- en: In this chapter, we hope that we have given you enough food for thought when
+    creating secure cloud native applications. The guidelines in this chapter will
+    help you design and implement applications that don’t write to the local filesystem
+    or require root privileges (for example, when containerizing applications, to
+    ensure the container has a designated non-root user) and configure the security
+    context. We hope that you understand exactly what your application needs and give
+    it only the minimum permissions. We also aimed to help you build boundaries between
+    the workloads and the host, to reduce container privileges and configuring the
+    runtime environment to limit resource utilization in the event of a breach. In
+    this endeavor, the *Process Containment* pattern ensures “what happens in a container
+    stays in a container,” including any security breaches.
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们希望为您创建安全的云原生应用程序提供了足够的思路。本章中的指南将帮助您设计和实施不会向本地文件系统写入或需要 root 权限的应用程序（例如，在容器化应用程序时，确保容器具有指定的非
+    root 用户）并配置安全上下文。我们希望您明确了解您的应用程序确切需要什么，并仅为其授予最低权限。我们还旨在帮助您在工作负载和主机之间建立边界，减少容器权限，并配置运行时环境以在发生违规时限制资源利用。在这方面，“进程限制”模式确保“容器内发生的一切都留在容器内”，包括任何安全漏洞。
+- en: More Information
+  id: totrans-70
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 更多信息
+- en: '[Process Containment Example](https://oreil.ly/Seeg_)'
+  id: totrans-71
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[进程限制示例](https://oreil.ly/Seeg_)'
+- en: '[Configure a Security Context for a Pod or Container](https://oreil.ly/e7lKN)'
+  id: totrans-72
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[为 Pod 或容器配置安全上下文](https://oreil.ly/e7lKN)'
+- en: '[Pod Security Admission](https://oreil.ly/S8ac9)'
+  id: totrans-73
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Pod 安全审核](https://oreil.ly/S8ac9)'
+- en: '[Pod Security Standards](https://oreil.ly/2xzlg)'
+  id: totrans-74
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Pod 安全标准](https://oreil.ly/2xzlg)'
+- en: '[Enforce Pod Security Standards with Namespace Labels](https://oreil.ly/FnVMh)'
+  id: totrans-75
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[使用命名空间标签强制实施 Pod 安全标准](https://oreil.ly/FnVMh)'
+- en: '[Admission Controllers Reference: PodSecurity](https://oreil.ly/QnhLj)'
+  id: totrans-76
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[准入控制器参考：Pod 安全性](https://oreil.ly/QnhLj)'
+- en: '[Linux Capabilities](https://oreil.ly/GkHt7)'
+  id: totrans-77
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Linux 权限](https://oreil.ly/GkHt7)'
+- en: '[Introduction to Security Contexts and SCCs](https://oreil.ly/IkMnH)'
+  id: totrans-78
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[安全上下文和 SCCs 简介](https://oreil.ly/IkMnH)'
+- en: '[10 Kubernetes Security Context Settings You Should Understand](https://oreil.ly/f04Xj)'
+  id: totrans-79
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[你应该理解的 10 个 Kubernetes 安全上下文设置](https://oreil.ly/f04Xj)'
+- en: '[Security Risk Analysis Tool for Kubernetes Resources](https://oreil.ly/pbAqs)'
+  id: totrans-80
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[用于 Kubernetes 资源的安全风险分析工具](https://oreil.ly/pbAqs)'

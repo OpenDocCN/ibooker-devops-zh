@@ -1,0 +1,1041 @@
+- en: Chapter 4\. Workload Runtime Security
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第四章 工作负载运行时安全性
+- en: With contributions from Manoj Ahuje,
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与Manoj Ahuje的贡献，
+- en: Senior Threat Intelligence Research Engineer at Tigera
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Tigera 的高级威胁情报研究工程师
+- en: 'Kubernetes’ default pod provisioning mechanism has a wide attack surface that
+    can be used by adversaries to exploit the cluster or escape the container. In
+    this chapter you will learn how to implement pod security policies (PSPs) to limit
+    the attack surface of the pods and how to monitor processes (e.g., process privileges),
+    file access, and runtime security for your workloads. Here are a few specifics
+    of what we will discuss:'
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 的默认Pod提供机制存在广泛的攻击面，敌对方可以利用这一点来攻击集群或逃逸容器。本章将教您如何实施Pod安全策略（PSP），以限制Pod的攻击面，并学习如何监控进程（例如进程权限）、文件访问以及工作负载的运行时安全性。以下是我们将讨论的一些具体内容：
+- en: We will cover the implementation details of PSPs, like pod security contexts,
+    and also explain the limitations of PSPs. Note PSPs are deprecated as of Kubernetes
+    v1.21; however, we will cover this topic in this chapter as we are aware that
+    PSPs are widely used.
+  id: totrans-4
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 我们将覆盖PSP的实现细节，例如Pod安全上下文，并解释PSP的限制。请注意，自 Kubernetes v1.21 起，PSP已被弃用；然而，由于我们知道PSP被广泛使用，本章节将继续讨论此主题。
+- en: We will discuss process monitoring, which focuses on the need for Kubernetes-native
+    monitoring to detect suspicious activities. We will cover runtime monitoring and
+    enforcement using kernel security features like seccomp, SELinux, and AppArmor
+    to prevent containers from accessing host resources.
+  id: totrans-5
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 我们将讨论过程监控，重点是需要Kubernetes本地监控来检测可疑活动。我们将覆盖使用内核安全特性如seccomp、SELinux和AppArmor来防止容器访问主机资源的运行时监控和强制执行。
+- en: We will cover both detection and runtime defense against vulnerabilities, workload
+    isolation, and a blast radius containment.
+  id: totrans-6
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 我们将同时讨论漏洞的检测和运行时防御、工作负载隔离以及爆炸半径的控制。
+- en: Pod Security Policies
+  id: totrans-7
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Pod 安全策略
+- en: Kubernetes provides a way to securely onboard your pods and containers by using
+    PSPs. They are a cluster-scoped resource that checks for a set of conditions before
+    a pod is admitted and scheduled to run in a cluster. This is achieved via a Kubernetes
+    admission controller, which evaluates every pod creation request for compliance
+    with the PSP assigned to the pod.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 通过使用PSP提供了一种安全地引导Pod和容器的方法。它们是一个集群范围的资源，可以在将Pod允许并计划在集群中运行之前，检查一组条件。这通过一个Kubernetes准入控制器实现，该控制器会评估每个Pod创建请求，以确保其符合分配给Pod的PSP的规定。
+- en: Please note that PSPs are deprecated with Kubernetes release 1.21 and are scheduled
+    to be removed in release 1.25\. They are widely used in production clusters, though,
+    and therefore this section will help you understand how they work and what best
+    practices are for implementing PSPs.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，自 Kubernetes 1.21 版本起，PSP已被弃用，并计划在 1.25 版本中移除。尽管如此，它们在生产集群中被广泛使用，因此本节将帮助您了解它们的工作原理以及实施PSP的最佳实践。
+- en: PSPs let you enforce rules with controls like *pods should not run as root*
+    or *pods should not use host network, host namespace, or run as privileged.* The
+    policies are enforced at pod creation time. By using PSPs you can make sure pods
+    are created with the minimum privileges needed for operation, which reduces the
+    attack surface for your application. Additionally, this mechanism helps you to
+    be compliant with various standards like PCI, SOC 2, or HIPAA, which mandates
+    the use of principle of least privilege access. As the name suggests, the principle
+    requires that any process, user, or, in our case, workload be granted the least
+    amount of privileges necessary for it to function.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: PSP允许您通过诸如 *Pods不应作为root运行* 或 *Pods不应使用主机网络、主机命名空间或以特权模式运行* 等控制来强制执行规则。这些策略在Pod创建时生效。通过使用PSP，您可以确保Pod以操作所需的最低特权创建，从而减少应用程序的攻击面。此外，该机制还帮助您符合PCI、SOC
+    2或HIPAA等各种标准的要求，这些标准要求使用最少特权访问原则。正如其名称所示，该原则要求任何进程、用户或者在我们的情况下，工作负载都被授予其运行所需的最低权限。
+- en: Using Pod Security Policies
+  id: totrans-11
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 使用Pod安全策略
+- en: Kubernetes PSPs are recommended but implemented via an optional admission controller.
+    The enforcement of PSPs can be turned on by enabling an admission controller.
+    That means the Kubernetes API server manifest should have a PodSecurityPolicy
+    plug-in in its --enable-admission-plugins list. Many Kubernetes distros do not
+    support or by default disable PSPs, so it’s worth checking while choosing the
+    Kubernetes distros.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes PSP被推荐但通过可选的准入控制器实现。启用PSP的强制性可以通过启用一个准入控制器来实现。这意味着Kubernetes API服务器清单应在其--enable-admission-plugins列表中具有一个PodSecurityPolicy插件。许多Kubernetes发行版不支持或默认禁用PSP，因此在选择Kubernetes发行版时值得检查。
+- en: Once the PSPs are enabled, it’s a three-step process to apply PSPs, as shown
+    in [Figure 4-1](#process_to_apply_psps). A best practice is to apply PSPs to groups
+    rather than individual service accounts.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦启用了PSP，将PSP应用到组而不是单个服务帐户是一个三步骤的过程，如[图 4-1](#process_to_apply_psps)所示。一个最佳实践是应用PSP到组。
+- en: '![](Images/ksao_0401.png)'
+  id: totrans-14
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/ksao_0401.png)'
+- en: Figure 4-1\. Process to apply PSPs
+  id: totrans-15
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 4-1\. 应用PSP的过程
+- en: Step 1 is to create a PSP. Step 2 is to create ClusterRole with the `use` verb,
+    which authorizes pod deployment controllers to use the policies. Then step 3 is
+    to create ClusterRoleBindings, which is used to enforce policy for the groups
+    (i.e., system:authenticated or system:unauthenticated) or service accounts.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 第1步是创建一个PSP。第2步是创建具有`use`动词的ClusterRole，授权Pod部署控制器使用这些策略。然后第3步是创建ClusterRoleBindings，用于对组（例如，system:authenticated或system:unauthenticated）或服务帐户强制执行策略。
+- en: 'A good starting point is the PSP template from the Kubernetes project:'
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一个良好的起点是来自Kubernetes项目的PSP模板：
+- en: '[PRE0]'
+  id: totrans-18
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: 'In the following example, you apply this policy to all authenticated users
+    using Kubernetes role-based access control:'
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在以下示例中，您可以使用Kubernetes基于角色的访问控制将此策略应用于所有经过身份验证的用户：
+- en: '[PRE1]'
+  id: totrans-20
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: Pod Security Policy Capabilities
+  id: totrans-21
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Pod安全策略功能
+- en: Let’s focus on the capabilities provided by PSPs that you can utilize as required
+    by your use case and internal threat model. You can follow the example PSP template
+    we just discussed to build your own PSPs. In this template most of the PSP capabilities
+    are utilized to formulate a restrictive policy.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们关注PSP提供的功能，您可以根据您的用例和内部威胁模型进行利用。您可以按照我们刚讨论过的示例PSP模板来构建您自己的PSP。在此模板中，大部分PSP功能被利用来制定一种限制性策略。
+- en: To explain the impact of a capability, let’s take a look at an example where
+    you see capabilities granted to the pod created with privileged:true and with
+    privileged:false. A Linux utility [capsh](https://oreil.ly/UuDcu) can be used
+    to evaluate the permissions of containerized root users. As you can see in [Figure 4-2](#pod_capabilities_for_default_and_privil),
+    the privileged pod has a plethora of capabilities in its Linux namespace, which
+    translates to a wider attack surface for an attacker to escape your container.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要解释一项能力的影响，让我们看一个示例，在这个示例中，您可以看到为使用privileged:true和privileged:false创建的Pod授予的能力。Linux实用程序[capsh](https://oreil.ly/UuDcu)可以用来评估容器化根用户的权限。正如您在[图 4-2](#pod_capabilities_for_default_and_privil)中所见，特权Pod在其Linux命名空间中具有大量能力，这意味着攻击者可以更广泛地攻击您的容器逃逸面。
+- en: '![](Images/ksao_0402.png)'
+  id: totrans-24
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/ksao_0402.png)'
+- en: Figure 4-2\. Pod capabilities for default and privileged pods
+  id: totrans-25
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 4-2\. 默认和特权Pod的Pod功能
+- en: '[Table 4-1](#summarizes_the_capabilities_for_pods_as) summarizes the capabilities
+    for pods as described in the [Kubernetes PSP documentation](https://oreil.ly/FSDGN).'
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[表 4-1](#summarizes_the_capabilities_for_pods_as)总结了在[Kubernetes PSP文档](https://oreil.ly/FSDGN)中描述的Pod功能。'
+- en: Table 4-1\. Pod capabilities
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 4-1\. Pod功能
+- en: '| Field | Uses |'
+  id: totrans-28
+  prefs: []
+  type: TYPE_TB
+  zh: '| Field | Uses |'
+- en: '| --- | --- |'
+  id: totrans-29
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| privileged | Allow containers to gain capabilities that include access to
+    host mounts, filesystem to change settings, and many more. You can check capabilities
+    with command capsh --print. |'
+  id: totrans-30
+  prefs: []
+  type: TYPE_TB
+  zh: '| privileged | 允许容器获得访问主机挂载、文件系统以更改设置等功能。您可以使用命令`capsh --print`检查功能。'
+- en: '| hostPID, hostIPC | Give container access to host namespaces where process
+    and Ethernet interfaces are visible to it. |'
+  id: totrans-31
+  prefs: []
+  type: TYPE_TB
+  zh: '| hostPID, hostIPC | 允许容器访问主机命名空间，其中进程和以太网接口对其可见。'
+- en: '| hostNetwork, hostPorts | Give container IP access to the host network and
+    ports. |'
+  id: totrans-32
+  prefs: []
+  type: TYPE_TB
+  zh: '| hostNetwork, hostPorts | 允许容器访问主机网络和端口。'
+- en: '| volumes | Allow volumes types like configMap, emtyDir, or secret. |'
+  id: totrans-33
+  prefs: []
+  type: TYPE_TB
+  zh: '| volumes | 允许卷类型如configMap、emtyDir或secret。'
+- en: '| allowedHostPaths | Allow the whitelisting of host paths that can be used
+    by hostPath volumes (i.e., /tmp). |'
+  id: totrans-34
+  prefs: []
+  type: TYPE_TB
+  zh: '| allowedHostPaths | 允许列出可以被hostPath卷使用的主机路径的白名单（例如，/tmp）。'
+- en: '| allowedFlexVolumes | Allow specific FlexVolume drivers (i.e., azure/kv).
+    |'
+  id: totrans-35
+  prefs: []
+  type: TYPE_TB
+  zh: '| allowedFlexVolumes | 允许特定的 FlexVolume 驱动程序（例如 azure/kv）。 |'
+- en: '| fsGroup | Set a GID or range of GID that owns the pod’s volumes. |'
+  id: totrans-36
+  prefs: []
+  type: TYPE_TB
+  zh: '| fsGroup | 设置拥有 pod 卷的 GID 或 GID 范围。 |'
+- en: '| readOnlyRootFilesystem | Set the container’s root filesystem to read-only.
+    |'
+  id: totrans-37
+  prefs: []
+  type: TYPE_TB
+  zh: '| readOnlyRootFilesystem | 将容器的根文件系统设置为只读。 |'
+- en: '| runAsUser, runAsGroup, supplementalGroups | Define containers UID and GID.
+    Here you can specify non-root user or groups. |'
+  id: totrans-38
+  prefs: []
+  type: TYPE_TB
+  zh: '| runAsUser, runAsGroup, supplementalGroups | 定义容器的 UID 和 GID。在此处，您可以指定非 root
+    用户或组。 |'
+- en: '| allowPrivilegeEscalation, defaultAllowPrivilegeEscalation | Restrict privilege
+    escalation by process. |'
+  id: totrans-39
+  prefs: []
+  type: TYPE_TB
+  zh: '| allowPrivilegeEscalation, defaultAllowPrivilegeEscalation | 通过进程限制特权升级。 |'
+- en: '| defaultAddCapabilities, requiredDropCapabilities, allowedCapabilities | Add
+    or drop [Linux capabilities](https://oreil.ly/H87Jc) as needed. |'
+  id: totrans-40
+  prefs: []
+  type: TYPE_TB
+  zh: '| defaultAddCapabilities, requiredDropCapabilities, allowedCapabilities | 根据需要添加或删除
+    [Linux capabilities](https://oreil.ly/H87Jc)。 |'
+- en: '| SELinux | Define the SELinux context of the container. |'
+  id: totrans-41
+  prefs: []
+  type: TYPE_TB
+  zh: '| SELinux | 定义容器的 SELinux 上下文。 |'
+- en: '| allowedProcMountTypes | Allowed proc mount types by container. |'
+  id: totrans-42
+  prefs: []
+  type: TYPE_TB
+  zh: '| allowedProcMountTypes | 容器允许的 proc 挂载类型。 |'
+- en: '| forbiddenSysctls,allowedUnsafeSysctls | Set the sysctl profile used by the
+    container. |'
+  id: totrans-43
+  prefs: []
+  type: TYPE_TB
+  zh: '| forbiddenSysctls,allowedUnsafeSysctls | 设置容器使用的 sysctl 配置文件。 |'
+- en: '| annotations | Set the AppArmor and seccomp profiles used by containers. |'
+  id: totrans-44
+  prefs: []
+  type: TYPE_TB
+  zh: '| annotations | 设置容器使用的 AppArmor 和 seccomp 配置文件。 |'
+- en: AppArmor and seccomp profiles are used with PSP annotation where you can use
+    the runtime’s (Docker, CRI) default profile or choose a custom profile loaded
+    on the host by you. You will see more about these defenses in [“Process Monitoring”](#process_monitoring).
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在使用 PSP 注释时，可以使用 AppArmor 和 seccomp 配置文件，其中可以使用运行时（Docker、CRI）的默认配置文件或者您在主机上加载的自定义配置文件。您将在
+    [“进程监控”](#process_monitoring) 中了解更多关于这些防御措施的信息。
+- en: Pod Security Context
+  id: totrans-46
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Pod 安全上下文
+- en: 'Unlike PSPs, which are defined cluster-wide, a pod securityContext can be defined
+    at runtime while creating a deployment or pod. Here is a simple example of pod
+    securityContext in action, where the pod is created with the root user `(uid=0)`
+    and allows only four capabilities:'
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与定义为整个集群的 PSPs 不同，pod securityContext 可以在创建部署或 pod 时定义运行时。以下是 pod securityContext
+    在操作中的简单示例，其中 pod 使用 root 用户 `(uid=0)` 创建，并且只允许四种功能：
+- en: '[PRE2]'
+  id: totrans-48
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: This code snippet shows how you can create a pod running a root but limited
+    to a subset of capabilities by specifying a security context. [Figure 4-3](#four_allowed_pod_capabilities)
+    shows commands you can run to verify that the pod runs as root with the limited
+    set of capabilities.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此代码片段展示了如何通过指定安全上下文创建一个以 root 用户运行但只允许部分功能集的 pod。[图 4-3](#four_allowed_pod_capabilities)
+    展示了可以运行的命令，以验证 pod 以 root 用户和受限功能集运行。
+- en: '![](Images/ksao_0403.png)'
+  id: totrans-50
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/ksao_0403.png)'
+- en: Figure 4-3\. Four allowed pod capabilities
+  id: totrans-51
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 4-3\. 允许的四种 pod 功能
+- en: Pod securityContext, as shown in [Figure 4-3](#four_allowed_pod_capabilities),
+    can be used without enabling PSPs cluster-wide, but once the PSPs are enabled,
+    you need to define securityContext to make sure pods are created properly. Since
+    the securityContext has a PSP construct, all the PSPs’ capabilities apply to securityContext.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Pod 安全上下文，如 [图 4-3](#four_allowed_pod_capabilities) 所示，可以在不启用 PSPs 的情况下使用，但一旦启用
+    PSPs，您需要定义 securityContext 以确保正确创建 pod。由于 securityContext 具有 PSP 构造，所有 PSP 的功能都适用于
+    securityContext。
+- en: Limitations of PSPs
+  id: totrans-53
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: PSPs 的限制
+- en: 'Some of the limitations of PSPs include:'
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: PSPs 的一些限制包括：
+- en: PodSecurityPolicySpec has references to allowedCapabilities, privileged, or
+    hostNetwork. These enforcements can work only on Linux-based runtimes.
+  id: totrans-55
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: PodSecurityPolicySpec 引用了 allowedCapabilities、privileged 或 hostNetwork。这些强制措施仅适用于基于
+    Linux 的运行时。
+- en: If you are creating a pod using controllers (e.g., replication controller),
+    it’s worth checking if PSPs are authorized for use by those controllers.
+  id: totrans-56
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 如果您正在使用控制器（例如复制控制器）创建 pod，则值得检查这些控制器是否被授权使用 PSPs。
+- en: Once PSPs are enabled cluster-wide and a pod doesn’t start because of an incorrect
+    PSP, it becomes hectic to troubleshoot the issue. Moreover, if PSPs are enabled
+    cluster-wide in production clusters, you need to test each and every component
+    in your cluster, including dependencies like mutating admission controllers and
+    conflicting verdicts.
+  id: totrans-57
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一旦在整个集群启用了 PSPs 并且由于错误的 PSP 导致 pod 无法启动，那么排除问题将变得非常繁琐。此外，如果在生产集群中整个集群启用了 PSPs，您需要测试集群中的每个组件，包括像突变接入控制器和冲突判断这样的依赖项。
+- en: '[Azure Kubernetes Service (AKS)](https://oreil.ly/Z99lf) has deprecated support
+    for PSPs and preferred OPA Gatekeeper for policy enforcement to support more flexible
+    policies using the OPA engine.'
+  id: totrans-58
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Azure Kubernetes Service (AKS)](https://oreil.ly/Z99lf) 已弃用对 PSP 的支持，并优先使用
+    OPA Gatekeeper 进行策略执行，以支持使用 OPA 引擎实现更灵活的策略。'
+- en: PSP are deprecated and scheduled to be removed by Kubernetes v1.25.
+  id: totrans-59
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: PSP 已被弃用，并计划在 Kubernetes v1.25 中移除。
+- en: Kubernetes can have edge cases where PSPs can be bypassed (e.g., [TOB-K8S-038](https://oreil.ly/PqfNQ)).
+  id: totrans-60
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Kubernetes 可能存在 PSP 可被绕过的边缘情况（例如，[TOB-K8S-038](https://oreil.ly/PqfNQ)）。
+- en: Now that you understand PSPs, best practices to implement them, and the limitations
+    of PSPs, let’s look at process monitoring.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在您了解了 PSP、实施它们的最佳实践以及 PSP 的限制，让我们来看看进程监控。
+- en: Process Monitoring
+  id: totrans-62
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 进程监控
+- en: 'When you containerize a workload and run it on a host with an orchestrator
+    like Kubernetes, there are a number of layers you need to take into consideration
+    for monitoring a process inside a container. These start with container process
+    logs and artifacts, filesystem access, network connections, system calls required,
+    kernel permission (specialized workload), Kubernetes artifacts, and cloud infrastructure
+    artifacts. Usually your organization’s security posture depends on how good your
+    solutions are in stitching together these various log contexts. And this is where
+    the traditional monitoring system fails measurably and a need for Kubernetes’
+    native monitoring and observability arises. Traditional solutions, like endpoint
+    detection and response (EDR) and endpoint protection systems, have the following
+    limitations when used in Kubernetes clusters:'
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您将工作负载容器化并在像 Kubernetes 这样的编排器上运行时，您需要考虑的层次很多，以监控容器内的进程。这些层次包括容器进程日志和工件、文件系统访问、网络连接、所需的系统调用、内核权限（特殊工作负载）、Kubernetes
+    工件和云基础设施工件。通常，您组织的安全姿态取决于您的解决方案在将这些各种日志上下文有机地结合起来方面的表现。这也是传统监控系统明显不足之处，需要 Kubernetes
+    的本地监控和可观察性的原因。传统解决方案，如终端点检测与响应（EDR）和终端点保护系统，在 Kubernetes 集群中使用时存在以下限制：
+- en: They are not container aware.
+  id: totrans-64
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 他们不知道容器。
+- en: They are not aware of container networking and typically see activity from the
+    host perspective, which can lead to false negatives on attackers’ lateral movements.
+  id: totrans-65
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 他们不了解容器网络，通常从主机的角度看待活动，这可能导致对攻击者的侧向移动产生误判。
+- en: They are blind to traffic between containers and don’t have any sight of underlays
+    like IPIP or VXLAN.
+  id: totrans-66
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 他们对容器之间的流量一无所知，也看不到像 IPIP 或 VXLAN 这样的底层协议。
+- en: They are not aware of process privileges and file permissions of containers
+    accessing the underlying host.
+  id: totrans-67
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 他们不了解容器访问底层主机的进程权限和文件权限。
+- en: They are not aware of the Kubernetes container runtime interface (CRI) or its
+    intricacies and security issues, which can lead to containers being able to access
+    resources on the host. This is also known as *privilege escalation*.
+  id: totrans-68
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 他们不了解 Kubernetes 容器运行时接口（CRI）或其复杂性和安全问题，这可能导致容器能够访问主机上的资源。这也被称为*权限提升*。
+- en: In the following sections, we will go over various techniques you can use for
+    process monitoring. First we look at monitoring using various logs available in
+    Kubernetes; then we explore seccomp, SELinux, and AppArmor features that allow
+    you to control what a process can access (e.g., system calls, filesystem, etc.)
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在接下来的几节中，我们将介绍您可以用于进程监控的各种技术。首先，我们将查看 Kubernetes 中可用的各种日志进行监控；然后，我们探讨 seccomp、SELinux
+    和 AppArmor 功能，这些功能允许您控制进程可以访问的内容（例如系统调用、文件系统等）。
+- en: Kubernetes Native Monitoring
+  id: totrans-70
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Kubernetes 本地监控
+- en: As shown in [Figure 4-4](#kubernetes_native_monitoring), each layer leading
+    up to your containerized application process introduces monitoring and logging
+    requirements and a new attack surface that is different from what traditional
+    IT security practitioners are used to for monitoring networks and applications.
+    The challenge is to reduce this monitoring overhead, as it can get really expensive
+    for the storage and compute resources. The topic of metric collection and how
+    to do this efficiently is covered in detail in [Chapter 5](ch05.xhtml#observability-id000002).
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如 [图 4-4](#kubernetes_native_monitoring) 所示，每一层到您的容器化应用程序进程都引入了监控和日志记录要求，以及与传统
+    IT 安全从业人员监控网络和应用程序不同的新攻击面。挑战在于减少这种监控开销，因为对于存储和计算资源来说这可能变得非常昂贵。有关度量收集及其高效执行的详细信息将在
+    [第 5 章](ch05.xhtml#observability-id000002) 中详细讨论。
+- en: '![](Images/ksao_0404.png)'
+  id: totrans-72
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/ksao_0404.png)'
+- en: Figure 4-4\. Kubernetes native monitoring
+  id: totrans-73
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 4-4\. Kubernetes 本地监控
+- en: 'In order to build defenses in each layer, the following are some options you
+    should consider incorporating while choosing solutions:'
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要在每个层面构建防御，你在选择解决方案时应该考虑以下几个选项：
+- en: Ability to block processes spawned by each container or Kubernetes orchestration
+    creating containers.
+  id: totrans-75
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 能够阻止每个容器或 Kubernetes 编排创建容器生成的进程。
+- en: Monitor kernel system calls used by each container process and ability to filter,
+    block, and alert on suspicious calls to prevent containers accessing host resources.
+  id: totrans-76
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 监控每个容器进程使用的内核系统调用，并能够过滤、阻止和警报可疑调用，以防止容器访问主机资源。
+- en: Monitor each network connection (socket) originated by a container process and
+    ability to enforce network policy.
+  id: totrans-77
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 监控每个容器进程发起的每个网络连接（套接字），并能够强制执行网络策略。
+- en: Ability to isolate a container using network policy (or a node running this
+    container) and pause it to investigate suspicious activities and collect forensics
+    data in Kubernetes. The [`pause` command](https://oreil.ly/LE52U) for Docker-based
+    containers suspends processes in a container to allow for detailed analysis. Note
+    that pausing a container will cause the container to suspend normal operation
+    and should be used as a response to an event (e.g., security incident).
+  id: totrans-78
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 能够使用网络策略隔离容器（或运行该容器的节点），并将其暂停以调查可疑活动并在 Kubernetes 中收集取证数据。基于 Docker 的容器的 [`pause`
+    命令](https://oreil.ly/LE52U) 暂停容器中的进程以进行详细分析。请注意，暂停容器将导致其停止正常操作，应作为对事件（例如安全事件）的响应而使用。
+- en: Monitor filesystem reads and writes to know filesystem changes (binaries, packages)
+    and additional isolation through mandatory access control (MAC) to prevent privilege
+    escalations.
+  id: totrans-79
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 监控文件系统的读写操作，了解文件系统变更（二进制、软件包），并通过强制访问控制（MAC）进行额外隔离，以防止提权。
+- en: Monitor the Kubernetes audit log to know what Kubernetes API requests clients
+    are making and detect suspicious activity.
+  id: totrans-80
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 监控 Kubernetes 审计日志，了解客户端发出的 Kubernetes API 请求及检测可疑活动。
+- en: Enable a cloud provider’s logging for your infrastructure and ability to detect
+    suspicious activity in the cloud provider’s infrastructure.
+  id: totrans-81
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 启用云服务提供商的基础设施日志记录，并能够在云服务提供商的基础设施中检测可疑活动。
+- en: There are many enterprise and open source solutions (e.g., Falco) that target
+    groups of layers using various tools and mechanisms (like ebpf, kprobes, ptrace,
+    tracepoints, etc.) to help build defense at various layers. You should look at
+    their threat model and choose solutions that fulfill their requirements.
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有许多企业和开源解决方案（例如，Falco），利用各种工具和机制（如ebpf、kprobes、ptrace、tracepoints等）来瞄准各层级，帮助在各个层面构建防御。你应该查看它们的威胁模型，并选择满足其需求的解决方案。
+- en: In the next section you will see some of the mechanisms that are offered by
+    Kubernetes by bringing Linux defenses closer to the container, which will help
+    you in monitoring and reducing the attack surface at various layers. The previous
+    section focused on monitoring to allow you to detect unintended (malicious) behavior.
+    The following mechanisms allow you to set controls to prevent unintended (malicious)
+    behavior.
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在接下来的部分，你将看到 Kubernetes 提供的一些机制，通过将 Linux 防御措施与容器更紧密地结合，帮助你在各层面监控和减少攻击面。前一部分侧重于监控，以便检测意外（恶意）行为。以下机制允许你设置控件以防止意外（恶意）行为。
+- en: Kernel security features like seccomp, AppArmor, and SELinux can control what
+    system calls are required for your containerized application, virtually isolate
+    and customize each container for the workload it is running, and use MAC to provide
+    access to resources like volume or filesystem that prevent container breakouts
+    efficiently. Just using the feature with default settings can tremendously reduce
+    the attack surface throughout your cluster. In the following sections you will
+    look at each defense in depth and how it works in the Kubernetes cluster so that
+    you can choose the best option for your threat model.
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 内核安全功能如 seccomp、AppArmor 和 SELinux 可以控制容器化应用程序所需的系统调用，为每个容器提供虚拟隔离和定制，以及使用 MAC
+    为访问资源（如卷或文件系统）提供访问，有效防止容器越界。仅使用默认设置的功能即可大幅减少集群中的攻击面。在接下来的部分中，你将深入了解每种防御措施及其在 Kubernetes
+    集群中的工作方式，以便选择适合你威胁模型的最佳选项。
+- en: Seccomp
+  id: totrans-85
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Seccomp
+- en: Seccomp is a Linux kernel feature that can filter system calls executed by the
+    container on a granular basis. Kubernetes lets you automatically apply seccomp
+    profiles loaded onto a node by Kubernetes runtimes like [Docker](https://www.docker.com),
+    [podman](https://oreil.ly/O4ZUZ), or [CRI-O](https://oreil.ly/Cgrep). A simple
+    seccomp profile consists of a list of syscalls and the appropriate action to take
+    when a syscall is invoked. This action reduces the attack surface to only allowed
+    syscalls, reducing the risk of privilege escalation and container escape.
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Seccomp是Linux内核的一个功能，可以在粒度基础上过滤容器执行的系统调用。Kubernetes允许您通过像[Docker](https://www.docker.com)、[podman](https://oreil.ly/O4ZUZ)或[CRI-O](https://oreil.ly/Cgrep)这样的运行时自动应用加载到节点上的seccomp配置文件。简单的seccomp配置文件包括一系列syscalls和在调用syscalls时要采取的适当操作。此操作将攻击面减少到仅允许的syscalls，从而减少特权升级和容器逃逸的风险。
+- en: 'In the following seccomp profile, a default action is `SCMP_ACT_ERRNO`, which
+    denies a system call. But defaultAction for syscall chmod is overwritten with
+    `SCMP_ACT_ALLOW`. Usually seccomp profiles are loaded into the directory /var/lib/kubelet/seccomp
+    on all nodes by your runtimes. You can add your custom profile at the same place:'
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在下面的seccomp配置文件中，默认操作是`SCMP_ACT_ERRNO`，这会拒绝系统调用。但是对于syscall chmod，默认的操作被覆盖为`SCMP_ACT_ALLOW`。通常，seccomp配置文件由您的运行时加载到所有节点的/var/lib/kubelet/seccomp目录中。您可以在同一位置添加自定义配置文件：
+- en: '[PRE3]'
+  id: totrans-88
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: 'To find the system calls used by your application, you can use `strace` as
+    shown in the next example. For this example, you can list syscalls used by `curl`
+    utility as follows:'
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要查找应用程序使用的系统调用，可以使用`strace`，如下例所示。例如，您可以列出`curl`实用程序使用的syscalls如下：
+- en: '[PRE4]'
+  id: totrans-90
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: The default seccomp profiles provided by the Kubernetes runtime contain a list
+    of common syscalls that are used by most of the applications. Just enabling this
+    feature forbids the use of dangerous system calls, which can lead to a kernel
+    exploit and a container escape. The [default Docker runtime seccomp profile is
+    available](https://oreil.ly/pGX2O) for your reference.
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes运行时提供的默认seccomp配置文件包含大多数应用程序使用的常见syscalls列表。启用此功能可以禁止使用危险的系统调用，从而可以导致内核漏洞利用和容器逃逸。您可以参考[默认Docker运行时seccomp配置文件](https://oreil.ly/pGX2O)。
+- en: Note
+  id: totrans-92
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注
+- en: At the time of writing, the Docker/default profile was deprecated, so we recommend
+    you use runtime/default as the seccomp profile instead.
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在撰写本文时，Docker/default配置文件已弃用，建议您改用runtime/default作为seccomp配置文件。
+- en: '[Table 4-2](#shows_the_options_for_deploying_seccomp) shows the options for
+    deploying seccomp profile in Kubernetes via PSP annotations.'
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[表格 4-2](#shows_the_options_for_deploying_seccomp) 展示了通过PSP注释在Kubernetes中部署seccomp配置文件的选项。'
+- en: Table 4-2\. Seccomp options
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表格 4-2\. Seccomp选项
+- en: '| Value | Description |'
+  id: totrans-96
+  prefs: []
+  type: TYPE_TB
+  zh: '| 值 | 描述 |'
+- en: '| --- | --- |'
+  id: totrans-97
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| runtime/default | Default container runtime profile |'
+  id: totrans-98
+  prefs: []
+  type: TYPE_TB
+  zh: '| runtime/default | 默认容器运行时配置文件 |'
+- en: '| unconfined | No seccomp profile—this option is default in Kubernetes |'
+  id: totrans-99
+  prefs: []
+  type: TYPE_TB
+  zh: '| 未限制 | Kubernetes中默认没有seccomp配置文件—此选项是默认的。 |'
+- en: '| localhost/<path> | Your own profile located on node, usually in /var/lib/kubelet/seccomp
+    directory |'
+  id: totrans-100
+  prefs: []
+  type: TYPE_TB
+  zh: '| localhost/<path> | 您在节点上的自定义配置文件，通常位于/var/lib/kubelet/seccomp目录中 |'
+- en: SELinux
+  id: totrans-101
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: SELinux
+- en: In the recent past, every container runtime breakout (container escape or privilege
+    escalation) was some kind of filesystem breakout (i.e., CVE-2019-5736, CVE-2016-9962,
+    CVE-2015-3627, and more). SELinux mitigates these issues by providing control
+    over who can access the filesystem and the interaction between resources (i.e.,
+    user, files, directories, memory, sockets, and more). In the cloud computing context,
+    it makes sense to apply SELinux profiles to workloads to get better isolation
+    and reduce attack surface by limiting filesystem access by the host kernel.
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在最近的过去，每个容器运行时的突破（容器逃逸或特权升级）都是某种文件系统的突破（即CVE-2019-5736、CVE-2016-9962、CVE-2015-3627等）。通过提供控制谁可以访问文件系统以及资源之间的交互（例如用户、文件、目录、内存、套接字等），SELinux可以减轻这些问题。在云计算环境中，应用SELinux配置文件对工作负载进行更好的隔离，通过限制主机内核对文件系统的访问来减少攻击面。
+- en: SELinux was originally developed by the National Security Agency in the early
+    2000s and is predominantly used on Red Hat- and centOS-based distros. The reason
+    SELinux is effective is it provides a MAC, which greatly augments the traditional
+    Linux discretionary access control (DAC) system.
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: SELinux最初由国家安全局在2000年代初开发，主要用于基于Red Hat和centOS的发行版。SELinux之所以有效，是因为它提供了MAC，极大增强了传统的Linux自主访问控制（DAC）系统。
+- en: Traditionally with the Linux DAC, users have the ability to change permissions
+    on files, directories, and the process owned by them. And a root user has access
+    to everything. But with SELinux (MAC), each OS resource is assigned a label by
+    the kernel, which is stored as extended file attributes. These labels are used
+    to evaluate SELinux policies inside the kernel to allow any interaction. With
+    SELinux enabled, even a root user in a container won’t be able to access a host’s
+    files in a mounted volume if the labels are not accurate.
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在传统的 Linux DAC 中，用户可以更改文件、目录和自己拥有的进程的权限。根用户可以访问所有内容。但是使用 SELinux（MAC）时，每个操作系统资源都由内核分配一个标签，并存储为扩展文件属性。这些标签用于在内核内评估
+    SELinux 策略，以允许任何交互。启用 SELinux 后，即使容器中的根用户也无法访问挂载卷中主机的文件，如果标签不准确的话。
+- en: 'SELinux operates in three modes: Enforcing, Permissive, and Disabled. Enforcing
+    enables SELinux policy enforcement, Permissive provides warnings, and Disabled
+    is to no longer use SELinux policies. The SELinux policies themselves can be further
+    categorized into Targeted and Strict, where Targeted policies apply to particular
+    processes and Strict policies apply to all processes.'
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: SELinux 有三种模式：强制执行（Enforcing）、宽松（Permissive）和禁用（Disabled）。强制执行使 SELinux 策略生效，宽松提供警告，禁用则不使用
+    SELinux 策略。SELinux 策略本身可以进一步分为定向（Targeted）和严格（Strict），定向策略适用于特定进程，而严格策略适用于所有进程。
+- en: 'The  following  is  the  SELinux  label  for  Docker  binaries  on  a  host, 
+    which  consists of `<user:role:type:level>`. Here you will see the type, which
+    is `container_runtime_exec_t`:'
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下面是主机上 Docker 二进制文件的 SELinux 标签，由 `<user:role:type:level>` 组成。在这里，您将看到类型，即 `container_runtime_exec_t`：
+- en: '[PRE5]'
+  id: totrans-107
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: To further enhance SELinux, multicategory security (MCS) is used to allow users
+    to label resources with a category. So a file labeled with a category can be accessed
+    by only users or processes of that category.
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了进一步增强 SELinux，使用多类别安全（MCS）允许用户为资源打上类别标签。因此，标有类别标签的文件只能被该类别的用户或进程访问。
+- en: Once SELinux is enabled, a container runtime like [Docker](https://oreil.ly/WKf97),
+    [podman](https://oreil.ly/HW4Cc), or [`CRI-O`](https://oreil.ly/2bOJA) picks a
+    random MCS label to run the container. These MCS labels consist of two random
+    numbers between 1 and 1023, and they are prefixed with the character “c” (category)
+    and a sensitivity level (i.e., s0). So a complete MCS label looks like “s0:c1,c2.”
+    As shown in [Figure 4-5](#selinux_enforcing_filesystem_access), a container won’t
+    be able to access a file on a host or Kubernetes volume unless it is labeled correctly
+    as needed. This provides an important isolation between resource interaction,
+    which prevents many security vulnerabilities targeted toward escaping containers.
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦启用 SELinux，像 [Docker](https://oreil.ly/WKf97)、[podman](https://oreil.ly/HW4Cc)
+    或 [`CRI-O`](https://oreil.ly/2bOJA) 这样的容器运行时会选择一个随机的 MCS 标签来运行容器。这些 MCS 标签由两个在
+    1 到 1023 之间的随机数组成，并以字符“c”（类别）和一个敏感级别（即 s0）为前缀。因此，完整的 MCS 标签看起来像 “s0:c1,c2”。如 [图 4-5](#selinux_enforcing_filesystem_access)
+    所示，除非正确标记，否则容器无法访问主机或 Kubernetes 卷上的文件。这在资源交互之间提供了重要的隔离，防止许多针对逃逸容器的安全漏洞。
+- en: '![](Images/ksao_0405.png)'
+  id: totrans-110
+  prefs: []
+  type: TYPE_IMG
+  zh: '![](Images/ksao_0405.png)'
+- en: Figure 4-5\. SELinux enforcing filesystem access
+  id: totrans-111
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 4-5\. SELinux 强制执行文件系统访问权限
+- en: 'Next is an example of a pod deployed with SELinux profile; this pod won’t be
+    able to access any host volume mount files unless they are labeled so:c123,c456
+    on host. Even though you see the entire host, the filesystem is mounted on the
+    pod:'
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 接下来是一个部署有 SELinux 配置文件的 pod 示例；除非在主机上标记为 so:c123,c456，否则此 pod 将无法访问任何主机卷挂载文件。即使您可以看到整个主机，文件系统也是以
+    pod 的方式挂载的：
+- en: '[PRE6]'
+  id: totrans-113
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: '[Table 4-3](#table_four_three) lists the CVEs pertaining to container escape
+    that are prevented just by enabling SELinux on hosts. Though SELinux policies
+    can be challenging to maintain, they are critical for a defense-in-depth strategy.
+    Openshift, a Kubernetes distribution, comes with SELinux enabled in its default
+    configuration with targeted policies; for other distros it’s worth checking the
+    status.'
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[表 4-3](#table_four_three) 列出了关于容器逃逸的 CVE，通过在主机上启用 SELinux 可以预防。虽然 SELinux
+    策略可能难以维护，但它们对于深度防御策略至关重要。Openshift，一个 Kubernetes 分发版，在其默认配置中启用了 SELinux，并使用定向策略；对于其他发行版，检查状态值得一试。'
+- en: Table 4-3\. CVEs related to container escape
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 4-3\. 与容器逃逸相关的 CVE
+- en: '| CVE | Description | Blocked by SELinux |'
+  id: totrans-116
+  prefs: []
+  type: TYPE_TB
+  zh: '| CVE | 描述 | SELinux 阻止 |'
+- en: '| --- | --- | --- |'
+  id: totrans-117
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- |'
+- en: '| CVE-2019-5736 | Allows attackers to overwrite host runc binary and consequently
+    obtain host root access | Yes |'
+  id: totrans-118
+  prefs: []
+  type: TYPE_TB
+  zh: '| CVE-2019-5736 | 允许攻击者覆盖主机的 runc 二进制文件，从而获取主机 root 访问权限 | 是 |'
+- en: '| CVE-2016-9962 | RunC exec vulnerability | Yes |'
+  id: totrans-119
+  prefs: []
+  type: TYPE_TB
+  zh: '| CVE-2016-9962 | RunC 执行漏洞 | 是 |'
+- en: '| CVE-2015-3627 | Insecure file-descriptor exploitation | Yes |'
+  id: totrans-120
+  prefs: []
+  type: TYPE_TB
+  zh: '| CVE-2015-3627 | 不安全的文件描述符利用 | 是 |'
+- en: 'Kubernetes provides the following options to enforce SELinux in PSPs:'
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 通过 PSP 提供以下选项来强制执行 SELinux：
+- en: '| Value | Description |'
+  id: totrans-122
+  prefs: []
+  type: TYPE_TB
+  zh: '| Value | 描述 |'
+- en: '| --- | --- |'
+  id: totrans-123
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| MustRunAs | Need to have seLinuxOptions configured as shown in [Figure 4-5](#selinux_enforcing_filesystem_access).
+    |'
+  id: totrans-124
+  prefs: []
+  type: TYPE_TB
+  zh: '| MustRunAs | 需要像 [图 4-5](#selinux_enforcing_filesystem_access) 中显示的那样配置 seLinuxOptions。
+    |'
+- en: '| RunAsAny | No defaults are provided in PSP (can be optionally configured
+    on pod and deployments) |'
+  id: totrans-125
+  prefs: []
+  type: TYPE_TB
+  zh: '| RunAsAny | 在 PSP 中不提供默认设置（可以选择性地在 pod 和 deployments 上配置） |'
+- en: AppArmor
+  id: totrans-126
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: AppArmor
+- en: 'Like SELinux, AppArmor was developed for Debian and Ubuntu operating systems.
+    AppArmor works in a similar way to SELinux, where an AppArmor profile defines
+    what a process has access to. Let’s look at an example of an AppArmor profile:'
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与 SELinux 类似，AppArmor 是为 Debian 和 Ubuntu 操作系统开发的。AppArmor 的工作方式类似于 SELinux，其中一个
+    AppArmor 配置文件定义了进程可以访问的内容。让我们看一个 AppArmor 配置文件的示例：
+- en: '[PRE7]'
+  id: totrans-128
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: Here a ping utility has only three capabilities (i.e., net_raw, setuid, and
+    inet raw and read access to /etc/modules.conf). With these permissions a ping
+    utility cannot modify or write to the filesystem (keys, binaries, settings, persistence)
+    or load any modules, which reduces attack surface for the ping utility to perform
+    any malicious activity in case of a compromise.
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里的 ping 实用工具仅具备三个能力（即 net_raw、setuid 和对 /etc/modules.conf 的 inet 原始和读取访问权限）。有了这些权限，ping
+    实用程序无法修改或写入文件系统（密钥、二进制文件、设置、持久性），也不能加载任何模块，这减少了 ping 实用程序在受到威胁时执行任何恶意活动的攻击面。
+- en: By default, your Kubernetes runtime like [Docker](https://oreil.ly/WKf97), [podman](https://oreil.ly/HW4Cc),
+    or [CRI-O](https://oreil.ly/Cgrep) provides an AppArmor profile. Docker’s runtime
+    profile is [provided for your reference](https://oreil.ly/utKNx).
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，像 [Docker](https://oreil.ly/WKf97)、[podman](https://oreil.ly/HW4Cc) 或
+    [CRI-O](https://oreil.ly/Cgrep) 这样的 Kubernetes 运行时会提供一个 AppArmor 配置文件。Docker 的运行时配置文件可以参考
+    [此处](https://oreil.ly/utKNx)。
+- en: 'Since AppArmor is much more flexible and easy to work with, we recommend having
+    a policy per microservice. Kubernetes provides the following options to enforce
+    these policies via PSP annotations:'
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于 AppArmor 更加灵活且易于使用，我们建议为每个微服务单独创建一个策略。Kubernetes 通过 PSP 注解提供以下选项来强制执行这些策略：
+- en: '| Value | Description |'
+  id: totrans-132
+  prefs: []
+  type: TYPE_TB
+  zh: '| Value | 描述 |'
+- en: '| --- | --- |'
+  id: totrans-133
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- |'
+- en: '| runtime/default | Runtime’s default policy |'
+  id: totrans-134
+  prefs: []
+  type: TYPE_TB
+  zh: '| runtime/default | 运行时的默认策略 |'
+- en: '| localhost/<profile_name> | Apply profile loaded on host, usually in directory
+    /sys/kernel/security/apparmor/profiles |'
+  id: totrans-135
+  prefs: []
+  type: TYPE_TB
+  zh: '| localhost/<profile_name> | 应用于主机上加载的配置文件，通常位于目录 /sys/kernel/security/apparmor/profiles
+    |'
+- en: '| unconfined | No profile will be loaded |'
+  id: totrans-136
+  prefs: []
+  type: TYPE_TB
+  zh: '| unconfined | 不加载任何配置文件 |'
+- en: Sysctl
+  id: totrans-137
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Sysctl
+- en: '[`Kubernetes sysctl`](https://oreil.ly/zwlcG) allows you to use the sysctl
+    interface to use and configure kernel parameters in your cluster. An example of
+    using sysctls is to manage containers with resource-hungry workloads that need
+    to handle a large number of concurrent connections or need a special parameter
+    set (i.e., IPv6 forwarding) to run efficiently. In such cases, sysctl provides
+    a way to modify kernel behavior only for those workloads without affecting the
+    rest of the cluster.'
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[`Kubernetes sysctl`](https://oreil.ly/zwlcG) 允许您使用 sysctl 接口在集群中使用和配置内核参数。使用
+    sysctl 的一个示例是管理需要处理大量并发连接或需要特殊参数设置（例如 IPv6 转发）以有效运行的资源密集型工作负载的容器。在这种情况下，sysctl
+    提供了一种仅对这些工作负载修改内核行为而不影响集群其余部分的方法。'
+- en: 'The sysctls are categorized into two buckets: safe and unsafe. Safe sysctl
+    only affects the containers, but unsafe sysctl affects the container and node
+    it is running on. Sysctl lets administrators set both the sysctl buckets at their
+    discretion.'
+  id: totrans-139
+  prefs: []
+  type: TYPE_NORMAL
+  zh: sysctl 可以将 sysctl 分为两个桶：安全和不安全。安全的 sysctl 只影响容器，但不安全的 sysctl 影响容器和运行在其上的节点。管理员可以自行决定如何设置这两个
+    sysctl 桶。
+- en: 'Let’s take an example where a containerized web server needs to handle a high
+    number of concurrent connections and needs to set the net.core.somaxconn value
+    to a higher number than the kernel default. In this case it can be set as follows:'
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 举例来说，如果一个容器化的 Web 服务器需要处理大量并发连接，并且需要将 net.core.somaxconn 值设置为高于内核默认值，可以如下设置：
+- en: '[PRE8]'
+  id: totrans-141
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: 'Please note that we recommend that you use node affinity to schedule workloads
+    on nodes that have the sysctl applied, in case you need to use a sysctl that applies
+    to the node. The following example shows how PSPs allow sysctls to be forbidden
+    or allowed:'
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，我们建议您使用节点亲和性来安排工作负载，以便在需要使用适用于节点的 sysctl 时使用。以下示例显示了 PSPs 如何允许或禁止 sysctl：
+- en: '[PRE9]'
+  id: totrans-143
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: Conclusion
+  id: totrans-144
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 结论
+- en: 'In this chapter we covered tools and best practices for defining and implementing
+    your workload runtime security. The most important takeaways are:'
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们讨论了定义和实施工作负载运行时安全性的工具和最佳实践。最重要的要点是：
+- en: Pod security policies are an excellent way to enable workload controls at workload
+    creation time. They have limitations but can be used effectively.
+  id: totrans-146
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: Pod 安全策略是在工作负载创建时启用工作负载控制的一种绝佳方式。它们有一些限制，但可以有效使用。
+- en: You need to pick a solution that is native to Kubernetes for monitoring processes
+    and implement controls based on your threat model for your workloads.
+  id: totrans-147
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 您需要选择一个在 Kubernetes 中本地支持的监控进程的解决方案，并根据您的工作负载威胁模型实施控制。
+- en: We recommend you review the various security options that are available in the
+    Linux kernel and leverage the right set of features based on your use case.
+  id: totrans-148
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 我们建议您审查 Linux 内核中提供的各种安全选项，并根据您的用例利用适当的功能集。

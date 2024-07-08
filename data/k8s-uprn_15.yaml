@@ -1,0 +1,328 @@
+- en: Chapter 15\. Service Meshes
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第15章 服务网格
+- en: Perhaps second only to containers, the term *service mesh* has become synonymous
+    with cloud native development. However, just like containers, service mesh is
+    a broad term that encompasses a variety of open source projects as well as commercial
+    products. Understanding the general role of a service mesh in a cloud native architecture
+    is useful. This chapter will show you what a service mesh is, how different software
+    projects implement them, and finally (and most importantly) when it makes sense
+    to incorporate a service mesh, versus a less complex architecture, into your application.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 或许仅次于容器，术语*服务网格*已经成为云原生开发的代名词。然而，就像容器一样，服务网格是一个广义术语，涵盖了各种开源项目以及商业产品。了解服务网格在云原生架构中的一般作用是很有用的。本章将向您展示什么是服务网格，不同的软件项目如何实现它们，以及最后（也是最重要的）在何时将服务网格纳入应用程序，相对于更简单的架构，是有意义的。
+- en: Note
+  id: totrans-2
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: In many abstract cloud native architecture diagrams, it seems that a service
+    mesh is necessary for a cloud native architecture. This is very much not true.
+    When considering adopting a service mesh, you have to balance the complexity of
+    adding a new component (generally provided by a third party) to your list of dependencies.
+    In many cases, it is easier and more reliable to simply depend on the existing
+    Kubernetes resources, if they meet the needs of your application.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在许多抽象的云原生架构图中，似乎服务网格对于云原生架构是必需的。但这在很大程度上并不正确。当考虑采用服务网格时，您必须平衡增加新组件（通常由第三方提供）到依赖列表中所带来的复杂性。在许多情况下，如果现有的Kubernetes资源能够满足应用程序的需求，简单依赖这些资源可能更容易和更可靠。
+- en: We have previously discussed other networking primitives in Kubernetes like
+    Services and Ingress. Given the presence of these networking capabilities in the
+    core of Kubernetes, why is there a need to inject additional capabilities (and
+    complexities) into the networking layer? Fundamentally it comes down to the needs
+    of the software application that is using these networking primitives.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们之前讨论过Kubernetes中的其他网络原语，比如Services和Ingress。鉴于这些网络功能已经存在于Kubernetes核心中，为什么还需要向网络层注入额外的功能（以及复杂性）呢？归根结底，这取决于使用这些网络原语的软件应用程序的需求。
+- en: Networking in the core of Kubernetes is really only aware of the application
+    as a destination. Both Service and Ingress resources have label selectors that
+    route traffic to a particular set of Pods, but beyond that there is comparatively
+    little in the way of additional capabilities that these resources bring. As an
+    HTTP load balancer, Ingress goes a little beyond this, but the challenge of defining
+    a common API that fits a wide variety of different existing implementations limits
+    the capabilities in the Ingress API. How can a truly “cloud native” HTTP-routing
+    API be compatible with load balancers and proxies ranging from bare-metal networking
+    devices through to public cloud APIs that were built without thinking about cloud
+    native development?
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes核心中的网络仅意识到应用程序作为目标。Service和Ingress资源都有标签选择器，用于将流量路由到特定的Pod集，但除此之外，这些资源在增加附加功能方面相对较少。作为HTTP负载均衡器，Ingress稍微超越了这一点，但是在定义一个适合各种不同现有实现的通用API的挑战下，限制了Ingress
+    API的功能。如何才能使一个真正的“云原生”HTTP路由API与从裸金属网络设备到未考虑云原生开发的公共云API的代理兼容呢？
+- en: 'In a very real way, the development of service mesh APIs outside the core of
+    Kubernetes is a result of this challenge. The Ingress APIs bring HTTP(S) traffic
+    from the outside world into a cloud native application. Within a cloud native
+    application in Kubernetes, freed of the need to be compatible with existing infrastructure,
+    the service mesh APIs provide additional cloud native networking capabilities.
+    So what are these capabilities? There are three general capabilities provided
+    by most service mesh implementations: network encryption and authorization, traffic
+    shaping, and observability. The following sections look at each of these in turn.'
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 实际上，服务网格API在Kubernetes核心之外的发展正是这一挑战的结果。Ingress API将HTTP(S)流量从外部世界引入到云原生应用程序中。在Kubernetes中的云原生应用程序内部，解放了与现有基础设施兼容的需求，服务网格API提供了额外的云原生网络功能。那么这些功能是什么呢？大多数服务网格实现提供了三种一般性能力：网络加密和授权、流量塑形以及可观察性。接下来的部分将依次讨论每一个。
+- en: Encryption and Authentication with Mutal TLS
+  id: totrans-7
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 使用Mutual TLS进行加密和认证
+- en: Encryption of network traffic between Pods is a key component to security in
+    a microservice architecture. Encryptions provided by Mutual Transport Layer Security,
+    or *mTLS*, is one of the most popular use cases for a service mesh. While it is
+    possible for developers to implement this encryption themselves, certificate handling
+    and traffic encryption is complicated and hard to get right. Leaving the implementation
+    of encryption to individual development teams leads to developers forgetting to
+    add encryption at all, or doing it poorly. When poorly implemented, encryption
+    can negatively impact both reliability and, in the worst case, provide no real
+    security. By contrast, installing a service mesh on your Kubernetes cluster automatically
+    provides encryption to network traffic between every Pod in the cluster. The service
+    mesh adds a sidecar container to every Pod, which transparently intercepts all
+    network communication. In addition to securing the communication, mTLS adds identity
+    to the encryption using client certificates so your application securely knows
+    the identity of every network client.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在微服务架构中，Pod之间网络流量的加密是安全的关键组成部分。由相互传输层安全性提供的加密，即*mTLS*，是服务网格的最流行用例之一。虽然开发人员可以自行实现这种加密，但证书处理和流量加密是复杂且难以正确实现的。将加密的实现留给各个开发团队会导致开发人员忘记完全添加加密，或者实现不当。当加密实施不当时，可能会对可靠性产生负面影响，并且在最坏的情况下根本提供不了真正的安全性。相比之下，在你的Kubernetes集群上安装服务网格会自动为集群中每个Pod之间的网络流量提供加密。服务网格为每个Pod添加了一个旁载容器，该容器透明地拦截所有网络通信。除了保护通信外，mTLS还使用客户端证书为加密添加了身份，因此你的应用程序安全地知道每个网络客户端的身份。
+- en: Traffic Shaping
+  id: totrans-9
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 交通整形
+- en: When you first think about your application design, it is typically a clean
+    diagram with a single box for each microservice or layer in the system (e.g.,
+    the frontend service, user preferences service, etc). When implemented in practice,
+    there are actually often multiple instances of any particular microservice running
+    within the application. For example, when you are doing a rollout from version
+    X of your service to version Y, there is a point in the middle of the rollout
+    when you are simultaneously running two different versions of that service. While
+    the middle of a rollout is a temporary state, there are many times when you need
+    to create a longer-running experiment that persists for an extended period. A
+    common model used in the software industry is “dog-fooding” your own software,
+    meaning that a new version of the software is tried internally before anywhere
+    else. In a dog-fooding model, you may run version Y of your service for a day
+    to a week (or longer) for a subset of users before you roll it out broadly to
+    your full set of users.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当你首次考虑应用程序设计时，通常会有一个清晰的图表，系统中每个微服务或层次都用一个框表示（例如，前端服务，用户偏好服务等）。在实际实施时，实际上通常会有多个实例在应用程序中运行。例如，在从服务版本X到版本Y的升级过程中，升级的中间阶段会同时运行两个不同版本的服务。虽然升级过程中间是一个临时状态，但是有很多时候你需要创建一个更长时间运行的实验，这种实验会持续一段时间。软件行业常用的模式是“狗粮化”你自己的软件，意思是新版本的软件会在其他地方发布之前先在内部试用。在狗粮化模式中，你可能会在一部分用户中运行服务版本Y一天到一周（或更长时间），然后再广泛地发布到所有用户中。
+- en: Such experiments require the ability to do *traffic shaping*, or routing of
+    requests to different service implementations based on the characteristics of
+    the request. In this example, you would create an experiment where all traffic
+    from your company’s internal users went to service Y, while all traffic from the
+    rest of the world still went to service X.
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这类实验需要能够进行*交通整形*，即根据请求的特征将请求路由到不同的服务实现。在这个例子中，你可以创建一个实验，使公司内部用户的所有流量都发送到服务Y，而来自世界其他地方的流量仍然发送到服务X。
+- en: Experiments are useful for a variety of scenarios, including development, where
+    a programmer can send a limited set (typically 1% or less) of real-world traffic
+    to an experimental backend, or you can run an A/B experiment where 50% of users
+    get one experience and 50% of users get another, so that you can build statistical
+    models of which approach is more effective. Experiments are an incredibly useful
+    way to add reliability, agility, and insight to your application, but they are
+    often difficult to implement in practice and thus not used as often as they might
+    otherwise be.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 实验在各种场景下都很有用，包括开发中，程序员可以将有限的真实流量（通常为1%或更少）发送到实验后端，或者可以运行A/B实验，其中50%的用户获得一种体验，另外50%的用户获得另一种体验，这样你可以建立哪种方法更有效的统计模型。实验是增加应用程序可靠性、灵活性和洞察力的极其有用的方法，但实际中往往难以实现，因此使用率不如可能的高。
+- en: Service meshes change this by building experimentation into the mesh itself.
+    Instead of writing code to implement your experiment, or deploying an entirely
+    new copy of your application on new infrastructure, you declaratively define the
+    parameters of the experiment (10% of traffic to version Y, 90% of traffic to version
+    X), and the service mesh implements it for you. Although, as a developer, you
+    are involved in defining the experiment, the implementation is transparent and
+    automatic, meaning that many more experiments will be run with a corresponding
+    increase in reliability, agility, and insight.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 服务网格通过将实验集成到网格本身来改变这一点。与其编写代码来实施您的实验，或者在新基础设施上部署应用程序的全新副本，您可以声明性地定义实验的参数（10%的流量发送到版本Y，90%的流量发送到版本X），服务网格会为您实现它。尽管作为开发者，您参与定义实验，但实施过程是透明和自动化的，这意味着会运行更多实验，并相应增加可靠性、灵活性和洞察力。
+- en: Introspection
+  id: totrans-14
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 自省
+- en: If you are like most programmers, once you write a program, you repeatedly debug
+    it as new errors manifest themselves. Finding errors in your code is a large part
+    of how most developers spend their days. Debugging is even more difficult when
+    applications are spread across multiple microservices. It is hard to stitch together
+    a single request when it spans multiple Pods. The information needed for debugging
+    must be stitched back together from multiple sources, assuming that the relevant
+    information was collected in the first place.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您像大多数程序员一样，一旦编写了程序，就会在新的错误显现时反复调试它。发现代码中的错误是大多数开发者日常工作的重要部分。当应用程序分布在多个微服务之间时，调试变得更加困难。当一个请求跨越多个Pod时，将其组合成一个单一请求是很困难的。调试所需的信息必须从多个源头组合在一起，前提是首先收集到了相关信息。
+- en: Automatic introspection is another important capability provided by a service
+    mesh. Because it is involved in all communication between Pods, the service mesh
+    knows where requests were routed, and it can keep track of the information required
+    to put a complete request trace back together. Instead of seeing a flurry of requests
+    to a bunch of different microservices, the developer can see a single aggregate
+    request that defines the user experience of their complete application. Furthermore,
+    the service mesh is implemented once for an entire cluster. This means that the
+    same request tracing works no matter which team developed the service. The monitoring
+    data is entirely consistent across all of the different services joined together
+    by a cluster-wide service mesh.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 自动内省是服务网格提供的另一个重要功能。因为它参与了Pod之间的所有通信，所以服务网格知道请求被路由到哪里，并且可以跟踪组装完整请求所需的信息。开发者不再看到大量请求发送到多个不同的微服务，而是可以看到一个单一的聚合请求，定义了他们整个应用程序的用户体验。此外，服务网格只需为整个集群实现一次。这意味着无论哪个团队开发了服务，相同的请求跟踪都能正常工作。监控数据在由集群级服务网格连接在一起的所有不同服务之间是完全一致的。
+- en: Do You Really Need a Service Mesh?
+  id: totrans-17
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 您真的需要服务网格吗？
+- en: The advantages described here may have you eager to start installing a service
+    mesh on your cluster. However, before you do that, it’s worth considering whether
+    a service mesh is really necessary for your application. A service mesh is a distributed
+    system that adds complexity to your application design. The service mesh is deeply
+    integrated into the core communication of your microservices. When a service mesh
+    fails, your entire application stops working. Before you adopt a service mesh,
+    you must be confident that you can fix problems when they occur. You must also
+    be ready to monitor the software releases for the service mesh to make sure that
+    you pick up the latest security and bug fixes, and, of course, when fixes become
+    available, you must also be ready to roll out the new version without impacting
+    your application. This additional operational overhead means that for many small
+    applications, a service mesh is an unnecessary complexity.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里描述的优势可能会让你急于在集群上安装服务网格。然而，在你这样做之前，值得考虑一下是否真的需要为你的应用程序安装服务网格。服务网格是一个将复杂性增加到你的应用程序设计中的分布式系统。服务网格深度集成到你的微服务核心通信中。当服务网格失败时，整个应用程序将停止工作。在采用服务网格之前，你必须确信自己能够在问题发生时解决问题。你还必须准备好监控服务网格的软件发布，以确保获取最新的安全性和错误修复，当然，当修复可用时，你也必须准备好在不影响应用程序的情况下部署新版本。这种额外的运营开销意味着对于许多小型应用程序来说，服务网格是一种不必要的复杂性。
+- en: If you are using Kubernetes provided as a managed service that also provides
+    a service mesh, it is much easier to use that mesh, knowing that the cloud provider
+    will provide the support, debugging, and seamless new releases for the service
+    mesh. But even with a service mesh supplied by a cloud provider, there is additional
+    complexity for your developers to learn. Ultimately, weighing the costs versus
+    benefits of a service mesh is something each application or platform team needs
+    to do at a cluster level. To maximize the benefits of a service mesh, it’s helpful
+    for all microservices in the cluster to adopt it at the same time.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你正在使用作为托管服务提供的 Kubernetes，它同时提供了服务网格，那么使用该网格会更加容易，因为云提供商将提供支持、调试和无缝的新版本发布服务网格。但即使是由云提供商提供的服务网格，对于开发人员来说也存在额外的学习复杂性。最终，在集群级别，每个应用程序或平台团队都需要权衡服务网格的成本与收益。为了最大化服务网格的好处，对于集群中的所有微服务同时采用它是有帮助的。
+- en: Introspecting a Service Mesh Implementation
+  id: totrans-20
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: '**审视服务网格实现**'
+- en: There are many different service mesh projects and implementations in the cloud
+    native ecosystem, but most share many of the same design patterns and technology.
+    Because the service mesh is transparently intercepting network traffic from your
+    application Pod, modifying it and rerouting it through the cluster, a part of
+    the service mesh needs to be present within every one of your Pods. Forcing developers
+    to add something to each container image would introduce significant friction
+    as well as make it much more difficult to centrally manage the service mesh version.
+    As a result, most service mesh implementations add a sidecar container to every
+    Pod in the mesh. Because the sidecar sits in the same network stack as the application
+    Pod, it can use tools like `iptables` or, more recently, `eBPF` to introspect
+    and intercept network traffic coming from your application container and process
+    it into the service mesh.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 云原生生态系统中有许多不同的服务网格项目和实现，但大多数共享许多相同的设计模式和技术。由于服务网格会透明地拦截来自你的应用 Pod 的网络流量，修改并通过集群重新路由它，所以服务网格的一部分需要存在于每个
+    Pod 中。强制开发人员向每个容器镜像添加某些内容会引入显著的摩擦，同时使得集中管理服务网格版本变得更加困难。因此，大多数服务网格实现在每个网格中的每个 Pod
+    添加了一个 sidecar 容器。由于 sidecar 位于与应用 Pod 相同的网络堆栈中，它可以使用诸如`iptables`或最近更多使用的`eBPF`等工具来审视和拦截来自你的应用容器的网络流量，并将其处理到服务网格中。
+- en: Of course, requiring every developer to add a container image to their Pod definition
+    introduces nearly as much friction as requiring them to modify their container
+    image. To address this, most service mesh implementations depend on a mutating
+    admission controller to automatically add the service mesh sidecar to all Pods
+    that are created in a particular cluster. Any REST API request to create a Pod
+    is first routed to this admission controller. The service mesh admission controller
+    modifies the Pod definition by adding the sidecar. Because this admission controller
+    is installed by the cluster administrator, it transparently and consistently implements
+    a service mesh for an entire cluster.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当然，要求每个开发人员在他们的 Pod 定义中添加一个容器镜像几乎和要求他们修改他们的容器镜像一样繁琐。为了解决这个问题，大多数服务网格实现依赖于一个变异接入控制器，以自动向特定集群中创建的所有
+    Pod 添加服务网格 sidecar。任何用于创建 Pod 的 REST API 请求首先会被路由到这个接入控制器。服务网格接入控制器通过添加 sidecar
+    来修改 Pod 定义。由于这个接入控制器是由集群管理员安装的，它会透明且一致地为整个集群实现服务网格。
+- en: But the service mesh isn’t just about modifying the Pod network. You also need
+    to be able to control how the service mesh behaves; for example, by defining routing
+    rules for experiments or access restrictions for services in the mesh. Like everything
+    else in Kubernetes, these resource definitions are declaratively specified via
+    JSON or YAML object definitions that you create using `kubectl` or other tools
+    that communicate with the Kubernetes API server. Service mesh implementations
+    take advantages of *custom resource definitions* (CRDs) to add specialized resources
+    to your Kubernetes cluster that are not part of the default installation. In most
+    cases, the specific custom resources are tightly tied to the service mesh itself.
+    An ongoing effort in the CNCF is defining a standard vendor-neutral Service Mesh
+    Interface (SMI) that many different service meshes can implement.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 但服务网格不仅仅是修改 Pod 网络。您还需要能够控制服务网格的行为；例如，通过定义用于实验的路由规则或用于网格中服务的访问限制。与 Kubernetes
+    中的其他所有内容一样，这些资源定义是通过 JSON 或 YAML 对象定义声明性地指定的，您可以使用 `kubectl` 或其他与 Kubernetes API
+    服务器通信的工具创建它们。服务网格实现利用 *自定义资源定义*（CRD）来向您的 Kubernetes 集群添加专门的资源，这些资源不是默认安装的一部分。在大多数情况下，特定的自定义资源与服务网格本身紧密相关。CNCF
+    正在进行一个持续的工作，定义一个标准的供应商中立的服务网格接口（SMI），许多不同的服务网格可以实现这个接口。
+- en: Service Mesh Landscape
+  id: totrans-24
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 服务网格景观
+- en: The most daunting aspect of the service mesh landscape may be figuring out which
+    mesh to choose. So far, no one mesh has emerged as the de facto standard. Though
+    concrete statistics are hard to come by, the most popular service mesh is likely
+    the Istio project. In addition to Istio, there are many other open source meshes,
+    including Linkerd, Consul Connect, Open Service Mesh, and others. There are also
+    proprietary meshes like AWS App Mesh. We expect efforts to standardize these interfaces
+    to continue in the coming years in the cloud native community.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 服务网格景观最令人望而生畏的方面可能是选择哪种网格。到目前为止，没有一种网格被视为事实上的标准。尽管具体的统计数据难以获得，但最受欢迎的服务网格可能是
+    Istio 项目。除了 Istio，还有许多其他开源网格，包括 Linkerd、Consul Connect、Open Service Mesh 等。还有像
+    AWS App Mesh 这样的专有网格。我们预计云原生社区在未来几年会继续努力标准化这些接口。
+- en: How is a developer or cluster administrator to choose? The truth is that the
+    best service mesh for you is likely the one that your cloud provider supplies
+    for you. Adding operating a service mesh to the already complicated duties of
+    your cluster operators is generally unnecessary. It is much better to let a cloud
+    provider manage it for you.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 开发人员或集群管理员该如何选择？事实上，最适合您的服务网格很可能是您的云服务提供商为您提供的那种。将服务网格的操作添加到集群操作员已经复杂的职责中通常是不必要的。最好让云服务提供商为您管理它。
+- en: If that isn’t an option for you, do your research. Don’t be drawn in by flashy
+    demos and promises of functionality. A service mesh lives deep within your infrastructure,
+    and any failures can significantly impact the availability of your application.
+    Additionally, because service mesh APIs tend to be implementation specific, it
+    is difficult to change your choice of service mesh once you have spent time developing
+    applications around it. In the end, you may find that the right mesh for you is
+    no mesh at all.
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果这对您来说不是一个选项，请进行调查。不要被华丽的演示和功能承诺所吸引。服务网格深深植根于您的基础设施中，任何故障都可能严重影响您应用程序的可用性。此外，由于服务网格的API往往是特定实现的，一旦您花费时间围绕它开发应用程序，更改服务网格选择将变得困难。最终，您可能会发现适合您的网格是没有网格。
+- en: Summary
+  id: totrans-28
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 概要
+- en: Service meshes contain powerful functionality that adds security and flexibility
+    to your application. At the same time, a service mesh adds complexity to the operations
+    of your cluster and is another potential source of outages for your application.
+    Carefully consider the pros and cons of adding service meshes to your infrastructure.
+    If you have the choice, use a managed service mesh where someone else takes responsibility
+    for the operational details while enabling your applications access to service
+    mesh capabilities.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 服务网格包含强大的功能，可以为您的应用程序增加安全性和灵活性。同时，服务网格会增加集群操作的复杂性，并可能成为应用程序故障的另一个潜在源头。仔细考虑向基础架构添加服务网格的利弊。如果有选择的余地，请使用托管服务网格，让其他人负责操作细节，同时使您的应用程序能够访问服务网格的功能。

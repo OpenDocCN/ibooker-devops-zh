@@ -1,0 +1,2034 @@
+- en: Chapter 29\. Elastic Scale
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第29章 弹性伸缩
+- en: 'The *Elastic Scale* pattern covers application scaling in multiple dimensions:
+    horizontal scaling by adapting the number of Pod replicas, vertical scaling by
+    adapting resource requirements for Pods, and scaling the cluster itself by changing
+    the number of cluster nodes. While all of these actions can be performed manually,
+    in this chapter we explore how Kubernetes can perform scaling based on load automatically.'
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*弹性伸缩*模式涵盖了多维度的应用扩展：通过调整 Pod 副本数量进行水平扩展，通过调整 Pod 的资源需求进行垂直扩展，以及通过改变集群节点数量来扩展集群本身。虽然所有这些操作都可以手动执行，但在本章中，我们将探讨
+    Kubernetes 如何根据负载自动执行扩展。'
+- en: Problem
+  id: totrans-2
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 问题
+- en: Kubernetes automates the orchestration and management of distributed applications
+    composed of a large number of immutable containers by maintaining their declaratively
+    expressed desired state. However, with the seasonal nature of many workloads that
+    often change over time, it is not an easy task to figure out how the desired state
+    should look. Accurately identifying how many resources a container will require
+    and how many replicas a service will need at a given time to meet service-level
+    agreements takes time and effort. Luckily, Kubernetes makes it easy to alter the
+    resources of a container, the desired replicas for a service, or the number of
+    nodes in the cluster. Such changes can happen either manually, or given specific
+    rules, can be performed in a fully automated manner.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 自动化地编排和管理由大量不可变容器组成的分布式应用，通过维护其声明式表达的期望状态。然而，由于许多工作负载的季节性变化，通常随时间变化，确定期望状态应如何看起来并不容易。准确地确定一个容器需要多少资源以及一个服务在某个特定时间需要多少副本来满足服务级别协议，需要时间和精力。幸运的是，Kubernetes
+    可以轻松地修改容器的资源、服务的期望副本，或者集群中节点的数量。这些变化可以手动进行，或者根据特定规则，在完全自动化的方式下执行。
+- en: Kubernetes not only can preserve a fixed Pod and cluster setup but can also
+    monitor external load and capacity-related events, analyze the current state,
+    and scale itself for the desired performance. This kind of observation is a way
+    for Kubernetes to adapt and gain antifragile traits based on actual usage metrics
+    rather than anticipated factors. Let’s explore the different ways we can achieve
+    such behavior and how to combine the various scaling methods for an even greater
+    experience.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes 不仅可以保持固定的 Pod 和集群设置，还可以监视外部负载和与容量相关的事件，分析当前状态，并根据期望性能自动扩展。这种观察是 Kubernetes
+    根据实际使用度量而非预期因素来适应和获取反脆弱特性的一种方式。让我们探索可以实现这种行为的不同方式，以及如何结合各种扩展方法以获得更好的体验。
+- en: Solution
+  id: totrans-5
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 解决方案
+- en: 'There are two main approaches to scaling any application: horizontal and vertical.
+    *Horizontally* in the Kubernetes world equates to creating more replicas of a
+    Pod. *Vertically* scaling implies giving more resources to running containers
+    managed by Pods. While it may seem straightforward on paper, creating an application
+    configuration for autoscaling on a shared cloud platform without affecting other
+    services and the cluster itself requires significant trial and error. As always,
+    Kubernetes provides a variety of features and techniques to find the best setup
+    for our applications, and we explore them briefly here.'
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 扩展任何应用有两种主要方法：水平和垂直。在 Kubernetes 中，*水平*扩展意味着创建更多 Pod 的副本。*垂直*扩展则意味着向由 Pod 管理的运行容器提供更多资源。尽管在纸面上看起来很简单，但在共享云平台上创建一个适合自动扩展的应用配置，同时不影响其他服务和集群本身，需要进行大量的试验和错误。作为一直以来的做法，Kubernetes
+    提供了各种功能和技术来找到我们应用的最佳设置，我们在这里简要探讨一下。
+- en: Manual Horizontal Scaling
+  id: totrans-7
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 手动水平扩展
+- en: 'The manual scaling approach, as the name suggests, is based on a human operator
+    issuing commands to Kubernetes. This approach can be used in the absence of autoscaling
+    or for gradual discovery and tuning of the optimal configuration of an application
+    matching the slow-changing load over long periods. An advantage of the manual
+    approach is that it also allows anticipatory rather than reactive-only changes:
+    knowing the seasonality and the expected application load, you can scale it out
+    in advance, rather than reacting to an already-increased load through autoscaling,
+    for example. We can perform manual scaling in two styles.'
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 手动扩展方法，顾名思义，基于操作人员向 Kubernetes 发出命令。在缺少自动扩展或用于逐步发现和调整应用程序在长时间内与慢变化负载匹配的最佳配置时，可以使用这种方法。手动方法的一个优势是它还允许预见性而不仅仅是反应性的变化：了解季节性和预期的应用负载，您可以提前扩展它，而不是通过自动扩展来对已经增加的负载做出反应。我们可以以两种方式进行手动扩展。
+- en: Imperative scaling
+  id: totrans-9
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 命令式扩展
+- en: A controller such as ReplicaSet is responsible for making sure a specific number
+    of Pod instances are always up and running. Thus, scaling a Pod is as trivially
+    simple as changing the number of desired replicas. Given a Deployment named `random-generator`,
+    scaling it to four instances can be done in one command, as shown in [Example 29-1](#ex-elastic-scale-horizontal-imperative).
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 控制器如 ReplicaSet 负责确保始终运行特定数量的 Pod 实例。因此，扩展 Pod 就像简单地更改所需副本数量一样简单。假设存在名为`random-generator`的
+    Deployment，可以通过一条命令将其扩展到四个实例，如[示例29-1](#ex-elastic-scale-horizontal-imperative)所示。
+- en: Example 29-1\. Scaling a Deployment’s replicas on the command line
+  id: totrans-11
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 29-1\. 在命令行上扩展 Deployment 的副本
+- en: '[PRE0]'
+  id: totrans-12
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: After such a change, the ReplicaSet could either create additional Pods to scale
+    up or, if there are more Pods than desired, delete them to scale down.
+  id: totrans-13
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这种改变后，ReplicaSet 可能会创建额外的 Pod 以进行扩展，或者如果 Pod 多于期望值，则删除它们以进行缩减。
+- en: Declarative scaling
+  id: totrans-14
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 声明性扩展
+- en: While using the scale command is trivially simple and good for quick reactions
+    to emergencies, it does not preserve this configuration outside the cluster. Typically,
+    all Kubernetes applications would have their resource definitions stored in a
+    source control system that also includes the number of replicas. Recreating the
+    ReplicaSet from its original definition would change the number of replicas back
+    to its previous number. To avoid such a configuration drift and to introduce operational
+    processes for backporting changes, it is a better practice to change the desired
+    number of replicas declaratively in the ReplicaSet or some other definition and
+    apply the changes to Kubernetes, as shown in [Example 29-2](#ex-deployment-declaratively).
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然使用 scale 命令非常简单，适用于对紧急情况做出快速反应，但它不会在集群外保留此配置。通常，所有 Kubernetes 应用程序的资源定义都将存储在包含副本数的源控制系统中。从其原始定义重新创建
+    ReplicaSet 将使副本数更改为其先前的数目。为了避免这种配置漂移并引入用于反向传播更改的操作流程，最好是在 ReplicaSet 或其他定义中以声明性方式更改所需的副本数，并将更改应用于
+    Kubernetes，如[示例29-2](#ex-deployment-declaratively)所示。
+- en: Example 29-2\. Using a Deployment for declaratively setting the number of replicas
+  id: totrans-16
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 29-2\. 使用 Deployment 来声明性地设置副本数量
+- en: '[PRE1]'
+  id: totrans-17
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: We can scale resources managing multiple Pods such as ReplicaSets, Deployments,
+    and StatefulSets. Notice the asymmetric behavior in scaling a StatefulSet with
+    persistent storage. As described in [Chapter 12, “Stateful Service”](ch12.html#StatefulService),
+    if the StatefulSet has a `.spec.volumeClaimTemplates` element, it will create
+    PVCs while scaling, but it won’t delete them when scaling down to preserve the
+    storage from deletion.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以扩展管理多个 Pod 的资源，如 ReplicaSets、Deployments 和 StatefulSets。请注意在扩展带有持久存储的 StatefulSet
+    时的非对称行为。正如[第12章，“有状态服务”](ch12.html#StatefulService)中描述的那样，如果 StatefulSet 具有`.spec.volumeClaimTemplates`元素，它将在扩展时创建
+    PVC，但在缩减时不会删除它们，以保护存储免受删除。
+- en: 'Another Kubernetes resource that can be scaled but follows a different naming
+    convention is the Job resource, which we described in [Chapter 7, “Batch Job”](ch07.html#BatchJob).
+    A Job can be scaled to execute multiple instances of the same Pod at the same
+    time by changing the `.spec.parallelism` field rather than `.spec.replicas`. However,
+    the semantic effect is the same: increased capacity with more processing units
+    that act as a single logical unit.'
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个可以扩展但遵循不同命名约定的 Kubernetes 资源是 Job 资源，我们在[第7章，“批处理作业”](ch07.html#BatchJob)中描述过。通过更改`.spec.parallelism`字段而不是`.spec.replicas`，可以扩展作业以同时执行多个相同
+    Pod 的实例。然而，语义效果是相同的：增加处理单元，这些单元作为单个逻辑单元。
+- en: Note
+  id: totrans-20
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: For describing resource fields, we use a JSON path notation. For example, `.spec.replicas`
+    points to the `replicas` field of the resource’s `spec` section.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用于描述资源字段的是 JSON 路径表示法。例如，`.spec.replicas` 指向资源的 `spec` 部分的 `replicas` 字段。
+- en: Both manual scaling styles (imperative and declarative) expect a human to observe
+    or anticipate a change in the application load, make a decision on how much to
+    scale, and apply it to the cluster. They have the same effect, but they are not
+    suitable for dynamic workload patterns that change often and require continuous
+    adaptation. Next, let’s see how we can automate scaling decisions themselves.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 无论是命令式还是声明式的手动缩放样式，都期望人类观察或预期应用程序负载的变化，做出扩展决策，并将其应用到集群中。它们具有相同的效果，但不适合经常变化且需要持续适应的动态工作负载模式。接下来，让我们看看如何自动化缩放决策本身。
+- en: Horizontal Pod Autoscaling
+  id: totrans-23
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 水平 Pod 自动缩放
+- en: Many workloads have a dynamic nature that varies over time and makes it hard
+    to have a fixed scaling configuration. But cloud native technologies such as Kubernetes
+    enable you to create applications that adapt to changing loads. Autoscaling in
+    Kubernetes allows us to define a varying application capacity that is not fixed
+    but instead ensures just enough capacity to handle a different load. The most
+    straightforward approach to achieving such behavior is by using a HorizontalPodAutoscaler
+    (HPA) to horizontally scale the number of Pods. HPA is an intrinsic part of Kubernetes
+    and does not require any extra installation steps. One important limitation of
+    the HPA is that it can’t scale down to zero Pods so that no resources are consumed
+    at all if nobody is using the deployed workload. Luckily, Kubernetes add-ons offer
+    scale-to-zero and transform Kubernetes into a true serverless platform. Knative
+    and KEDA are the most prominent of such Kubernetes extensions. We will have a
+    look at both in [“Knative”](#elastic-scale-knative) and [“KEDA”](#elastic-scale-keda),
+    but let’s first see how Kubernetes offers horizontal autoscaling out of the box.
+  id: totrans-24
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 许多工作负载具有动态的特性，随时间变化，这使得固定的扩展配置变得困难。但是，像 Kubernetes 这样的云原生技术使您能够创建适应不断变化负载的应用程序。Kubernetes
+    中的自动缩放允许我们定义一个不固定但确保足够处理不同负载的应用程序容量。实现这种行为的最简单方法是使用 HorizontalPodAutoscaler（HPA）来水平扩展
+    Pod 的数量。HPA 是 Kubernetes 的一个固有部分，不需要任何额外的安装步骤。HPA 的一个重要限制是它不能将 Pod 缩减到零，以确保不使用已部署工作负载时不会消耗任何资源。幸运的是，Kubernetes
+    的附加组件提供了零缩放功能，并将 Kubernetes 转变为真正的无服务器平台。Knative 和 KEDA 是此类 Kubernetes 扩展中最显著的两个。我们将在[“Knative”](#elastic-scale-knative)和[“KEDA”](#elastic-scale-keda)中详细讨论它们，但首先让我们看看
+    Kubernetes 如何提供即插即用的水平自动缩放功能。
+- en: Kubernetes HorizontalPodAutoscaler
+  id: totrans-25
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: Kubernetes HorizontalPodAutoscaler
+- en: The HPA is best explained with an example. An HPA for the `random-generator`
+    Deployment can be created with the command in [Example 29-3](#ex-elastic-scale-kubectl-hpa).
+    For the HPA to have any effect, it is important that the Deployment declare a
+    `.spec.resources.requests` limit for the CPU as described in [Chapter 2, “Predictable
+    Demands”](ch02.html#PredictableDemands). Another requirement is enabling the metrics
+    server, which is a cluster-wide aggregator of resource usage data.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过示例来最好地解释 HPA。可以使用 [示例 29-3](#ex-elastic-scale-kubectl-hpa) 中的命令为 `random-generator`
+    部署创建 HPA。为了使 HPA 生效，重要的是 Deployment 声明 `.spec.resources.requests` 作为 CPU 的限制，如
+    [第 2 章，“可预测的需求”](ch02.html#PredictableDemands) 中所述。另一个要求是启用指标服务器，这是资源使用数据的集群级聚合器。
+- en: Example 29-3\. Create HPA definition on the command line
+  id: totrans-27
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 29-3\. 在命令行上创建 HPA 定义
+- en: '[PRE2]'
+  id: totrans-28
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: The preceding command will create the HPA definition shown in [Example 29-4](#ex-elastic-scale-hpa).
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 上述命令将创建如[示例 29-4](#ex-elastic-scale-hpa)所示的 HPA 定义。
+- en: Example 29-4\. HPA definition
+  id: totrans-30
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 29-4\. HPA 定义
+- en: '[PRE3]'
+  id: totrans-31
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: '[![1](assets/1.png)](#co_elastic_scale_CO1-1)'
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_elastic_scale_CO1-1)'
+- en: Minimum number of Pods that should always run.
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应始终运行的最小 Pod 数量。
+- en: '[![2](assets/2.png)](#co_elastic_scale_CO1-2)'
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_elastic_scale_CO1-2)'
+- en: Maximum number of Pods until the HPA can scale up.
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: HPA 可以扩展的最大 Pod 数量。
+- en: '[![3](assets/3.png)](#co_elastic_scale_CO1-3)'
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_elastic_scale_CO1-3)'
+- en: Reference to the object that should be associated with this HPA.
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用于关联此 HPA 的对象引用。
+- en: '[![4](assets/4.png)](#co_elastic_scale_CO1-4)'
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_elastic_scale_CO1-4)'
+- en: Desired CPU usage as a percentage of the Pods’ requested CPU resource. For example,
+    when the Pods have a `.spec.resources.requests.cpu` of 200m, a scale-up happens
+    when on average more than 100m CPU (= 50%) is utilized.
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 期望的 CPU 使用率作为 Pod 请求的 CPU 资源的百分比。例如，当 Pod 的 `.spec.resources.requests.cpu` 为
+    200m 时，如果平均使用了超过 100m 的 CPU（= 50%），则会发生扩展。
+- en: This definition instructs the HPA controller to keep between one and five Pod
+    instances to retain an average Pod CPU usage of around 50% of the specified CPU
+    resource limit in the Pod’s `.spec.resources.requests` declaration. While it is
+    possible to apply such an HPA to any resource that supports the `scale` subresource
+    such as Deployments, ReplicaSets, and StatefulSets, you must consider the side
+    effects. Deployments create new ReplicaSets during updates but without copying
+    over any HPA definitions. If you apply an HPA to a ReplicaSet managed by a Deployment,
+    it is not copied over to new ReplicaSets and will be lost. A better technique
+    is to apply the HPA to the higher-level Deployment abstraction, which preserves
+    and applies the HPA to the new ReplicaSet versions.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个定义指示 HPA 控制器保持一个到五个 Pod 实例，以保持 Pod CPU 使用率在 Pod 的 `.spec.resources.requests`
+    声明中指定的 CPU 资源限制的大约 50%。虽然可以将这样的 HPA 应用于支持 `scale` 子资源的任何资源，如 Deployments、ReplicaSets
+    和 StatefulSets，但必须考虑副作用。在更新期间，Deployments 会创建新的 ReplicaSets，但不会复制任何 HPA 定义。如果将
+    HPA 应用于由 Deployment 管理的 ReplicaSet，它不会复制到新的 ReplicaSet 中，并且将会丢失。更好的技术是将 HPA 应用于更高级别的
+    Deployment 抽象，这样可以将 HPA 保留和应用于新的 ReplicaSet 版本。
+- en: 'Now, let’s see how an HPA can replace a human operator to ensure autoscaling.
+    At a high level, the HPA controller performs the following steps continuously:'
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，让我们看看 HPA 如何取代人工操作员以确保自动缩放。在高层次上，HPA 控制器连续执行以下步骤：
+- en: It retrieves metrics about the Pods that are subject to scaling according to
+    the HPA definition. Metrics are not read directly from the Pods but from the Kubernetes
+    Metrics APIs that serve aggregated metrics (and even custom and external metrics
+    if configured to do so). Pod-level resource metrics are obtained from the Metrics
+    API, and all other metrics are retrieved from the Custom Metrics API of Kubernetes.
+  id: totrans-42
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 它从 Kubernetes Metrics API 检索关于需要根据 HPA 定义进行缩放的 Pod 的指标。指标不是直接从 Pod 中读取的，而是从服务聚合的
+    Metrics API（甚至是自定义和外部指标，如果配置为这样做）中获取的。从 Metrics API 获取 Pod 级别的资源指标，并从 Kubernetes
+    的 Custom Metrics API 中获取所有其他指标。
+- en: 'It calculates the required number of replicas based on the current metric value
+    and targeting the desired metric value. Here is a simplified version of the formula:'
+  id: totrans-43
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 它根据当前指标值和目标指标值计算所需的副本数。以下是公式的简化版本：
+- en: <math alttext="d e s i r e d upper R e p l i c a s equals left ceiling c u r
+    r e n t upper R e p l i c a s times StartFraction c u r r e n t upper M e t r
+    i c upper V a l u e Over d e s i r e d upper M e t r i c upper V a l u e EndFraction
+    right ceiling" display="block"><mrow><mi>d</mi> <mi>e</mi> <mi>s</mi> <mi>i</mi>
+    <mi>r</mi> <mi>e</mi> <mi>d</mi> <mi>R</mi> <mi>e</mi> <mi>p</mi> <mi>l</mi> <mi>i</mi>
+    <mi>c</mi> <mi>a</mi> <mi>s</mi> <mo>=</mo> <mo>⌈</mo> <mi>c</mi> <mi>u</mi> <mi>r</mi>
+    <mi>r</mi> <mi>e</mi> <mi>n</mi> <mi>t</mi> <mi>R</mi> <mi>e</mi> <mi>p</mi> <mi>l</mi>
+    <mi>i</mi> <mi>c</mi> <mi>a</mi> <mi>s</mi> <mo>×</mo> <mfrac><mrow><mi>c</mi><mi>u</mi><mi>r</mi><mi>r</mi><mi>e</mi><mi>n</mi><mi>t</mi><mi>M</mi><mi>e</mi><mi>t</mi><mi>r</mi><mi>i</mi><mi>c</mi><mi>V</mi><mi>a</mi><mi>l</mi><mi>u</mi><mi>e</mi></mrow>
+    <mrow><mi>d</mi><mi>e</mi><mi>s</mi><mi>i</mi><mi>r</mi><mi>e</mi><mi>d</mi><mi>M</mi><mi>e</mi><mi>t</mi><mi>r</mi><mi>i</mi><mi>c</mi><mi>V</mi><mi>a</mi><mi>l</mi><mi>u</mi><mi>e</mi></mrow></mfrac>
+    <mo>⌉</mo></mrow></math>
+  id: totrans-44
+  prefs: []
+  type: TYPE_NORMAL
+  zh: <math alttext="d e s i r e d upper R e p l i c a s equals left ceiling c u r
+    r e n t upper R e p l i c a s times StartFraction c u r r e n t upper M e t r
+    i c upper V a l u e Over d e s i r e d upper M e t r i c upper V a l u e EndFraction
+    right ceiling" display="block"><mrow><mi>d</mi> <mi>e</mi> <mi>s</mi> <mi>i</mi>
+    <mi>r</mi> <mi>e</mi> <mi>d</mi> <mi>R</mi> <mi>e</mi> <mi>p</mi> <mi>l</mi> <mi>i</mi>
+    <mi>c</mi> <mi>a</mi> <mi>s</mi> <mo>=</mo> <mo>⌈</mo> <mi>c</mi> <mi>u</mi> <mi>r</mi>
+    <mi>r</mi> <mi>e</mi> <mi>n</mi> <mi>t</mi> <mi>R</mi> <mi>e</mi> <mi>p</mi> <mi>l</mi>
+    <mi>i</mi> <mi>c</mi> <mi>a</mi> <mi>s</mi> <mo>×</mo> <mfrac><mrow><mi>c</mi><mi>u</mi><mi>r</mi><mi>r</mi><mi>e</mi><mi>n</mi><mi>t</mi><mi>M</mi><mi>e</mi><mi>t</mi><mi>r</mi><mi>i</mi><mi>c</mi><mi>V</mi><mi>a</mi><mi>l</mi><mi>u</mi><mi>e</mi></mrow>
+    <mrow><mi>d</mi><mi>e</mi><mi>s</mi><mi>i</mi><mi>r</mi><mi>e</mi><mi>d</mi><mi>M</mi><mi>e</mi><mi>t</mi><mi>r</mi><mi>i</mi><mi>c</mi><mi>V</mi><mi>a</mi><mi>l</mi><mi>u</mi><mi>e</mi></mrow></mfrac>
+    <mo>⌉</mo></mrow></math>
+- en: For example, if there is a single Pod with a current CPU usage metric value
+    of 90% of the specified CPU resource request value,^([1](ch29.html#idm45902081598912))
+    and the desired value is 50%, the number of replicas will be doubled, as <math
+    alttext="left ceiling 1 times StartFraction 90 Over 50 EndFraction right ceiling
+    equals 2"><mrow><mo>⌈</mo> <mn>1</mn> <mo>×</mo> <mfrac><mn>90</mn> <mn>50</mn></mfrac>
+    <mo>⌉</mo> <mo>=</mo> <mn>2</mn></mrow></math> . The actual implementation is
+    more complicated as it has to consider multiple running Pod instances, cover multiple
+    metric types, and account for many corner cases and fluctuating values as well.
+    If multiple metrics are specified, for example, then the HPA evaluates each metric
+    separately and proposes a value that is the largest of all. After all the calculations,
+    the final output is a single-integer number representing the number of desired
+    replicas that keep the measured value below the desired threshold value.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 例如，如果有一个单独的 Pod，其当前 CPU 使用率指标值为指定的 CPU 资源请求值的 90%^([1](ch29.html#idm45902081598912))，并且期望值为
+    50%，则副本的数量将加倍，如 <math alttext="left ceiling 1 times StartFraction 90 Over 50 EndFraction
+    right ceiling equals 2"><mrow><mo>⌈</mo> <mn>1</mn> <mo>×</mo> <mfrac><mn>90</mn>
+    <mn>50</mn></mfrac> <mo>⌉</mo> <mo>=</mo> <mn>2</mn></mrow></math> 。实际的实现更为复杂，因为它必须考虑多个运行中的
+    Pod 实例，涵盖多种指标类型，并考虑许多边界情况和波动值。例如，如果指定了多个指标，则 HPA 将分别评估每个指标，并提出最大值。在所有计算完成后，最终输出是一个表示期望的副本数量的单个整数，以保持测量值低于期望阈值值。
+- en: 'The `replicas` field of the autoscaled resource will be updated with this calculated
+    number, and other controllers do their bit of work in achieving and keeping the
+    new desired state. [Figure 29-1](#img-elastic-scale-hpa) shows how the HPA works:
+    monitoring metrics and changing declared replicas accordingly.'
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 自动缩放资源的`replicas`字段将根据计算出的数量进行更新，其他控制器将通过它们各自的工作部分来实现和保持新的期望状态。[图 29-1](#img-elastic-scale-hpa)展示了
+    HPA 的工作方式：监视指标并相应地更改声明的副本数量。
+- en: '![Horizontal Pod autoscaling mechanism](assets/kup2_2901.png)'
+  id: totrans-47
+  prefs: []
+  type: TYPE_IMG
+  zh: '![水平 Pod 自动缩放机制](assets/kup2_2901.png)'
+- en: Figure 29-1\. Horizontal Pod autoscaling mechanism
+  id: totrans-48
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 29-1\. 水平 Pod 自动缩放机制
+- en: Autoscaling is an area of Kubernetes with many low-level details, and each one
+    can have a significant impact on the overall behavior of autoscaling. As such,
+    it is beyond the scope of this book to cover all the details, but [“More Information”](#elastic-scale-more-information)
+    provides the latest up-to-date information on the subject.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 自动缩放是 Kubernetes 的一个包含许多低级细节的领域，每个细节都可能对自动缩放的整体行为产生重大影响。因此，本书无法涵盖所有细节，但[“更多信息”](#elastic-scale-more-information)提供了该主题的最新更新信息。
+- en: 'Broadly, there are the following metric types:'
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 广义上，有以下几种指标类型：
+- en: Standard metrics
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 标准指标
+- en: These metrics are declared with `.spec.metrics.resource[].type` equal to `Resource`
+    and represent resource usage metrics such as CPU and memory. They are generic
+    and available for any container on any cluster under the same name. You can specify
+    them as a percentage, as we did in the preceding example, or as an absolute value.
+    In both cases, the values are based on the guaranteed resource amount, which are
+    the container resource `requests` values and not the `limits` values. These are
+    the easiest-to-use metric types generally provided by the metrics server component,
+    which can be launched as cluster add-ons.
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些指标被声明为`.spec.metrics.resource[].type`等于`Resource`，表示资源使用指标，如 CPU 和内存。它们是通用的，并且适用于同一名称下的任何集群上的任何容器。您可以像前面的示例中那样指定它们为百分比，也可以指定为绝对值。在两种情况下，值都基于保证的资源量，即容器资源的`requests`值而不是`limits`值。这些是由度量服务器组件提供的最易于使用的度量类型，可以作为集群附加组件启动。
+- en: Custom metrics
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 自定义指标
+- en: These metrics with `.spec.metrics.resource[].type` equal to `Object` or `Pod`
+    require a more advanced cluster-monitoring setup, which can vary from cluster
+    to cluster. A custom metric with the Pod type, as the name suggests, describes
+    a Pod-specific metric, whereas the Object type can describe any other object.
+    The custom metrics are served in an aggregated API Server under the `custom.metrics.k8s.io`
+    API path and are provided by different metrics adapters,  such  as  Prometheus, 
+    Datadog,  Microsoft  Azure,  or  Google  Stackdriver.
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些具有`.spec.metrics.resource[].type`等于`Object`或`Pod`的指标需要更高级的集群监控设置，这些设置可能因集群而异。如其名称所示，带有
+    Pod 类型的自定义指标描述了特定于 Pod 的指标，而 Object 类型则可以描述任何其他对象。自定义指标在聚合的 API 服务器下提供，位于`custom.metrics.k8s.io`API
+    路径下，并由不同的指标适配器（如 Prometheus、Datadog、Microsoft Azure 或 Google Stackdriver 等）提供。
+- en: External metrics
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 外部指标
+- en: This category is for metrics that describe resources that are not a part of
+    the Kubernetes cluster. For example, you may have a Pod that consumes messages
+    from a cloud-based queueing service. In such a scenario, you’ll want to scale
+    the number of consumer Pods based on the queue depth. Such a metric would be populated
+    by an external metrics plugin similar to custom metrics. Only one external metrics
+    endpoint can be hooked into the Kubernetes API server. For using metrics from
+    many different external systems, an extra aggregation layer like KEDA is required
+    (see [“KEDA”](#elastic-scale-keda)).
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此类别用于描述不属于 Kubernetes 集群的资源指标。例如，您可能有一个 Pod，它从基于云的队列服务中消费消息。在这种情况下，您会希望根据队列深度来扩展消费者
+    Pod 的数量。这样的指标将由类似于自定义指标的外部指标插件填充。只能将一个外部指标端点连接到 Kubernetes API 服务器。要使用来自多个不同外部系统的指标，需要额外的聚合层，例如
+    KEDA（参见[“KEDA”](#elastic-scale-keda)）。
+- en: 'Getting autoscaling right is not easy and involves a little experimenting and
+    tuning. The following are a few of the main areas to consider when setting up
+    an HPA:'
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正确设置自动缩放并不容易，并且需要一些试验和调整。在设置 HPA 时需要考虑以下几个主要方面：
+- en: Metric selection
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 指标选择
+- en: Probably one of the most critical decisions around autoscaling is which metrics
+    to use. For an HPA to be useful, there must be a direct correlation between the
+    metric value and the number of Pod replicas. For example, if the chosen metric
+    is of the Queries-per-Second kind (such as HTTP requests per second), increasing
+    the number of Pods causes the average number of queries to go down as the queries
+    are dispatched to more Pods. The same is true if the metric is CPU usage, as there
+    is a direct correlation between the query rate and CPU usage (an increased number
+    of queries would result in increased CPU usage). For other metrics such as memory
+    consumption, that is not the case. The issue with memory is that if a service
+    consumes a certain amount of memory, starting more Pod instances most likely will
+    not result in a memory decrease unless the application is clustered and aware
+    of the other instances and has mechanisms to distribute and release its memory.
+    If the memory is not released and reflected in the metrics, the HPA would create
+    more and more Pods in an effort to decrease it, until it reaches the upper replica
+    threshold, which is probably not the desired behavior. So choose a metric that
+    is directly (preferably linearly) correlated to the number of Pods.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 自动缩放周围可能是最关键的决策之一是使用哪些指标。对于 HPA 来说，指标值与 Pod 副本数之间必须有直接的关联。例如，如果选择的指标是每秒查询量（例如每秒
+    HTTP 请求），增加 Pod 的数量会导致平均查询量下降，因为查询被分发到更多的 Pod。如果指标是 CPU 使用率，情况也是如此，因为查询率和 CPU
+    使用率之间存在直接的关联（增加查询数量会导致 CPU 使用率增加）。对于内存消耗等其他指标，情况则不同。内存的问题在于，如果一个服务消耗了一定量的内存，启动更多的
+    Pod 实例可能不会导致内存减少，除非应用程序是集群化的并且意识到其他实例并具有分配和释放内存的机制。如果内存没有释放并反映在指标中，HPA 将会试图创建越来越多的
+    Pod 以减少内存消耗，直到达到上限副本阈值，这可能不是期望的行为。因此，选择一个与 Pod 数量直接（最好是线性地）相关的指标。
+- en: Preventing thrashing
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 防止抖动
+- en: The HPA applies various techniques to avoid rapid execution of conflicting decisions
+    that can lead to a fluctuating number of replicas when the load is not stable.
+    For example, during scale-up, the HPA disregards high CPU usage samples when a
+    Pod is initializing, ensuring a smoothing reaction to increasing load. During
+    scale-down, to avoid scaling down in response to a short dip in usage, the controller
+    considers all scale recommendations during a configurable time window and chooses
+    the highest recommendation from within the window. All this makes the HPA more
+    stable when dealing with random metric fluctuations.
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: HPA 应用各种技术来避免在负载不稳定时导致副本数量波动的冲突决策快速执行。例如，在扩展时，当 Pod 初始化时，HPA 忽略高 CPU 使用率样本，确保对增加负载的平滑反应。在缩减时，为了避免响应短期使用量下降而缩小规模，控制器在可配置的时间窗口内考虑所有规模建议，并选择窗口内的最高建议。所有这些使得
+    HPA 在处理随机指标波动时更加稳定。
+- en: Delayed reaction
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 延迟反应
+- en: Triggering a scaling action based on a metric value is a multistep process involving
+    multiple Kubernetes components. First, it is the cAdvisor (container advisor)
+    agent that collects metrics at regular intervals for the Kubelet. Then the metrics
+    server collects metrics from the Kubelet at regular intervals. The HPA controller
+    loop also runs periodically and analyzes the collected metrics. The HPA scaling
+    formula introduces some delayed reaction to prevent fluctuations/thrashing (as
+    explained in the previous point). All this activity accumulates into a delay between
+    the cause and the scaling reaction. Tuning these parameters by introducing more
+    delay makes the HPA less responsive, but reducing the delays increases the load
+    on the platform and increases thrashing. Configuring Kubernetes to balance resources
+    and performance is an ongoing learning process.
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 基于指标值触发扩展操作是一个多步骤过程，涉及多个 Kubernetes 组件。首先是 cAdvisor（容器顾问）代理，定期收集 Kubelet 的指标。然后指标服务器定期收集来自
+    Kubelet 的指标。HPA 控制器循环也定期运行并分析收集到的指标。HPA 缩放公式引入了一些延迟反应，以防止波动/抖动（如前一点所述）。所有这些活动累积成为原因和缩放反应之间的延迟。通过引入更多的延迟来调整这些参数会使得
+    HPA 的响应性降低，但减少延迟会增加平台的负载并增加抖动。配置 Kubernetes 来平衡资源和性能是一个持续的学习过程。
+- en: Tuning the autoscale algorithm for the HPA in Kubernetes can be complex. To
+    help with this, Kubernetes provides the `.spec.behavior` field in the HPA specification.
+    This field allows you to customize the behavior of the HPA when scaling the number
+    of replicas in a Deployment.
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Kubernetes 中调整 HPA 的自动缩放算法可能很复杂。为了帮助解决这个问题，Kubernetes 在 HPA 规范中提供了 `.spec.behavior`
+    字段。该字段允许您在扩展 Deployment 中的副本数量时自定义 HPA 的行为。
+- en: 'For each scaling direction (up or down), you can use the `.spec.behavior` field
+    to specify the following parameters:'
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于每个缩放方向（向上或向下），您可以使用 `.spec.behavior` 字段来指定以下参数：
+- en: '`policies`'
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`policies`'
+- en: These describe the maximum number of replicas to scale in a given period.
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些描述了在给定时间段内扩展副本的最大数量。
+- en: '`stabilizationWindowSeconds`'
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`stabilizationWindowSeconds`'
+- en: This specifies when the HPA will not make any further scaling decisions. Setting
+    this field can help to prevent thrashing effects, where the HPA rapidly scales
+    the number of replicas up and down.
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这指定了 HPA 将不再做进一步缩放决策的条件。设置此字段可以帮助防止 HP 迅速在副本数量上下波动。
+- en: '[Example 29-5](#ex-elastic-scale-hpa-behavior) shows how the behavior can be
+    configured. All behavior parameters can also be configured on the CLI with `kubectl
+    autoscale`.'
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Example 29-5](#ex-elastic-scale-hpa-behavior) 显示了如何配置行为。所有行为参数也可以通过 `kubectl
+    autoscale` 在 CLI 中配置。'
+- en: Example 29-5\. Configuration of the autoscaling algorithm
+  id: totrans-71
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: Example 29-5\. 自动缩放算法的配置
+- en: '[PRE4]'
+  id: totrans-72
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: '[![1](assets/1.png)](#co_elastic_scale_CO2-1)'
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_elastic_scale_CO2-1)'
+- en: Scaling behavior when scaling down.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在缩减时的缩放行为。
+- en: '[![2](assets/2.png)](#co_elastic_scale_CO2-2)'
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_elastic_scale_CO2-2)'
+- en: A 5-minute minimum window for down-scaling decisions to prevent flapping.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为防止波动，下缩放决策的最小窗口为5分钟。
+- en: '[![3](assets/3.png)](#co_elastic_scale_CO2-3)'
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_elastic_scale_CO2-3)'
+- en: Scale down at most 10% of the current replicas in one minute.
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在一分钟内最多减少当前副本的10%。
+- en: '[![4](assets/4.png)](#co_elastic_scale_CO2-4)'
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_elastic_scale_CO2-4)'
+- en: Scaling behavior when scaling up.
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在扩展时的缩放行为。
+- en: '[![5](assets/5.png)](#co_elastic_scale_CO2-5)'
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![5](assets/5.png)](#co_elastic_scale_CO2-5)'
+- en: Scale up at most four Pods within 15 seconds.
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在15秒内最多扩展四个 Pod。
+- en: Please refer to the Kubernetes documentation on [configuring the scaling behavior](https://oreil.ly/gQAa9)
+    for all the details and usage examples.
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请参考 Kubernetes 文档中关于 [配置扩展行为](https://oreil.ly/gQAa9) 的所有详细信息和使用示例。
+- en: 'While the HPA is very powerful and covers the basic needs for autoscaling,
+    it lacks one crucial feature: scale-to-zero for stopping all Pods of an application
+    if it is not used. That’s important so that it does not cause any costs based
+    on memory, CPU, or network usage. However, scaling to zero is not so hard; the
+    tricky part is waking up again and scaling to at least one Pod by a trigger, like
+    an incoming HTTP request or an event to process.'
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然 HPA 非常强大，并且涵盖了自动缩放的基本需求，但它缺少一个关键功能：即在应用程序不使用时将所有 Pod 缩减至零。这一点很重要，以免基于内存、CPU
+    或网络使用产生任何费用。然而，缩减到零并不难；困难的部分是再次唤醒并通过触发器（如传入的 HTTP 请求或要处理的事件）至少扩展到一个 Pod。
+- en: 'The following two sections introduce the two most prominent Kubernetes-based
+    add-ons for enabling scale-to-zero: Knative and KEDA. It is essential to understand
+    that Knative and KEDA are not alternative but complementary solutions. Both projects
+    cover different use cases and can ideally be used together. As we will see, Knative
+    specializes in stateless HTTP applications and offers an autoscaling algorithm
+    that goes beyond the capabilities of the HPA. On the other hand, KEDA is a pull-based
+    approach that can be triggered by many different sources, like messages in a Kafka
+    topic or IBM MQ queue.'
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下面的两节介绍了用于启用零缩放的两个最显著的基于 Kubernetes 的附加组件：Knative 和 KEDA。了解 Knative 和 KEDA 不是替代方案，而是互补解决方案至关重要。这两个项目涵盖了不同的用例，可以理想地结合使用。正如我们将看到的那样，Knative
+    专门用于无状态 HTTP 应用程序，并提供超出 HPA 能力的自动缩放算法。另一方面，KEDA 是一种拉取式方法，可以由许多不同的源触发，例如 Kafka
+    主题中的消息或 IBM MQ 队列。
+- en: Let’s have a closer look at Knative and KEDA.
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们仔细看看 Knative 和 KEDA。
+- en: Knative
+  id: totrans-87
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: Knative
+- en: 'Knative is a CNCF project initiated by Google in 2018, with broad industry
+    support from vendors like IBM, VMware, and Red Hat. This Kubernetes add-on consists
+    of three parts:'
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Knative 是谷歌在2018年发起的 CNCF 项目，得到了来自 IBM、VMware 和 Red Hat 等供应商的广泛行业支持。这个 Kubernetes
+    插件包括三个部分：
+- en: Knative Serving
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Knative Serving
+- en: This is a simplified application deployment model with sophisticated autoscaling
+    and traffic-splitting capabilities, including scale-to-zero.
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是一个简化的应用程序部署模型，具有复杂的自动缩放和流量分割功能，包括零缩放。
+- en: Knative Eventing
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Knative 事件驱动
+- en: This provides everything needed to create an Event Mesh to connect event sources
+    that produce CloudEvents^([2](ch29.html#idm45902081399136)) with a sink that consumes
+    these events. Those sinks are typically Knative Serving services.
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这提供了创建事件网格所需的一切，以连接产生 CloudEvents 的事件源与消费这些事件的接收器。这些接收器通常是 Knative Serving 服务。
+- en: Knative Functions
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Knative 函数
+- en: This is for scaffolding and building Knative Serving services from source code.
+    It supports various programming languages and offers an AWS Lambda-like programming
+    model.
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是从源代码构建 Knative Serving 服务的脚手架和构建工具。它支持多种编程语言，并提供类似于 AWS Lambda 的编程模型。
+- en: In this section, we will focus on Knative Serving and its autoscaler for an
+    application that uses HTTP to offer its services. For those workloads, CPU and
+    memory are metrics that only indirectly correlate to actual usage. A much better
+    metric is the number of *concurrent requests* per Pod—i.e., requests that are
+    processed in parallel.
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本节中，我们将专注于 Knative Serving 及其用于使用 HTTP 提供服务的应用程序的自动缩放器。对于这些工作负载，CPU 和内存是仅间接相关到实际使用的度量。一个更好的度量是每个
+    Pod 的并发请求数量，即并行处理的请求。
+- en: Note
+  id: totrans-96
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Another HTTP-based metric that Knative can use is *requests per second* (rps).
+    Still, this metric does not say anything about the costs of a single request,
+    so concurrent requests are typically the much better metric to use, as they capture
+    the frequency of requests and the duration of those requests. You can select the
+    scale metric individually for each application or as a global default.
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Knative 可以使用的另一个基于 HTTP 的度量是每秒请求数（rps）。但是，这个度量并不反映单个请求的成本，因此并发请求通常是更好的度量，因为它们捕捉请求的频率和持续时间。您可以为每个应用程序单独选择扩展度量或作为全局默认设置。
+- en: Basing the autoscaling decision on concurrent requests gives a much better correlation
+    to the latency of HTTP request processing than scaling based on CPU or memory
+    consumption can provide.
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 基于并发请求的自动缩放决策与 HTTP 请求处理的延迟有更好的相关性，而基于 CPU 或内存消耗的扩展则无法提供。
+- en: Historically, Knative used to be implemented as a custom metric adapter for
+    the HPA in Kubernetes. However, it later developed its own implementation in order
+    to have more flexibility in influencing the scaling algorithm and to avoid the
+    bottleneck of being able to register only a single custom metric adapter in a
+    Kubernetes cluster.
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 历史上，Knative 曾作为 Kubernetes 中 HPA 的自定义度量适配器实现。然而，为了在影响扩展算法时拥有更大的灵活性，并避免只能在 Kubernetes
+    集群中注册单个自定义度量适配器的瓶颈，后来它发展出自己的实现。
+- en: While Knative still supports using the HPA for scaling based on memory or CPU
+    usage, it now focuses on using its own autoscaling implementation, called the
+    Knative Pod Autoscaler (KPA). This allows Knative to have more control over the
+    scaling algorithm and to better optimize it for the needs of the application.
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然 Knative 仍支持使用 HPA 根据内存或 CPU 使用情况进行扩展，但现在它专注于使用自己的自动缩放实现，称为 Knative Pod Autoscaler（KPA）。这使
+    Knative 能够更好地控制扩展算法，并优化以满足应用程序的需求。
+- en: The architecture of the KPA is shown in [Figure 29-2](#img-elastic-scale-knative-architecture).
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: KPA 的架构显示在[图 29-2](#img-elastic-scale-knative-architecture)中。
+- en: '![Knative Pod Autoscaler components](assets/kup2_2902.png)'
+  id: totrans-102
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Knative Pod Autoscaler 组件](assets/kup2_2902.png)'
+- en: Figure 29-2\. Knative Pod Autoscaler
+  id: totrans-103
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 29-2\. Knative Pod Autoscaler
+- en: 'Three components are playing together for autoscaling a service:'
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 三个组件一起用于自动缩放服务：
+- en: Activator
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 激活器
+- en: This is a proxy in front of the application that is always available, even when
+    the application is scaled down to zero Pods. When the application is scaled down
+    to zero, and a first request comes in, the request gets buffered, and the application
+    is scaled up to at least one Pod. It’s important to note that during a *cold start*,
+    all incoming requests will be buffered to ensure that no requests are lost.
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是一个位于应用程序前端的代理，即使应用程序缩减到零个 Pod 时也始终可用。当应用程序缩减到零时，如果有第一个请求进入，请求将被缓冲，并且应用程序将至少扩展到一个
+    Pod。重要的是，在*冷启动*期间，所有传入请求都将被缓冲，以确保不丢失请求。
+- en: Queue proxy
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 队列代理
+- en: The queue proxy is an ambassador sidecar described in [Chapter 18](ch18.html#Ambassador)
+    that is injected into the application’s Pod by the Knative controller. It intercepts
+    the request path for collecting metrics relevant to autoscaling, like concurrent
+    requests.
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 队列代理是一个大使边车，在应用的 Pod 中由 Knative 控制器注入，其拦截请求路径以收集与自动缩放相关的度量，如并发请求。
+- en: Autoscaler
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 自动缩放器
+- en: This is a service running in the background that is responsible for the scaling
+    decision based on the data it gets from the activator and queue-proxy. The autoscaler
+    is the one that sets the replica count in the application’s ReplicaSet.
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是在后台运行的服务，负责根据从激活器和队列代理获取的数据做出缩放决策。自动缩放器设置应用程序ReplicaSet中的副本计数。
+- en: The KPA algorithm can be configured in many ways to optimize the autoscaling
+    behavior for any workload and traffic shape. [Table 29-1](#table-elastic-scale-knative-parameters)
+    shows some of the configuration options for tuning the KPA for individual services
+    via annotations. Similar configuration options also exist for global defaults
+    that are stored in a ConfigMap. You can find the full set of all autoscaling configuration
+    options in the [Knative documentation](https://oreil.ly/m09BV). This documentation
+    has more details about the Knative scaling algorithm, like dealing with bursty
+    workloads by scaling up more aggressively when the increase in concurrent requests
+    is over a threshold.
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以通过多种方式配置KPA算法，以优化任何工作负载和流量形状的自动缩放行为。[表 29-1](#table-elastic-scale-knative-parameters)展示了通过注释调整单个服务的KPA的一些配置选项。类似的配置选项也存在于全局默认配置中，这些配置存储在ConfigMap中。您可以在[Knative文档](https://oreil.ly/m09BV)中找到所有自动扩展配置选项的完整集合。该文档详细介绍了Knative缩放算法，例如通过在并发请求增加超过阈值时更积极地扩展来处理突发工作负载。
+- en: Table 29-1\. Important Knative scaling parameters. `autoscaling.knative.dev/`,
+    the common annotation prefix, has been omitted.
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表 29-1\. 重要的Knative扩展参数。`autoscaling.knative.dev/`，通用注释前缀，已被省略。
+- en: '| Annotation | Description | Default |'
+  id: totrans-113
+  prefs: []
+  type: TYPE_TB
+  zh: '| 注释 | 描述 | 默认值 |'
+- en: '| --- | --- | --- |'
+  id: totrans-114
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- |'
+- en: '| `target` | Number of simultaneous requests that can be processed by each
+    replica. This is a soft limit and might be temporarily exceeded in case of a traffic
+    burst. `.spec.concurrencyLimit` is used as a hard limit that can’t be crossed.
+    | 100 |'
+  id: totrans-115
+  prefs: []
+  type: TYPE_TB
+  zh: '| `target` | 每个副本可以处理的同时请求数量。这是一个软限制，在流量突发情况下可能会暂时超过。`.spec.concurrencyLimit`用作无法超过的硬限制。|
+    100 |'
+- en: '| `target-utilization-percentage` | Start creating new replicas if this fraction
+    of the concurrency limit has been reached. | 70 |'
+  id: totrans-116
+  prefs: []
+  type: TYPE_TB
+  zh: '| `target-utilization-percentage` | 如果已达到并发限制的此分数，则开始创建新的副本。| 70 |'
+- en: '| `min-scale` | Minimum number of replicas to keep. If set to a value greater
+    than zero, the application will never scale down to zero. | 0 |'
+  id: totrans-117
+  prefs: []
+  type: TYPE_TB
+  zh: '| `min-scale` | 要保留的最小副本数。如果设置为大于零的值，则应用程序永远不会缩减到零。| 0 |'
+- en: '| `max-scale` | Upper bound for the number of replicas; zero means unlimited
+    scaling. | 0 |'
+  id: totrans-118
+  prefs: []
+  type: TYPE_TB
+  zh: '| `max-scale` | 副本数的上限；零表示无限扩展。| 0 |'
+- en: '| `activation-scale` | How many replicas to create when scaling up from zero.
+    | 1 |'
+  id: totrans-119
+  prefs: []
+  type: TYPE_TB
+  zh: '| `activation-scale` | 从零开始扩展时要创建的副本数。| 1 |'
+- en: '| `scale-down-delay` | How long scale-down conditions must hold before scaling
+    down. Useful for keeping replicas warm before scaling zero in order to avoid cold
+    start time. | 0s |'
+  id: totrans-120
+  prefs: []
+  type: TYPE_TB
+  zh: '| `scale-down-delay` | 在缩小之前必须保持的缩小条件的持续时间。有助于在缩小为零之前保持副本的热状态，以避免冷启动时间。| 0s
+    |'
+- en: '| `window` | Length of the time window over which metrics are averaged to provide
+    the input for scaling decisions. | 60s |'
+  id: totrans-121
+  prefs: []
+  type: TYPE_TB
+  zh: '| `window` | 用于平均度量指标以提供缩放决策输入的时间窗口长度。| 60s |'
+- en: '[Example 29-6](#ex-elastic-scale-kservice) shows a Knative service that deploys
+    an example application. It looks similar to a Kubernetes Deployment. However,
+    behind the scenes, the Knative operator creates the Kubernetes resources needed
+    to expose your application as a web service, i.e., a ReplicaSet, Kubernetes Service,
+    and Ingress for exposing the application to the outside of your cluster.'
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[示例 29-6](#ex-elastic-scale-kservice)展示了一个Knative服务，部署了一个示例应用程序。它看起来类似于Kubernetes的部署（Deployment）。然而，在幕后，Knative操作员创建了必要的Kubernetes资源，以将您的应用程序公开为Web服务，即ReplicaSet、Kubernetes服务和用于将应用程序暴露到集群外部的Ingress。'
+- en: Example 29-6\. Knative service
+  id: totrans-123
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 29-6\. Knative服务
+- en: '[PRE5]'
+  id: totrans-124
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: '[![1](assets/1.png)](#co_elastic_scale_CO3-1)'
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_elastic_scale_CO3-1)'
+- en: Knative also uses Service for the resource name but with the API group `serving.knative.dev`,
+    which is different from a Kubernetes Service from the `core` API group.
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Knative还使用Service作为资源名称，但API组`core`的Kubernetes服务不同于API组`serving.knative.dev`。
+- en: '[![2](assets/2.png)](#co_elastic_scale_CO3-2)'
+  id: totrans-127
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_elastic_scale_CO3-2)'
+- en: Options for tuning the autoscaling algorithm. See [Table 29-1](#table-elastic-scale-knative-parameters)
+    for the available options.
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 调整自动扩展算法的选项。请参阅[表 29-1](#table-elastic-scale-knative-parameters)获取可用选项。
+- en: '[![3](assets/3.png)](#co_elastic_scale_CO3-3)'
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_elastic_scale_CO3-3)'
+- en: The only mandatory argument for a Knative Service is a reference to a container
+    image.
+  id: totrans-130
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Knative服务的唯一必需参数是对容器镜像的引用。
+- en: We only briefly touch on Knative here. There is much more that can help you
+    in operating the Knative autoscaler. Please check out the [online documentation](https://knative.dev)
+    for more features of Knative Serving, like traffic splitting for the complex rollout
+    scenarios we described in [Chapter 3, “Declarative Deployment”](ch03.html#DeclarativeDeployment).
+    Also, if you are following an event-driven architecture (EDA) paradigm for your
+    applications, Knative Eventing and Knative Functions have a lot to offer.
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们在这里仅简要提及Knative。在操作Knative自动缩放器方面，还有很多内容可供您参考。请查看[在线文档](https://knative.dev)了解更多Knative
+    Serving的功能，例如用于我们在[第3章，“声明式部署”](ch03.html#DeclarativeDeployment)中描述的复杂部署方案的流量分割。此外，如果您正在遵循事件驱动架构（EDA）范例来开发应用程序，Knative
+    Eventing和Knative Functions也有很多提供。
+- en: KEDA
+  id: totrans-132
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: KEDA
+- en: Kubernetes Event-Driven Autoscaling (KEDA) is the other important Kubernetes-based
+    autoscaling platform that supports scale-to-zero but has a different scope than
+    Knative. While Knative supports autoscaling based on HTTP traffic, KEDA is a pull-based
+    approach that scales based on external metrics from different systems. Knative
+    and KEDA play very well together, and there is only a little overlap,^([3](ch29.html#idm45902081237056))
+    so nothing prevents you from using both add-ons together.
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes事件驱动自动缩放（KEDA）是另一个重要的基于Kubernetes的自动缩放平台，支持零缩放，但其范围与Knative有所不同。虽然Knative支持基于HTTP流量的自动缩放，但KEDA是一种基于拉取的方法，根据来自不同系统的外部指标进行缩放。Knative和KEDA之间有很好的协作，只有少量重叠^([3](ch29.html#idm45902081237056))，因此您可以同时使用这两个附加组件。
+- en: 'So, what is KEDA? KEDA is a CNCF project that Microsoft and Red Hat created
+    in 2019 and consists of the following components:'
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 那么，什么是KEDA？KEDA是一个CNCF项目，由Microsoft和Red Hat在2019年创建，包括以下组件：
+- en: The KEDA Operator reconciles a ScaledObject custom resource that connects the
+    scaled target (e.g., a Deployment or StatefulSet) with an autoscale trigger that
+    connects to an external system via a so-called *scaler*. It is also responsible
+    for configuring the HPA with the external metrics service provided by KEDA.
+  id: totrans-135
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: KEDA操作员调和了一个ScaledObject自定义资源，将缩放目标（例如Deployment或StatefulSet）与一个通过所谓的*scaler*连接到外部系统的自动缩放触发器连接起来。它还负责配置HPA，使用由KEDA提供的外部指标服务。
+- en: KEDA’s metrics service is registered as an APIService resource in the Kubernetes
+    API aggregation layer so that the HPA can use it as an external metrics service.
+  id: totrans-136
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: KEDA的指标服务在Kubernetes API聚合层注册为APIService资源，以便HPA可以将其用作外部指标服务。
+- en: '[Figure 29-3](#img-elastic-scale-keda-architecture) illustrates the relationship
+    between the KEDA Operator, metrics service, and the Kubernetes HPA.'
+  id: totrans-137
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图29-3](#img-elastic-scale-keda-architecture)展示了KEDA操作员、指标服务和Kubernetes HPA之间的关系。'
+- en: '![KEDA operator and metrics server](assets/kup2_2903.png)'
+  id: totrans-138
+  prefs: []
+  type: TYPE_IMG
+  zh: '![KEDA操作员和指标服务器](assets/kup2_2903.png)'
+- en: Figure 29-3\. KEDA autoscaling components
+  id: totrans-139
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图29-3. KEDA自动缩放组件
+- en: 'While Knative is a complete solution that completely replaces HPA for a consumption-based
+    autoscaling, KEDA is a hybrid solution. KEDA’s autoscaling algorithm distinguishes
+    between two scenarios:'
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然Knative是一个完整的解决方案，完全替代了基于消耗的自动缩放器HPA，但KEDA是一个混合解决方案。KEDA的自动缩放算法区分两种情况：
+- en: 'Activation by scaling from zero replicas to one (*0 ↔ 1*): This action is performed
+    by the KEDA operator itself when it detects that a used scaler’s metric exceeds
+    a certain threshold.'
+  id: totrans-141
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 从零副本到一个的缩放激活（*0 ↔ 1*）：当KEDA操作员检测到使用的缩放器指标超过某一阈值时，由KEDA操作员自身执行此操作。
+- en: 'Scaling up and down when running (*1 ↔ n*): When the workload is already active,
+    the HPA takes over and scales based on the external metric that KEDA offers.'
+  id: totrans-142
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 在运行时进行扩展和收缩（*1 ↔ n*）：当工作负载已经活动时，HPA接管并根据KEDA提供的外部指标进行缩放。
+- en: The central element for KEDA is the custom resource ScaledObject, provided by
+    the user to configure KEDA-based autoscaling and playing a similar role as the
+    HorizontalPodAutoscaler resource. As soon as the KEDA operator detects a new instance
+    of ScaledObject, it automatically creates a HorizontalPodAutoscaler resource that
+    uses the KEDA metrics service as an external metrics provider and the scaling
+    parameters.
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: KEDA的核心元素是ScaledObject自定义资源，由用户提供以配置基于KEDA的自动缩放，并起到类似HorizontalPodAutoscaler资源的作用。一旦KEDA操作员检测到ScaledObject的新实例，它将自动创建一个HorizontalPodAutoscaler资源，该资源使用KEDA指标服务作为外部指标提供程序和缩放参数。
+- en: '[Example 29-7](#ex-elastic-scale-scaledobject) shows how you can scale a Deployment
+    based on the number of messages in an Apache Kafka topic.'
+  id: totrans-144
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Example 29-7](#ex-elastic-scale-scaledobject)显示了如何基于Apache Kafka主题中的消息数量来扩展部署。'
+- en: Example 29-7\. ScaledObject definition
+  id: totrans-145
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: Example 29-7\. ScaledObject定义
+- en: '[PRE6]'
+  id: totrans-146
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: '[![1](assets/1.png)](#co_elastic_scale_CO4-1)'
+  id: totrans-147
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_elastic_scale_CO4-1)'
+- en: Reference to a Deployment with the name `kafka-consumer` that should be autoscaled.
+    You can also specify other scalable workloads here; Deployment is the default.
+  id: totrans-148
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 提到应该自动缩放的名为`kafka-consumer`的部署。您还可以在此处指定其他可扩展的工作负载；部署是默认选择。
+- en: '[![2](assets/2.png)](#co_elastic_scale_CO4-2)'
+  id: totrans-149
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_elastic_scale_CO4-2)'
+- en: In the action phase (scale from zero), poll every 30 seconds for the metric
+    value. In this example, it is the number of messages in a Kafka topic.
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在动作阶段（从零扩展），每30秒轮询度量值。在此示例中，它是Kafka主题中的消息数量。
+- en: '[![3](assets/3.png)](#co_elastic_scale_CO4-3)'
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![3](assets/3.png)](#co_elastic_scale_CO4-3)'
+- en: Select the Apache Kafka scaler.
+  id: totrans-152
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 选择Apache Kafka缩放器。
+- en: '[![4](assets/4.png)](#co_elastic_scale_CO4-4)'
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![4](assets/4.png)](#co_elastic_scale_CO4-4)'
+- en: Configuration options for the Apache Kafka scaler—i.e., how to connect to the
+    Kafka cluster and which topic to monitor.
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Apache Kafka缩放器的配置选项——即如何连接到Kafka集群以及要监视的主题。
+- en: KEDA provides many out-of-the-box scalers that can be selected to connect to
+    external systems for the autoscaling stimulus. You can obtain the complete list
+    of directly supported scalers from the [KEDA home page](https://oreil.ly/rkJKU).
+    In addition, you can easily integrate custom scalers by providing an external
+    service that communicates with KEDA over a gRPC-based API.
+  id: totrans-155
+  prefs: []
+  type: TYPE_NORMAL
+  zh: KEDA提供许多开箱即用的缩放器，可以选择连接到外部系统以进行自动缩放刺激。您可以从[KEDA主页](https://oreil.ly/rkJKU)获取完整的直接支持的缩放器列表。此外，您可以通过提供一个通过基于gRPC的API与KEDA通信的外部服务，轻松集成自定义缩放器。
+- en: 'KEDA is a great autoscaling solution when you need to scale based on work items
+    held in external systems, like message queues that your application consumes.
+    To some degree, this pattern shares some of the characteristics of [Chapter 7,
+    “Batch Job”](ch07.html#BatchJob): the workload runs only when work is done and
+    does not consume any resources when idle. Both can be scaled up for parallel processing
+    of the work items. The difference here is that a KEDA ScaledObject does the up-scale
+    automatically, whereas for a Kubernetes `Job`, you must manually determine the
+    parallelism parameters. With KEDA, you can also automatically trigger Kubernetes
+    Jobs based on the availability of external workloads. The ScaledJob custom resource
+    is precisely for this purpose so that instead of scaling up replicas from 0 to
+    1, a Job resource is started in case a scaler’s activation threshold is met. Note
+    that the `parallelism` field in the Job is still fixed, but the autoscaling happens
+    on the Job resource level itself (i.e., Job resources themselves play the role
+    of replicas).'
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您需要根据外部系统中持有的工作项（如您的应用程序消费的消息队列）来进行扩展时，KEDA是一个很好的自动缩放解决方案。在某种程度上，此模式与[第7章，“批处理作业”](ch07.html#BatchJob)的一些特性相似：工作负载仅在有工作时运行，在空闲时不消耗任何资源。两者都可以扩展以并行处理工作项。不同之处在于，KEDA
+    ScaledObject会自动进行扩展，而对于Kubernetes的`Job`，您必须手动确定并行参数。使用KEDA，您还可以基于外部工作负载的可用性自动触发Kubernetes
+    Jobs。ScaledJob自定义资源正是为此目的而设计，以便在满足扩展器激活阈值时启动Job资源，而不是将副本从0扩展到1。请注意，Job中的`parallelism`字段仍然是固定的，但是自动缩放发生在Job资源级别上（即Job资源本身起到副本的作用）。
+- en: '[Table 29-2](#table-elasticscale-comparison) summarizes the unique features
+    and differences between HPA, Knative, and KEDA.'
+  id: totrans-157
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Table 29-2](#table-elasticscale-comparison)总结了HPA、Knative和KEDA之间的独特功能和差异。'
+- en: Table 29-2\. Horizontal autoscaling on Kubernetes
+  id: totrans-158
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 表29-2\. Kubernetes上的水平自动缩放配置选项
+- en: '|  | HPA | Knative | KEDA |'
+  id: totrans-159
+  prefs: []
+  type: TYPE_TB
+  zh: '|  | HPA | Knative | KEDA |'
+- en: '| --- | --- | --- | --- |'
+  id: totrans-160
+  prefs: []
+  type: TYPE_TB
+  zh: '| --- | --- | --- | --- |'
+- en: '| Scale metrics | Resource usage | HTTP requests | External metrics like message
+    queue backlog |'
+  id: totrans-161
+  prefs: []
+  type: TYPE_TB
+  zh: '| 缩放指标 | 资源使用率 | HTTP请求 | 外部度量，如消息队列积压 |'
+- en: '| Scale-to-zero | No | Yes | Yes |'
+  id: totrans-162
+  prefs: []
+  type: TYPE_TB
+  zh: '| 零缩放 | 否 | 是 | 是 |'
+- en: '| Type | Pull | Push | Pull |'
+  id: totrans-163
+  prefs: []
+  type: TYPE_TB
+  zh: '| 类型 | 拉取 | 推送 | 拉取 |'
+- en: '| Typical use cases | Stable traffic web applications, Batch processing | Serverless
+    applications with rapid scaling, serverless functions | Message-driven microservices
+    |'
+  id: totrans-164
+  prefs: []
+  type: TYPE_TB
+  zh: '| 典型用例 | 稳定流量Web应用程序，批处理 | 快速扩展的无服务器应用程序，无服务器函数 | 消息驱动的微服务 |'
+- en: Now that we have seen all the possibilities for scaling horizontally with HPA,
+    Knative, and KEDA, let’s look at a completely different kind of scaling that does
+    not alter the number of parallel-running replicas but lets your application grow
+    and shrink.
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，我们已经看到了通过 HPA、Knative 和 KEDA 进行水平扩展的所有可能性，让我们看看一种完全不同的扩展方式，它不会改变并行运行副本的数量，而是允许您的应用程序自由增长和收缩。
+- en: Vertical Pod Autoscaling
+  id: totrans-166
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 垂直 Pod 自动缩放
+- en: Horizontal scaling is preferred over vertical scaling because it is less disruptive,
+    especially for stateless services. That is not the case for stateful services,
+    where vertical scaling may be preferred. Other scenarios where vertical scaling
+    is useful include tuning the resource needs of a service based on actual load
+    patterns. We’ve discussed why identifying the correct number of Pod replicas might
+    be difficult and even impossible when the load changes over time. Vertical scaling
+    also has these kinds of challenges in identifying the correct `requests` and `limits`
+    for a container. The Kubernetes Vertical Pod Autoscaler (VPA) aims to address
+    these challenges by automating the process of adjusting and allocating resources
+    based on real-world usage feedback.
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与无状态服务相比，水平扩展优于垂直扩展，因为它更少会造成中断。对于有状态服务来说，情况并非如此，垂直扩展可能更可取。垂直扩展有助于根据实际负载模式调整服务的资源需求的其他场景。我们已经讨论过，在负载随时间变化时，确定
+    Pod 副本的正确数量可能是困难甚至不可能的。垂直扩展也面临着识别容器的正确 `requests` 和 `limits` 的挑战。Kubernetes 垂直
+    Pod 自动缩放器（VPA）旨在通过根据实际使用反馈自动调整和分配资源的过程来应对这些挑战。
+- en: As we saw in [Chapter 2, “Predictable Demands”](ch02.html#PredictableDemands),
+    every container in a Pod can specify its CPU and memory `requests`, which influences
+    where the Pods will be scheduled. In a sense, the resource `requests` and `limits`
+    of a Pod form a contract between the Pod and the scheduler, which causes a certain
+    amount of resources to be guaranteed or prevents the Pod from being scheduled.
+    Setting the memory `requests` too low can cause nodes to be more tightly packed,
+    which in turn can lead to out-of-memory errors or workload eviction due to memory
+    pressure. If the CPU `limits` are too low, CPU starvation and underperforming
+    workloads can occur. On the other hand, specifying resource `requests` that are
+    too high allocates unnecessary capacity, leading to wasted resources. It is important
+    to set resource `requests` as accurately as possible since they impact the cluster
+    utilization and the effectiveness of horizontal scaling. Let’s see how VPA helps
+    address this.
+  id: totrans-168
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如我们在 [第 2 章，“可预测的需求”](ch02.html#PredictableDemands) 中看到的，Pod 中的每个容器都可以指定其 CPU
+    和内存的 `requests`，这影响 Pod 的调度位置。从某种意义上说，Pod 的资源 `requests` 和 `limits` 形成了 Pod 与调度器之间的合同，这会确保分配一定量的资源或防止
+    Pod 被调度。将内存的 `requests` 设置得太低可能导致节点过于密集，从而出现内存不足的错误或由于内存压力而导致工作负载被驱逐。如果 CPU 的
+    `limits` 设置过低，可能会发生 CPU 饥饿和工作负载性能不佳。另一方面，指定过高的资源 `requests` 会分配不必要的容量，导致资源浪费。准确设置资源
+    `requests` 非常重要，因为它们影响集群利用率和水平扩展的有效性。让我们看看 VPA 如何解决这个问题。
+- en: On a cluster with VPA and the metrics server installed, we can use a VPA definition
+    to demonstrate vertical autoscaling of Pods, as in [Example 29-8](#ex-elastic-scale-vpa).
+  id: totrans-169
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在安装了 VPA 和度量服务器的集群上，我们可以使用 VPA 定义来演示 Pods 的垂直自动缩放，如 [示例 29-8](#ex-elastic-scale-vpa)。
+- en: Example 29-8\. VPA
+  id: totrans-170
+  prefs:
+  - PREF_H5
+  type: TYPE_NORMAL
+  zh: 示例 29-8\. VPA
+- en: '[PRE7]'
+  id: totrans-171
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: '[![1](assets/1.png)](#co_elastic_scale_CO5-1)'
+  id: totrans-172
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![1](assets/1.png)](#co_elastic_scale_CO5-1)'
+- en: Reference to the higher-level resource that holds the selector to identify the
+    Pods to manage.
+  id: totrans-173
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 引用到包含选择器以识别要管理的 Pods 的更高级别资源。
+- en: '[![2](assets/2.png)](#co_elastic_scale_CO5-2)'
+  id: totrans-174
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[![2](assets/2.png)](#co_elastic_scale_CO5-2)'
+- en: The update policy for how VPA will apply changes.
+  id: totrans-175
+  prefs: []
+  type: TYPE_NORMAL
+  zh: VPA 将如何应用更改的更新策略。
+- en: 'A VPA definition has the following main parts:'
+  id: totrans-176
+  prefs: []
+  type: TYPE_NORMAL
+  zh: VPA 定义有以下主要部分：
+- en: Target reference
+  id: totrans-177
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 目标参考
+- en: The target reference points to a higher-level resource that controls Pods, like
+    a Deployment or a StatefulSet. From this resource, the VPA looks up the label
+    selector for identifying the Pods it should handle. If the reference points to
+    a resource that does not contain such a selector, then it will report an error
+    in the VPA status section.
+  id: totrans-178
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 目标参考指向一个更高级别的资源，控制 Pods，例如 Deployment 或 StatefulSet。从这个资源中，VPA 查找标签选择器，以识别应该处理的
+    Pods。如果参考指向不包含这样的选择器的资源，则会在 VPA 状态部分报告错误。
+- en: Update policy
+  id: totrans-179
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 更新策略
+- en: The update policy controls how the VPA applies changes. The `Initial` mode allows
+    you to assign resource requests only during Pod creation time and not later. The
+    default `Auto` mode allows resource assignment to Pods at creation time, but additionally,
+    it can update Pods during their lifetimes, by evicting and rescheduling the Pod.
+    The value `Off` disables automatic changes to Pods but allows you to suggest resource
+    values. This is a kind of dry run for discovering the right size of a container
+    without applying it directly.
+  id: totrans-180
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 更新策略控制 VPA 如何应用更改。 `Initial` 模式允许您仅在 Pod 创建时分配资源请求，而不是以后。默认的 `Auto` 模式允许在 Pod
+    创建时为 Pod 分配资源，并且可以在 Pod 的生命周期内更新 Pod，通过逐出和重新调度 Pod。值 `Off` 禁用对 Pod 的自动更改，但允许您建议资源值。这是一种在不直接应用更改的情况下发现容器适当大小的试运行。
+- en: A VPA definition can also have a resource policy that influences how the VPA
+    computes the recommended resources (e.g., by setting per-container lower and upper
+    resource boundaries).
+  id: totrans-181
+  prefs: []
+  type: TYPE_NORMAL
+  zh: VPA 定义还可以具有资源策略，影响 VPA 如何计算推荐的资源（例如，通过设置每个容器的资源下限和上限边界）。
+- en: Depending on which `.spec.updatePolicy.updateMode` is configured, the VPA involves
+    different system components. All three VPA components—recommender, admission plugin,
+    and updater—are decoupled and independent and can be replaced with alternative
+    implementations. The module with the intelligence to produce recommendations is
+    the recommender, which is inspired by Google’s Borg system. The implementation
+    analyzes the actual resource usage of a container under load for a certain period
+    (by default, eight days), produces a histogram, and chooses a high-percentile
+    value for that period. In addition to metrics, it also considers resource and
+    specifically memory-related Pod events such as evictions and `OutOfMemory` events.
+  id: totrans-182
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 根据配置的 `.spec.updatePolicy.updateMode`，VPA 涉及不同的系统组件。所有三个 VPA 组件——推荐器、准入插件和更新器——都是解耦且独立的，并且可以替换为替代实现。生成推荐的模块是推荐器，受
+    Google 的 Borg 系统启发。该实现分析容器在负载下的实际资源使用情况，持续一段时间（默认为八天），生成直方图，并选择该期间的高百分位值。除了指标外，还考虑了资源和特别是内存相关的
+    Pod 事件，例如驱逐和 `OutOfMemory` 事件。
+- en: 'In our example, we chose `.spec.updatePolicy.updateMode` equals `Off`, but
+    there are two other options to choose from, each with a different level of potential
+    disruption on the scaled Pods. Let’s see how different values for `updateMode`
+    work, starting from nondisruptive to a more disruptive order:'
+  id: totrans-183
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在我们的示例中，我们选择了 `.spec.updatePolicy.updateMode` 等于 `Off`，但还有两个其他选项可供选择，每个选项对扩展的
+    Pod 造成不同程度的潜在中断。让我们看看不同的 `updateMode` 值如何工作，从不造成中断到更具破坏性的顺序：
+- en: 'Off'
+  id: totrans-184
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 关闭
+- en: The VPA recommender gathers Pod metrics and events and then produces recommendations.
+    The VPA recommendations are always stored in the `status` section of the VPA resource.
+    However, this is as far as the `Off` mode goes. It analyzes and produces recommendations,
+    but it does not apply them to the Pods. This mode is useful for getting insight
+    on the Pod resource consumption without introducing any changes and causing disruption.
+    That decision is left for the user to make if desired.
+  id: totrans-185
+  prefs: []
+  type: TYPE_NORMAL
+  zh: VPA 推荐器收集 Pod 的指标和事件，然后生成推荐。 VPA 的推荐始终存储在 VPA 资源的 `status` 部分。然而，这就是 `Off` 模式的功能范围。它分析并生成推荐，但不将其应用于
+    Pod。这种模式有助于了解 Pod 资源消耗情况，而不引入任何变化和造成中断。如果需要，用户可以自行决定是否应用推荐。
+- en: Initial
+  id: totrans-186
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 初始
+- en: In this mode, the VPA goes one step further. In addition to the activities performed
+    by the recommender component, it also activates the VPA admission Controller,
+    which applies the recommendations to newly created Pods only. For example, if
+    a Pod is scaled manually, updated by a Deployment, or evicted and restarted for
+    whatever reason, the Pod’s resource request values are updated by the VPA Admission
+    Controller.
+  id: totrans-187
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在此模式下，VPA 进一步进行。除了推荐器组件执行的活动外，还激活了 VPA 准入控制器，仅将推荐应用于新创建的 Pod。例如，如果手动扩展 Pod，由
+    Deployment 更新或由于任何原因驱逐并重新启动 Pod，则 VPA 准入控制器将更新 Pod 的资源请求值。
+- en: This controller is a *mutating admission Webhook* that overrides the `requests`
+    of new matching Pods that are associated with the VPA resource. This mode does
+    not restart a running Pod, but it is still partially disruptive because it changes
+    the resource request of newly created Pods. This in turn can affect where a new
+    Pod is scheduled. What’s more, it is possible that after applying the recommended
+    resource requests, the Pod is scheduled to a different node, which can have unexpected
+    consequences. Or worse, the Pod might not be scheduled to any node if there is
+    not enough capacity on the cluster.
+  id: totrans-188
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个控制器是一个*变异接受Webhook*，它会覆盖与VPA资源相关联的新匹配Pod的`requests`。这种模式不会重新启动运行中的Pod，但它仍然部分干扰，因为它改变了新创建Pod的资源请求。这反过来可能会影响新Pod的调度位置。更糟糕的是，如果集群上没有足够的容量，应用推荐的资源请求后，Pod可能根本无法被调度到任何节点。
+- en: Recreate and Auto
+  id: totrans-189
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 重新创建和自动
+- en: In addition to the recommendation creation and its application for newly created
+    Pods, as described previously, in this mode, the VPA also activates its updated
+    component. The `Recreate` update mode forcibly evicts and restarts all Pods in
+    the deployment to apply the VPA’s recommendations, while the `Auto` update mode
+    is supposed to support in-place updates of resource limits without restarting
+    Pods in a future version of Kubernetes. As of 2023, `Auto` behaves the same as
+    `Recreate`, so both update modes can be disruptive and may lead to the unexpected
+    scheduling issues that have been described earlier.
+  id: totrans-190
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了之前描述的推荐创建及其在新创建的Pod上的应用之外，在这种模式下，VPA还会激活其更新的组件。`Recreate`更新模式强制驱逐并重新启动部署中的所有Pod以应用VPA的建议，而`Auto`更新模式据说在未来的Kubernetes版本中将支持资源限制的就地更新而无需重新启动Pod。截至2023年，`Auto`的行为与`Recreate`相同，因此这两种更新模式可能会带来干扰，并可能导致之前描述的意外调度问题。
+- en: Kubernetes is designed to manage immutable containers with immutable Pod `spec`
+    definitions, as seen in [Figure 29-4](#img-elastic-scale-vpa). While this simplifies
+    horizontal scaling, it introduces challenges for vertical scaling, such as requiring
+    Pod deletion and recreation, which can impact scheduling and cause service disruptions.
+    This is true even when the Pod is scaling down and wants to release already-allocated
+    resources with no disruption.
+  id: totrans-191
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Kubernetes旨在管理具有不可变Pod `spec`定义的不可变容器，如[图29-4](#img-elastic-scale-vpa)所示。虽然这简化了水平扩展，但对于垂直扩展，如需要Pod删除和重新创建，这可能会影响调度并引起服务中断。即使Pod在缩减时想要释放已分配的资源而不造成中断，这也是真实的。
+- en: Another concern is the coexistence of VPA and HPA because these autoscalers
+    are not currently aware of each other, which can lead to unwanted behavior. For
+    example, if an HPA is using resource metrics such as CPU and memory, and the VPA
+    is also influencing the same values, you may end up with horizontally scaled Pods
+    that are also vertically scaled (hence double scaling).
+  id: totrans-192
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个问题是VPA和HPA的共存，因为这些自动缩放器目前不相互感知，这可能导致不希望的行为。例如，如果HPA正在使用CPU和内存等资源指标，而VPA也影响相同的值，则可能导致水平扩展的Pod也同时进行垂直扩展（因此会双倍扩展）。
+- en: We can’t go into more details here. Although it is still evolving, it is worth
+    keeping an eye on the VPA as it is a feature that has the potential to significantly
+    improve resource consumption.
+  id: totrans-193
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们不能在这里详细讨论。虽然它仍在不断发展中，但值得关注VPA，因为它是一个有潜力显著改善资源消耗的功能。
+- en: '![Vertical Pod autoscaling mechanism](assets/kup2_2904.png)'
+  id: totrans-194
+  prefs: []
+  type: TYPE_IMG
+  zh: '![垂直Pod自动缩放机制](assets/kup2_2904.png)'
+- en: Figure 29-4\. Vertical Pod autoscaling mechanism
+  id: totrans-195
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图29-4\. 垂直Pod自动缩放机制
+- en: Cluster Autoscaling
+  id: totrans-196
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 集群自动缩放
+- en: The patterns in this book primarily use Kubernetes primitives and resources
+    targeted at developers using a Kubernetes cluster that’s already set up, which
+    is usually an operational task. Since it is a topic related to the elasticity
+    and scaling of workloads, we will briefly cover the Kubernetes Cluster Autoscaler
+    (CA) here.
+  id: totrans-197
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本书中的模式主要使用针对已经设置的Kubernetes集群的开发人员的Kubernetes基元和资源，这通常是一个运维任务。由于这是与工作负载的弹性和扩展相关的主题，我们将简要介绍Kubernetes集群自动缩放器（CA）。
+- en: One of the tenets of cloud computing is pay-as-you-go resource consumption.
+    We can consume cloud services when needed, and only as much as needed. CA can
+    interact with cloud providers where Kubernetes is running and request additional
+    nodes during peak times or shut down idle nodes during other times, reducing infrastructure
+    costs. While the HPA and VPA perform Pod-level scaling and ensure service-capacity
+    elasticity within a cluster, the CA provides node scalability to ensure cluster-capacity
+    elasticity.
+  id: totrans-198
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 云计算的一个原则是按需使用资源。我们可以在需要时消费云服务，且仅使用所需的量。在高峰时段，CA 可以与运行 Kubernetes 的云提供商进行交互，请求额外的节点；在其他时间关闭空闲节点，从而降低基础设施成本。虽然
+    HPA 和 VPA 执行 Pod 级别的扩展，并确保集群内服务能力的弹性，但 CA 则提供节点的扩展能力，以确保集群容量的弹性。
+- en: CA is a Kubernetes add-on that has to be turned on and configured with a minimum
+    and maximum number of nodes. It can function only when the Kubernetes cluster
+    is running on a cloud-computing infrastructure where nodes can be provisioned
+    and decommissioned on demand and that has support for Kubernetes CA, such as AWS,
+    IBM Cloud Kubernetes Service, Microsoft Azure, or Google Compute Engine.
+  id: totrans-199
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CA 是一个 Kubernetes 的附加组件，必须在云计算基础设施上开启和配置，其中节点可以按需配置和下线，并支持 Kubernetes CA，如 AWS、IBM
+    Cloud Kubernetes Service、Microsoft Azure 或 Google Compute Engine。
+- en: 'A CA primarily performs two operations: it add new nodes to a cluster or removes
+    nodes from a cluster. Let’s see how these actions are performed:'
+  id: totrans-200
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CA 主要执行两种操作：向集群添加新节点或从集群中移除节点。让我们看看这些操作是如何执行的：
+- en: Adding a new node (scale-up)
+  id: totrans-201
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 添加新节点（扩展）
+- en: If you have an application with a variable load (busy times during the day,
+    weekend, or holiday season and much less load during other times), you need varying
+    capacity to meet these demands. You could buy fixed capacity from a cloud provider
+    to cover the peak times, but paying for it during less busy periods reduces the
+    benefits of cloud computing. This is where CA becomes truly useful.
+  id: totrans-202
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您的应用具有变化负载（一天中的繁忙时段、周末或假期季节和其他时间负载较少），您需要可变的容量来满足这些需求。您可以从云提供商购买固定的容量以覆盖高峰时段，但在较不繁忙的时段支付固定成本会减少云计算的优势。这正是
+    CA 真正有用的地方。
+- en: When a Pod is scaled horizontally or vertically, either manually or through
+    HPA or VPA, the replicas have to be assigned to nodes with enough capacity to
+    satisfy the requested CPU and memory. If no node in the cluster has enough capacity
+    to satisfy all of the Pod’s requirements, the Pod is marked as *unschedulable*
+    and remains in the waiting state until such a node is found. CA monitors for such
+    Pods to see whether adding a new node would satisfy the needs of the Pods. If
+    the answer is yes, it resizes the cluster and accommodates the waiting Pods.
+  id: totrans-203
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当一个 Pod 被水平或垂直地扩展，无论是手动操作还是通过 HPA 或 VPA，副本都必须分配到有足够 CPU 和内存容量以满足要求的节点上。如果集群中没有节点有足够的容量来满足
+    Pod 的所有需求，该 Pod 将被标记为 *unschedulable*，并保持等待状态，直到找到这样的节点。CA 监控这些 Pod，以确定是否添加新节点可以满足这些
+    Pod 的需求。如果答案是肯定的，它会调整集群大小并容纳等待的 Pods。
+- en: CA cannot expand the cluster by a random node—it has to choose a node from the
+    available node groups the cluster is running on.^([4](ch29.html#idm45902080917024))
+    It assumes that all the machines in a node group have the same capacity and the
+    same labels, and that they run the same Pods specified by local manifest files
+    or DaemonSets. This assumption is necessary for CA to estimate how much extra
+    Pod capacity a new node will add to the cluster.
+  id: totrans-204
+  prefs: []
+  type: TYPE_NORMAL
+  zh: CA 不能通过随机节点来扩展集群—它必须从集群正在运行的可用节点组中选择一个节点。^([4](ch29.html#idm45902080917024))
+    它假设节点组中的所有机器具有相同的容量和相同的标签，并且它们运行由本地清单文件或 DaemonSets 指定的相同 Pods。这种假设对于 CA 估算新节点将为集群添加多少额外
+    Pod 容量是必要的。
+- en: If multiple node groups are satisfying the needs of the waiting Pods, CA can
+    be configured to choose a node group by different strategies called *expanders*.
+    An expander can expand a node group with an additional node by prioritizing least
+    cost or least resource waste, accommodating most Pods, or just randomly. At the
+    end of a successful node selection, a new machine should be provisioned by the
+    cloud provider in a few minutes and registered in the API Server as a new Kubernetes
+    node ready to host the waiting Pods.
+  id: totrans-205
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果多个节点组都能满足等待的 Pods 的需求，CA 可以配置为通过不同的策略选择一个节点组，称为 *expanders*。一个 expander 可以通过优先考虑最低成本或最小资源浪费来扩展节点组，容纳大多数
+    Pods，或者仅仅是随机选择。在成功选择节点之后，云服务提供商应在几分钟内为 API 服务器注册一个新的 Kubernetes 节点，并准备好托管等待的 Pods。
+- en: Removing a node (scale-down)
+  id: totrans-206
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 删除节点（缩减）
+- en: 'Scaling down Pods or nodes without service disruption is always more involved
+    and requires many checks. CA performs scale-down if there is no need to scale
+    up and a node is identified as unneeded. A node is qualified for scale-down if
+    it satisfies the following main conditions:'
+  id: totrans-207
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在不造成服务中断的情况下缩减 Pods 或节点始终更为复杂，并且需要进行许多检查。如果不需要扩展并且标识出节点不需要，则 CA 执行缩减。如果节点满足以下主要条件，则节点有资格进行缩减：
+- en: More than half of its capacity is unused—that is, the sum of all requested CPU
+    and the memory of all Pods on the node is less than 50% of the node-allocatable
+    resource capacity.
+  id: totrans-208
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 其容量超过一半未使用，即节点可分配资源容量的所有请求 CPU 和内存的总和少于节点资源容量的 50%。
+- en: All movable Pods on the node (Pods that are not run locally by manifest files
+    or Pods created by DaemonSets) can be placed on other nodes. To prove that, CA
+    performs a scheduling simulation and identifies the future location of every Pod
+    that would be evicted. The final location of the Pods is still determined by the
+    scheduler and can be different, but the simulation ensures there is spare capacity
+    for the Pods.
+  id: totrans-209
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 节点上的所有可移动 Pod（非通过清单文件本地运行或由 DaemonSets 创建的 Pod）都可以放置在其他节点上。为证明此点，CA 进行调度模拟，并确定每个可能被驱逐
+    Pod 的未来位置。Pod 的最终位置仍由调度程序确定，并可能不同，但模拟确保了 Pod 的备用容量。
+- en: There are no other reasons to prevent node deletion, such as a node being excluded
+    from scaling down through annotations.
+  id: totrans-210
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 没有其他原因阻止节点删除，如通过注释排除节点从缩减中。
+- en: There are no Pods that cannot be moved, such as Pods with a PodDisruptionBudget
+    that cannot be satisfied, Pods with local storage, Pods with annotations preventing
+    eviction, Pods created without a controller, or system Pods.
+  id: totrans-211
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 不能被迁移的 Pod 包括具有无法满足的 PodDisruptionBudget、具有本地存储的 Pod、阻止驱逐的注释的 Pod、没有控制器创建的 Pod
+    或系统 Pod。
+- en: All of these checks are performed to ensure no Pod is deleted that cannot be
+    started on a different node. If all of the preceding conditions are true for a
+    while (the default is 10 minutes), the node qualifies for deletion. The node is
+    deleted by marking it as unschedulable and moving all Pods from it to other nodes.
+  id: totrans-212
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所有这些检查都是为了确保不删除任何无法在不同节点上启动的 Pod。如果所有前述条件在一段时间内为真（默认为 10 分钟），则节点符合删除条件。将节点标记为不可调度，并将其上的所有
+    Pod 移动到其他节点来删除节点。
+- en: '[Figure 29-5](#img-elastic-scale-ca) summarizes how the CA interacts with cloud
+    providers and Kubernetes for scaling out cluster nodes.'
+  id: totrans-213
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[图 29-5](#img-elastic-scale-ca) 总结了 CA 如何与云提供商和 Kubernetes 交互，以扩展集群节点。'
+- en: '![Cluster autoscaling mechanism](assets/kup2_2905.png)'
+  id: totrans-214
+  prefs: []
+  type: TYPE_IMG
+  zh: '![集群自动扩展机制](assets/kup2_2905.png)'
+- en: Figure 29-5\. Cluster autoscaling mechanism
+  id: totrans-215
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 29-5\. 集群自动扩展机制
+- en: As you’ve probably figured out by now, scaling Pods and nodes are decoupled
+    but complementary procedures. An HPA or VPA can analyze usage metrics and events,
+    and scale Pods. If the cluster capacity is insufficient, the CA kicks in and increases
+    the capacity. The CA is also helpful when irregularities occur in the cluster
+    load due to batch Jobs, recurring tasks, continuous integration tests, or other
+    peak tasks that require a temporary increase in the capacity. It can increase
+    and reduce capacity and provide significant savings on cloud infrastructure costs.
+  id: totrans-216
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如您现在可能已经了解的那样，扩展 Pods 和节点是解耦但互补的过程。HPA 或 VPA 可分析使用情况指标和事件，并扩展 Pods。如果集群容量不足，CA
+    介入并增加容量。在由批处理作业、定期任务、持续集成测试或其他需要临时增加容量的高峰任务导致集群负载异常时，CA 也是有帮助的。它可以增加和减少容量，并在云基础设施成本上实现显著节省。
+- en: Scaling Levels
+  id: totrans-217
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 缩放级别
+- en: In this chapter, we explored various techniques for scaling deployed workloads
+    to meet their changing resource needs. While a human operator can manually perform
+    most of the activities listed here, that doesn’t align with the cloud native mindset.
+    To enable large-scale distributed system management, automating repetitive activities
+    is a must. The preferred approach is to automate scaling and enable human operators
+    to focus on tasks that a Kubernetes Operator cannot automate yet.
+  id: totrans-218
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本章中，我们探讨了各种技术，以满足部署工作负载的不断变化的资源需求。虽然人工操作员可以手动执行此处列出的大部分活动，但这与云原生思维不一致。为了实现大规模分布式系统管理，自动化重复活动是必不可少的。首选方法是自动缩放，使人工操作员能够专注于
+    Kubernetes Operator 尚不能自动化的任务。
+- en: Let’s review all of the scaling techniques, from the more granular to the more
+    coarse-grained order, as shown in [Figure 29-6](#img-elastic-scale-levels).
+  id: totrans-219
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们按照从更精细到更粗粒度的顺序回顾所有的扩展技术，如 [图 29-6](#img-elastic-scale-levels) 所示。
+- en: '![Application scaling levels](assets/kup2_2906.png)'
+  id: totrans-220
+  prefs: []
+  type: TYPE_IMG
+  zh: '![应用程序缩放级别](assets/kup2_2906.png)'
+- en: Figure 29-6\. Application-scaling levels
+  id: totrans-221
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 29-6\. 应用程序缩放级别
+- en: Application tuning
+  id: totrans-222
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 应用程序调优
+- en: At the most granular level, there is an application tuning technique we didn’t
+    cover in this chapter, as it is not a Kubernetes-related activity. However, the
+    very first action you can take is to tune the application running in the container
+    to best use the allocated resources. This activity is not performed every time
+    a service is scaled, but it must be performed initially before hitting production.
+    For example, for Java runtimes, that is right-sizing thread pools for best use
+    of the available CPU shares the container is getting, then tuning the different
+    memory regions such as heap, nonheap, and thread stack sizes. Adjusting these
+    values is typically performed through configuration changes rather than code changes.
+  id: totrans-223
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在最精细的级别，有一种应用程序调优技术我们在本章中没有涵盖，因为它不是与 Kubernetes 相关的活动。然而，您可以采取的第一个行动是调整运行在容器中的应用程序以最佳利用分配的资源。这种活动并非每次服务扩展时都要执行，但必须在投入生产之前进行。例如，对于
+    Java 运行时，可以通过配置更改而不是代码更改来调整线程池的大小，以最佳利用容器获取的可用 CPU 资源份额，然后调整不同的内存区域，如堆、非堆和线程堆栈大小的值。
+- en: Container-native applications use start scripts that can calculate good default
+    values for thread counts, and memory sizes for the application based on the allocated
+    container resources rather than the shared full-node capacity. Using such scripts
+    is an excellent first step. You can also go one step further and use techniques
+    and libraries such as the Netflix Adaptive Concurrency Limits library, where the
+    application can dynamically calculate its concurrency limits by self-profiling
+    and adapting. This is a kind of in-app autoscaling that removes the need for manually
+    tuning services.
+  id: totrans-224
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器本机应用程序使用启动脚本，根据分配的容器资源而不是共享的整个节点容量，可以计算出线程数和应用程序内存大小的良好默认值。使用这种脚本是一个很好的第一步。您还可以进一步使用技术和库，如
+    Netflix 自适应并发限制库，其中应用程序可以通过自我分析和适应动态计算其并发限制。这是一种应用程序内自动缩放的方式，无需手动调优服务。
+- en: Tuning applications can cause regressions similar to a code change and must
+    be followed by a degree of testing. For example, changing the heap size of an
+    application can cause it to be killed with an `OutOfMemory` error, and horizontal
+    scaling won’t be able to help. On the other hand, scaling Pods vertically or horizontally,
+    or provisioning more nodes, will not be as effective if your application is not
+    consuming the resources allocated for the container properly. So tuning for scale
+    at this level can impact all other scaling methods and can be disruptive, but
+    it must be performed at least once for optimal application behavior.
+  id: totrans-225
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 调优应用程序可能会导致类似代码更改的回归，并且必须进行一定程度的测试。例如，更改应用程序的堆大小可能会导致其因 `OutOfMemory` 错误而被终止，水平缩放无法帮助解决此问题。另一方面，垂直或水平扩展
+    Pods，或者提供更多节点，如果你的应用程序未正确消耗为容器分配的资源，则效果不佳。因此，在此级别进行规模调整可能会影响所有其他扩展方法，并且可能会造成干扰，但至少必须执行一次以获得最佳的应用程序行为。
+- en: Vertical Pod autoscaling
+  id: totrans-226
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 垂直 Pod 自动缩放
+- en: Assuming the application is consuming the container resources effectively, the
+    next step is setting the right resource requests and limits in the containers.
+    Earlier, we explored how VPA can automate the process of discovering and applying
+    optimal values driven by real consumption. A significant concern here is that
+    Kubernetes requires Pods to be deleted and created from scratch, which leaves
+    the potential for short or unexpected periods of service disruption. Allocating
+    more resources to a resource-starved container may make the Pod unschedulable
+    and increase the load on other instances even more. Increasing container resources
+    may also require application tuning to best use the increased resources.
+  id: totrans-227
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设应用程序有效地消耗了容器资源，下一步是在容器中设置正确的资源请求和限制。之前我们已经探讨了 VPA 如何自动化发现和应用由实际消耗驱动的最优值的过程。这里的一个重要问题是
+    Kubernetes 要求删除并从头开始创建 Pods，这可能导致服务短暂或意外的中断。为资源匮乏的容器分配更多资源可能会使 Pod 无法调度，并进一步增加其他实例的负载。增加容器资源可能还需要对应用程序进行调优，以最佳利用增加的资源。
+- en: Horizontal Pod autoscaling
+  id: totrans-228
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 水平 Pod 自动缩放
+- en: 'The preceding two techniques are a form of vertical scaling; we hope to get
+    better performance from existing Pods by tuning them but without changing their
+    count. The following two techniques are a form of horizontal scaling: we don’t
+    touch the Pod specification, but we change the Pod and node count. This approach
+    reduces the chances of introducing any regression and disruption and allows more
+    straightforward automation. HPA, Knative, and KEDA are the most popular forms
+    of horizontal scaling. Initially, HPA provided minimal functionality through CPU
+    and memory metrics support only. Now it uses custom and external metrics for more
+    advanced scaling use cases that allow scaling based on metrics that have an improved
+    cost correlation.'
+  id: totrans-229
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 前面两种技术是一种垂直扩展的形式；通过调整现有 Pod 而不改变其数量，我们希望获得更好的性能。接下来的两种技术是一种水平扩展的形式：我们不触及 Pod
+    的规格，但是改变 Pod 和节点的数量。这种方法减少了引入任何回归和中断的机会，并允许更简单的自动化。HPA、Knative 和 KEDA 是最流行的水平扩展形式。最初，HPA
+    仅通过 CPU 和内存指标支持提供了最小功能。现在它使用自定义和外部指标来支持更高级别的扩展用例，允许基于具有改进成本关联的指标进行扩展。
+- en: Assuming that you have performed the preceding two methods once for identifying
+    good values for the application setup itself and determined the resource consumption
+    of the container, from there on, you can enable HPA and have the application adapt
+    to shifting resource needs.
+  id: totrans-230
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设您已经执行了前面两种方法，用于确定应用程序设置本身的良好值，并确定了容器的资源消耗，从那时起，您可以启用 HPA，并使应用程序适应不断变化的资源需求。
+- en: Cluster autoscaling
+  id: totrans-231
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 集群自动缩放
+- en: The scaling techniques described in HPA and VPA provide elasticity within the
+    boundary of the cluster capacity only. You can apply them only if there is enough
+    room within the Kubernetes cluster. CA introduces flexibility at the cluster capacity
+    level. CA is complementary to the other scaling methods but is also completely
+    decoupled. It doesn’t care about the reason for extra capacity demand, or why
+    there is unused capacity, or whether it is a human operator or an autoscaler that
+    is changing the workload profiles. CA can extend the cluster to ensure demanded
+    capacity or shrink it to spare some resources.
+  id: totrans-232
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 HPA 和 VPA 中描述的扩展技术仅在集群容量边界内提供弹性。只有在 Kubernetes 集群内有足够的空间时，才能应用它们。CA 在集群容量级别引入了灵活性。CA
+    是其他扩展方法的补充，但完全解耦。它不关心额外容量需求的原因，也不关心为什么有未使用的容量，或者是人为操作员还是自动缩放器在改变工作负载配置文件。CA 可以扩展集群以确保所需的容量，或者缩小以节省一些资源。
+- en: Discussion
+  id: totrans-233
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 讨论
+- en: Elasticity and the different scaling techniques are an area of Kubernetes that
+    is still actively evolving. The VPA, for example, is still experimental. Also,
+    with the popularization of the serverless programming model, scaling to zero and
+    quick scaling have become a priority. Knative and KEDA are Kubernetes add-ons
+    that exactly address this need to provide the foundation for scale-to-zero, as
+    we briefly described in [“Knative”](#elastic-scale-knative) and [“KEDA”](#elastic-scale-keda).
+    Those projects are progressing quickly and are introducing very exciting new cloud
+    native primitives. We are watching this space closely and recommend you keep an
+    eye on Knative and KEDA too.
+  id: totrans-234
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 弹性和不同的扩展技术是 Kubernetes 中仍在积极发展的领域。例如，VPA 仍处于实验阶段。此外，随着无服务器编程模型的普及，缩放到零和快速缩放已成为优先考虑的事项。Knative
+    和 KEDA 是 Kubernetes 的附加组件，正好满足了提供基础以实现零缩放的需求，正如我们在 [“Knative”](#elastic-scale-knative)
+    和 [“KEDA”](#elastic-scale-keda) 中简要描述的那样。这些项目正在快速发展，并引入非常激动人心的新的云原生基元。我们正在密切关注这个领域，并建议您也关注
+    Knative 和 KEDA。
+- en: Given a desired state specification of a distributed system, Kubernetes can
+    create and maintain it. It also makes it reliable and resilient to failures, by
+    continuously monitoring and self-healing and ensuring its current state matches
+    the desired one. While a resilient and reliable system is good enough for many
+    applications today, Kubernetes goes a step further. A small but properly configured
+    Kubernetes system would not break under a heavy load but instead would scale the
+    Pods and nodes. So in the face of these external stressors, the system would get
+    bigger and stronger rather than weaker and more brittle, giving Kubernetes antifragile
+    capabilities.
+  id: totrans-235
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 鉴于分布式系统的期望状态规范，Kubernetes 可以创建并维护它。它还通过持续监控和自我修复来提高可靠性和抗故障能力，并确保其当前状态与期望状态一致。尽管对于今天的许多应用来说，一个具有弹性和可靠性的系统已经足够了，但
+    Kubernetes 更进一步。一个小而正确配置的 Kubernetes 系统在面对重载时不会崩溃，而是会扩展 Pods 和节点。因此，在面对这些外部压力时，系统会变得更大更强，而不是更脆弱，这赋予了
+    Kubernetes 抗脆弱的能力。
+- en: More Information
+  id: totrans-236
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 更多信息
+- en: '[Elastic Scale Example](https://oreil.ly/PTUws)'
+  id: totrans-237
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[弹性扩展示例](https://oreil.ly/PTUws)'
+- en: '[Rightsize Your Pods with Vertical Pod Autoscaling](https://oreil.ly/x2DJI)'
+  id: totrans-238
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[通过垂直 Pod 自动缩放来优化你的 Pods](https://oreil.ly/x2DJI)'
+- en: '[Kubernetes Autoscaling 101](https://oreil.ly/_nRvf)'
+  id: totrans-239
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Kubernetes 自动缩放 101](https://oreil.ly/_nRvf)'
+- en: '[Horizontal Pod Autoscaling](https://oreil.ly/_hg2J)'
+  id: totrans-240
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[水平 Pod 自动缩放](https://oreil.ly/_hg2J)'
+- en: '[HPA Algorithm Details](https://oreil.ly/n1C4o)'
+  id: totrans-241
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[HPA 算法细节](https://oreil.ly/n1C4o)'
+- en: '[Horizontal Pod Autoscaler Walk-Through](https://oreil.ly/4BN1z)'
+  id: totrans-242
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[水平 Pod 自动缩放演练](https://oreil.ly/4BN1z)'
+- en: '[Knative](https://oreil.ly/8W7WM)'
+  id: totrans-243
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Knative](https://oreil.ly/8W7WM)'
+- en: '[Knative Autoscaling](https://oreil.ly/dt15f)'
+  id: totrans-244
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Knative 自动缩放](https://oreil.ly/dt15f)'
+- en: '[Knative: Serving Your Serverless Services](https://oreil.ly/-f2di)'
+  id: totrans-245
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Knative：服务你的无服务器服务](https://oreil.ly/-f2di)'
+- en: '[KEDA](https://keda.sh)'
+  id: totrans-246
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[KEDA](https://keda.sh)'
+- en: '[Application Autoscaling Made Easy with Kubernetes Event-Driven Autoscaling
+    (KEDA)](https://oreil.ly/0Q4g4)'
+  id: totrans-247
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[使用 Kubernetes 事件驱动自动缩放轻松构建应用自动缩放（KEDA）](https://oreil.ly/0Q4g4)'
+- en: '[Kubernetes Metrics API and Clients](https://oreil.ly/lIDRK)'
+  id: totrans-248
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Kubernetes Metrics API 和客户端](https://oreil.ly/lIDRK)'
+- en: '[Vertical Pod Autoscaling](https://oreil.ly/GowW1)'
+  id: totrans-249
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[垂直 Pod 自动缩放](https://oreil.ly/GowW1)'
+- en: '[Configuring Vertical Pod Autoscaling](https://oreil.ly/bhuVj)'
+  id: totrans-250
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[配置垂直 Pod 自动缩放](https://oreil.ly/bhuVj)'
+- en: '[Vertical Pod Autoscaler Proposal](https://oreil.ly/8LUZT)'
+  id: totrans-251
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[垂直 Pod 自动缩放提案](https://oreil.ly/8LUZT)'
+- en: '[Vertical Pod Autoscaler GitHub Repo](https://oreil.ly/Hk5Xc)'
+  id: totrans-252
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[垂直 Pod 自动缩放 GitHub 仓库](https://oreil.ly/Hk5Xc)'
+- en: '[Kubernetes VPA: Guide to Kubernetes Autoscaling](https://oreil.ly/eKb8G)'
+  id: totrans-253
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Kubernetes VPA：Kubernetes 自动缩放指南](https://oreil.ly/eKb8G)'
+- en: '[Cluster Autoscaler](https://oreil.ly/inobt)'
+  id: totrans-254
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[集群自动缩放器](https://oreil.ly/inobt)'
+- en: '[Performance Under Load: Adaptive Concurrency Limits at Netflix](https://oreil.ly/oq_FS)'
+  id: totrans-255
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[在 Netflix 的负载下性能表现：自适应并发限制](https://oreil.ly/oq_FS)'
+- en: '[Cluster Autoscaler FAQ](https://oreil.ly/YmgkB)'
+  id: totrans-256
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[集群自动缩放器 FAQ](https://oreil.ly/YmgkB)'
+- en: '[Cluster API](https://oreil.ly/pw4aC)'
+  id: totrans-257
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[集群 API](https://oreil.ly/pw4aC)'
+- en: '[Kubermatic Machine-Controller](https://oreil.ly/OvJrT)'
+  id: totrans-258
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Kubermatic 机器控制器](https://oreil.ly/OvJrT)'
+- en: '[OpenShift Machine API Operator](https://oreil.ly/W2o6v)'
+  id: totrans-259
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[OpenShift 机器 API 操作员](https://oreil.ly/W2o6v)'
+- en: '[Adaptive Concurrency Limits Library (Java)](https://oreil.ly/RH7fI)'
+  id: totrans-260
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[自适应并发限制库（Java）](https://oreil.ly/RH7fI)'
+- en: '[Knative Tutorial](https://oreil.ly/f0TyP)'
+  id: totrans-261
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '[Knative 教程](https://oreil.ly/f0TyP)'
+- en: ^([1](ch29.html#idm45902081598912-marker)) For multiple running Pods, the average
+    CPU utilization is used as *currentMetricValue*.
+  id: totrans-262
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([1](ch29.html#idm45902081598912-marker)) 对于多个运行中的 Pods，平均 CPU 利用率被用作 *currentMetricValue*。
+- en: ^([2](ch29.html#idm45902081399136-marker)) CloudEvents is a CNCF standard that
+    describes the format and metadata for events in a cloud context.
+  id: totrans-263
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([2](ch29.html#idm45902081399136-marker)) CloudEvents 是一个 CNCF 标准，用于描述云环境中事件的格式和元数据。
+- en: ^([3](ch29.html#idm45902081237056-marker)) KEDA initially did not support HTTP-triggered
+    autoscaling, and although there is now a [KEDA HTTP add-on](https://oreil.ly/DyvZK)
+    it is still in its infancy (in 2023), requires a complex setup, and would need
+    to catch up quite a bit to reach the maturity of the KPA that is included out
+    of the box in Knative.
+  id: totrans-264
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([3](ch29.html#idm45902081237056-marker)) 初始时，KEDA 不支持 HTTP 触发的自动缩放，尽管现在有一个
+    [KEDA HTTP add-on](https://oreil.ly/DyvZK)，但其仍处于早期阶段（截至 2023 年），需要复杂的设置，并且需要大幅赶上
+    Knative 自带的 KPA 的成熟度。
+- en: ^([4](ch29.html#idm45902080917024-marker)) Node groups is not an intrinsic Kubernetes
+    concept (i.e., there is no NodeGroup resource) but is used as an abstraction in
+    the CA and Cluster APIs to describe nodes that share certain characteristics.
+  id: totrans-265
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([4](ch29.html#idm45902080917024-marker)) 节点组不是 Kubernetes 的固有概念（即没有 NodeGroup
+    资源），但在 CA 和集群 API 中被用作描述共享某些特性的节点的抽象概念。
