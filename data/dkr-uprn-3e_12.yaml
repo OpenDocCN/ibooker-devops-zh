@@ -1,0 +1,3351 @@
+- en: Chapter 11\. Advanced Topics
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第 11 章. 高级主题
+- en: In this chapter, we’ll do a quick pass through some of the more advanced topics.
+    We’re going to assume that you have a pretty good hold on Docker by now and that
+    you’ve already got it in production or you’re at least a regular user. We’ll talk
+    about how containers work in detail and about some of the aspects of Docker security,
+    Docker networking, Docker plug-ins, swappable runtimes, and other advanced configurations.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这一章中，我们将快速浏览一些更高级的主题。我们假设您对 Docker 已经有了相当好的掌握，并且已经将其投入生产或者至少是常规用户。我们将详细讨论容器的工作原理以及
+    Docker 安全性、Docker 网络、Docker 插件、可交换运行时以及其他高级配置的一些方面。
+- en: Some of this chapter covers configurable changes you can make to your Docker
+    installation. These can be useful, but Docker has good defaults, so as with most
+    software, you should stick to the defaults on your operating system unless you
+    have a good reason to change them and have educated yourself on what those changes
+    mean to you. Getting your installation right for your environment will likely
+    involve some trial and error, tuning, and adjustment over time. However, changing
+    settings from their defaults before understanding them well is not recommended.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本章的一部分涵盖了您可以对 Docker 安装进行的可配置更改。这些可能很有用，但 Docker 有良好的默认设置，所以像大多数软件一样，除非您有足够的理由更改它们并且已经了解这些更改对您意味着什么，否则应该坚持使用操作系统的默认设置。为了使您的环境中的安装正确，可能需要一些试验、调整和随时间的调整。然而，在充分理解它们之前修改默认设置并不建议。
+- en: Containers in Detail
+  id: totrans-3
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 容器详解
+- en: 'Though we usually talk about Linux containers as a single entity, they are
+    actually implemented through several separate mechanisms built into the Linux
+    kernel that all work together: control groups (cgroups), namespaces, Secure Computing
+    Mode (`seccomp`), and SELinux or AppArmor, all of which serve to *contain* the
+    process. cgroups provide for resource limits, namespaces allow for processes to
+    use identically named resources and isolate them from one another’s view of the
+    system, Secure Computing Mode limits which system calls a process can use, and
+    SELinux or AppArmor provides additional strong security isolation for processes.
+    So, to start, what do cgroups and namespaces do for you?'
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管我们通常将 Linux 容器称为一个单一实体，它们实际上是通过几个内建于 Linux 内核中的单独机制实现的，这些机制共同工作：控制组（cgroups）、命名空间、安全计算模式（`seccomp`）以及
+    SELinux 或 AppArmor，它们都用于*限制*进程。cgroups 提供资源限制，命名空间允许进程使用相同命名的资源并将它们从系统其他部分的视图中隔离出来，安全计算模式限制进程可以使用哪些系统调用，而
+    SELinux 或 AppArmor 则为进程提供了额外的强安全隔离。那么，首先，cgroups 和命名空间为您做了什么？
+- en: Before we launch into detail, an analogy might help you understand how each
+    of these subsystems plays into the way that containers work. Imagine that the
+    typical computer is like a large open warehouse, full of workers (processes).
+    The warehouse is full of space and resources, but it is very easy for the workers
+    to get in one another’s way, and most of the resources are simply used by whomever
+    gets them first.
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在我们进入详细内容之前，类比可能有助于您理解这些子系统如何影响容器工作方式。想象一下，典型的计算机就像是一个大型的开放仓库，充满了工人（进程）。仓库充满了空间和资源，但工人很容易互相干扰，大多数资源只是由先得到它们的人使用。
+- en: When you are running Docker and using Linux containers for your workloads, it
+    is like that warehouse has been converted into an office building, where each
+    worker now has their own individual office. Each office has all the normal things
+    that the workers need to accomplish their jobs, and in general, they can now work
+    without worrying much about what other people (processes) are doing.
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您运行 Docker 并使用 Linux 容器来处理工作负载时，就像那个仓库已经被转换成一个办公楼，每个工人现在都有自己的独立办公室。每个办公室都有工人完成工作所需的所有正常事物，总体上，他们现在可以在不太担心其他人（进程）正在做什么的情况下工作。
+- en: Namespaces make up the walls of the office and ensure that processes cannot
+    interact with neighboring processes in any way that they are not specifically
+    allowed to. Control groups are a bit like paying rent to receive utilities. When
+    the process is first spun up, it is assigned time on the CPU and storage subsystem
+    that it will be allowed each cycle, in addition to the amount of memory that it
+    will be allowed to use at any moment. This helps ensure that the workers (processes)
+    have the resources they need, without allowing them to use resources or space
+    reserved for others. Imagine the worst kind of noisy neighbors, and you can suddenly
+    truly appreciate good, solid barriers between offices. Finally, Secure Computing
+    Mode, SELinux, and AppArmor are a bit like office security, ensuring that even
+    if something unexpected or untoward happens, it is unlikely to cause much more
+    than the headache of filling out paperwork and filing an incident report.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 命名空间构成了办公室的隔离墙，并确保进程不能以任何未经特别允许的方式与相邻进程交互。控制组有点像支付租金以获取公共设施。当进程首次启动时，它被分配在 CPU
+    和存储子系统上的时间，每个周期都会被允许使用，在任何时刻都可以使用的内存量。这有助于确保工作者（进程）拥有所需的资源，而不允许它们使用为他人保留的资源或空间。想象一下最糟糕的吵闹邻居，你会突然真正欣赏到良好而坚固的办公室隔离。最后，安全计算模式、SELinux
+    和 AppArmor 有点像办公室安全，确保即使发生意外或不良事件，也不太可能引起更多麻烦，只是填写文书工作和提交事故报告的头痛。
+- en: cgroups
+  id: totrans-8
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: cgroups
+- en: Traditional distributed system design dictates running each intensive task on
+    its own virtual server. So, for example, you don’t run your applications on the
+    database server because they have competing resource demands, and their resource
+    usage could grow unbounded and begin to dominate the server, starving the database
+    of performance.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 传统的分布式系统设计要求将每个密集型任务分配到自己的虚拟服务器上运行。例如，您不会在数据库服务器上运行应用程序，因为它们具有竞争的资源需求，它们的资源使用可能会无限增长，并开始主导服务器，从而使数据库的性能受到影响。
+- en: On real hardware systems, this could be quite expensive, so solutions like virtual
+    servers are very appealing, in part because you can share expensive hardware between
+    competing applications, and the virtualization layer will handle your resource
+    partitioning. But while it saves money, this is still a fairly expensive approach
+    if you don’t need all the other separation provided by virtualization, because
+    running multiple kernels introduces a reasonable overhead on the applications.
+    Maintaining VMs is also not the cheapest solution. All the same, cloud computing
+    has shown that it’s immensely powerful and, with the right tooling, incredibly
+    effective.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在实际硬件系统上，这可能非常昂贵，因此像虚拟服务器这样的解决方案非常诱人，部分原因是您可以在竞争应用程序之间共享昂贵的硬件，而虚拟化层将处理您的资源分区。但是虽然可以节省成本，如果不需要虚拟化提供的所有其他隔离，这仍然是一种相当昂贵的方法，因为运行多个内核会对应用程序产生合理的额外开销。维护
+    VM 也不是最便宜的解决方案。尽管如此，云计算已经证明了它的强大性，并且在正确的工具支持下非常有效。
+- en: 'But if the only kind of isolation you needed was resource partitioning, wouldn’t
+    it be great if you could get that on the same kernel without running another operating
+    system instance? For many years, you could assign a “niceness” value to a process,
+    and it would give the scheduler hints about how you wanted this process to be
+    treated in relation to the others. But it wasn’t possible to impose hard limits
+    like those that you get with VMs. And niceness is not at all fine-grained: you
+    can’t give something more I/O and less CPU than other processes. This fine-grained
+    control, of course, is one of the promises of Linux containers, and the mechanism
+    that they use to provide that functionality is cgroups, which predate Docker and
+    were invented to solve just this problem.'
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 但是，如果您需要的唯一隔离方式是资源分区，那么如果您可以在同一内核上获得这些功能而无需运行另一个操作系统实例，那不是很棒吗？多年来，您可以为进程分配“亲和性”值，这将为调度程序提供有关您希望如何处理此进程与其他进程关系的提示。但是，不可能像使用
+    VM 那样强制实施硬限制。而且亲和性并不是非常精细：您不能使某些进程在 I/O 方面比其他进程更多，而在 CPU 方面更少。当然，这种精细控制是 Linux
+    容器的承诺之一，它们用来提供此功能的机制是 cgroups，早在 Docker 出现之前就已经发明，目的就是解决这个问题。
+- en: '*Control groups* allow you to set limits on resources for processes and their
+    children. This is the mechanism that the Linux kernel uses to control limits on
+    memory, swap, CPU, storage, and network I/O resources. cgroups are built into
+    the kernel and originally shipped in 2007 in Linux 2.6.24\. The official [kernel
+    documentation](https://www.kernel.org/doc/Documentation/cgroup-v2.txt) defines
+    them as “a mechanism to organize processes hierarchically and distribute system
+    resources along the hierarchy in a controlled and configurable manner.” It’s important
+    to note that this setting applies to a process and all of the children that descend
+    from it. That’s exactly how containers are structured.'
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*控制组* 允许您为进程及其子进程设置资源限制。这是 Linux 内核用于控制内存、交换、CPU、存储和网络 I/O 资源限制的机制。cgroups
+    已经内建于内核中，并最早在 Linux 2.6.24 中发布于 2007 年。官方的 [内核文档](https://www.kernel.org/doc/Documentation/cgroup-v2.txt)
+    将其定义为“一种按层次结构组织进程并以受控和可配置的方式分配系统资源的机制。” 需要注意的是，这个设置适用于一个进程及其所有的子进程。这正是容器的结构所在。'
+- en: Note
+  id: totrans-13
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: 'It is worth mentioning that there have been at least two major releases of
+    Linux control groups: [v1](https://www.kernel.org/doc/Documentation/cgroup-v1/cgroups.txt)
+    and [v2](https://www.kernel.org/doc/Documentation/cgroup-v2.txt). Make sure that
+    you know which version is being used in production so that you can leverage all
+    the abilities that it provides.'
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 值得一提的是，Linux 控制组至少已经有两个主要版本发布：[v1](https://www.kernel.org/doc/Documentation/cgroup-v1/cgroups.txt)
+    和 [v2](https://www.kernel.org/doc/Documentation/cgroup-v2.txt)。确保您知道正在生产中使用的版本，以便充分利用其提供的所有功能。
+- en: Every Linux container is assigned a cgroup that is unique to that container.
+    All of the processes in the container will be in the same group. This means that
+    it’s easy to control resources for each container as a whole without worrying
+    about what might be running. If a container is redeployed with new processes added,
+    you can have Docker assign the same policy and it will apply to the whole container
+    and all the process containers within it.
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个 Linux 容器都被分配了一个唯一的 cgroup。容器中的所有进程将位于同一组中。这意味着可以轻松地为每个容器作为整体控制资源，而无需担心其中可能运行的内容。如果重新部署一个容器并添加了新进程，您可以让
+    Docker 分配相同的策略，并且它将适用于整个容器及其内部的所有进程容器。
+- en: We talked previously about the cgroups hooks exposed by Docker via its API.
+    That interface allows you to control memory, swap, and disk usage. But there are
+    lots of other things that you can manage with cgroups, including tagging network
+    packets from a container so that you can use those tags to prioritize traffic.
+    You might find that in your environment you need to use some of these levers to
+    keep your containers under control, and there are a few ways you can go about
+    doing that. By their very nature, cgroups need to do a lot of accounting of resources
+    used by each group. That means that when you’re using them, the kernel has a lot
+    of interesting statistics about how much CPU, RAM, disk I/O, and so on your processes
+    are using. So Docker uses cgroups not just to limit resources but also to report
+    on them. These are many of the metrics you see, for example, in the output of
+    `docker` `container stats`.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们之前谈到了 Docker 通过其 API 公开的 cgroups 钩子。该接口允许您控制内存、交换和磁盘使用情况。但是，还有许多其他可以使用 cgroups
+    管理的东西，包括标记容器的网络数据包，以便您可以使用这些标记来优先处理流量。您可能会发现，在您的环境中，您需要使用这些杠杆来控制您的容器，有几种方法可以做到这一点。由于
+    cgroups 的本质，它们需要对每个组使用的资源进行大量的资源核算。这意味着当您使用它们时，内核有关于每个进程使用多少 CPU、RAM、磁盘 I/O 等方面的有趣统计数据。因此，Docker
+    不仅使用 cgroups 限制资源，还用于报告这些资源。例如，这些指标中的许多是您在 `docker` `container stats` 输出中看到的。
+- en: The /sys filesystem
+  id: totrans-17
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 文件系统 /sys
+- en: The primary way to control cgroups in a fine-grained manner, even if you configured
+    them with Docker, is to manage them yourself. This is the most powerful method
+    because changes don’t just happen at container creation time—they can be done
+    on the fly.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 控制 cgroups 的主要方式是以精细的方式控制，即使您已经通过 Docker 进行了配置，也可以自行管理它们。这是最强大的方法，因为更改不仅发生在容器创建时，还可以在运行时进行。
+- en: On systems with `systemd`, there are command-line tools like `systemctl` that
+    you can use to do this. But since cgroups are built into the kernel, the method
+    that works everywhere is to talk to the kernel directly via the */sys* filesystem.
+    If you’re not familiar with */sys*, it’s a filesystem that directly exposes several
+    kernel settings and outputs. You can use it with simple command-line tools to
+    tell the kernel how you would like it to behave.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在带有`systemd`的系统上，有像`systemctl`这样的命令行工具可以用来执行此操作。但由于cgroups内建于内核中，适用于所有地方的方法是通过*/sys*文件系统直接与内核交互。如果您对*/sys*不熟悉，它是一个直接公开几个内核设置和输出的文件系统。您可以使用它来告诉内核您希望它如何行动的简单命令行工具。
+- en: This method of configuring cgroups controls for containers only works directly
+    on the Docker server, so it is not available remotely via any API. If you use
+    this method, you’ll need to figure out how to script this for your environment.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 仅在Docker服务器上直接使用此方法配置容器的cgroups控制才有效，因此不通过任何API远程使用。如果您使用此方法，您需要找出如何为您的环境编写脚本。
+- en: Warning
+  id: totrans-21
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Changing cgroups values yourself, outside of any Docker configuration, breaks
+    some of the repeatability of a Docker deployment. Unless you implement changes
+    in your deployment process, settings will revert to their defaults when containers
+    are replaced. Some schedulers take care of this for you, so if you run one in
+    production, you might check the documentation to see how to best apply these changes
+    repeatably.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在任何Docker配置之外自行更改cgroups值会破坏Docker部署的某些可重复性。除非您在部署过程中实施更改，否则容器替换时设置将恢复为其默认值。一些调度程序会为您处理这些事务，因此如果您在生产中运行一个调度程序，您可能需要查看文档以了解如何最好地重复应用这些更改。
+- en: 'Let’s use an example of changing the CPU cgroups settings for a container we
+    have just started up. We need to get the long ID of the container, and then we
+    need to find it in the */sys* filesystem. Here’s what that looks like:'
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们使用一个例子来改变我们刚刚启动的容器的CPU cgroups设置。我们需要获取容器的长ID，然后我们需要在*/sys*文件系统中找到它。这是它的样子：
+- en: '[PRE0]'
+  id: totrans-24
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: Here, we’ve had `docker container run` give us the long ID in the output, and
+    the ID we want is `dcbb…8e86f1dc0a91e7675d3c93895cb6a6d83371e25b7f0bd62803ed8e86`.
+    You can see why Docker normally truncates this.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这里，我们已经让`docker container run`在输出中给我们长ID，并且我们想要的ID是`dcbb…8e86f1dc0a91e7675d3c93895cb6a6d83371e25b7f0bd62803ed8e86`。你可以看到为什么Docker通常会截断这个ID。
+- en: Note
+  id: totrans-26
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: In the examples, we may need to truncate the ID to make it fit into the constraints
+    of a standard page. But remember that you will need to use the long ID!
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在示例中，我们可能需要截断ID以使其适应标准页面的约束条件。但请记住，你需要使用长ID！
+- en: Now that we have the ID, we can find our container’s cgroup in the */sys* filesystem.
+    */sys* is laid out so that each type of setting is grouped into a module, and
+    that module might be exposed at a different place in the */sys* filesystem. So
+    when we look at CPU settings, we won’t see `blkio` settings, for example. You
+    might take a look around in */sys* to see what else is there. But for now we’re
+    interested in the CPU controller, so let’s inspect what that gives us. You need
+    `root` access on the system to do this because you’re manipulating kernel settings.
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们有了ID，我们可以在*/sys*文件系统中找到我们容器的cgroup。*/sys*布局使得每种类型的设置都被分组到一个模块中，而该模块可能在*/sys*文件系统中的不同位置暴露。因此，当我们查看CPU设置时，例如我们不会看到`blkio`设置。你可以在*/sys*周围看看还有什么。但现在我们对CPU控制器感兴趣，所以让我们检查一下这给我们带来了什么。你需要在系统上有`root`权限来执行此操作，因为你正在操作内核设置。
+- en: Tip
+  id: totrans-29
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: Remember our `nsenter` trick we originally discussed in [Chapter 3](ch03.html#installing_docker).
+    You can run `docker container run --rm -it --privileged --pid=host debian nsenter
+    -t 1 -m -u -n -i sh` to get access to the Docker host, even if you can’t SSH into
+    the server.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 记住我们最初在[第3章](ch03.html#installing_docker)中讨论的`nsenter`技巧。你可以运行`docker container
+    run --rm -it --privileged --pid=host debian nsenter -t 1 -m -u -n -i sh`来访问Docker主机，即使无法通过SSH连接到服务器。
+- en: '[PRE1]'
+  id: totrans-31
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: Note
+  id: totrans-32
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The exact path here may change a bit depending on the Linux distribution your
+    Docker server is running on and what the hash of your container is.
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此处的确切路径可能会有所变化，这取决于您的Docker服务器运行的Linux发行版以及您的容器的哈希值。
+- en: You can see that under cgroups, there is a *docker* directory that contains
+    all of the Linux containers that are running on this host. You can’t set cgroups
+    for things that aren’t running, because they apply only to running processes.
+    This is an important point that you should consider. Docker takes care of reapplying
+    cgroup settings for you when you start and stop containers. Without that mechanism,
+    you are somewhat on your own.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可以看到，在 cgroups 下，有一个包含此主机上所有正在运行的 Linux 容器的 *docker* 目录。你不能为未运行的东西设置 cgroups，因为它们只适用于正在运行的进程。这是一个你应该考虑的重要点。Docker
+    在启动和停止容器时会重新应用 cgroup 设置。没有这种机制，你会有些自己摸索。
+- en: 'Let’s go ahead and inspect the [CPU weight](https://docs.kernel.org/admin-guide/cgroup-v2.html#cpu-interface-files)
+    for this container. Remember that we explored setting some of these CPU values
+    in [Chapter 5](ch05.html#docker_containers) via the `--cpus` command-line argument
+    to `docker container run`. But for a normal container where no settings were passed,
+    this setting is the default:'
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们来检查一下这个容器的 [CPU 权重](https://docs.kernel.org/admin-guide/cgroup-v2.html#cpu-interface-files)。请记住，我们在
+    [第 5 章](ch05.html#docker_containers) 中通过 `docker container run` 的 `--cpus` 命令行参数探索了设置一些
+    CPU 值。但对于一个没有传递任何设置的普通容器，这个设置是默认的：
+- en: '[PRE2]'
+  id: totrans-36
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: '`100` CPU weight means we are not limited at all. Let’s tell the kernel that
+    this container should be limited to half that:'
+  id: totrans-37
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`100` CPU 权重意味着我们完全没有限制。让我们告诉内核，这个容器应该被限制在这一半：'
+- en: '[PRE3]'
+  id: totrans-38
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: Warning
+  id: totrans-39
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: In production, you should not use this method to adjust cgroups on the fly,
+    but we are demonstrating it here so that you understand the underlying mechanics
+    that make all of this work. Take a look at [`docker container update`](https://dockr.ly/2PPC4P1)
+    if you’d like to adjust these on a running container. You might also find the
+    [`--cgroup-parent`](https://dockr.ly/2PTLaKK) option to `docker container run`
+    interesting.
+  id: totrans-40
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在生产环境中，不应该使用此方法动态调整 cgroups，但我们在这里演示它，以便你了解使所有这些工作的底层机制。如果你想要在运行中的容器上调整这些设置，请查看
+    [`docker container update`](https://dockr.ly/2PPC4P1)。你可能还会发现 `docker container
+    run` 的 [`--cgroup-parent`](https://dockr.ly/2PTLaKK) 选项很有趣。
+- en: 'There you have it. We’ve changed the container’s settings on the fly. This
+    method is very powerful because it allows you to set any cgroups setting for the
+    container. But as we mentioned earlier, it’s entirely ephemeral. When the container
+    is stopped and restarted, the setting reverts to the default:'
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 就是这样。我们已经在运行中动态更改了容器的设置。这种方法非常强大，因为它允许你为容器设置任何 cgroups 设置。但正如我们之前提到的，它完全是暂时的。当容器停止并重新启动时，设置会恢复为默认值：
+- en: '[PRE4]'
+  id: totrans-42
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: 'You can see that the directory path doesn’t even exist anymore now that the
+    container is stopped. And when we start it back up, the directory comes back but
+    the setting is back to `100`:'
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可以看到，由于容器已经停止，目录路径甚至不复存在。当我们重新启动它时，目录会回来，但设置会回到 `100`：
+- en: '[PRE5]'
+  id: totrans-44
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: If you were to change these kinds of settings in a production system via the
+    */sys* filesystem directly, you’d want to manage that directly. A daemon that
+    watches the `docker system events` stream and changes settings at container startup,
+    for example, is a possibility.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你要直接通过 */sys* 文件系统在生产系统中更改这些设置，你需要直接管理它。例如，可以通过监听 `docker system events` 流并在容器启动时更改设置的守护进程。
+- en: Note
+  id: totrans-46
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: It is possible to create custom cgroups outside of Docker and then attach a
+    new container to that cgroup using the `--cgroup-parent` argument to `docker container
+    create`. This mechanism is also used by schedulers that run multiple containers
+    inside the same cgroup (e.g., Kubernetes pods).
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以在 Docker 外部创建自定义的 cgroups，然后使用 `docker container create` 的 `--cgroup-parent`
+    参数将新容器附加到该 cgroup。这种机制也被调度程序用于在同一个 cgroup 中运行多个容器（例如 Kubernetes pods）。
+- en: Namespaces
+  id: totrans-48
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 命名空间
+- en: 'Inside each container, you see a filesystem, network interfaces, disks, and
+    other resources that all appear to be unique to the container despite sharing
+    the kernel with all the other processes on the system. The primary network interface
+    on the actual machine, for example, is a single shared resource. But inside your
+    container, it will look like it has an entire network interface to itself. This
+    is a really useful abstraction: it’s what makes your container feel like a machine
+    all by itself. The way this is implemented in the kernel is with Linux namespaces.
+    Namespaces take a traditionally global resource and present the container with
+    its own unique and unshared version of that resource.'
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在每个容器内部，你会看到一个文件系统、网络接口、磁盘和其他资源，尽管与系统上所有其他进程共享内核，但它们都看起来是唯一的容器。例如，实际机器上的主要网络接口是一个共享资源。但在你的容器内部，它看起来像是拥有整个网络接口。这是一个非常有用的抽象：它使你的容器感觉像是一个独立的机器。这是通过
+    Linux 命名空间在内核中实现的。命名空间将传统上的全局资源提供给容器，使其拥有自己独特且不共享的版本。
+- en: Note
+  id: totrans-50
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Namespaces cannot be explored on the filesystem quite as easily as cgroups,
+    but most of the details can be found under the */proc/*/ns/** and */proc/*/task/*/ns/**
+    hierarchies. In newer Linux releases, the `lsns` command can also be quite useful.
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 命名空间不能像 cgroups 那样在文件系统上轻松探索，但大多数细节可以在 */proc/*/ns/** 和 */proc/*/task/*/ns/**
+    层次结构下找到。在较新的 Linux 发行版中，`lsns` 命令也可能非常有用。
+- en: 'Rather than just having a single namespace, however, by default containers
+    have a namespace on each of the resources that are currently namespaced in the
+    kernel: mount, UTS, IPC, PID, network, and user namespaces, in addition to the
+    partially implemented time namespace. Essentially, when you talk about a container,
+    you’re talking about several different namespaces that Docker sets up on your
+    behalf. So what do they all do?'
+  id: totrans-52
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，默认情况下，容器不仅仅有一个命名空间，而是在内核中当前命名空间的每个资源上都有一个命名空间：挂载、UTS、IPC、PID、网络和用户命名空间，还有部分实现的时间命名空间。基本上，当你谈论一个容器时，你在谈论
+    Docker 为你设置的几个不同的命名空间。那么它们都做什么呢？
+- en: Mount namespaces
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 挂载命名空间
+- en: Linux uses these primarily to make your container look like it has its own entire
+    filesystem. If you’ve ever used a `chroot` jail, this is its more robust relative.
+    It looks a lot like a `chroot` jail but goes all the way down to the deepest levels
+    of the kernel so that even `mount` and `unmount` system calls are namespaced.
+    If you use `docker container exec` or `nsenter`, which we will discuss later in
+    this chapter, to get into a container, you’ll see a filesystem rooted on */*.
+    But we know that this isn’t the actual root partition of the system. It’s the
+    mount namespace that makes that possible.
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Linux 主要用这些来使你的容器看起来像拥有自己的整个文件系统。如果你曾经使用过 `chroot` 狱，那么这是其更强大的相对。它看起来很像 `chroot`
+    狱，但是它深入到内核的最深层，甚至 `mount` 和 `unmount` 系统调用也是命名空间的。如果你使用 `docker container exec`
+    或 `nsenter` 来进入容器，你会看到一个以 */* 根目录为根的文件系统。但我们知道这并不是系统的实际根分区。是挂载命名空间使这一切成为可能。
+- en: UTS namespaces
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: UTS 命名空间
+- en: Named for the kernel structure they namespace, UTS (Unix Time Sharing System)
+    namespaces give your container its own hostname and domain name. This is also
+    used by older systems like NIS to identify which domain a host belongs to. When
+    you enter a container and see a hostname that is not the same as the machine on
+    which it runs, it’s this namespace that makes that happen.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 以其命名空间命名的内核结构，UTS（Unix Time Sharing System）命名空间为你的容器提供了自己的主机名和域名。这也被旧系统如 NIS
+    使用来确定主机属于哪个域。当你进入一个容器并看到一个与其运行的机器不同的主机名时，正是这个命名空间让这种情况发生。
+- en: Tip
+  id: totrans-57
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: To have a container use its host’s UTS namespace, you can specify the `--uts=host`
+    option when launching the container with `docker container run`. There are similar
+    commands for sharing the other namespaces as well.
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要使容器使用其主机的 UTS 命名空间，可以在使用 `docker container run` 启动容器时指定 `--uts=host` 选项。其他命名空间也有类似的命令用于共享。
+- en: IPC namespaces
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: IPC 命名空间
+- en: These isolate your container’s System V IPC and POSIX message queue systems
+    from those of the host. Some IPC mechanisms use filesystem resources like named
+    pipes, and those are covered by the mount namespace. The IPC namespace covers
+    things like shared memory and semaphores that aren’t filesystem resources but
+    that really should not cross the container wall.
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些将你的容器的 System V IPC 和 POSIX 消息队列系统与主机的隔离开来。一些 IPC 机制使用像命名管道这样的文件系统资源，这些资源由挂载命名空间覆盖。IPC
+    命名空间涵盖的是诸如共享内存和信号量这样的不是文件系统资源但不应越过容器墙的东西。
+- en: PID namespaces
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: PID 命名空间
+- en: We have already shown that you can see all of the processes in containers in
+    the Linux `ps` output on the host Linux server. But inside the container, processes
+    have a different PID. This is the PID namespace in action. A process has a unique
+    PID in each namespace to which it belongs. If you look in */proc* inside a container,
+    or run `ps`, you will only see the processes inside the container’s PID namespace.
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们已经展示了您可以在主机Linux服务器上通过Linux的 `ps` 输出看到容器中的所有进程。但在容器内部，进程具有不同的PID。这是PID命名空间的作用。进程在每个命名空间中都有一个唯一的PID。如果在容器内部查看
+    */proc* 或运行 `ps`，您只会看到容器PID命名空间内的进程。
+- en: Network namespaces
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 网络命名空间
+- en: This is what allows your container to have its own network devices, ports, and
+    so on. When you run `docker container ls` and see the bound ports for your container,
+    you are seeing ports from both namespaces. Inside the container, your `nginx`
+    might be bound to port 80, but that’s on the namespaced network interface. This
+    namespace makes it possible to have what seems to be a completely separate network
+    stack for your container.
+  id: totrans-64
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这就是使您的容器拥有自己的网络设备、端口等的原因。当您运行 `docker container ls` 并查看容器的绑定端口时，您会看到来自两个命名空间的端口。在容器内部，您的
+    `nginx` 可能绑定到端口 80，但这是在命名空间网络接口上。这个命名空间使得容器的网络堆栈看起来是完全独立的成为可能。
+- en: User namespaces
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用户命名空间
+- en: These provide isolation between the user and group IDs inside a container and
+    those on the Linux host. Earlier, when we looked at `ps` output outside and then
+    inside the container, we saw different user IDs; this is how that happened. A
+    new user inside a container is not a new user on the Linux host’s main namespace,
+    and vice versa. There are some subtleties here, though. For example, UID 0 (`root`)
+    in a user namespace is not the same thing as UID 0 on the host, although running
+    as `root` inside the container does increase the risk of potential security exploits.
+    There are concerns about security leakage, which we’ll talk about in a bit, and
+    this is why things like rootless containers are growing in popularity.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些提供了在容器内部用户和组ID与Linux主机上的用户和组ID之间的隔离。早些时候，当我们在容器外部和容器内部分别查看 `ps` 输出时，我们看到了不同的用户ID；这就是它发生的方式。容器内的新用户不是Linux主机主命名空间上的新用户，反之亦然。不过，这里有一些微妙之处。例如，在用户命名空间中，UID
+    0（`root`）并不等同于主机上的UID 0，尽管在容器内作为 `root` 运行会增加潜在的安全漏洞风险。关于安全泄露的问题我们稍后会讨论，这也是像无根容器之类的东西变得越来越受欢迎的原因。
+- en: Cgroup namespaces
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 控制组命名空间
+- en: This namespace was introduced in Linux kernel 4.6 in 2016 and is intended to
+    hide the identity of the cgroup of which the process is a member. A process checking
+    which cgroup any process is part of would see a path that is relative to the cgroup
+    set at creation time, hiding its true cgroup position and identity.
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此命名空间于2016年的Linux内核4.6中引入，旨在隐藏进程所属的控制组的身份。检查任何进程属于哪个控制组时，会看到一个相对于创建时设置的控制组路径，隐藏了其真实的控制组位置和身份。
+- en: Time namespaces
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 时间命名空间
+- en: Time has historically not been namespaced since it is so integral to the Linux
+    kernel, and providing full namespacing would be very complex. However, with the
+    release of Linux kernel 5.6 in 2020, support was added for a [time namespace](https://man7.org/linux/man-pages/man7/time_namespaces.7.html)
+    that allows containers to have their own unique clock offsets.
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于时间对Linux内核如此重要，因此历史上它并没有被命名空间化，提供完整的命名空间化将非常复杂。然而，随着2020年Linux内核5.6的发布，支持添加了一个[时间命名空间](https://man7.org/linux/man-pages/man7/time_namespaces.7.html)，允许容器具有自己独特的时钟偏移。
+- en: Note
+  id: totrans-71
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: At the time of this writing, Docker still does not have direct support for setting
+    the time offset, but like everything else, it can be set directly, if required.
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在撰写本文时，Docker 仍然不直接支持设置时间偏移，但像其他所有内容一样，如果需要，可以直接设置。
+- en: So by combining all of these namespaces, Linux can provide the visual and, in
+    many cases, the functional isolation that makes a container look like a VM even
+    though it’s running on the same kernel. Let’s explore what some of the namespacing
+    that we just described looks like in more detail.
+  id: totrans-73
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，通过结合所有这些命名空间，Linux 可以提供视觉上的以及在许多情况下的功能隔离，使得容器看起来像是在同一个内核上运行的虚拟机。让我们更详细地探讨刚刚描述的一些命名空间是什么样子。
+- en: Note
+  id: totrans-74
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: There is a lot of ongoing work trying to make containers more secure. The community
+    is actively looking into ways to improve support for [rootless containers](https://rootlesscontaine.rs),
+    which enables regular users to create, run, and manage containers locally without
+    needing special privileges. In Docker, this can now be achieved via [rootless
+    mode](https://docs.docker.com/engine/security/rootless). New container runtimes
+    like [Google gVisor](https://github.com/google/gvisor) are also trying to explore
+    better ways to create much more secure container sandboxes without losing most
+    of the advantages of containerized workflows.
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 目前有大量的工作致力于使容器更加安全。社区正在积极寻找改进支持[无根容器](https://rootlesscontaine.rs)（允许普通用户在本地创建、运行和管理容器而无需特殊权限）的方法。在
+    Docker 中，可以通过[无根模式](https://docs.docker.com/engine/security/rootless)实现。新的容器运行时如[Google
+    gVisor](https://github.com/google/gvisor)也在探索更安全地创建容器沙盒的方式，同时保留容器化工作流程的大部分优势。
+- en: Exploring namespaces
+  id: totrans-76
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 探索命名空间
+- en: 'One of the easiest namespaces to demonstrate is UTS, so let’s use `docker container
+    exec` to get a shell in a container and take a look. From within the Docker server,
+    run the following:'
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最容易演示的命名空间之一是 UTS，所以让我们使用 `docker container exec` 进入容器并查看一下。在 Docker 服务器内运行以下命令：
+- en: '[PRE6]'
+  id: totrans-78
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: Tip
+  id: totrans-79
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: Again, remember that you can use the `docker container run --rm -it --privileged
+    --pid=host debian nsenter -t 1 -m -u -n -i sh` command that we originally discussed
+    in [Chapter 3](ch03.html#installing_docker) to get access to the Docker host,
+    even if you can’t SSH into the server.
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 同样要记住，即使无法通过 SSH 连接到服务器，你仍然可以使用我们在[第三章](ch03.html#installing_docker)讨论过的命令 `docker
+    container run --rm -it --privileged --pid=host debian nsenter -t 1 -m -u -n -i
+    sh` 来访问 Docker 主机。
+- en: 'And then on your local system, run the following:'
+  id: totrans-81
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后在你的本地系统上运行以下命令：
+- en: '[PRE7]'
+  id: totrans-82
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: That `docker container run` command line gets us an interactive session (`-ti`)
+    and then executes the `hostname` command via `/bin/bash` inside the container.
+    Since the `hostname` command is run inside the container’s namespace, we get back
+    the short container ID, which is used as the hostname by default. This is a pretty
+    simple example, but it should clearly show that we’re not in the same namespace
+    as the host.
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 那个 `docker container run` 命令行让我们进入一个交互式会话（`-ti`），然后通过 `/bin/bash` 在容器内执行 `hostname`
+    命令。由于 `hostname` 命令在容器的命名空间内运行，我们会得到默认的短容器 ID 作为主机名。这是一个相当简单的例子，但它应该清楚地表明我们不在与主机相同的命名空间中。
+- en: 'Another example that’s easy to understand and demonstrate involves PID namespaces.
+    Let’s create a new container:'
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个易于理解和演示的例子涉及 PID 命名空间。让我们创建一个新的容器：
+- en: '[PRE8]'
+  id: totrans-85
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: 'And now let’s get Docker to show us the process IDs from the host’s perspective:'
+  id: totrans-86
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在让 Docker 显示我们从主机视角看到的进程 ID：
+- en: '[PRE9]'
+  id: totrans-87
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: What we can see here is that from inside our container, the original command
+    run by Docker is `sleep 240`, and it has been assigned PID `1` inside the container.
+    You might recall that this is the PID normally used by the `init` process on Unix
+    systems. In this case, the `sleep 240` command that we started the container with
+    is the first process, so it gets PID `1`. But in the Docker server’s main namespace,
+    we can see that the PID there is not `1` but `31396`, and it’s a child of process
+    ID `31370`.
+  id: totrans-88
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以看到，在我们的容器内部，由 Docker 启动的原始命令是 `sleep 240`，并且它在容器内被分配了 PID `1`。你可能还记得，在 Unix
+    系统上，这是 `init` 进程通常使用的 PID。在这种情况下，我们用来启动容器的 `sleep 240` 命令是第一个进程，所以它获得了 PID `1`。但在
+    Docker 服务器的主命名空间中，我们可以看到那里的 PID 不是 `1`，而是 `31396`，并且它是进程 ID `31370` 的子进程。
+- en: 'If you are curious, you can run a command like this to determine what PID `31370`
+    is:'
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你感兴趣，你可以运行像这样的命令来确定 PID `31370` 是什么：
+- en: '[PRE10]'
+  id: totrans-90
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: 'Now we can go ahead and remove the container we started in the last example
+    by running the following:'
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们可以继续通过运行以下命令来删除上一个示例中启动的容器：
+- en: '[PRE11]'
+  id: totrans-92
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: The other namespaces work in essentially the same manner, and you probably get
+    the idea by now. It’s worth pointing out here that when we were first working
+    with `nsenter` back in [Chapter 3](ch03.html#installing_docker), we had to pass
+    what appeared to be some pretty arcane arguments to the command when we ran it
+    to enter a container from the Docker server. Let’s go ahead and look at the `nsenter`
+    portion of the command `docker container run --rm -it --privileged --pid=host
+    debian nsenter -t 1 -m -u -n -i sh`.
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 其他命名空间基本上以相同的方式工作，到这里你可能已经理解了。值得指出的是，当我们首次在[第三章](ch03.html#installing_docker)讨论使用
+    `nsenter` 时，我们在运行它以从 Docker 服务器进入容器时，不得不传递一些看起来相当深奥的参数。让我们继续看看命令 `docker container
+    run --rm -it --privileged --pid=host debian nsenter -t 1 -m -u -n -i sh` 中的 `nsenter`
+    部分。
+- en: It turns out that `nsenter -t 1 -m -u -n -i sh` is exactly the same as `nsenter
+    --target 1 --mount --uts --net -ipc sh`. So this command really just says, look
+    at PID `1` and then open up a shell in the same `mount`, `uts`, `net`, and `ipc`
+    namespaces of that process.
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 结果发现，`nsenter -t 1 -m -u -n -i sh`与`nsenter --target 1 --mount --uts --net -ipc
+    sh`完全相同。因此，这个命令实际上是说，查看PID为`1`的进程，然后在该进程的`mount`、`uts`、`net`和`ipc`命名空间中打开一个shell。
+- en: Now that we’ve explained namespaces in detail, this probably makes a lot more
+    sense to you. It can also be educational to use `nsenter` to try entering different
+    sets of namespaces in a throwaway container to see what you get and simply explore
+    how all of this works in some more detail.
+  id: totrans-95
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经详细解释了命名空间，这可能对您来说更加清晰了。使用`nsenter`尝试进入一次性容器中的不同命名空间集合来查看您可以得到什么，简单地探索更多细节也可能会增长您的见识。
+- en: When it comes down to it, namespaces are the primary things that make a container
+    look like a container. Combine them with cgroups, and you have reasonably robust
+    isolation between processes on the same kernel.
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当谈到容器时，命名空间是使容器看起来像容器的主要因素。结合控制组，您可以在同一内核上实现相对强大的进程隔离。
+- en: Security
+  id: totrans-97
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 安全性
+- en: We’ve spent a good bit of space now talking about how Docker provides containment
+    for applications, allows you to constrain resource utilization, and uses namespaces
+    to give the container a unique view of the world. We have also briefly mentioned
+    the need for technologies like Secure Computing Mode, SELinux, and AppArmor. One
+    of the advantages of containers is the ability to replace VMs in several use cases.
+    So let’s take a look at what isolation we get by default and what we don’t.
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们花了不少篇幅讨论Docker如何为应用程序提供容器化，允许您限制资源利用，并使用命名空间为容器提供独特的视角。我们还简要提到了像安全计算模式、SELinux和AppArmor这样的技术的必要性。容器的一个优势是能够在多种用例中替代虚拟机。因此，让我们看看我们默认获得了哪些隔离以及哪些没有。
+- en: You are undoubtedly aware by now that the isolation you get from a container
+    is not as strong as that from a VM. We’ve been reinforcing the idea from the start
+    of this book that containers are just processes running on the Linux server. Despite
+    the isolation provided by namespaces, containers are not as secure as you might
+    imagine, especially if you are still mentally comparing them to lightweight VMs.
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您现在无疑已经意识到，容器提供的隔离不如虚拟机强大。从本书开始我们一直强调容器只是在Linux服务器上运行的进程。尽管命名空间提供了隔离，但容器的安全性并不如您想象的那么高，特别是如果您仍然在精神上将它们与轻量级虚拟机进行比较的话。
+- en: One of the big boosts in performance for containers, and one of the things that
+    makes them lightweight, is that they share the kernel of the Linux server. This
+    is also the source of the greatest security concern around Linux containers. The
+    main reason for this concern is that not everything in the kernel is namespaced.
+    We have talked about all of the namespaces that exist and how the container’s
+    view of the world is constrained by the namespaces it runs in. However, there
+    are still lots of places in the kernel where no real isolation exists, and namespaces
+    constrain the container only if it does not have the power to tell the kernel
+    to give it access to a different namespace.
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于容器的性能显著提升之一，以及使其轻量化的因素之一，是它们共享Linux服务器的内核。这也是围绕Linux容器最大的安全关注点。这种关注的主要原因在于内核中并非所有内容都有命名空间。我们已经讨论了所有存在的命名空间及容器对世界视角的限制是如何运作的。然而，内核中仍有许多地方没有真正的隔离，而命名空间只有在容器没有权限要求内核让其访问不同命名空间时才对其进行约束。
+- en: Containerized applications are more secure than noncontainerized applications
+    because cgroups and standard namespaces provide some important isolation from
+    the host’s core resources. But you should not think of containers as a substitute
+    for good security practices. If you think about how you would run an application
+    on a production system, that is really how you should run all your containers.
+    If your application would traditionally run as a nonprivileged user on a server,
+    then it should be run in the same manner inside the container. It is very easy
+    to tell Docker to run your container processes as a nonprivileged user, and in
+    almost all cases, this is what you should be doing.
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器化应用比非容器化应用更安全，因为控制组（cgroups）和标准命名空间（namespaces）提供了对主机核心资源的重要隔离。但是，你不应认为容器可以替代良好的安全实践。如果你考虑如何在生产系统上运行应用程序，那么你在所有容器中的运行方式应该与此相同。如果你的应用程序在服务器上通常以非特权用户身份运行，那么它在容器内部也应以相同方式运行。告诉Docker以非特权用户身份运行容器进程非常简单，在几乎所有情况下，这都是你应该做的。
+- en: Tip
+  id: totrans-102
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: The `--userns-remap` argument to the `dockerd` command and rootless mode both
+    make it possible to force all containers to run within a user and group context
+    that is unprivileged on the host system. These approaches help protect the host
+    from many potential security exploits.
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`--userns-remap`参数传递给`dockerd`命令以及无根模式都使得所有容器都可以在主机系统上非特权的用户和组上下文中运行。这些方法有助于保护主机免受许多潜在的安全漏洞的影响。'
+- en: For more information about `userns-remap`, read through the official [feature](https://dockr.ly/2BYfWze)
+    and [Docker daemon](https://dockr.ly/2LE9gG2) documentation.
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有关`userns-remap`的更多信息，请阅读官方[功能](https://dockr.ly/2BYfWze)和[Docker守护程序](https://dockr.ly/2LE9gG2)文档。
+- en: You can learn more about rootless mode in the section [“Rootless Mode”](#rootless_mode).
+  id: totrans-105
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在“[无根模式](#rootless_mode)”部分了解更多关于无根模式的信息。
+- en: Let’s look at some common security risks and controls.
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们看一些常见的安全风险和控制措施。
+- en: UID 0
+  id: totrans-107
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: UID 0
+- en: The first and most overarching security risk in a container is that, unless
+    you are using rootless mode or the `userns-remap` functionality in the Docker
+    daemon, the `root` user in the container is actually the `root` user on the system.
+    There are extra constraints on `root` in a container, and namespaces do a good
+    job of isolating `root` in the container from the most dangerous parts of the
+    */proc* and */sys* filesystems. But if you are UID 0, you have `root` access,
+    so if you somehow get access to protected resources on a file mount or outside
+    of your namespace, then the kernel will treat you as `root` and therefore give
+    you access to the resource. Unless otherwise configured, Docker starts all services
+    in containers as `root`, which means you are responsible for managing privileges
+    in your applications just like if you are on any standard Linux system. Let’s
+    explore some of the limits on `root` access and look at some obvious holes. This
+    is not intended to be an exhaustive statement on container security but rather
+    an attempt to give you a healthy understanding of some of the classes of security
+    risks.
+  id: totrans-108
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器中的第一个和最普遍的安全风险是，除非你使用了无根模式（rootless mode）或者Docker守护程序中的`userns-remap`功能，否则容器中的`root`用户实际上是系统中的`root`用户。在容器中，`root`用户有额外的约束条件，并且命名空间可以很好地将容器中的`root`与*/proc*和*/sys*文件系统中最危险的部分隔离开来。但是，如果你的UID是0，你就有`root`访问权限，因此如果你以某种方式访问了文件挂载或者命名空间外的受保护资源，那么内核将把你视为`root`并且允许你访问该资源。除非另有配置，Docker会以`root`用户身份启动所有容器中的服务，这意味着你需要像在任何标准Linux系统上一样管理应用程序的权限。让我们探讨一些`root`访问权限的限制，并看看一些明显的漏洞。这并不打算详尽阐述容器安全性的声明，而是试图让你对某些安全风险类别有一个健康的理解。
+- en: 'First, let’s fire up a container and get a `bash` shell using the public Ubuntu
+    image shown in the following code. Then we’ll see what kinds of access we have,
+    after installing some tools we want to run:'
+  id: totrans-109
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，让我们启动一个容器，并使用下面代码中显示的公共Ubuntu镜像获取一个`bash` shell。然后，我们将看看我们在安装了一些我们想要运行的工具之后拥有哪些访问权限：
+- en: '[PRE12]'
+  id: totrans-110
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: In Docker Desktop, you may only see a few modules in the list, but on a normal
+    Linux system, this list can be very long. Using `lsmod`, we’ve just asked the
+    kernel to tell us what modules are loaded. It is not that surprising that we get
+    this list from inside our container, since a normal user can always do this. If
+    you run this listing on the Docker server itself, it will be identical, which
+    reinforces the fact that the container is talking to the same Linux kernel that
+    is running on the server. So we can see the kernel modules; what happens if we
+    try to unload the `floppy` module?
+  id: totrans-111
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Docker Desktop 中，你可能只能看到列表中的几个模块，但在普通的 Linux 系统上，这个列表可能非常长。使用`lsmod`，我们刚刚要求内核告诉我们加载了哪些模块。从容器内获取这个列表并不奇怪，因为普通用户总是可以这样做。如果你在
+    Docker 服务器本身上运行此列表，结果将是相同的，这加强了容器正在与服务器上运行的相同 Linux 内核交互的事实。因此，我们可以看到内核模块；如果我们尝试卸载`floppy`模块会发生什么？
+- en: '[PRE13]'
+  id: totrans-112
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: That’s the same error message we would get if we were a nonprivileged user trying
+    to tell the kernel to remove a module. This should give you a good sense that
+    the kernel is doing its best to prevent us from doing things we shouldn’t. And
+    because we’re in a limited namespace, we can’t get the kernel to give us access
+    to the top-level namespace either. We are essentially relying on the hope that
+    there are no bugs in the kernel that allow us to escalate our privileges inside
+    the container. Because if we do manage to do that, we are `root`, which means
+    that we will be able to make changes if the kernel allows us to.
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果我们是非特权用户尝试告诉内核删除一个模块，我们将会得到相同的错误消息。这应该让你明白内核正在尽最大努力阻止我们做不应该做的事情。因为我们在有限的命名空间中，我们不能让内核让我们访问顶级命名空间。我们基本上是依赖于这样一个希望：内核中没有允许我们在容器内提升特权的漏洞。因为如果我们成功做到了，我们就是`root`，这意味着如果内核允许的话，我们将能够进行更改。
+- en: We can contrive a simple example of how things can go wrong by starting a `bash`
+    shell in a container that has had the Docker server’s */etc* bind-mounted into
+    the container’s namespace. Keep in mind that anyone who can start a container
+    on your Docker server can do what we’re about to do any time they like because
+    you can’t configure Docker to prevent it, so you must instead rely on external
+    tools like SELinux to avoid exploits like this.
+  id: totrans-114
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以通过在容器中启动一个`bash` shell来制造一个简单的错误示例，该容器已将 Docker 服务器的*/etc*绑定到容器的命名空间中。请记住，任何可以在你的
+    Docker 服务器上启动容器的人都可以随时像我们即将做的事情一样做，因为你无法配置 Docker 来阻止这种操作，所以你必须依赖像 SELinux 这样的外部工具来避免这样的漏洞利用。
+- en: Note
+  id: totrans-115
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: This example assumes that you are running the `docker` CLI on a Linux system,
+    which has an */etc/shadow* file. This file will not exist on Windows or macOS
+    hosts running something like Docker Desktop.
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此示例假定你在运行`docker` CLI 的 Linux 系统上，该系统有*/etc/shadow*文件。在运行 Docker Desktop 等 Windows
+    或 macOS 主机上，此文件将不存在。
+- en: '[PRE14]'
+  id: totrans-117
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: 'Here we’ve used the `-v` switch to tell Docker to mount a host path into the
+    container. The one we’ve chosen is */etc*, which is a very dangerous thing to
+    do. But it serves to prove a point: we are `root` in the container, and `root`
+    has file permissions in this path. So we can look at the */etc/shadow* file on
+    the Linux server, which contains the encrypted passwords for all the users. There
+    are plenty of other things you could do here, but the point is that by default
+    you’re only partly constrained.'
+  id: totrans-118
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这里，我们使用了`-v`开关告诉 Docker 将主机路径挂载到容器中。我们选择的路径是*/etc*，这是一件非常危险的事情。但这证明了一个观点：我们在容器中是`root`，而`root`在此路径下具有文件权限。因此，我们可以查看
+    Linux 服务器上的*/etc/shadow*文件，其中包含所有用户的加密密码。这里还有许多其他操作，但关键是，默认情况下你只受到部分限制。
+- en: Warning
+  id: totrans-119
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: It is a bad idea to run your container processes with UID 0\. This is because
+    any exploit that allows the process to somehow escape its namespaces will expose
+    your host system to a fully privileged process. You should always run your standard
+    containers with a nonprivileged UID.
+  id: totrans-120
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 UID 0 来运行你的容器进程是一个不好的主意。这是因为任何允许进程以某种方式逃离其命名空间的漏洞都会使你的主机系统暴露给完全特权的进程。你应该始终以非特权
+    UID 运行标准容器。
+- en: The easiest way to deal with the potential problems surrounding the use of UID
+    0 inside containers is to always tell Docker to use a different UID for your container.
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 处理在容器内使用 UID 0 可能带来的潜在问题最简单的方法是始终告诉 Docker 为你的容器使用不同的 UID。
+- en: 'You can do this by passing the `-u` argument to `docker container run`. In
+    the next example, we run the `whoami` command to show that we are `root` by default
+    and that we can read the */etc/shadow* file that is inside this container:'
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以通过传递 `-u` 参数给 `docker container run` 来做到这一点。在下一个示例中，我们运行 `whoami` 命令以显示默认情况下我们是
+    `root`，并且我们可以读取此容器内部的 */etc/shadow* 文件：
+- en: '[PRE15]'
+  id: totrans-123
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: 'In this example, when you add `-u 500`, you will see that we become a new,
+    unprivileged user and can no longer read the same */etc/shadow* file:'
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这个例子中，当您添加 `-u 500` 时，您会看到我们成为了一个新的非特权用户，不能再读取相同的 */etc/shadow* 文件：
+- en: '[PRE16]'
+  id: totrans-125
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: 'Another highly recommended approach is to add the `USER` directive to your
+    *Dockerfile*s so that containers created from them will launch using a nonprivileged
+    user by default:'
+  id: totrans-126
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个强烈推荐的方法是在您的 *Dockerfile* 中添加 `USER` 指令，以便从它们创建的容器将默认使用非特权用户启动：
+- en: '[PRE17]'
+  id: totrans-127
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: 'If you create this *Dockerfile*, and then build and run it, you will see that
+    `whoami` returns `myuser` instead of `root`:'
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您创建了这个 *Dockerfile*，然后构建并运行它，您将看到 `whoami` 返回的是 `myuser` 而不是 `root`：
+- en: '[PRE18]'
+  id: totrans-129
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: Rootless Mode
+  id: totrans-130
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 无根模式
+- en: One of the primary security challenges with containers is that they often require
+    some root-privileged processes to launch and manage them. Even when you use the
+    `--userns-remap` feature of the Docker daemon, the daemon itself still runs as
+    a privileged process, even though the containers that it launches will not.
+  id: totrans-131
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器的一个主要安全挑战是，它们通常需要一些特权进程来启动和管理。即使您使用 Docker 守护程序的 `--userns-remap` 功能，守护程序本身仍然作为特权进程运行，尽管它启动的容器不会。
+- en: With [rootless mode](https://docs.docker.com/engine/security/rootless), it is
+    possible to run the daemon and all containers without root privileges, which can
+    do a great deal to improve the security of the underlying system.
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 [无根模式](https://docs.docker.com/engine/security/rootless)，可以在不需要 root 权限的情况下运行守护程序和所有容器，这可以大大提高底层系统的安全性。
+- en: Rootless mode requires a Linux system, and Docker recommends Ubuntu, so let’s
+    run through an example using a new Ubuntu 22.04 system.
+  id: totrans-133
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Rootless 模式需要一个 Linux 系统，Docker 推荐使用 Ubuntu，因此让我们通过一个新的 Ubuntu 22.04 系统的示例来运行。
+- en: Note
+  id: totrans-134
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: These steps assume that you are logging in a regular unprivileged user and that
+    you already have [Docker Engine installed](https://docs.docker.com/engine/install/ubuntu).
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些步骤假定您正在以普通非特权用户登录，并且您已经安装了 [Docker Engine](https://docs.docker.com/engine/install/ubuntu)。
+- en: 'The first thing we need to do is make sure that `dbus-user-session` and `uidmap`
+    are installed. If `dbus-user-session` isn’t already installed, then we need to
+    log out and log back in after running the following command:'
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们首先需要确保安装了 `dbus-user-session` 和 `uidmap`。如果尚未安装 `dbus-user-session`，则在运行以下命令后需要注销并重新登录：
+- en: '[PRE19]'
+  id: totrans-137
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: 'Although, it is not strictly required, if the system-wide Docker daemon is
+    set up to run, it is a very good idea to disable it and then reboot:'
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管不是必须的，但如果系统范围内设置了 Docker 守护程序来运行，最好是将其禁用，然后重新启动：
+- en: '[PRE20]'
+  id: totrans-139
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: 'Once the system is back up, you can SSH back into the server as a regular user
+    and confirm that */var/run/docker.sock* is no longer on the system:'
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 系统恢复后，您可以作为普通用户 SSH 回到服务器，并确认 */var/run/docker.sock* 不再存在于系统上：
+- en: '[PRE21]'
+  id: totrans-141
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: 'The next step is to run the rootless mode installation script, which is installed
+    in */usr/bin* by the Docker installer:'
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下一步是运行无根模式安装脚本，该脚本由 Docker 安装程序安装在 */usr/bin* 中：
+- en: '[PRE22]'
+  id: totrans-143
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: Note
+  id: totrans-144
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The `` UID` `` in the `` DOCKER_HOST` `` variable here should match the UID
+    of the user who ran the script. In this case, the `UID` is `1000`.
+  id: totrans-145
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这里 `DOCKER_HOST` 变量中的 `` UID` `` 应该与运行脚本的用户的 UID 匹配。在这种情况下，`UID` 是 `1000`。
+- en: This script ran a few checks to ensure that our system was ready and then installed
+    and started a user-scoped `systemd` service file into `${HOME}/.config/systemd/user/docker.service`.
+    Each and every user on the system could do the same thing, if desired.
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此脚本运行了一些检查以确保我们的系统已准备就绪，然后安装并启动了一个用户范围的 `systemd` 服务文件到 `${HOME}/.config/systemd/user/docker.service`。系统上的每个用户都可以根据需要执行相同的操作。
+- en: 'The user Docker daemon can be controlled, like most `systemd` services. A few
+    basic examples are shown here:'
+  id: totrans-147
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 用户 Docker 守护程序可以像大多数 `systemd` 服务一样进行控制。这里展示了一些基本示例：
+- en: '[PRE23]'
+  id: totrans-148
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: 'To allow the user Docker daemon to run when the user is not logged in, the
+    user needs to use `sudo` to enable a `systemd` feature called `linger`, and then
+    you can also enable the Docker daemon to start whenever the system boots up:'
+  id: totrans-149
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要允许用户 Docker 守护程序在用户未登录时运行，用户需要使用 `sudo` 来启用 `systemd` 的一个名为 `linger` 的功能，然后还可以使
+    Docker 守护程序在系统启动时启动：
+- en: '[PRE24]'
+  id: totrans-150
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: 'This would be a good time to go ahead and add those environment variables to
+    our shell startup files, but at a minimum we need to make sure both of these environment
+    variables are set in our current terminal:'
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在是时候继续将这些环境变量添加到我们的shell启动文件中了，但至少我们需要确保这两个环境变量在我们当前的终端中设置：
+- en: '[PRE25]'
+  id: totrans-152
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE25]'
+- en: 'We can easily run a standard container:'
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以轻松运行一个标准容器：
+- en: '[PRE26]'
+  id: totrans-154
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE26]'
+- en: 'However, you will notice that some of the more privileged containers that we
+    have used in earlier sections will not work in this environment:'
+  id: totrans-155
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，您会注意到，在较早的章节中使用的某些更高特权的容器在这种环境下无法工作：
+- en: '[PRE27]'
+  id: totrans-156
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE27]'
+- en: 'And this is because, in rootless mode, the container cannot have more privileges
+    than the user who is running the container, even though, on the surface, the container
+    appears to still have full `root` privileges:'
+  id: totrans-157
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是因为，在无根模式下，容器不能比运行容器的用户拥有更多的特权，即使在表面上，容器似乎仍然具有完整的`root`特权：
+- en: '[PRE28]'
+  id: totrans-158
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE28]'
+- en: 'Let’s explore this just a little bit more by launching a small container that
+    is running `sleep 480s`:'
+  id: totrans-159
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们再深入探讨一下，通过启动一个运行`sleep 480s`的小型容器：
+- en: '[PRE29]'
+  id: totrans-160
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE29]'
+- en: 'If we look at the processes inside the container, we see that they all appear
+    to be running with the user `root`:'
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果我们查看容器内部的进程，我们会看到它们似乎都是以用户`root`运行的：
+- en: '[PRE30]'
+  id: totrans-162
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE30]'
+- en: 'However, if we look at the processes on the Linux system, we see that the `sleep`
+    command is actually being run by the local user, named `me`, and not by `root`
+    at all:'
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 但是，如果我们查看Linux系统上的进程，我们会发现`sleep`命令实际上是由本地用户`me`而不是`root`来运行的：
+- en: '[PRE31]'
+  id: totrans-164
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE31]'
+- en: The `root` user inside a rootless container is actually mapped to the user themself.
+    The container processes cannot use any privileges that the user running the daemon
+    does not already have, and because of this, they are a very safe way to allow
+    users on a multiuser system to run containers without granting any of them elevated
+    privileges on the system.
+  id: totrans-165
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在无根容器内部的`root`用户实际上映射到用户本身。容器进程无法使用守护程序运行用户尚未具有的任何特权，因此，这是允许多用户系统上的用户运行容器的非常安全方式，而无需在系统上授予他们任何提升的特权。
+- en: Tip
+  id: totrans-166
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 小贴士
+- en: There are directions to [uninstall rootless mode](https://docs.docker.com/engine/security/rootless/#uninstall)
+    on the Docker website.
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有关在Docker网站上[卸载无根模式](https://docs.docker.com/engine/security/rootless/#uninstall)的说明。
+- en: Privileged Containers
+  id: totrans-168
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 特权容器
+- en: There are times when you need your container to have special [kernel capabilities](https://man7.org/linux/man-pages/man7/capabilities.7.html)
+    that would normally be denied to the container. These could include mounting a
+    USB drive, modifying the network configuration, or creating a new Unix device.
+  id: totrans-169
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有时您需要容器具有特殊的[内核功能](https://man7.org/linux/man-pages/man7/capabilities.7.html)，通常容器将被拒绝。这些功能可能包括挂载USB驱动器、修改网络配置或创建新的Unix设备。
+- en: 'In the following code, we try to change the MAC address of our container:'
+  id: totrans-170
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在下面的代码中，我们尝试更改容器的MAC地址：
+- en: '[PRE32]'
+  id: totrans-171
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE32]'
+- en: As you can see, it doesn’t work. This is because the underlying Linux kernel
+    blocks the nonprivileged container from doing this, which is exactly what we’d
+    normally want. However, assuming that we need this functionality for our container
+    to work as intended, the easiest way to significantly expand a container’s privileges
+    is by launching it with the `--privileged=true` argument.
+  id: totrans-172
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如您所见，这是行不通的。这是因为底层的Linux内核阻止非特权容器执行此操作，这正是我们通常希望的。但是，假设我们需要此功能使容器按预期工作，通过使用`--privileged=true`参数启动容器是显著扩展容器特权的最简单方法。
+- en: Warning
+  id: totrans-173
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: We don’t recommend running the `ip link set eth0 address` command in the next
+    example, since this will change the MAC address on the container’s network interface.
+    We show it to help you understand the mechanism. Try it at your own risk.
+  id: totrans-174
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们不建议在下一个示例中运行`ip link set eth0 address`命令，因为这会更改容器网络接口的MAC地址。我们展示它是为了帮助你理解机制。请自行承担风险。
+- en: '[PRE33]'
+  id: totrans-175
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE33]'
+- en: In the preceding output, you will notice that we no longer get the error, and
+    the `link/ether` entry for `eth0` has been changed.
+  id: totrans-176
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在先前的输出中，您会注意到我们不再收到错误，并且`eth0`的`link/ether`条目已更改。
+- en: The problem with using the `--privileged=true` argument is that you are giving
+    your container very broad privileges, and in most cases, you likely need only
+    one or two kernel capabilities to get the job done.
+  id: totrans-177
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用`--privileged=true`参数的问题在于，您为容器提供了非常广泛的特权，在大多数情况下，您可能只需要一两个内核功能就能完成工作。
+- en: 'If we explore our privileged container some more, we will discover that we
+    have capabilities that have nothing to do with changing the MAC address. We can
+    even do things that could cause issues with both Docker and the host system. In
+    the following code, we are going to mount a disk partition from the underlying
+    host system, list all of the underlying Docker-based Linux containers on the system,
+    and explore some of their critical files:'
+  id: totrans-178
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果我们进一步探索我们的特权容器，我们会发现我们拥有一些与更改 MAC 地址无关的能力。我们甚至可以执行可能导致 Docker 和主机系统出现问题的操作。在以下代码中，我们将从底层主机系统挂载一个磁盘分区，列出系统上所有基于
+    Docker 的 Linux 容器，并探索其中一些关键文件：
+- en: '[PRE34]'
+  id: totrans-179
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE34]'
+- en: '[PRE35]'
+  id: totrans-180
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE35]'
+- en: '[PRE36]'
+  id: totrans-181
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE36]'
+- en: Warning
+  id: totrans-182
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Do not change or delete any of these files. It could have an unpredictable impact
+    on the containers or the underlying Linux system.
+  id: totrans-183
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不要更改或删除这些文件。这可能会对容器或底层 Linux 系统产生不可预测的影响。
+- en: So, as we’ve seen, people can run commands and get access to things that they
+    shouldn’t from a fully privileged container.
+  id: totrans-184
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因此，正如我们所见，人们可以在完全特权的容器中运行命令并访问不应访问的内容。
+- en: 'To change the MAC address, the only kernel capability we need is `CAP_NET_ADMIN`.
+    Instead of giving our container the full set of privileges, we can give it this
+    one privilege by launching our Linux container with the `--cap-add` argument,
+    as shown here:'
+  id: totrans-185
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要更改 MAC 地址，我们唯一需要的内核能力是`CAP_NET_ADMIN`。我们可以通过在启动 Linux 容器时使用`--cap-add`参数，给予容器这个特权，而不是给予它完整的特权集，如下所示：
+- en: '[PRE37]'
+  id: totrans-186
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE37]'
+- en: 'You should also notice that although we can change the MAC address, we can
+    no longer use the `mount` command inside our container:'
+  id: totrans-187
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你还应该注意，尽管我们可以更改 MAC 地址，但我们无法在容器内部再使用`mount`命令：
+- en: '[PRE38]'
+  id: totrans-188
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE38]'
+- en: 'It is also possible to remove specific capabilities from a container. Imagine
+    for a moment that your security team requires that `tcpdump` be disabled in all
+    containers, and when you test some of your containers, you find that `tcpdump`
+    is installed and can easily be run:'
+  id: totrans-189
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 也可以从容器中删除特定的能力。想象一下，你的安全团队要求在所有容器中禁用`tcpdump`，当你测试一些容器时，你发现`tcpdump`已安装并且可以轻松运行：
+- en: '[PRE39]'
+  id: totrans-190
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE39]'
+- en: 'You could remove `tcpdump` from your images, but there is very little preventing
+    someone from reinstalling it. The most effective way to solve this problem is
+    to determine what capability `tcpdump` needs to operate and remove that from the
+    container. In this case, you can do so by adding `--cap-drop=NET_RAW` to your
+    `docker container run` command:'
+  id: totrans-191
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可以从你的镜像中删除`tcpdump`，但很少有什么能阻止别人重新安装它。解决这个问题的最有效方法是确定`tcpdump`运行所需的能力，并从容器中移除。在这种情况下，你可以通过在`docker
+    container run`命令中添加`--cap-drop=NET_RAW`来实现：
+- en: '[PRE40]'
+  id: totrans-192
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE40]'
+- en: By using both the `--cap-add` and `--cap-drop` arguments to `docker container
+    run`, you can finely control your container’s [Linux kernel capabilities](https://man7.org/linux/man-pages/man7/capabilities.7.html).
+  id: totrans-193
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过在`docker container run`中使用`--cap-add`和`--cap-drop`参数，你可以精确控制容器的[Linux 内核能力](https://man7.org/linux/man-pages/man7/capabilities.7.html)。
+- en: Note
+  id: totrans-194
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Be aware that in addition to providing access to system calls, there are actually
+    some other things that enabling a specific Linux capability can provide. This
+    might include visibility of all the devices on the system or the ability to change
+    the time on the system.
+  id: totrans-195
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，除了提供系统调用的访问权限之外，启用特定的 Linux 能力实际上还可以提供其他一些功能。这可能包括查看系统上所有设备的可见性或更改系统时间的能力。
+- en: Secure Computing Mode
+  id: totrans-196
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 安全计算模式
+- en: When Linux kernel version 2.6.12 was released in 2005, it included a new security
+    feature called Secure Computing Mode, or `seccomp` for short. This feature enables
+    a process to make a one-way transition into a special state, where it will only
+    be allowed to make the system calls `exit()`, `sigreturn()`, and `read()` or `write()`
+    to already-open file descriptors.
+  id: totrans-197
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当 Linux 内核版本 2.6.12 在 2005 年发布时，它包含了一个名为安全计算模式（Secure Computing Mode）的新安全特性，简称为`seccomp`。这个特性使得进程可以单向转换到一个特殊状态，在这种状态下，它只能执行系统调用`exit()`、`sigreturn()`，以及对已打开文件描述符的`read()`或`write()`。
+- en: An extension to `seccomp`, called `seccomp-bpf`, utilizes the Linux version
+    of [Berkeley Packet Filter (BPF)](https://www.kernel.org/doc/Documentation/networking/filter.txt)
+    rules to allow you to create a policy that will provide an explicit list of system
+    calls that a process can utilize while running under Secure Computing Mode. The
+    Docker support for Secure Computing Mode utilizes `seccomp-bpf` so that users
+    can create profiles that give them very fine-grained control of which kernel system
+    calls their containerized processes are allowed to make.
+  id: totrans-198
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 作为`seccomp`的扩展，称为`seccomp-bpf`，利用Linux版本的[伯克利数据包过滤器（BPF）](https://www.kernel.org/doc/Documentation/networking/filter.txt)规则，允许你创建一个策略，明确列出一个进程在安全计算模式下可以使用的系统调用列表。Docker对安全计算模式的支持使用`seccomp-bpf`，让用户可以创建非常精细化的配置文件，控制他们的容器化进程可以执行哪些内核系统调用。
+- en: Note
+  id: totrans-199
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: By default, all containers use Secure Computing Mode and have the default profile
+    attached to them. You can [read more about Secure Computing Mode](https://docs.docker.com/engine/security/seccomp)
+    and which system calls the default profile blocks in the documentation. You can
+    also examine the [default policy’s JSON file](https://github.com/moby/moby/blob/master/profiles/seccomp/default.json)
+    to see what a policy looks like and understand exactly what it defines.
+  id: totrans-200
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，所有容器都使用安全计算模式，并且附加了默认配置文件。你可以在文档中[了解更多安全计算模式的信息](https://docs.docker.com/engine/security/seccomp)，以及默认配置文件阻止哪些系统调用。你还可以查看[默认策略的JSON文件](https://github.com/moby/moby/blob/master/profiles/seccomp/default.json)来了解策略的具体定义。
+- en: To see how you could use this, let’s use the program `strace` to trace the system
+    calls that a process is making when we try to unmount a filesystem with the `umount`
+    command.
+  id: totrans-201
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要看看如何使用这个功能，让我们使用`strace`程序来跟踪在尝试使用`umount`命令卸载文件系统时进程所做的系统调用。
+- en: Warning
+  id: totrans-202
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: These examples are here to prove a point, but you obviously shouldn’t be unmounting
+    filesystems out of your container without knowing exactly what is going to happen.
+  id: totrans-203
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这些示例是为了证明一个观点，但显然你不应该在不确切知道会发生什么的情况下在容器中卸载文件系统。
+- en: '[PRE41]'
+  id: totrans-204
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE41]'
+- en: We already know that mount-related commands do not work in a container with
+    standard permissions, and `strace` makes it clear that the system returns an “Operation
+    not permitted” error message when the `umount` command tries to use the `umount2`
+    system call.
+  id: totrans-205
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们已经知道，在标准权限的容器中，与挂载相关的命令不起作用，`strace`清楚地表明，在`umount`命令尝试使用`umount2`系统调用时，系统返回一个“操作不允许”的错误消息。
+- en: 'You could potentially fix this by giving your container the `SYS_ADMIN` capability,
+    like this:'
+  id: totrans-206
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可以通过给容器添加`SYS_ADMIN`能力来潜在地解决这个问题，如下所示：
+- en: '[PRE42]'
+  id: totrans-207
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE42]'
+- en: 'However, remember that using `--cap-add=SYS_ADMIN` will make it possible for
+    us to do many other things, including mounting system partitions using a command
+    like this:'
+  id: totrans-208
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然而，请记住，使用`--cap-add=SYS_ADMIN`将使我们能够做很多其他事情，包括使用类似这样的命令来挂载系统分区：
+- en: '[PRE43]'
+  id: totrans-209
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE43]'
+- en: You can solve this problem with a more focused approach by using a `seccomp`
+    profile. Unlike `seccomp`, `--cap-add` will enable a whole set of system calls
+    and some additional privileges, and you almost certainly don’t need them all.
+    `CAP_SYS_ADMIN` is particularly powerful and provides way more privileges than
+    any one capability should. With a `seccomp` profile, however, you can be very
+    specific about exactly what system calls you want to be enabled or disabled.
+  id: totrans-210
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可以通过使用更加专注的方法，使用一个`seccomp`配置文件来解决这个问题。与`seccomp`不同，`--cap-add`将启用一整套系统调用和一些额外的权限，你几乎肯定不需要它们全部。`CAP_SYS_ADMIN`特别强大，并提供了比任何一个能力应具有的权限更多。然而，使用`seccomp`配置文件，你可以非常明确地指定要启用或禁用的系统调用。
+- en: 'If we take a look at the default `seccomp` profile, we’ll see something like
+    this:'
+  id: totrans-211
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果我们看一下默认的`seccomp`配置文件，会看到类似这样的内容：
+- en: '[PRE44]'
+  id: totrans-212
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE44]'
+- en: This JSON file provides a list of supported architectures, a default ruleset,
+    and groups of system calls that fall within the scope of each capability. In this
+    case, the default action is `SCMP_ACT_ERRNO` and will generate an error if an
+    unspecified call is attempted.
+  id: totrans-213
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个JSON文件提供了一个受支持的体系结构列表、一个默认的规则集和每个能力范围内的系统调用组。在这种情况下，默认操作是`SCMP_ACT_ERRNO`，如果尝试未指定的调用，将生成错误。
+- en: If you examine the default profile in detail, you’ll notice that `CAP_SYS_ADMIN`
+    controls access to 37 system calls, a huge number that is even larger than the
+    4-6 system calls included in most other capabilities.
+  id: totrans-214
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你详细检查默认配置文件，你会注意到`CAP_SYS_ADMIN`控制对37个系统调用的访问，这个数字相当巨大，甚至比大多数其他能力中包含的4-6个系统调用还要多。
+- en: In the current use case, we actually need some of the special functionality
+    provided by `CAP_SYS_ADMIN`, but we do not need all of those system calls. To
+    ensure that we are adding only the one additional system call that we need, we
+    can create our own Secure Computing Mode policy, based on the default policy that
+    Docker provides.
+  id: totrans-215
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在当前使用案例中，我们实际上需要 `CAP_SYS_ADMIN` 提供的一些特殊功能，但我们不需要所有这些系统调用。为确保只添加我们需要的一个额外系统调用，我们可以基于
+    Docker 提供的默认策略创建自己的安全计算模式策略。
+- en: 'First, pull down the default policy and make a copy of it:'
+  id: totrans-216
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，拉取默认策略并创建其副本：
+- en: '[PRE45]'
+  id: totrans-217
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE45]'
+- en: Note
+  id: totrans-218
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The URL has been continued on the following line so that it fits in the margins.
+    You may find that you need to reassemble the URL and remove the backslashes for
+    the command to work properly in your environment.
+  id: totrans-219
+  prefs: []
+  type: TYPE_NORMAL
+  zh: URL 已经延续到下一行以适应页面边界。你可能需要重新组装 URL 并移除反斜杠，以使命令在你的环境中正常工作。
+- en: Then edit the file and remove a bunch of the system calls that `CAP_SYS_ADMIN`
+    normally provides. In this case, we actually need to retain two system calls to
+    ensure that both `strace` and `umount` work correctly.
+  id: totrans-220
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后编辑文件并移除 `CAP_SYS_ADMIN` 通常提供的一堆系统调用。在这种情况下，我们实际上需要保留两个系统调用以确保 `strace` 和 `umount`
+    正常工作。
+- en: 'The section of the file that we are targeting ends with this JSON block:'
+  id: totrans-221
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们正在针对文件的这一部分，它以这个 JSON 块结束：
+- en: '[PRE46]'
+  id: totrans-222
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE46]'
+- en: 'This `diff` shows the exact changes that need to be made in this use case:'
+  id: totrans-223
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个 `diff` 显示了在这个使用案例中需要进行的确切更改：
+- en: '[PRE47]'
+  id: totrans-224
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE47]'
+- en: '[PRE48]'
+  id: totrans-225
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE48]'
+- en: 'You are now ready to test your new finely tuned `seccomp` profile to ensure
+    that it can run `umount` but cannot run `mount`:'
+  id: totrans-226
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，你已经准备好测试你的新调优的 `seccomp` 配置文件，确保它可以运行 `umount` 但不能运行 `mount`：
+- en: '[PRE49]'
+  id: totrans-227
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE49]'
+- en: If everything went according to plan, your `strace` of the `umount` program
+    should have run perfectly and the `mount` command should have been blocked. In
+    the real world, it would be much safer to consider redesigning your applications
+    so that they do not need these special privileges, but when it cannot be avoided,
+    you should be able to use these tools to help ensure that your containers remain
+    as secure as possible while still doing their jobs.
+  id: totrans-228
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果一切按计划进行，你对 `umount` 程序的 `strace` 应该已经完美运行，而 `mount` 命令应该已被阻止。在现实世界中，考虑重新设计你的应用程序，以避免需要这些特殊权限会更安全，但在无法避免时，你可以使用这些工具来帮助确保你的容器在尽可能保持安全的同时仍然能够正常工作。
+- en: Warning
+  id: totrans-229
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: You could completely disable the default Secure Computing Mode profile by setting
+    `--security-opt seccomp=unconfined`; however, running a container unconfined is
+    a very bad idea in general and is probably only useful when you are trying to
+    figure out exactly what system calls you may need to define in your profile.
+  id: totrans-230
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以通过设置 `--security-opt seccomp=unconfined` 完全禁用默认的安全计算模式配置；然而，通常来说在未限制的情况下运行容器是一个非常糟糕的主意，并且可能只在你试图确定在配置文件中需要定义哪些系统调用时才有用。
+- en: The strength of Secure Computing Mode is that it allows users to be much more
+    selective about what a container can and can’t do with the underlying Linux kernel.
+    Custom profiles are not required for most containers, but they are an incredibly
+    handy tool when you need to carefully craft a powerful container and ensure that
+    you maintain the overall security of the system.
+  id: totrans-231
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安全计算模式的优势在于它允许用户更加精确地选择容器在底层 Linux 内核上可以做什么和不能做什么。大多数容器不需要自定义配置文件，但在需要精心制作强大容器并确保系统整体安全性时，它们是非常有用的工具。
+- en: SELinux and AppArmor
+  id: totrans-232
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: SELinux 和 AppArmor
+- en: Earlier, we talked about how containers primarily leverage cgroups and namespaces
+    for their functionality. [SELinux](https://www.redhat.com/en/topics/linux/what-is-selinux)
+    and [AppArmor](https://apparmor.net) are security layers in the Linux ecosystem
+    that can be used to increase the security of containers even further. In this
+    section, we are going to discuss these two systems a bit. SELinux and AppArmor
+    allow you to apply security controls that extend beyond those normally supported
+    by Unix systems. SELinux originated in the US National Security Agency, was strongly
+    adopted by Red Hat, and supports very fine-grained control. AppArmor is an effort
+    to achieve many of the same goals while being a bit more user-friendly than SELinux.
+  id: totrans-233
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 早些时候，我们讨论了容器主要利用 cgroups 和命名空间来实现其功能。[SELinux](https://www.redhat.com/en/topics/linux/what-is-selinux)
+    和 [AppArmor](https://apparmor.net) 是 Linux 生态系统中的安全层，可进一步增强容器的安全性。在本节中，我们将稍微讨论这两个系统。SELinux
+    和 AppArmor 允许您应用超出 Unix 系统正常支持的安全控制。SELinux 起源于美国国家安全局，得到了红帽公司的强力支持，并支持非常精细的控制。AppArmor
+    则是一个旨在实现许多相同目标的努力，比 SELinux 更加用户友好。
+- en: By default, Docker ships with reasonable profiles enabled on platforms that
+    support either of these systems. You can further configure these profiles to enable
+    or prevent all sorts of features, and if you’re running Docker in production,
+    you should do a risk analysis to determine if there are additional considerations
+    that you should be aware of. We’ll give a quick outline of the benefits you are
+    getting from these systems.
+  id: totrans-234
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，Docker 在支持这些系统的平台上默认启用合理的配置文件。您可以进一步配置这些配置文件以启用或阻止各种功能，如果您在生产环境中运行 Docker，则应进行风险分析，以确定是否有额外的考虑因素需要注意。我们将简要概述您从这些系统中获得的好处。
+- en: Both systems provide *mandatory access control*, a class of security system
+    where a systemwide security policy grants users (or “initiators”) access to a
+    resource (or “target”). This allows you to prevent anyone, including `root`, from
+    accessing a part of the system that they should not have access to. You can apply
+    the policy to a whole container so that all processes are constrained. Many chapters
+    would be required to provide a clear and detailed overview of how to configure
+    these systems. The default profiles are performing tasks like blocking access
+    to parts of the */proc* and */sys* filesystems that would be dangerous to expose
+    in the container, even though they show up in the container’s namespace. The default
+    profiles also provide more narrowly scoped mount access to prevent containers
+    from getting hold of mount points they should not see.
+  id: totrans-235
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这两个系统都提供*强制访问控制*，这是一种安全系统类别，系统范围的安全策略授予用户（或“发起者”）对资源（或“目标”）的访问权限。这使您可以防止任何人，包括`root`，访问他们不应该访问的系统部分。您可以将策略应用于整个容器，以约束所有进程。为了清晰和详细地概述如何配置这些系统，需要涉及多个章节。默认配置文件执行的任务包括阻止访问容器中可能危险的*/proc*和*/sys*文件系统的部分，尽管它们出现在容器的命名空间中。默认配置文件还提供了更窄范围的挂载访问，以防止容器获取不应看到的挂载点。
+- en: If you are considering using Linux containers in production, it is worth seriously
+    considering going through the effort to enable AppArmor or SELinux on these systems.
+    For the most part, both systems are reasonably equivalent. But in the Docker context,
+    one notable limitation of SELinux is that it only works fully on systems that
+    support filesystem metadata, which means that it won’t work with all Docker storage
+    drivers. AppArmor, on the other hand, does not use filesystem metadata and therefore
+    works on all of the Docker backends. Which one you use is somewhat distribution-centric,
+    so you may be forced to choose a filesystem backend that also supports the security
+    system that you use.
+  id: totrans-236
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您考虑在生产环境中使用 Linux 容器，值得认真考虑在这些系统上启用 AppArmor 或 SELinux。在很大程度上，这两个系统基本等效。但在
+    Docker 环境中，SELinux 的一个显著限制是它只在支持文件系统元数据的系统上完全工作，这意味着它不适用于所有 Docker 存储驱动程序。另一方面，AppArmor
+    不使用文件系统元数据，因此适用于所有 Docker 后端。您使用哪个系统在某种程度上取决于发行版，因此您可能被迫选择一个也支持您使用的安全系统的文件系统后端。
+- en: The Docker Daemon
+  id: totrans-237
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: Docker 守护程序
+- en: From a security standpoint, the Docker daemon and its components are the only
+    completely new risk you are introducing to your infrastructure. Your containerized
+    applications are not any less secure and are, at least, a little more secure than
+    they would be if deployed outside of containers. But without the containers, you
+    would not be running `dockerd`, the Docker daemon. You can run Docker such that
+    it doesn’t expose any ports on the network. This is highly recommended and the
+    default for most Docker installations.
+  id: totrans-238
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 从安全的角度来看，Docker 守护程序及其组件是您引入基础设施的唯一完全新的风险。您的容器化应用程序并不比在容器之外部署时更不安全，至少它们比不运行
+    `dockerd` 的情况稍微安全一些。但是如果没有容器，您将无法运行 Docker 守护程序。您可以运行 Docker 以使其不在网络上暴露任何端口。这是极为推荐的，并且是大多数
+    Docker 安装的默认设置。
+- en: The default configuration for Docker, on most distributions, leaves Docker isolated
+    from the network with only a local Unix socket exposed. Since you cannot remotely
+    administer Docker when it is set up this way, it is not uncommon to see people
+    simply add the nonencrypted port 2375 to the configuration. This may be great
+    for getting started with Docker, but it is not what you should do in any environment
+    where you care about the security of your systems. You should not open Docker
+    up to the outside world at all unless you have a very good reason to. If you do,
+    you should also commit to properly securing it. Most scheduler systems run their
+    services on each node and expect to talk to Docker over the Unix domain socket
+    instead of over a network port.
+  id: totrans-239
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大多数发行版上，默认的 Docker 配置将 Docker 与网络隔离开来，只暴露一个本地 Unix 套接字。因此，当 Docker 配置为这种方式时，无法远程管理
+    Docker 是很常见的情况，通常人们会简单地将非加密端口 2375 添加到配置中。这对于开始使用 Docker 可能很有帮助，但在任何关心系统安全的环境中都不应该这样做。除非有非常好的理由，否则不应该完全向外界开放
+    Docker。如果确实需要这样做，还应该承诺要正确地保护它。大多数调度系统在每个节点上运行其服务，并期望通过 Unix 域套接字而不是网络端口与 Docker
+    进行通信。
+- en: If you do need to expose the daemon to the network, you can do a few things
+    to tighten Docker down in a way that makes sense in most production environments.
+    But no matter what you do, you are relying on the Docker daemon itself to be resilient
+    against threats like buffer overflows and race conditions, two of the more common
+    classes of security vulnerabilities. This is true of any network service. The
+    risk is a lot higher with the Docker daemon because it is normally run as `root`,
+    it can run anything on your system, and it has no integrated role-based access
+    controls.
+  id: totrans-240
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果确实需要将守护程序暴露给网络，您可以采取一些措施，在大多数生产环境中都是有意义的方式来加固 Docker。但无论您做什么，都依赖于 Docker 守护程序本身对抗缓冲区溢出和竞争条件等威胁的抵抗能力，这是任何网络服务的真实情况。Docker
+    守护程序的风险要高得多，因为它通常以 `root` 用户身份运行，可以在您的系统上运行任何内容，并且没有集成的基于角色的访问控制。
+- en: 'The basics of locking Docker down are common with many other network daemons:
+    encrypt your traffic and authenticate users. The first is reasonably easy to set
+    up on Docker; the second is not as easy. If you have SSL certificates you can
+    use for protecting HTTP traffic to your hosts, such as a wildcard certificate
+    for your domain, you can turn on TLS support to encrypt all of the traffic to
+    your Docker servers, using port 2376\. This is a good first step. The [Docker
+    documentation](https://docs.docker.com/engine/security/protect-access) will walk
+    you through doing this.'
+  id: totrans-241
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 锁定 Docker 的基础知识与许多其他网络守护程序类似：加密您的流量并对用户进行身份验证。第一个方法在 Docker 上设置起来相对容易；第二个方法则不那么容易。如果您有
+    SSL 证书可用于保护主机的 HTTP 流量，例如您域的通配符证书，您可以打开 TLS 支持来加密所有到 Docker 服务器的流量，使用端口 2376。这是一个良好的第一步。[Docker
+    文档](https://docs.docker.com/engine/security/protect-access) 将指导您完成这一过程。
+- en: 'Authenticating users is more complicated. Docker does not provide any kind
+    of fine-grained authorization: you either have access or you don’t. But the authentication
+    control it does provide—signed certificates—is reasonably strong. Unfortunately,
+    this also means that you don’t get a cheap step from no authentication to some
+    authentication without also having to set up a certificate authority in most cases.
+    If your organization already has one, then you are in luck. Certificate management
+    needs to be implemented carefully in any organization, both to keep certificates
+    secure and to distribute them efficiently. So, given that, here are the basic
+    steps:'
+  id: totrans-242
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 认证用户更加复杂。Docker 不提供任何细粒度的授权：您要么有权限，要么没有。但它提供的认证控制——签名证书——是相当强大的。不幸的是，这也意味着，如果需要，您不能从没有认证到部分认证实现廉价过渡，而不设置证书颁发机构。如果您的组织已经有一个，那么您很幸运。在任何组织中，证书管理都需要小心实施，既要保证证书安全，又要高效地分发它们。因此，这里是基本步骤：
+- en: Set up a method of generating and signing certificates.
+  id: totrans-243
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 设置生成和签署证书的方法。
+- en: Generate certificates for the server and clients.
+  id: totrans-244
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 为服务器和客户端生成证书。
+- en: Configure Docker to require certificates with `--tlsverify`.
+  id: totrans-245
+  prefs:
+  - PREF_OL
+  type: TYPE_NORMAL
+  zh: 配置 Docker 使用 `--tlsverify` 要求证书。
+- en: Detailed instructions on getting a server and client set up, as well as a simple
+    certificate authority, are included in the [Docker documentation](https://docs.docker.com/engine/security/protect-access).
+  id: totrans-246
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 包括在 [Docker 文档](https://docs.docker.com/engine/security/protect-access) 中的详细设置服务器和客户端的说明，以及简单的证书颁发机构。
+- en: Warning
+  id: totrans-247
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Because it’s a daemon that almost always runs with privilege, and because it
+    has direct control of your applications, it is a bad idea to expose Docker directly
+    on the internet. If you need to talk to your Docker hosts from outside your network,
+    consider something like a VPN or an SSH tunnel to a secure jump host.
+  id: totrans-248
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于它几乎总是以特权运行的守护程序，并且因为它直接控制您的应用程序，直接将 Docker 暴露在互联网上是一个坏主意。如果您需要从网络外部访问您的 Docker
+    主机，请考虑使用像 VPN 或者安全跳板主机的 SSH 隧道等方法。
+- en: Advanced Configuration
+  id: totrans-249
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 高级配置
+- en: Docker has a very clean external interface, and on the surface, it looks pretty
+    monolithic. But there are actually a lot of things going on behind the scenes
+    that are configurable, and the logging backends we described in [“Logging”](ch06.html#docker_logs)
+    are a good example. You can also do things like change out the storage backend
+    for container images for the whole daemon, use a completely different runtime,
+    or configure individual containers to run on a different network configuration.
+    Those are powerful switches, and you’ll want to know what they do before turning
+    them on. First, we’ll talk about the network configuration, then we’ll cover the
+    storage backends, and finally, we’ll try out a completely different container
+    runtime to replace the default `runc` supplied with Docker.
+  id: totrans-250
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Docker 有一个非常干净的外部接口，在表面上看起来相当单块化。但实际上，后台有很多可以配置的事情，我们在 [“日志”](ch06.html#docker_logs)
+    中描述的日志后端就是一个很好的例子。您还可以做一些事情，例如更换整个守护程序的容器映像存储后端，使用完全不同的运行时，或者配置单独的容器以在不同的网络配置下运行。这些都是强大的开关，在打开它们之前，您需要了解它们的作用。首先，我们将讨论网络配置，然后我们将涵盖存储后端，最后，我们将尝试使用替换
+    Docker 默认提供的 `runc` 的完全不同的容器运行时。
+- en: Networking
+  id: totrans-251
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 网络配置
+- en: Early on, we described the layers of networking between a Linux container and
+    the real, live network. Let’s take a closer look at how that works. Docker supports
+    a rich set of network configurations, but let’s start with the default setup.
+    [Figure 11-1](#figure11-1) shows a drawing of a typical Docker server, where three
+    containers are running on their private network, shown on the right. One of them
+    has a public port (TCP port 10520) that is exposed on the Docker server. We’ll
+    track how an inbound request gets to the Linux container and also how a Linux
+    container can make an outbound connection to the external network.
+  id: totrans-252
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 早些时候，我们描述了 Linux 容器与真实网络之间的网络层。让我们更仔细地看看它是如何工作的。Docker 支持丰富的网络配置，但让我们从默认设置开始。[图
+    11-1](#figure11-1) 显示了典型 Docker 服务器的图示，在右侧显示了三个容器在它们的私有网络上运行。其中一个容器具有在 Docker
+    服务器上公开的公共端口（TCP 端口 10520）。我们将跟踪入站请求如何到达 Linux 容器，以及 Linux 容器如何建立与外部网络的出站连接。
+- en: '![The network on a typical Docker server](assets/dur3_1101.png)'
+  id: totrans-253
+  prefs: []
+  type: TYPE_IMG
+  zh: '![典型 Docker 服务器上的网络](assets/dur3_1101.png)'
+- en: Figure 11-1\. The network on a typical Docker server
+  id: totrans-254
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 11-1\. 典型 Docker 服务器上的网络
+- en: If we have a client somewhere on the network that wants to talk to the `nginx`
+    server running on TCP port 80 inside Container 1, the request will come into the
+    `eth0` interface on the Docker server. Because Docker knows this is a public port,
+    it has spun up an instance of `docker-proxy` to listen on port 10520\. So our
+    request is passed to the `docker-proxy` process, which then forwards the request
+    to the correct container address and port on the private network. Return traffic
+    from the request flows through the same route.
+  id: totrans-255
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果我们在网络的某个地方有一个客户端想要与容器1内运行的TCP端口80上的`nginx`服务器进行通信，请求将进入Docker服务器上的`eth0`接口。因为Docker知道这是一个公共端口，它已经启动了一个`docker-proxy`实例来监听端口10520。因此，我们的请求被传递给`docker-proxy`进程，然后转发到私有网络上正确的容器地址和端口。请求的返回流量通过相同的路径流动。
+- en: Outbound traffic from the container follows a different route in which the `docker-proxy`
+    is not involved at all. In this case, Container 3 wants to contact a server on
+    the public internet. It has an address on the private network of 172.16.23.1,
+    and its default route is the `docker0` interface 172.16.23.7\. So it sends the
+    traffic there. The Docker server now sees that this traffic is outbound and that
+    it has traffic forwarding enabled. And since the virtual network is private, it
+    wants to send the traffic from its public address instead. So the request is passed
+    through the kernel’s network address translation (NAT) layer and put onto the
+    external network via the `eth0` interface on the server. Return traffic passes
+    through the same route. The NAT is one-way, so containers on the virtual network
+    will see real network addresses in response packets.
+  id: totrans-256
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器的出站流量遵循不同的路径，完全不涉及`docker-proxy`。在这种情况下，Container 3希望联系公共互联网上的服务器。它在私有网络上有一个地址为172.16.23.1，并且其默认路由是`docker0`接口172.16.23.7。因此，它将流量发送到那里。Docker服务器现在看到这个流量是出站的，并且启用了流量转发。由于虚拟网络是私有的，它希望使用其公共地址发送流量。因此，请求经过内核的网络地址转换（NAT）层，并通过服务器上的`eth0`接口放入外部网络。返回流量通过相同的路径。NAT是单向的，因此虚拟网络上的容器将在响应数据包中看到真实的网络地址。
+- en: You’ve probably noticed that it’s not a simple configuration. It’s a fair amount
+    of complexity, but it makes Docker seem pretty transparent. It also contributes
+    to the security posture of the Docker stack because the containers are namespaced
+    into individual network namespaces, are on individual private networks, and don’t
+    have access to things like the main system’s DBus (Desktop Bus) or iptables.
+  id: totrans-257
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可能已经注意到，这不是一个简单的配置。这是相当复杂的一部分，但它使得Docker看起来非常透明。它还有助于Docker堆栈的安全性姿态，因为容器被命名空间化到各自的网络命名空间中，位于各自的私有网络上，并且无法访问诸如主系统的DBus（桌面总线）或iptables等内容。
+- en: 'Let’s examine what’s happening at a more detailed level. The interfaces that
+    show up in `ifconfig` or `ip addr show` in the Linux container are actually virtual
+    Ethernet interfaces on the Docker server’s kernel. They are then mapped into the
+    container’s network namespace and given the names that you see inside the container.
+    Let’s take a look at what we might see when running `ip addr show` on a Docker
+    server. We’ll shorten the output a little for clarity and spaces, as shown here:'
+  id: totrans-258
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们更详细地查看发生的情况。在Linux容器中，在`ifconfig`或`ip addr show`中显示的接口实际上是Docker服务器内核上的虚拟以太网接口。然后将它们映射到容器的网络命名空间，并赋予你在容器内看到的名称。让我们看一下在Docker服务器上运行`ip
+    addr show`时可能看到的内容。为了清晰起见，我们将输出稍作缩短和调整，如下所示：
+- en: '[PRE50]'
+  id: totrans-259
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE50]'
+- en: What this tells us is that we have the normal loopback interface, our real Ethernet
+    interface `eth0`, and then the Docker bridge interface, `docker0`, that we described
+    earlier. This is where all the traffic from the Linux containers is picked up
+    to be routed outside the virtual network. The surprising thing in this output
+    is the `veth772de2a` interface. When Docker creates a container, it creates two
+    virtual interfaces, one of which sits on the server side and is attached to the
+    `docker0` bridge, and one that is attached to the container’s namespace. What
+    we’re seeing here is the server-side interface. Did you notice how it doesn’t
+    show up as having an IP address assigned to it? That’s because this interface
+    is just joined to the bridge. This interface will have a different name in the
+    container’s namespace as well.
+  id: totrans-260
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这告诉我们有正常的回环接口，我们真实的以太网接口`eth0`，以及我们之前描述的 Docker 桥接口`docker0`。所有 Linux 容器的流量都从这里捕获并路由到虚拟网络之外。在这个输出中令人惊讶的是`veth772de2a`接口。当
+    Docker 创建一个容器时，它会创建两个虚拟接口，一个位于服务器端，附加到`docker0`桥接口，另一个附加到容器的命名空间。我们在这里看到的是服务器端的接口。你注意到它没有显示分配的
+    IP 地址吗？那是因为这个接口只是加入到了桥接接口。这个接口在容器的命名空间中也会有一个不同的名称。
+- en: As with so many pieces of Docker, you can replace the proxy with a different
+    implementation. To do so, you would use the `--userland-proxy-path=<path>` setting,
+    but there are probably not that many good reasons to do this unless you have a
+    very specialized network. However, the `--userland-proxy=false` flag to `dockerd`
+    will completely disable the `userland-proxy` and instead rely on hairpin [NAT](https://www.geeksforgeeks.org/network-address-translation-nat)
+    functionality to route traffic between local containers. If you need higher-throughput
+    services, this might be right for you.
+  id: totrans-261
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 就像 Docker 的许多部分一样，你可以用不同的实现来替换代理。为此，你可以使用`--userland-proxy-path=<path>`设置，但除非你有一个非常专业的网络，否则可能没有太多好的理由这样做。然而，将`--userland-proxy=false`标志传递给`dockerd`将完全禁用`userland-proxy`，而是依赖于
+    hairpin [NAT](https://www.geeksforgeeks.org/network-address-translation-nat) 功能来在本地容器之间路由流量。如果你需要更高吞吐量的服务，这可能适合你。
+- en: Note
+  id: totrans-262
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: A hairpin NAT is typically used to describe services inside a NATed network
+    that address one another with their public IP addresses. This causes traffic from
+    the source service to route out to the internet, hit the external interface for
+    the NAT router, and then get routed back into the original network to the destination
+    service. The traffic is shaped like the letter U or a standard hairpin.
+  id: totrans-263
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Hairpin NAT 通常用于描述位于 NAT 网络内部的服务，这些服务使用它们的公共 IP 地址相互寻址。这会导致来自源服务的流量路由到互联网，命中
+    NAT 路由器的外部接口，然后再被路由回原始网络到达目标服务。流量的形状类似字母 U 或标准的 hairpin。
+- en: Host networking
+  id: totrans-264
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 主机网络
+- en: As we’ve noted, there is a lot of complexity involved in the default implementation.
+    You can, however, run a container without the whole networking configuration that
+    Docker puts in place for you. And the `docker-proxy` can also limit the throughput
+    for very high-volume data services by requiring all the network traffic to pass
+    through the `docker-proxy` process before being received by the container. So
+    what does it look like if we turn off the Docker network layer? Since the beginning,
+    Docker has let you do this on a per-container basis with the `--net=host` command-line
+    switch. There are times, like when you want to run high-throughput applications,
+    when you might want to do this. But you lose some of Docker’s flexibility when
+    you do. Let’s examine how this mechanism works.
+  id: totrans-265
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如我们所指出的，默认实现涉及许多复杂性。但是，你可以在不使用 Docker 提供的整个网络配置的情况下运行容器。`docker-proxy`也可以通过要求所有网络流量通过`docker-proxy`进程传输后才传递给容器，来限制非常高流量数据服务的吞吐量。那么如果我们关闭
+    Docker 网络层，会出现什么情况呢？从一开始，Docker 就允许你在每个容器的基础上使用`--net=host`命令行开关来执行此操作。有时候，比如当你想运行高吞吐量应用程序时，你可能会想这么做。但是这样做会失去
+    Docker 的一些灵活性。让我们来看看这个机制是如何工作的。
+- en: Warning
+  id: totrans-266
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Like others we discuss in this chapter, this is not a setting you should take
+    lightly. It has operational and security implications that might be outside your
+    tolerance level. It can be the right thing to do, but you should understand the
+    consequences.
+  id: totrans-267
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 就像我们在本章讨论的其他内容一样，这不是一个你应该轻率对待的设置。它具有可能超出你容忍水平的操作和安全影响。这可能是正确的做法，但你应该了解其后果。
+- en: 'Let’s start a container with `--net=host` and see what happens:'
+  id: totrans-268
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们使用`--net=host`启动一个容器，看看会发生什么：
+- en: '[PRE51]'
+  id: totrans-269
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE51]'
+- en: 'That should look pretty familiar. That’s because when we run a container with
+    the host networking option, the container is running in both the host server’s
+    network and UTS namespaces. Our server’s hostname is `docker-desktop`, and from
+    the shell prompt, we can tell that our container has the same hostname:'
+  id: totrans-270
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 那看起来应该很熟悉。这是因为当我们使用主机网络选项运行容器时，容器同时在主机服务器的网络和 UTS 命名空间中运行。我们的服务器主机名是 `docker-desktop`，从
+    shell 提示符可以看出，我们的容器具有相同的主机名：
+- en: '[PRE52]'
+  id: totrans-271
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE52]'
+- en: 'If we run the `mount` command to see what’s mounted, though, we see that Docker
+    is still maintaining our */etc/resolv.conf*, */etc/hosts*, and */etc/hostname*
+    directories. And as expected, the */etc/hostname* directory simply contains the
+    server’s hostname:'
+  id: totrans-272
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 运行 `mount` 命令查看已挂载的内容时，我们可以看到 Docker 仍在维护我们的 */etc/resolv.conf*、*/etc/hosts*
+    和 */etc/hostname* 目录。预期中，*/etc/hostname* 目录只包含服务器的主机名：
+- en: '[PRE53]'
+  id: totrans-273
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE53]'
+- en: 'Just to prove that we can see all the normal networking on the Docker server,
+    let’s look at the output from `ss` to see if we can see the sockets that Docker
+    is utilizing:'
+  id: totrans-274
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了证明我们可以看到 Docker 服务器上的所有正常网络，让我们查看 `ss` 的输出，看看是否可以看到 Docker 正在利用的套接字：
+- en: '[PRE54]'
+  id: totrans-275
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE54]'
+- en: Note
+  id: totrans-276
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: If the Docker daemon was listening on a TCP port, like 2375, you could have
+    looked for that as well. Feel free to look for another TCP port on your server
+    port that you know is in use.
+  id: totrans-277
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果 Docker 守护程序正在监听 TCP 端口，比如 2375，你也可以查找该端口。请随意查找你知道正在使用的服务器端口上的另一个 TCP 端口。
+- en: 'If you search for `docker` in the output of a normal container within its own
+    namespace, you will notice that you get no results:'
+  id: totrans-278
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果在普通容器的输出中搜索 `docker`，您会注意到没有结果：
+- en: '[PRE55]'
+  id: totrans-279
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE55]'
+- en: So we are indeed in the server’s network namespace. What all of this means is
+    that if we were to launch a high-throughput network service, we could expect network
+    performance from it that is essentially native. But it also means we could try
+    to bind to ports that would collide with those on the server, so if you do this,
+    you should be careful about how you allocate port assignments.
+  id: totrans-280
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所以我们确实处于服务器的网络命名空间中。所有这些意味着，如果我们要启动一个高吞吐量的网络服务，我们可以期望它的网络性能基本上与本机相同。但这也意味着我们可能会尝试绑定与服务器上冲突的端口，因此如果您这样做，应该小心如何分配端口分配。
+- en: Configuring networks
+  id: totrans-281
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 配置网络
+- en: There is more to networking than just the default network or host networking,
+    however. The `docker network` command lets you create multiple networks backed
+    by different drivers. It also allows you to view and manipulate the Docker network
+    layers and how they are attached to containers that are running on the system.
+  id: totrans-282
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 网络配置不仅限于默认网络或主机网络。`docker network` 命令允许您创建由不同驱动程序支持的多个网络。它还允许您查看和操作 Docker 网络层及其如何附加到正在系统上运行的容器上。
+- en: 'Listing the networks available from Docker’s perspective is easily accomplished
+    with the following command:'
+  id: totrans-283
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用以下命令轻松列出 Docker 视角中可用的网络：
+- en: '[PRE56]'
+  id: totrans-284
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE56]'
+- en: 'You can then find out more details about any individual network by using the
+    `docker network inspect` command along with the network ID:'
+  id: totrans-285
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用 `docker network inspect` 命令和网络 ID 查找有关任何单个网络的更多详细信息：
+- en: '[PRE57]'
+  id: totrans-286
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE57]'
+- en: '[PRE58]'
+  id: totrans-287
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE58]'
+- en: Docker networks can be created and removed, as well as attached and detached
+    from individual containers, with the `network` subcommand.
+  id: totrans-288
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Docker 网络可以使用 `network` 子命令创建和移除，并与单个容器附加和分离。
+- en: 'So far, we’ve set up a bridged network, no Docker network, and a bridged network
+    with hairpin NAT. There are a few other drivers that you can use to create different
+    topologies using Docker as well, with the `overlay` and `macvlan` drivers being
+    the most common. Let’s take a brief look at what these can do for you:'
+  id: totrans-289
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，我们设置了一个桥接网络、无 Docker 网络以及一个具有 hairpin NAT 的桥接网络。还有一些其他驱动程序可用于使用 Docker
+    创建不同的拓扑，其中 `overlay` 和 `macvlan` 驱动程序最常见。让我们简要看看它们能为您做些什么：
+- en: '`overlay`'
+  id: totrans-290
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`overlay`'
+- en: This driver is used in Swarm mode to generate a network overlay between the
+    Docker hosts, creating a private network between all the containers that run on
+    top of the real network. This is useful for Swarm but not in scope for general
+    use with non-Swarm containers.
+  id: totrans-291
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此驱动程序用于 Swarm 模式，用于在 Docker 主机之间生成网络覆盖层，从而在实际网络之上为所有运行的容器创建私有网络。这对 Swarm 是有用的，但对于非
+    Swarm 容器的一般使用不适用。
+- en: '`macvlan`'
+  id: totrans-292
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`macvlan`'
+- en: This driver creates a real MAC address for each of your containers and then
+    exposes them on the network via the interface of your choice. This requires that
+    you switch gears to support more than one MAC address per physical port on the
+    switch. The result is that all the containers appear directly on the underlying
+    network. When you’re moving from a legacy system to a container-native one, this
+    can be a really useful step. There are drawbacks here, such as making it harder
+    when debugging to identify which host the traffic is really coming from, overflowing
+    the MAC tables in your network switches, excessive ARPing by container hosts,
+    and other underlying network issues. For this reason, the `macvlan` driver is
+    not recommended unless you have a good understanding of your underlying network
+    and can manage it effectively.
+  id: totrans-293
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 该驱动程序为每个容器创建一个真实的MAC地址，然后通过您选择的接口将它们暴露在网络上。这要求您在交换机上支持每个物理端口多个MAC地址。结果是所有容器直接出现在底层网络上。当您从传统系统转移到基于容器的系统时，这可能是一个非常有用的步骤。这里存在一些缺点，例如在调试时更难识别流量真正来自哪个主机，网络交换机中MAC表的溢出，容器主机的过多ARP请求以及其他底层网络问题。因此，除非您对底层网络有很好的理解并能有效地管理它，否则不建议使用`macvlan`驱动程序。
+- en: 'There are a few sets of configurations that are possible here, but the basic
+    setup is easy to configure:'
+  id: totrans-294
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里可能有几组配置选项，但基本设置很容易配置：
+- en: '[PRE59]'
+  id: totrans-295
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE59]'
+- en: Tip
+  id: totrans-296
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: You can prevent Docker from allocating specific addresses by specifying them
+    as named auxiliary addresses, `--aux-address="my-router=172.16.16.129"`.
+  id: totrans-297
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以通过将它们指定为命名的辅助地址来阻止Docker分配特定地址，`--aux-address="my-router=172.16.16.129"`。
+- en: There is a lot more you can configure with the Docker network layer. However,
+    the defaults, host networking, and userland proxyless mode are the ones that you’re
+    most likely to use or encounter in the wild. Some of the other options you can
+    configure include the container’s DNS nameservers, resolver options, and default
+    gateways, among other things. The networking section of the [Docker documentation](https://docs.docker.com/network)
+    gives an overview of how to do some of this configuration.
+  id: totrans-298
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Docker网络层有很多可以配置的地方。但是，默认设置、主机网络和无代理用户空间模式是您最有可能使用或在实际应用中遇到的选项。您可以配置的其他一些选项包括容器的DNS名称服务器、解析器选项和默认网关，等等。Docker文档的[网络部分](https://docs.docker.com/network)概述了如何进行部分配置。
+- en: Note
+  id: totrans-299
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: For advanced network configuration of Docker, check out [Weave](https://github.com/weaveworks/weave)—a
+    well-supported overlay network tool for spanning containers across multiple Docker
+    hosts, similar to the `overlay` driver but much more configurable and without
+    the Swarm requirement. Another offering is [Project Calico](https://www.tigera.io/project-calico).
+    If you’re running Kubernetes, which has its own networking configuration, you
+    might also want to familiarize yourself with the [Container Network Interface
+    (CNI)](https://www.cni.dev) and then look at [Cilium](https://cilium.io), which
+    provides robust eBPF-based networking for containers.
+  id: totrans-300
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于Docker的高级网络配置，请查看[Weave](https://github.com/weaveworks/weave)——一个受到良好支持的覆盖网络工具，可以跨多个Docker主机扩展容器，类似于`overlay`驱动程序，但更可配置且无需Swarm要求。另一个选择是[Project
+    Calico](https://www.tigera.io/project-calico)。如果您正在运行Kubernetes，它有自己的网络配置，您可能还想熟悉[Container
+    Network Interface (CNI)](https://www.cni.dev)，然后看看提供容器强大基于eBPF的网络功能的[Cilium](https://cilium.io)。
+- en: Storage
+  id: totrans-301
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 存储
+- en: 'Backing all of the images and containers on your Docker server is a storage
+    backend that handles reading and writing all of that data. Docker has some strenuous
+    requirements on its storage backend: it has to support layering, the mechanism
+    by which Docker tracks changes and reduces both how much disk a container occupies
+    and how much is shipped over the wire to deploy new images. Using a copy-on-write
+    strategy, Docker can start up a new container from an existing image without having
+    to copy the whole image. The storage backend supports that. The storage backend
+    is what makes it possible to export images as groups of changes in layers and
+    also lets you save the state of a running container. In most cases, you need the
+    kernel’s help in doing this efficiently. That’s because the filesystem view in
+    your container is generally a union of all of the layers below it, which are not
+    actually copied into your container. Instead, they are made visible to your container,
+    and only when you make changes does anything get written to your container’s filesystem.
+    One place this layering mechanism is exposed to you is when you upload or download
+    a new image from a registry like Docker Hub. The Docker daemon will push or pull
+    each layer separately, and if some of the layers are the same as others it has
+    already stored, it will use the cached layer instead. In the case of a push to
+    a registry, it will sometimes even tell you which image they are mounted from.'
+  id: totrans-302
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在您的 Docker 服务器上支持所有镜像和容器的是处理所有这些数据的存储后端。Docker 对其存储后端有一些严格的要求：它必须支持分层，这是 Docker
+    跟踪更改并减少容器占用的磁盘空间以及部署新镜像所需传输的数据量的机制。使用写时复制策略，Docker 可以从现有镜像启动新容器，而无需复制整个镜像。存储后端支持这一点。存储后端使得将镜像导出为一组层次变化成为可能，并且还允许您保存运行中容器的状态。在大多数情况下，您需要内核的帮助才能高效地完成这些操作。这是因为容器中的文件系统视图通常是其下所有层次的联合，这些层次实际上并未复制到容器中。相反，它们对容器可见，只有在进行更改时才会将任何内容写入到容器的文件系统中。此分层机制向您公开的一个场景是从像
+    Docker Hub 这样的注册表上传或下载新镜像时。Docker 守护进程将单独推送或拉取每个层，并且如果某些层与其已存储的其他层相同，则会使用缓存层。在向注册表推送时，它有时甚至会告诉您它们从哪个镜像挂载而来。
+- en: Docker relies on an array of possible kernel drivers to handle the layering.
+    The Docker codebase contains code that can handle interacting with many of these
+    backends, and you can configure the decision about which to use on daemon restart.
+    So let’s look at what is available and some of the pluses and minuses of each.
+  id: totrans-303
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Docker 依赖于一系列可能的内核驱动程序来处理分层。Docker 代码库包含能够处理与许多这些后端的交互的代码，您可以在守护进程重新启动时配置使用哪一个。所以让我们看看有哪些可用的选项以及每个选项的优缺点。
+- en: 'Various backends have different limitations that may or may not make them your
+    best option. In some cases, your choices of which backend to use are limited by
+    what your distribution of Linux supports. Using the drivers that are built into
+    the kernel shipped with your distribution will always be the easiest approach.
+    It’s generally best to stay close to the well-tested path. We’ve seen all manner
+    of oddities from various backends since Docker’s release. And, as usual, the common
+    case is always the best-supported one. Different backends also report different
+    statistics through the Docker Remote API (*/info* endpoint). This can be very
+    useful for monitoring your Docker systems. However, not all backends are created
+    equal, so let’s see how they differ:'
+  id: totrans-304
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 不同的后端具有可能使它们成为您最佳选择的不同限制。在某些情况下，您可以使用的后端选项受到 Linux 发行版支持的限制。始终使用与您发行版一起提供的内核中内置的驱动程序将是最简单的方法。通常最好保持在经过充分测试的路径上。自
+    Docker 发布以来，我们已经看到了各种各样的来自不同后端的奇特现象。通常情况下，常见情况总是得到最好的支持。不同的后端还通过 Docker 远程 API（*/info*
+    端点）报告不同的统计信息。这对于监视您的 Docker 系统非常有用。然而，并非所有后端都是平等的，因此让我们看看它们的区别：
+- en: '*Overlay*'
+  id: totrans-305
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*Overlay*'
+- en: '[Overlay](https://www.kernel.org/doc/html/latest/filesystems/overlayfs.html)
+    (formerly OverlayFS) is a union filesystem where multiple layers are mounted together
+    so that they appear as a single filesystem. The Overlay filesystem is the most
+    recommended choice for Docker storage these days and works on most major distributions.
+    If you are running on a Linux kernel older than 4.0 (or 3.10.0-693 for RHEL),
+    then you won’t be able to take advantage of this backend. The reliability and
+    performance are good enough that it might be worth updating your OS for Docker
+    hosts to support it, even if your company standard is an older distribution. The
+    Overlay filesystem is part of the mainline Linux kernel and has become increasingly
+    stable over time. Being in the mainline means that long-term support is virtually
+    guaranteed, which is another nice advantage. Docker supports two versions of the
+    Overlay backend, `overlay` and `overlay2`. As you might expect, you are strongly
+    advised to use `overlay2` as it is faster, more efficient with inode usage, and
+    more robust.'
+  id: totrans-306
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Overlay](https://www.kernel.org/doc/html/latest/filesystems/overlayfs.html)（以前称为OverlayFS）是一个联合文件系统，多个层被一起挂载，因此它们看起来像一个单一的文件系统。Overlay文件系统是目前Docker存储的最推荐选择，在大多数主要发行版上都可以工作。如果你运行的是早于4.0版本的Linux内核（或者RHEL的3.10.0-693版本），那么你将无法利用这个后端。其可靠性和性能足够好，以至于可能值得更新你的操作系统以支持Docker主机，即使你公司的标准是较旧的发行版。Overlay文件系统已成为主线Linux内核的一部分，并随着时间的推移变得越来越稳定。作为主线的一部分意味着长期支持几乎是有保证的，这是另一个很好的优势。Docker支持Overlay后端的两个版本，`overlay`和`overlay2`。正如你所预期的那样，强烈建议使用`overlay2`，因为它更快速，更有效地使用inode，并且更加稳健。'
+- en: Note
+  id: totrans-307
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The Docker community is frequently improving support for a variety of filesystem
+    backends. For more details about the supported filesystems, take a look at the
+    [official documentation](https://docs.docker.com/storage/storagedriver).
+  id: totrans-308
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Docker社区频繁改进对各种文件系统后端的支持。有关支持的文件系统的详细信息，请查看[官方文档](https://docs.docker.com/storage/storagedriver)。
+- en: '*AuFS*'
+  id: totrans-309
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*AuFS*'
+- en: Although at the time of this writing it is no longer recommended, `aufs` is
+    the original backend for Docker. [AuFS (Advanced multilayered unification filesystem)](https://aufs.sourceforge.net)
+    is a union filesystem driver with reasonable support on various popular Linux
+    distributions. It was never accepted into the mainline kernel, however, and this
+    has limited its availability on various distributions. It is not supported on
+    recent versions of Red Hat or Fedora, for example. It is not shipped in the standard
+    Ubuntu distribution but is in the Ubuntu `linux-image-extra` package.
+  id: totrans-310
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然在撰写本文时不再推荐使用，`aufs`是Docker的原始后端。[AuFS (Advanced multilayered unification filesystem)](https://aufs.sourceforge.net)是一个具有合理支持的联合文件系统驱动，在各种流行的Linux发行版上。然而，它从未被接受进入主线内核，这限制了它在各种发行版上的可用性。例如，它不支持最近版本的Red
+    Hat或Fedora。它没有在标准的Ubuntu发行版中提供，但在Ubuntu的`linux-image-extra`包中提供。
+- en: Its status as a second-class citizen in the kernel has led to the development
+    of many of the other backends now available. If you are running an older distribution
+    that supports AuFS, you might consider it, but you should upgrade to a kernel
+    version that natively supports Overlay or Btrfs, which is discussed next.
+  id: totrans-311
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 它作为内核中的二等公民的地位导致了现在可用的许多其他后端的开发。如果你运行支持AuFS的旧发行版，你可以考虑它，但是你应该升级到原生支持Overlay或Btrfs的内核版本，接下来会讨论Btrfs。
+- en: '*Btrfs*'
+  id: totrans-312
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*Btrfs*'
+- en: '[B-Tree File System (Btrfs)](https://btrfs.wiki.kernel.org/index.php/Main_Page)
+    is fundamentally a copy-on-write filesystem, which means it’s a pretty good fit
+    for the Docker image model. Like `aufs` and unlike `devicemapper`, Docker is using
+    the backend in the way it was intended. That means it’s both pretty stable in
+    production and also a good performer. It scales reasonably to thousands of containers
+    on the same system. A drawback for Red Hat–based systems is that Btrfs does not
+    support SELinux. If you can use the `btrfs` backend, it is worth exploring another
+    option, after the `overlay2` driver. One popular way to run `btrfs` backends for
+    Linux containers without having to give over a whole volume to this filesystem
+    is to make a Btrfs filesystem in a file and loopback-mount it with something like
+    `mount -o loop file.btrs /mnt`. Using this method, you could build a 50 GB Linux
+    container storage filesystem even on cloud-based systems without having to give
+    over all your precious local storage to Btrfs.'
+  id: totrans-313
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[B-Tree文件系统（Btrfs）](https://btrfs.wiki.kernel.org/index.php/Main_Page)基本上是一个写时复制文件系统，这意味着它非常适合Docker镜像模型。与`aufs`类似，但不同于`devicemapper`，Docker在使用此后端时是按照其预期的方式使用的。这意味着在生产环境中非常稳定，性能也很好。它在同一系统上合理扩展到成千上万个容器。对于基于Red
+    Hat的系统的一个缺点是，Btrfs不支持SELinux。如果可以使用`btrfs`后端，那么在`overlay2`驱动程序之后探索另一个选项是值得的。在Linux容器中运行`btrfs`后端的一种流行方式是，不必将整个卷交给此文件系统，而是在文件中创建Btrfs文件系统，并使用诸如`mount
+    -o loop file.btrfs /mnt`之类的方法进行回环挂载。通过这种方法，即使在基于云的系统上，您也可以构建一个50 GB的Linux容器存储文件系统，而无需将所有宝贵的本地存储空间都交给Btrfs。'
+- en: '*Device Mapper*'
+  id: totrans-314
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*Device Mapper*'
+- en: Originally written by Red Hat to support their distributions, which lacked AuFS
+    in Docker’s early days, Device Mapper became the default backend on all Red Hat–based
+    distributions of Linux. Depending on the version of Red Hat Linux that you are
+    using, this may be your only option. Device Mapper itself has been built into
+    the Linux kernel for ages and is very stable. The way the Docker daemon uses it
+    is a bit unconventional, though, and in the past, this backend was not that stable.
+    This checkered past means that we recommend picking a different backend when possible.
+    If your distribution supports only the `devicemapper` driver, then you will likely
+    be fine. But it’s worth considering using `overlay2` or `btrfs`. By default, `devicemapper`
+    utilizes the `loop-lvm` mode, which has zero configuration and is very slow and
+    generally only useful for development. If you decide to use the `devicemapper`
+    driver, you must make sure it is configured to use `direct-lvm` mode for all nondevelopment
+    environments.
+  id: totrans-315
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 最初由Red Hat编写以支持其发行版，因Docker早期缺乏AuFS而成为所有基于Red Hat的Linux发行版的默认后端。根据您使用的Red Hat
+    Linux版本，这可能是您唯一的选择。Device Mapper本身已经内置于Linux内核中很长时间，并且非常稳定。然而，Docker守护程序使用它的方式有点不寻常，过去这个后端并不太稳定。由于这种多舛的过去，我们建议尽可能选择其他后端。如果您的发行版仅支持`devicemapper`驱动程序，那么您可能会很满意。但是考虑到使用`overlay2`或`btrfs`也是值得的。默认情况下，`devicemapper`使用`loop-lvm`模式，它不需要任何配置，但非常慢，通常仅适用于开发环境。如果决定使用`devicemapper`驱动程序，则必须确保它配置为在所有非开发环境中使用`direct-lvm`模式。
+- en: Note
+  id: totrans-316
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: You can find out more about using the various `devicemapper` modes with Docker
+    in the [official documentation](https://docs.docker.com/storage/storagedriver/device-mapper-driver).
+    A 2014 [blog article](https://developers.redhat.com/blog/2014/09/30/overview-storage-scalability-docker)
+    also provides some interesting history about the various Docker storage backends.
+  id: totrans-317
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用Docker中的各种`devicemapper`模式的更多信息，请参阅[官方文档](https://docs.docker.com/storage/storagedriver/device-mapper-driver)。2014年的[博客文章](https://developers.redhat.com/blog/2014/09/30/overview-storage-scalability-docker)还介绍了各种Docker存储后端的有趣历史。
+- en: '*VFS*'
+  id: totrans-318
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*VFS*'
+- en: Of the supported drivers, the Virtual File System (`vfs`) driver is the simplest,
+    and slowest, to start up. It doesn’t actually support copy-on-write. Instead,
+    it makes a new directory and copies over all of the existing data. It was originally
+    intended for use in tests and for mounting host volumes. The `vfs` driver is very
+    slow to create new containers, but runtime performance is native, which is a real
+    benefit. Its mechanism is very simple, which means there is less to go wrong.
+    Docker, Inc., does not recommend it for production use, so proceed with caution
+    if you think it’s the right solution for your production environment.
+  id: totrans-319
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在支持的驱动程序中，虚拟文件系统（`vfs`）驱动程序是启动最简单、但最慢的。它实际上不支持写时复制，而是创建一个新目录并复制所有现有数据。最初是用于测试和挂载主机卷。`vfs`
+    驱动程序在创建新容器时非常慢，但运行时性能是本地的，这是一个真正的优点。它的机制非常简单，意味着出错的可能性较小。Docker, Inc. 不建议在生产环境中使用它，因此如果您认为它适合您的生产环境，请谨慎使用。
+- en: '*ZFS*'
+  id: totrans-320
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*ZFS*'
+- en: ZFS, which was created by Sun Microsystems, is the most advanced open source
+    filesystem available on Linux. Due to licensing restrictions, it does not ship
+    in mainline Linux. However, the [ZFS on Linux project](https://zfsonlinux.org)
+    has made it pretty easy to install. Docker can then run on top of the ZFS filesystem
+    and use its advanced copy-on-write facilities to implement layering. Given that
+    ZFS is not in the mainline kernel and not available off the shelf in the major
+    commercial distributions, going this route requires some extended effort. However,
+    if you are already running ZFS in production, this may be your very best option.
+  id: totrans-321
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ZFS 是由 Sun Microsystems 创建的最先进的开源文件系统，在 Linux 上可用。由于许可限制，它不会随主线 Linux 发布。然而，[ZFS
+    on Linux 项目](https://zfsonlinux.org) 已经让其安装变得相当容易。然后 Docker 可以在 ZFS 文件系统上运行，并使用其先进的写时复制功能实现分层。考虑到
+    ZFS 不在主线内核中，并且在主要商业发行版中不可用，选择这条路线需要一些额外的努力。然而，如果您已经在生产中运行 ZFS，这可能是您最好的选择。
+- en: Warning
+  id: totrans-322
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Storage backends can have a big impact on the performance of your containers.
+    And if you swap the backend on your Docker server, all of your existing images
+    will disappear. They are not gone, but they will not be visible until you switch
+    the driver back. Caution is advised.
+  id: totrans-323
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 存储后端对容器的性能有很大影响。如果在 Docker 服务器上切换后端，所有现有的映像将消失。它们并未丢失，但在切换驱动程序后将无法看到。建议谨慎操作。
+- en: 'You can use `docker system info` to see which storage backend your system is
+    running:'
+  id: totrans-324
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以使用 `docker system info` 查看您的系统正在运行哪个存储后端：
+- en: '[PRE60]'
+  id: totrans-325
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE60]'
+- en: '[PRE61]'
+  id: totrans-326
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE61]'
+- en: As you can see, Docker will also tell you what the underlying or “backing” filesystem
+    is if there is one. Since we’re running `overlay2` here, we can see it’s backed
+    by an `ext` filesystem. In some cases, like with `devicemapper` on raw partitions
+    or with `btrfs`, there won’t be a different underlying filesystem.
+  id: totrans-327
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如您所见，Docker 也会告诉您如果有底层或“后备”文件系统。因为我们在这里运行的是 `overlay2`，我们可以看到它是由 `ext` 文件系统支持的。在某些情况下，如在原始分区上的
+    `devicemapper` 或 `btrfs` 上，可能不会有不同的底层文件系统。
+- en: 'Storage backends can be swapped via the `daemon-json` configuration file or
+    via command-line arguments to `dockerd` on startup. If we wanted to switch our
+    Ubuntu system from `aufs` to `devicemapper`, we could do so like this:'
+  id: totrans-328
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 存储后端可以通过 `daemon-json` 配置文件或在启动时通过 `dockerd` 命令行参数进行交换。如果我们想要将我们的 Ubuntu 系统从
+    `aufs` 切换到 `devicemapper`，我们可以这样做：
+- en: '[PRE62]'
+  id: totrans-329
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE62]'
+- en: That will work on pretty much any Linux system that can support Docker because
+    `devicemapper` is almost always present. The same is true for `overlay2` on modern
+    Linux kernels. However, you will need to have the actual underlying dependencies
+    in place for the other drivers. For example, without `aufs` in the kernel—​usually
+    via a kernel module—​Docker will not start up with `aufs` set as the storage driver,
+    and the same is true for Btrfs or ZFS.
+  id: totrans-330
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 几乎任何能够支持 Docker 的 Linux 系统都可以使用 `devicemapper`，因为它几乎总是存在的。对于现代 Linux 内核上的 `overlay2`
+    也是如此。但是，您需要确保其他驱动程序的实际底层依赖项已经就位。例如，如果内核中没有 `aufs`（通常通过内核模块），Docker 将无法启动 `aufs`
+    作为存储驱动程序；对于 Btrfs 或 ZFS 也是如此。
+- en: 'Getting the appropriate storage driver for your systems and deployment needs
+    is one of the more important technical points to get right when you’re taking
+    Docker to production. Be conservative: make sure the path you choose is well supported
+    in your kernel and distribution. Historically, this was a pain point, but most
+    of the drivers have reached reasonable maturity. Remain cautious for any newly
+    appearing backends, however, as this space continues to change. Getting new backend
+    drivers to work reliably for production systems takes quite some time, in our
+    experience.'
+  id: totrans-331
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在将Docker投入生产时，选择适合您系统和部署需求的适当存储驱动是其中更重要的技术点之一。要保守：确保您选择的路径在您的内核和发行版中得到良好支持。从历史上看，这曾是一个痛点，但大多数驱动程序已经达到了合理的成熟度。然而，在这个领域继续变化时，对于任何新出现的后端，仍需保持谨慎。根据我们的经验，使新的后端驱动程序在生产系统中可靠运行需要相当长的时间。
+- en: nsenter
+  id: totrans-332
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: nsenter
+- en: '`nsenter`, which is short for “namespace enter,” allows you to enter any Linux
+    namespace and is part of the core `util-linux` package from [kernel.org](https://mirrors.edge.kernel.org/pub/linux/utils/util-linux).
+    Using `nsenter`, we can get into a Linux container from the server itself, even
+    in situations where the `dockerd` server is not responding and we can’t use `docker
+    container exec`. It can also be used to manipulate things in a container as `root`
+    on the server that would otherwise be prevented by `docker container exec`. This
+    can be truly useful when you are debugging. Most of the time, `docker container
+    exec` is all you need, but you should have `nsenter` in your tool belt.'
+  id: totrans-333
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`nsenter`，即“命名空间进入”，允许您进入任何Linux命名空间，并且是来自[kernel.org](https://mirrors.edge.kernel.org/pub/linux/utils/util-linux)核心`util-linux`包的一部分。使用`nsenter`，我们可以从服务器本身进入Linux容器，即使在`dockerd`服务器无响应且无法使用`docker
+    container exec`的情况下也可以。它还可以用作在服务器上以`root`身份操作容器中否则无法完成的操作的工具。在调试时，这非常有用。大多数情况下，`docker
+    container exec`就足够了，但您应该在工具箱中备有`nsenter`。'
+- en: Most Linux distributions ship with a new-enough `util-linux` package that it
+    will contain `nsenter`. If you are on a distribution that does not have it, the
+    easiest way to get hold of `nsenter` is to install it via the third-party [Linux
+    container](https://github.com/jpetazzo/nsenter).
+  id: totrans-334
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大多数Linux发行版都提供了足够新的`util-linux`包，其中包含`nsenter`。如果您使用的发行版没有它，获取`nsenter`的最简单方法是通过第三方的[Linux容器](https://github.com/jpetazzo/nsenter)进行安装。
+- en: This container works by pulling a Docker image from the Docker Hub registry
+    and then running a Linux container that will install the `nsenter` command-line
+    tool into */usr/local/bin*. This might seem strange at first, but it’s a clever
+    way to allow you to install `nsenter` to any Docker server remotely using nothing
+    more than the `docker` command.
+  id: totrans-335
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此容器通过从Docker Hub注册表拉取Docker镜像，然后运行一个Linux容器，该容器将`nsenter`命令行工具安装到*/usr/local/bin*中。这乍一看可能有些奇怪，但这是一种聪明的方法，允许您远程使用仅仅使用`docker`命令将`nsenter`安装到任何Docker服务器中。
+- en: 'Unlike `docker container exec`, which can be run remotely, `nsenter` requires
+    that you run it on the server itself, directly or via a container. For our purposes,
+    we’ll use a specially crafted container to run `nsenter`. As with the `docker
+    container exec` example, we need to have a container running:'
+  id: totrans-336
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与可以远程运行的`docker container exec`不同，`nsenter`要求您直接在服务器上运行它，或通过容器间接运行。为了我们的目的，我们将使用一个特制的容器来运行`nsenter`。与`docker
+    container exec`的示例类似，我们需要运行一个容器：
+- en: '[PRE63]'
+  id: totrans-337
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE63]'
+- en: '`docker container exec` is pretty simple, but `nsenter` is a little inconvenient
+    to use. It needs to have the PID of the actual top-level process in your container,
+    which is not obvious to find. Let’s go ahead and run `nsenter` by hand so you
+    can see what’s going on.'
+  id: totrans-338
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`docker container exec`相当简单，但使用`nsenter`有些麻烦。它需要知道您容器中实际顶层进程的PID，而这并不明显。让我们手动运行`nsenter`，看看发生了什么。'
+- en: 'First, we need to find out the ID of the running container, because `nsenter`
+    needs to know that to access it. We can easily get this using `docker container
+    ls`:'
+  id: totrans-339
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，我们需要找出正在运行的容器的ID，因为`nsenter`需要知道这一点才能访问它。我们可以通过`docker container ls`轻松获取这个：
+- en: '[PRE64]'
+  id: totrans-340
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE64]'
+- en: 'The ID we want is that first field, `fd521174d66d`. With that, we can now find
+    the PID we need, like this:'
+  id: totrans-341
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们想要的ID是第一个字段，`fd521174d66d`。有了这个，我们现在可以找到我们需要的PID，就像这样：
+- en: '[PRE65]'
+  id: totrans-342
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE65]'
+- en: Tip
+  id: totrans-343
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: 'You can also get the real PIDs of the processes in your container by running
+    the command `docker container top`, followed by the container ID. In our example,
+    this would look like the following:'
+  id: totrans-344
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您还可以通过运行`docker container top`命令，后跟容器ID，获取容器中进程的真实PID。在我们的示例中，这将如下所示：
+- en: '[PRE66]'
+  id: totrans-345
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE66]'
+- en: 'Make sure to update the `--target` argument in the following command with the
+    process ID that you got from the previous command, then go ahead and invoke `nsenter`:'
+  id: totrans-346
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 确保在下面的命令中更新`--target`参数为前一个命令得到的进程ID，然后继续调用`nsenter`：
+- en: '[PRE67]'
+  id: totrans-347
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE67]'
+- en: If the result looks a lot like `docker container exec`, that’s because it does
+    almost the same thing under the hood!
+  id: totrans-348
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果结果看起来很像`docker container exec`，那是因为它在底层几乎做了相同的事情！
+- en: The command-line argument `--all` is telling `nsenter` that we want to enter
+    all of the namespaces used by the process specified with `--target`.
+  id: totrans-349
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 命令行参数`--all`告诉`nsenter`我们想进入由`--target`指定的进程使用的所有命名空间。
+- en: Debugging Shell-less Containers
+  id: totrans-350
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 调试无Shell的容器
+- en: 'If you want to troubleshoot a container that does not have a Unix shell, then
+    things get a little trickier, but it is still possible. For this example, we can
+    run a container that has a single executable in it:'
+  id: totrans-351
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你想调试一个没有Unix Shell的容器，那么事情就会变得有些棘手，但仍然是可能的。例如，我们可以运行一个只有单个可执行文件的容器：
+- en: '[PRE68]'
+  id: totrans-352
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE68]'
+- en: 'Let’s take a quick look at the processes that are running in this container:'
+  id: totrans-353
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们快速看一下运行在这个容器中的进程：
+- en: '[PRE69]'
+  id: totrans-354
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE69]'
+- en: 'If you try to launch a Unix shell in the container, you will get an error:'
+  id: totrans-355
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你尝试在容器中启动Unix Shell，你会收到一个错误：
+- en: '[PRE70]'
+  id: totrans-356
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE70]'
+- en: 'We can then launch a second container that includes a shell and some other
+    useful tools in a way that the new container can see the processes in the first
+    container, is using the same network stack as the first container, and has some
+    extra privileges which will be helpful for our debugging:'
+  id: totrans-357
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以启动第二个包含Shell和其他一些有用工具的容器，这样新容器就可以看到第一个容器中的进程，使用与第一个容器相同的网络堆栈，并具有一些额外的权限，这对我们的调试将很有帮助：
+- en: '[PRE71]'
+  id: totrans-358
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE71]'
+- en: 'If you type `ls` in this container, you will see in the filesystem the `spkane/train-os`
+    image, which contains `/bin/sh` and all of our debugging tools, but it does not
+    contain any of the files from our `outyet-small` container:'
+  id: totrans-359
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你在这个容器中输入`ls`，你会在文件系统中看到`spkane/train-os`镜像，其中包含`/bin/sh`和所有我们的调试工具，但不包含任何`outyet-small`容器中的文件：
+- en: '[PRE72]'
+  id: totrans-360
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE72]'
+- en: 'However, if you type `ps -ef`, you will notice that you see all of the processes
+    from the original container. This is because we told Docker to attach to use the
+    namespace from the `outyet-small` container by passing in `--pid=container:outyet-small`:'
+  id: totrans-361
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 但是，如果你输入`ps -ef`，你会注意到你看到了所有原始容器中的进程。这是因为我们告诉Docker附加到`outyet-small`容器的命名空间，通过传递`--pid=container:outyet-small`：
+- en: '[PRE73]'
+  id: totrans-362
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE73]'
+- en: 'And because we are using the same network stack, you can even `curl` the port
+    that the `outyet` service from the first container is bound to:'
+  id: totrans-363
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 并且因为我们使用相同的网络堆栈，你甚至可以`curl`第一个容器中`outyet`服务绑定的端口：
+- en: '[PRE74]'
+  id: totrans-364
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE74]'
+- en: '[PRE75]'
+  id: totrans-365
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE75]'
+- en: At this point, you could use `strace` or whatever else you wanted to debug your
+    application, and then finally `exit` the new debug container, leaving your original
+    container still running on the server.
+  id: totrans-366
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此时，你可以使用`strace`或任何其他你想用来调试应用程序的工具，最后退出新的调试容器，保留你的原始容器在服务器上继续运行。
+- en: Warning
+  id: totrans-367
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: If you run `strace`, you will need to type Ctrl-C to exit the `strace` process.
+  id: totrans-368
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你运行`strace`，你需要输入Ctrl-C来退出`strace`进程。
+- en: '[PRE76]'
+  id: totrans-369
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE76]'
+- en: 'You’ll notice that we could not see the filesystem in this use case. If you
+    need to view or copy files from the container, you can make use of the `docker
+    container export` command to retrieve a tarball of the container’s filesystem:'
+  id: totrans-370
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你会注意到在这种情况下我们无法看到文件系统。如果你需要查看或复制容器中的文件，你可以使用`docker container export`命令获取容器文件系统的tarball：
+- en: '[PRE77]'
+  id: totrans-371
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE77]'
+- en: 'You can then use `tar` to view or extract the files:'
+  id: totrans-372
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后你可以使用`tar`来查看或提取文件：
+- en: '[PRE78]'
+  id: totrans-373
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE78]'
+- en: When you are finished, go ahead and delete `export.tar`, and then stop the `outyet-small`
+    container with `docker container stop outyet-small`.
+  id: totrans-374
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 完成后，继续删除`export.tar`，然后用`docker container stop outyet-small`停止`outyet-small`容器。
+- en: Note
+  id: totrans-375
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: You can explore the container’s filesystem from the Docker server by navigating
+    directly to where the filesystem resides on the server’s storage system. This
+    will typically look something like */var/lib/docker/overlay/fd5…* but will vary
+    based on the Docker setup, storage backend, and container hash. You can determine
+    your Docker root directory by running `docker system info`.
+  id: totrans-376
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可以通过直接导航到服务器存储系统上文件系统所在的位置，从Docker服务器探索容器的文件系统。这通常看起来像*/var/lib/docker/overlay/fd5…*，但会根据Docker设置、存储后端和容器哈希而变化。你可以通过运行`docker
+    system info`来确定你的Docker根目录。
+- en: The Structure of Docker
+  id: totrans-377
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Docker的结构
+- en: 'What we think of as Docker is made of five major server-side components that
+    present a common front via the API. These parts are `dockerd`, `containerd`, `runc`,
+    `containerd-shim-runc-v2`, and the `docker-proxy` we described in [“Networking”](#docker_net).
+    We’ve spent a lot of time interacting with `dockerd` and the API it presents.
+    It is, in fact, responsible for orchestrating the whole set of components that
+    make up Docker. But when it starts a container, Docker relies on `containerd`
+    to handle instantiating the container. All of this used to be handled in the `dockerd`
+    process itself, but there were several shortcomings to that design:'
+  id: totrans-378
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们所认为的 Docker 由五个主要的服务器端组件组成，通过 API 提供一个共同的前端。这些部分是 `dockerd`、`containerd`、`runc`、`containerd-shim-runc-v2`，以及我们在
+    [“Networking”](#docker_net) 中描述的 `docker-proxy`。我们花了很多时间与 `dockerd` 以及它呈现的 API
+    进行交互。事实上，它负责编排组成 Docker 的整套组件。但是当它启动一个容器时，Docker 依赖于 `containerd` 来处理容器的实例化。所有这些过去都是在
+    `dockerd` 进程本身中处理的，但这种设计存在几个缺点：
+- en: '`dockerd` had a huge number of jobs.'
+  id: totrans-379
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`dockerd` 承担了大量的工作。'
+- en: A monolithic runtime prevented any of the components from being swapped out
+    easily.
+  id: totrans-380
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: 一个单片运行时阻止了任何组件的轻松替换。
+- en: '`dockerd` had to supervise the lifecycle of the containers themselves, and
+    it couldn’t be restarted or upgraded without losing all the running containers.'
+  id: totrans-381
+  prefs:
+  - PREF_UL
+  type: TYPE_NORMAL
+  zh: '`dockerd` 必须监督容器本身的生命周期，而且如果没有丢失所有正在运行的容器，它就不能重新启动或升级。'
+- en: Another major motivation for `containerd` was that, as we’ve just shown, containers
+    are not just a single abstraction. On the Linux platform, they are processes involving
+    namespaces, cgroups, and security rules in AppArmor or SELinux. But Docker also
+    runs on Windows and may even work on other platforms in the future. The idea of
+    `containerd` is to present a standard layer to the outside world where, regardless
+    of implementation, developers can think about the higher-level concepts of containers,
+    tasks, and snapshots rather than worry about specific Linux system calls. This
+    simplifies the Docker daemon a lot and enables platforms like Kubernetes to integrate
+    directly into `containerd` rather than using the Docker API. Kubernetes relied
+    on a Docker shim for many years, but nowadays it uses `containerd` directly.
+  id: totrans-382
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 另一个 `containerd` 的主要动机是，正如我们刚才所展示的，容器不仅仅是一个单一的抽象。在 Linux 平台上，它们是涉及命名空间、cgroups
+    和安全规则（如 AppArmor 或 SELinux）的进程。但 Docker 也可以运行在 Windows 上，未来可能会在其他平台上运行。`containerd`
+    的理念是向外界呈现一个标准层，在这个层面上，无论实现方式如何，开发人员都可以思考关于容器、任务和快照的高级概念，而不必担心特定的 Linux 系统调用。这极大地简化了
+    Docker 守护程序，并使得像 Kubernetes 这样的平台可以直接集成到 `containerd` 中，而不是使用 Docker API。多年来，Kubernetes
+    依赖于 Docker 的代理，但现在它直接使用 `containerd`。
+- en: 'Let’s take a look at the components (shown in [Figure 11-2](#figure11-2)) and
+    see what each of them does:'
+  id: totrans-383
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们看看这些组件（显示在 [图 11-2](#figure11-2) 中）并了解它们各自的作用：
+- en: '`dockerd`'
+  id: totrans-384
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`dockerd`'
+- en: One per server. Serves the API, builds container images, and does high-level
+    network management, including volumes, logging, statistics reporting, and more.
+  id: totrans-385
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每台服务器一个。提供 API 服务，构建容器镜像，并进行高级网络管理，包括卷、日志、统计报告等。
+- en: '`docker-proxy`'
+  id: totrans-386
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`docker-proxy`'
+- en: One per port forwarding rule. Each instance handles the forwarding of the defined
+    protocol traffic (TCP/UDP) from the defined host IP and port to the defined container
+    IP and port.
+  id: totrans-387
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个端口转发规则一个。每个实例处理从定义的主机 IP 和端口到定义的容器 IP 和端口的指定协议流量（TCP/UDP）的转发。
+- en: '`containerd`'
+  id: totrans-388
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`containerd`'
+- en: One per server. Manages the lifecycle, execution, copy-on-write filesystem,
+    and low-level networking drivers.
+  id: totrans-389
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每台服务器一个。管理生命周期、执行、写时复制文件系统和低级网络驱动程序。
+- en: '`containerd-shim-runc-v2`'
+  id: totrans-390
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`containerd-shim-runc-v2`'
+- en: One per container. Handles file descriptors passed to the container (e.g., `stdin`/`out`)
+    and reports exit status.
+  id: totrans-391
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个容器一个。处理传递给容器的文件描述符（如 `stdin`/`out`）并报告退出状态。
+- en: '`runc`'
+  id: totrans-392
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`runc`'
+- en: Constructs the container and executes it, gathers statistics, and reports events
+    on the lifecycle.
+  id: totrans-393
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 构建容器并执行它，收集统计信息，并报告生命周期事件。
+- en: '![Structure of Docker](assets/dur3_1102.png)'
+  id: totrans-394
+  prefs: []
+  type: TYPE_IMG
+  zh: '![Docker 结构](assets/dur3_1102.png)'
+- en: Figure 11-2\. Structure of Docker
+  id: totrans-395
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 11-2\. Docker 结构
+- en: '`dockerd` and `containerd` speak to each other over a socket, usually a Unix
+    socket, using a [gRPC API](https://grpc.io). `dockerd` is the client in this case,
+    and `containerd` is the server! `runc` is a CLI tool that reads configuration
+    from JSON on disk and is executed by `containerd`.'
+  id: totrans-396
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`dockerd` 和 `containerd` 通过一个套接字进行通信，通常是一个 Unix 套接字，使用 [gRPC API](https://grpc.io)。在这种情况下，`dockerd`
+    是客户端，而 `containerd` 是服务器！`runc` 是一个 CLI 工具，它从磁盘上的 JSON 配置中读取配置，并由 `containerd`
+    执行。'
+- en: When we start a new container, `dockerd` will handle making sure that the image
+    is present or will pull it from the repository specified in the image name. (In
+    the future, this responsibility may shift to `containerd`, which already supports
+    image pulls.) The Docker daemon also does most of the rest of the setup around
+    the container, like launching `docker-proxy` to set up port forwarding. It then
+    talks to `containerd` and asks it to run the container. `containerd` will take
+    the image and apply the container configuration passed in from `dockerd` to generate
+    an [OCI bundle](https://www.opencontainers.org) that `runc` can execute.^([1](ch11.html#idm46803124791184))
+    It will then execute `containerd-shim-runc-v2` to start the container. This will
+    in turn execute `runc` to construct and start the container. However, `runc` will
+    not stay running, and the `containerd-shim-runc-v2` will be the actual parent
+    process of the new container process.
+  id: totrans-397
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当我们启动一个新容器时，`dockerd` 将确保镜像存在或将其从镜像名中指定的仓库拉取（将来，这个责任可能会转移到已支持镜像拉取的 `containerd`
+    上）。Docker 守护进程还会处理大部分围绕容器的其他设置，比如启动 `docker-proxy` 来设置端口转发。然后它与 `containerd` 进行通信，并要求其运行容器。`containerd`
+    将获取镜像，并将从 `dockerd` 传递的容器配置应用于生成一个 [OCI bundle](https://www.opencontainers.org)，供
+    `runc` 执行。^([1](ch11.html#idm46803124791184)) 然后它将执行 `containerd-shim-runc-v2`
+    来启动容器。这将反过来执行 `runc` 来构建并启动容器。但是，`runc` 不会保持运行状态，`containerd-shim-runc-v2` 将成为新容器进程的实际父进程。
+- en: If we launch a container and then look at the output of `ps axlf` on the Docker
+    server, we can see the parent/child relationship between the various processes.
+    PID 1 is `/sbin/init` and is the parent process for `containerd`, `dockerd`, and
+    the `containerd-shim-runc-v2`.
+  id: totrans-398
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果我们启动一个容器，然后查看 Docker 服务器上 `ps axlf` 命令的输出，我们可以看到各个进程之间的父子关系。PID 1 是 `/sbin/init`，是
+    `containerd`、`dockerd` 和 `containerd-shim-runc-v2` 的父进程。
+- en: Note
+  id: totrans-399
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Docker Desktop’s VM contains minimal versions of most Linux tools, and some
+    of these commands may not produce the same output that you will get if you use
+    a standard Linux server as the Docker daemon host.
+  id: totrans-400
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Docker Desktop 的虚拟机包含大多数 Linux 工具的最小版本，其中一些命令的输出可能与使用标准 Linux 服务器作为 Docker 守护进程主机时不同。
+- en: '[PRE79]'
+  id: totrans-401
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE79]'
+- en: So what happened to `runc`? Its job is to construct the container and start
+    it running, then it leaves and its children are inherited by its parent, the `containerd-shim-runc-v2`.
+    This leaves the minimal amount of code in memory necessary to manage the file
+    descriptors and exit status for `containerd`.
+  id: totrans-402
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 那么 `runc` 发生了什么？它的任务是构建容器并启动它运行，然后它离开并且它的子进程被其父进程 `containerd-shim-runc-v2`
+    继承。这样在内存中保留了管理文件描述符和 `containerd` 退出状态所需的最小代码量。
+- en: 'To help you understand what’s going on here, let’s take a deeper look at what
+    happens when we start a container. We’ll just reuse the `nginx` container that
+    we already have running for this since it’s very lightweight and the container
+    stays running when backgrounded:'
+  id: totrans-403
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了帮助您理解这里发生的情况，让我们深入了解启动容器时发生的情况。为此，我们将重复使用我们已经在运行的 `nginx` 容器，因为它非常轻量级且在后台运行时容器保持运行状态：
+- en: '[PRE80]'
+  id: totrans-404
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE80]'
+- en: 'Let’s use the `runc` runtime CLI tool to take a look at its view of the system.
+    We could see a similar view from `ctr`, the CLI client for `containerd`, but `runc`
+    is nicer to work with, and it’s at the lowest level:'
+  id: totrans-405
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们使用 `runc` 运行时 CLI 工具来查看系统的视图。我们可以从 `containerd` 的 CLI 客户端 `ctr` 中看到类似的视图，但
+    `runc` 更容易使用，并且它处于更低的层级上：
+- en: '[PRE81]'
+  id: totrans-406
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE81]'
+- en: 'We normally need root privileges to run this command. Unlike with the Docker
+    CLI, we can’t rely on the Docker daemon’s permissions to let us access lower-level
+    functionality. With `runc` we need direct access to these privileges. What we
+    can see in the output from `runc` is our container! This is the actual OCI runtime
+    bundle that represents our container, with which it shares an ID. Notice that
+    it also gives us the PID of the container; that’s the PID on the host of the application
+    running inside the container:'
+  id: totrans-407
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们通常需要 root 权限来运行这个命令。与 Docker CLI 不同，我们不能依赖 Docker 守护进程的权限来让我们访问更低级别的功能。使用
+    `runc`，我们需要直接访问这些权限。从 `runc` 的输出中我们能看到我们的容器！这是实际的 OCI 运行时捆绑包，代表我们的容器，并与之共享一个 ID。注意它还给出了容器的
+    PID；这是容器内运行的应用程序在主机上的 PID：
+- en: '[PRE82]'
+  id: totrans-408
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE82]'
+- en: 'If we look in the bundle, we’ll see a set of named pipes for our container:'
+  id: totrans-409
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果我们在捆绑包中查看，我们会看到一组命名管道用于我们的容器：
+- en: '[PRE83]'
+  id: totrans-410
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE83]'
+- en: 'You can find a lot of additional files related to your container underneath
+    */run/containerd/io.containerd.runtime.v2.task/moby*:'
+  id: totrans-411
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在 */run/containerd/io.containerd.runtime.v2.task/moby* 下找到与您的容器相关的许多附加文件：
+- en: '[PRE84]'
+  id: totrans-412
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE84]'
+- en: The *config.json* file is a very verbose equivalent of what Docker shows in
+    `docker container inspect`. We are not going to reproduce it here due to size,
+    but we encourage you to dig around and see what’s in the config. You may, for
+    example, note all the entries for the [“Secure Computing Mode”](#seccomp) that
+    are present in it.
+  id: totrans-413
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '*config.json*文件是`docker container inspect`所显示内容的一个非常冗长的等价版本。由于尺寸较大，我们不会在这里进行复制，但我们鼓励你深入挖掘并查看配置文件中的内容。例如，你可能会注意到其中涉及到的所有关于[“安全计算模式”](#seccomp)的条目。'
+- en: 'If you want to explore `runc` some more, you can experiment with the CLI tool.
+    Most of this is already available in Docker, usually on a higher and more useful
+    level than the one available in `runc`. But it can be useful to explore so that
+    you can better understand how containers and the Docker stack are put together.
+    It’s also interesting to watch the events that `runc` reports about a running
+    container. We can hook into those with the `runc events` command. During the normal
+    operations of a running container, there is not a lot of activity in the events
+    stream. But `runc` regularly reports runtime statistics, which we can see in JSON
+    format:'
+  id: totrans-414
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你想进一步探索`runc`，可以尝试使用其CLI工具进行实验。大部分功能在Docker中已经提供，通常在比`runc`更高级和更有用的层级上。但是，通过探索`runc`，你可以更好地理解容器和Docker堆栈是如何组合在一起的。此外，观察`runc`报告的运行容器事件也是很有趣的。我们可以使用`runc
+    events`命令进行监听。在运行容器的正常操作过程中，事件流中并不会有太多的活动。但`runc`定期报告运行时统计信息，我们可以以JSON格式看到这些信息。
+- en: '[PRE85]'
+  id: totrans-415
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE85]'
+- en: '[PRE86]'
+  id: totrans-416
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE86]'
+- en: To conserve space, we have removed much of the output from the previous command,
+    but this might look familiar to you now that we’ve spent some time looking at
+    `docker container stats`. Guess where Docker gets those statistics by default.
+    That’s right, `runc`.
+  id: totrans-417
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了节省空间，我们已经从前一个命令的输出中删除了大部分内容，但现在你可能已经很熟悉`docker container stats`所显示的内容了。猜猜Docker默认从哪里获取这些统计信息。没错，就是`runc`。
+- en: At this point, you can go ahead and stop the example container by running `docker
+    container stop nginx-test`.
+  id: totrans-418
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，你可以运行`docker container stop nginx-test`来停止示例容器。
+- en: Swapping Runtimes
+  id: totrans-419
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 切换运行时环境
+- en: As we mentioned in [Chapter 2](ch02.html#docker_glance), there are a few other
+    native OCI-compliant runtimes that can be substituted in place of `runc`. As an
+    example, there is [crun](https://github.com/containers/crun), which describes
+    itself as “a fast and low-memory footprint OCI Container Runtime fully written
+    in C.” Some other alternative native runtimes, like `railcar` and `rkt`, have
+    been deprecated and largely abandoned. In the next section, we’ll talk about a
+    sandboxed runtime from Google, called [gVisor](https://gvisor.dev), which provides
+    a user space runtime for untrusted code.
+  id: totrans-420
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如我们在[第2章](ch02.html#docker_glance)中提到的，还有一些其他本地的OCI兼容运行时可以替代`runc`。例如，有一个叫做[crun](https://github.com/containers/crun)的项目，它自称是“一个快速且低内存占用的OCI容器运行时，完全由C语言编写”。一些其他的本地运行时选择，如`railcar`和`rkt`，已经被弃用并基本被放弃。在接下来的章节中，我们将会讨论谷歌的一个沙箱运行时，称为[gVisor](https://gvisor.dev)，它为不受信任的代码提供了一个用户空间运行时环境。
+- en: Tip
+  id: totrans-421
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 小贴士
+- en: '[Kata Containers](https://github.com/kata-containers) is a very interesting
+    open source project that provides a runtime capable of using VMs as an isolation
+    layer for containers. At the time of this writing, version 3 of Kata works with
+    Kubernetes but does not work with Docker. The Kata developers [are working with
+    the Docker developers](https://github.com/kata-containers/kata-containers/issues/5321)
+    to try and improve this situation and create better documentation. This may be
+    resolved when Docker 22.06 is publicly released.'
+  id: totrans-422
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[Kata Containers](https://github.com/kata-containers)是一个非常有趣的开源项目，它提供了一个能够利用虚拟机作为容器隔离层的运行时环境。截至目前，Kata的第三版可以与Kubernetes一起使用，但无法与Docker兼容。Kata的开发者正在与Docker的开发者合作（链接至[此处](https://github.com/kata-containers/kata-containers/issues/5321)），试图改善这种情况并创建更好的文档。当Docker
+    22.06公开发布时，这个问题可能会得到解决。'
+- en: gVisor
+  id: totrans-423
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: gVisor
+- en: In mid-2018, Google released gVisor, which is a completely new take on a runtime.
+    It’s OCI compliant and can therefore also be used with Docker. However, gVisor
+    also runs in user space and isolates the application by implementing system calls
+    there rather than relying on Kernel isolation mechanisms. It doesn’t redirect
+    the calls to the kernel; rather, it implements them itself using kernel calls.
+    The most obvious win from this approach is security isolation since gVisor itself
+    is running in user space and thus is isolated from the kernel. Any security issues
+    are still trapped in user space, and all of the kernel security controls we’ve
+    mentioned still apply. The downside is that it typically performs worse than Kernel
+    or VM-based solutions.
+  id: totrans-424
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 2018年中期，Google发布了gVisor，这是一种全新的运行时方式。它符合OCI规范，因此也可以与Docker一起使用。但是，gVisor也在用户空间运行，并通过在那里实现系统调用来隔离应用程序，而不是依赖于内核隔离机制。它不会将调用重定向到内核，而是使用内核调用自行实现。这种方法的最明显优势是安全隔离，因为gVisor本身运行在用户空间，因此与内核隔离开来。任何安全问题仍然被困在用户空间中，并且我们提到的所有内核安全控制仍然适用。缺点是它通常性能比基于内核或虚拟机的解决方案差。
+- en: If you have processes that do not require massive scaling but do require highly
+    secure isolation, gVisor may be an ideal solution for you. A common use case for
+    gVisor is when your containers will be running code provided by your end users
+    and you cannot guarantee that the code is benign. Let’s run a quick demo so you
+    can see how gVisor works.
+  id: totrans-425
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您有一些不需要大规模扩展但需要高度安全隔离的流程，gVisor可能是您的理想选择。gVisor的一个常见用例是当您的容器将运行由最终用户提供的代码，且您无法保证该代码是良性的时候。让我们快速演示一下，这样您就可以看到gVisor的工作原理。
+- en: Installation is covered in the [gVisor documentation](https://gvisor.dev/docs/user_guide/quick_start/docker).
+    It is written in Go and is delivered as a single executable with no packages required.
+    Once it’s installed, you can start containers with the `runsc` runtime. To demonstrate
+    the different isolation levels offered by gVisor, we’ll run a shell using it and
+    compare that to one using a standard container.
+  id: totrans-426
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 安装过程详见[gVisor文档](https://gvisor.dev/docs/user_guide/quick_start/docker)。它是用Go语言编写的，作为一个单独的可执行文件提供，无需其他包。一旦安装完成，您可以使用`runsc`运行时启动容器。为了演示gVisor提供的不同隔离级别，我们将使用它运行一个shell，并与使用标准容器运行的情况进行比较。
+- en: 'First, let’s start a shell on gVisor and look around a bit:'
+  id: totrans-427
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 首先，让我们在gVisor上启动一个shell，稍微查看一下：
+- en: '[PRE87]'
+  id: totrans-428
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE87]'
+- en: 'That will drop us into a shell running in an Alpine Linux container. One very
+    revealing difference is apparent when you look at the output of the `mount` command:'
+  id: totrans-429
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这将使我们进入一个运行在Alpine Linux容器中的shell。当您查看`mount`命令的输出时，会发现一个非常明显的差异：
+- en: '[PRE88]'
+  id: totrans-430
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE88]'
+- en: 'There is not very much in there! Compare that with the output from a traditional
+    container launched with `runc`:'
+  id: totrans-431
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 没有什么内容！与使用`runc`启动的传统容器的输出相比：
+- en: '[PRE89]'
+  id: totrans-432
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE89]'
+- en: 'This output was 24 lines long, so we truncated it a lot. It should be pretty
+    clear that there is a lot of system detail here. That detail represents the kernel
+    footprint exposed to the container in one way or another. The contrast with the
+    very short output from gVisor should give you an idea of the differing level of
+    isolation. We won’t spend a lot more time on it, but it’s also worth looking at
+    the output of `ip addr show` as well. On gVisor:'
+  id: totrans-433
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此输出长达24行，因此我们对其进行了大幅截断。这里的系统细节非常丰富，它代表了以某种方式向容器暴露的内核足迹。与gVisor的非常短的输出形成鲜明对比，这应该可以让您了解到不同的隔离级别。我们不会花太多时间来深入讨论这一点，但查看`ip
+    addr show`的输出也是值得的。在gVisor上：
+- en: '[PRE90]'
+  id: totrans-434
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE90]'
+- en: 'And in a normal Linux container:'
+  id: totrans-435
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 而在一个正常的Linux容器中：
+- en: '[PRE91]'
+  id: totrans-436
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE91]'
+- en: 'Even the Linux */proc* filesystem exposes a lot less in the gVisor container:'
+  id: totrans-437
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 即使是Linux的*/proc*文件系统在gVisor容器中也会暴露得少得多：
+- en: '[PRE92]'
+  id: totrans-438
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE92]'
+- en: 'Once more comparing this to a normal Linux container:'
+  id: totrans-439
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 再次将其与正常的Linux容器进行比较：
+- en: '[PRE93]'
+  id: totrans-440
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE93]'
+- en: Aside from being more isolated, the experience inside the gVisor container is
+    interesting because it looks a lot more like what you might expect to see in an
+    isolated environment. Sandboxed runtimes like gVisor provide a lot of potential
+    for securely running untrusted workloads by providing a much stronger barrier
+    between the application and the underlying kernel.
+  id: totrans-441
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了更加隔离之外，在gVisor容器内部的体验非常有趣，因为它看起来更像是您在一个隔离环境中期望看到的样子。像gVisor这样的沙箱运行时通过在应用程序和底层内核之间提供更强大的隔离屏障，为安全运行不受信任的工作负载提供了很多潜力。
+- en: Wrap-Up
+  id: totrans-442
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 总结
+- en: That’s a quick tour of some of the more advanced concepts of Docker. Hopefully,
+    it has expanded your knowledge of what is happening behind the scenes and has
+    opened up some avenues for you to continue your exploration. As you build and
+    maintain a production platform, this background should provide you with a broad
+    enough perspective of Docker to know where to start when you need to customize
+    the system.
+  id: totrans-443
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这只是 Docker 的一些更高级概念的快速导览。希望它扩展了你对幕后发生的事情的知识，并为你继续探索打开了一些途径。当你建立和维护一个生产平台时，这些背景知识应该为你提供足够广阔的视角，让你知道在需要自定义系统时从哪里开始。
+- en: '^([1](ch11.html#idm46803124791184-marker)) To quote the OCI website: “The Open
+    Container Initiative (OCI) is a lightweight, open governance structure (project),
+    formed under the auspices of the Linux Foundation, for the express purpose of
+    creating open industry standards around container formats and runtime. The OCI
+    was launched on June 22nd, 2015 by Docker, CoreOS and other leaders in the container
+    industry.”'
+  id: totrans-444
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([1](ch11.html#idm46803124791184-marker)) 引用 OCI 网站的话：“开放容器倡议（OCI）是一个轻量级的开放治理结构（项目），由
+    Linux 基金会支持，旨在围绕容器格式和运行时创建开放行业标准。OCI 由 Docker、CoreOS 和容器行业的其他领导者于 2015 年 6 月 22
+    日推出。”

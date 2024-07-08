@@ -1,0 +1,875 @@
+- en: Chapter 7\. Debugging Containers
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第7章 调试容器
+- en: Once you’ve shipped an application to production, there will come a day when
+    it’s not working as expected. It’s always nice to know ahead of time what to expect
+    when that day comes. It’s also important to have a good understanding of debugging
+    containers before moving on to more complex deployments. Without debugging skills,
+    it will be difficult to see where orchestration systems have gone wrong. So let’s
+    take a look at debugging containers.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一旦你将应用程序部署到生产环境，总会有一天它不如预期般工作。提前了解那一天到来时可以期待什么总是很好的。在继续进行更复杂的部署之前，了解调试容器的基础知识也是很重要的。没有调试技能，将很难看出编排系统出了什么问题。因此，让我们来看看调试容器的内容。
+- en: In the end, debugging a containerized application is not all that different
+    from debugging a normal process on a system except that the tools are somewhat
+    different. Docker provides some pretty nice tooling to help you out! Some of these
+    map to regular system tools, and some go further.
+  id: totrans-2
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 总的来说，调试容器化应用程序与调试系统上的普通进程并没有太大的区别，只是工具有些不同而已。Docker提供了一些非常好的工具来帮助你！其中一些工具映射到常规系统工具，而一些工具则更进一步。
+- en: It is also critical to understand that your application is not running in a
+    separate system from the other Docker processes. They share a kernel, and depending
+    on your container configuration, they may share other things like a storage subsystem
+    and network interfaces. This means that you can get a lot of information about
+    what your container is doing from the system.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 还很重要的一点是要理解，你的应用程序并不是在与其他Docker进程分离的系统中运行。它们共享一个内核，并且根据容器的配置，它们可能会共享其他内容，如存储子系统和网络接口。这意味着你可以从系统中获取关于容器正在执行的操作的大量信息。
+- en: If you’re used to debugging applications in a VM environment, you might think
+    you would need to enter the container to inspect an application’s memory or CPU
+    use, or to debug its system calls. However, this is not so! Despite feeling in
+    many ways like a virtualization layer, processes in containers are just processes
+    on the Linux host itself. If you want to see a process list across all of the
+    Linux containers on a machine, you could log in to the server and run `ps` with
+    your favorite command-line options. However, you can use the `docker container
+    top` command from anywhere to see the list of processes running in your container
+    from the viewpoint of the underlying Linux kernel. Let’s take a more detailed
+    look at some of the things that you can do when debugging a containerized application
+    that do not require the use of either `docker container exec` or `nsenter`.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你习惯于在虚拟机环境中调试应用程序，你可能会认为需要进入容器来检查应用程序的内存或CPU使用情况，或者调试其系统调用。但事实并非如此！尽管在许多方面感觉像虚拟化层，但容器中的进程只是Linux主机本身上的进程。如果你想查看机器上所有Linux容器的进程列表，你可以登录服务器并以你喜欢的命令行选项运行`ps`命令。但是，你可以从任何地方使用`docker
+    container top`命令来查看正在运行的容器中的进程列表，从底层Linux内核的视角来看。让我们更详细地看看在调试容器化应用程序时可以做的一些事情，这些事情不需要使用`docker
+    container exec`或`nsenter`。
+- en: Process Output
+  id: totrans-5
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 进程输出
+- en: 'One of the first things you’ll want to know when debugging a container is what
+    is running inside it. As we mentioned previously, Docker has a built-in command
+    for doing just that: `docker container top`. This is not the only way to see what’s
+    going on inside a container, but it is by far the easiest to use. Let’s see how
+    that works:'
+  id: totrans-6
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在调试容器时，你首先想知道的是容器内部正在运行什么。正如我们之前提到的，Docker有一个内置命令可以做到这一点：`docker container top`。这不是查看容器内部情况的唯一方法，但是是最简单的方法。让我们看看它是如何工作的：
+- en: '[PRE0]'
+  id: totrans-7
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: To run `docker container top`, we need to pass it the name or ID of our container,
+    and then we receive a nice listing of what is running inside our container, ordered
+    by PID just as we’d expect from Linux `ps` output.
+  id: totrans-8
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要运行`docker container top`命令，我们需要向其传递容器的名称或ID，然后我们会得到一个很好的列表，显示容器内部正在运行的内容，按PID排序，就像我们从Linux的`ps`命令输出所期望的那样。
+- en: There are some oddities here, though. The primary one is the name-spacing of
+    user IDs and filesystems.
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 但这里有一些奇怪之处。主要的一个是用户ID和文件系统的命名空间。
+- en: It is important to understand that the username for a particular user ID (UID)
+    can be completely different between each container and the host system. It is
+    even possible that a specific UID has no named user in the container or host’s
+    */etc/passwd* file associated with it at all. This is because Unix does not require
+    a UID to have a named user associated with it, and Linux namespaces, which we
+    discuss much more in [“Namespaces”](ch11.html#namespaces), provide some isolation
+    between the container’s concept of valid users and those on the underlying host.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 重要的是要理解，特定用户ID（UID）的用户名在每个容器和主机系统之间可能完全不同。甚至可能会出现某个特定UID在容器或主机的*/etc/passwd*文件中没有任何关联的情况。这是因为Unix不要求UID必须与命名用户关联，而我们在[“命名空间”](ch11.html#namespaces)中详细讨论的Linux命名空间提供了一些容器对有效用户的概念与基础主机之间的隔离。
+- en: 'Let’s look at a more concrete example of this. Let’s consider a production
+    Docker server running Ubuntu 22.04 and a container running on it that has an Ubuntu
+    distribution inside. If you run the following commands on the Ubuntu host, you
+    would see that UID 7 is named `lp`:'
+  id: totrans-11
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们看一个更具体的例子。考虑一个运行Ubuntu 22.04的生产Docker服务器以及其中运行一个内部有Ubuntu发行版的容器。如果你在Ubuntu主机上运行以下命令，你会看到UID
+    7被命名为`lp`：
+- en: '[PRE1]'
+  id: totrans-12
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: Note
+  id: totrans-13
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: There is nothing special about the UID number we are using here. You don’t need
+    to take any particular note of it. It was chosen simply because it is used by
+    default on both platforms but represents a different username.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里使用的UID号并没有什么特别之处。你不需要特别注意它。之所以选择它，只是因为它在两个平台上默认使用，但代表着不同的用户名。
+- en: 'If we then enter the standard Fedora container on that Docker host, you will
+    see that UID 7 is set to `halt` in */etc/passwd*. By running the following commands,
+    you can see that the container has a completely different perspective of who UID
+    7 is:'
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果我们然后进入该Docker主机上的标准Fedora容器，你会看到UID 7在*/etc/passwd*中被设置为`halt`。通过运行以下命令，您可以看到容器对UID
+    7有完全不同的看法：
+- en: '[PRE2]'
+  id: totrans-16
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'If we then run `ps aux` on the theoretical Ubuntu Docker server while that
+    container is running as UID 7 (`-u 7`), we see that the Docker host shows the
+    container process as being run by `lp` instead of `halt`:'
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果我们在理论上的Ubuntu Docker服务器上以UID 7（`-u 7`）运行`ps aux`，我们会看到Docker主机显示容器进程由`lp`而不是`halt`运行：
+- en: '[PRE3]'
+  id: totrans-18
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: This could be particularly confusing if a well-known user like `nagios` or `postgres`
+    were configured on the host system but not in the container, yet the container
+    ran its process with the same ID. This namespacing can make the `ps` output look
+    quite strange. It might, for example, look like the `nagios` user on your Docker
+    host is running the `postgresql` daemon that was launched inside a container,
+    if you don’t pay close attention.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这可能特别令人困惑，特别是如果像`nagios`或`postgres`这样的知名用户在主机系统上配置好了，但在容器中没有配置，而容器却使用相同的ID运行其进程。这种命名空间可能会导致`ps`命令的输出看起来非常奇怪。例如，如果你不仔细观察，可能会看到你的Docker主机上的`nagios`用户正在运行容器内启动的`postgresql`守护进程。
+- en: Tip
+  id: totrans-20
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: One solution to this is to dedicate a nonzero UID to your containers. On your
+    Docker servers, you can create a `container` user as UID 5000 and then create
+    the same user in your base container images. If you then run all your containers
+    as UID 5000 (`-u 5000`), not only will you improve the security of your system
+    by not running container processes as UID 0, but you will also make the `ps` output
+    on the Docker host easier to decipher by displaying the `container` user for all
+    of your running container processes. Some systems use the `nobody` or `daemon`
+    user for the same purpose, but we prefer `container` for clarity. There is a little
+    more detail about how this works in [“Namespaces”](ch11.html#namespaces).
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 其中一个解决方案是为您的容器分配一个非零的UID。在您的Docker服务器上，您可以创建一个UID为5000的`container`用户，然后在基础容器镜像中创建相同的用户。如果您然后将所有容器作为UID
+    5000（`-u 5000`）运行，不仅可以通过在Docker主机上显示所有运行容器进程的`container`用户来提高系统安全性，而且还可以使`ps`命令的输出更易于解析。一些系统使用`nobody`或`daemon`用户来达到相同的目的，但我们更喜欢`container`以提升清晰度。关于这种工作方式的更多细节可以在[“命名空间”](ch11.html#namespaces)中找到。
+- en: Likewise, because the process has a different view of the filesystem, paths
+    that are shown in the `ps` output are relative to the container and not the host.
+    In these cases, knowing it is in a container is a big win.
+  id: totrans-22
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 同样，由于进程对文件系统有不同的视图，`ps`输出中显示的路径是相对于容器而不是主机的。在这些情况下，知道它在容器中是一大优势。
+- en: So that’s how you use the Docker tooling to look at what’s running in a container.
+    But that’s not the only way, and in a debugging situation, it might not be the
+    best way. If you hop onto a Docker server and run a normal Linux `ps` to see what’s
+    running, you get a full list of everything containerized and not containerized
+    just as if they were all equivalent processes. There are some ways to look at
+    the process output to make things a lot clearer. For example, you can facilitate
+    debugging by looking at the Linux `ps` output in tree form so that you can see
+    all of the processes descended from Docker. Here’s what that might look like when
+    you use the BSD command-line flags to look at a system that is currently running
+    two containers; we’ll chop the output to just the part we care about.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这就是你使用 Docker 工具来查看容器中正在运行的内容的方法。但这并不是唯一的方式，在调试情况下，这可能不是最佳方式。如果你进入 Docker 服务器并运行普通的
+    Linux `ps` 命令来查看正在运行的内容，你会得到一个包含所有容器化和非容器化内容的完整列表，就像它们都是等效进程一样。有一些方法可以查看进程输出以使事情更加清晰。例如，你可以通过查看
+    Linux `ps` 输出的树形式来促进调试，以便你可以看到所有从 Docker 派生的进程。当你使用 BSD 命令行标志查看当前运行两个容器的系统时，这可能是你会看到的样子；我们将只截取我们关心的部分输出。
+- en: Note
+  id: totrans-24
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Docker Desktop’s VM contains minimal versions of most Linux tools, and some
+    of these commands may not produce the same output that you will get if you use
+    a standard Linux server as the Docker daemon host.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Docker Desktop 的虚拟机包含大多数 Linux 工具的最小版本，其中一些命令的输出可能与将标准 Linux 服务器用作 Docker 守护程序主机时获得的输出不同。
+- en: '[PRE4]'
+  id: totrans-26
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: Note
+  id: totrans-27
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Many of the `ps` commands in this example work only on Linux distributions with
+    the full `ps` command. Some stripped-down versions of Linux, like Alpine, run
+    the BusyBox shell, which does not have full `ps` support and won’t show some of
+    this output. We recommend running a full distribution on your host systems like
+    Ubuntu or Fedora CoreOS.
+  id: totrans-28
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在本示例中，许多 `ps` 命令仅适用于具有完整 `ps` 命令的 Linux 发行版。某些精简版的 Linux，如 Alpine，运行 BusyBox
+    shell，它不支持完整的 `ps` 并且不会显示某些输出。我们建议在主机系统上运行类似 Ubuntu 或 Fedora CoreOS 的完整发行版。
+- en: Here you can see that we’re running one instance of `containerd`, which is the
+    main container runtime used by the Docker daemon. `dockerd` has two `docker-proxy`
+    sub-processes running at the moment, which we will discuss in more detail in [“Network
+    Inspection”](#net_inspect).
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这里，你可以看到我们正在运行一个 `containerd` 实例，它是 Docker 守护程序使用的主要容器运行时。`dockerd` 目前有两个 `docker-proxy`
+    子进程运行，我们将在 [“网络检查”](#net_inspect) 中详细讨论它们。
+- en: Each process that is using `containerd-shim-runc-v2` represents a single container
+    and all of the processes that are running inside that container. In this example,
+    we have two containers. They show up as `containerd-shim-runc-v2`, followed by
+    some additional information about the process, including the container ID. In
+    this case, we are running one instance of Google’s `cadvisor` and one instance
+    of `sleep` in another container. Each container that has ports mapped will have
+    at least one `docker-proxy` process that is used to map the required network ports
+    between the container and the host Docker server. In this example, both `docker-proxy`
+    processes are related to `cadvisor`. One is mapping the ports for IPv4 addresses,
+    and the other is mapping ports for IPv6 addresses.
+  id: totrans-30
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每个使用 `containerd-shim-runc-v2` 的进程表示一个单独的容器以及在该容器中运行的所有进程。在这个例子中，我们有两个容器。它们显示为
+    `containerd-shim-runc-v2`，后面跟着有关该进程的一些额外信息，包括容器 ID。在这种情况下，我们正在一个实例中运行 Google 的
+    `cadvisor` 和另一个容器中的 `sleep`。每个映射端口的容器将至少有一个 `docker-proxy` 进程，用于在容器和主机 Docker
+    服务器之间映射所需的网络端口。在本示例中，两个 `docker-proxy` 进程都与 `cadvisor` 相关联。其中一个映射 IPv4 地址的端口，另一个映射
+    IPv6 地址的端口。
+- en: 'Because of the tree output from `ps`, it’s pretty clear which processes are
+    running in which containers. If you’re a bigger fan of Unix SysV command-line
+    flags, you can get a similar, but not as nice-looking, tree output with `ps -ejH`:'
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 由于 `ps` 的树形输出，很明显可以看出哪些进程运行在哪些容器中。如果你更喜欢 Unix SysV 命令行标志，可以使用 `ps -ejH` 获得类似但不够美观的树形输出：
+- en: '[PRE5]'
+  id: totrans-32
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: 'You can get a more concise view of the `docker` process tree by using the `pstree`
+    command. Here, we’ll use `pidof` to scope it to the tree belonging to `docker`:'
+  id: totrans-33
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通过使用 `pstree` 命令，可以更简洁地查看 `docker` 进程树。在这里，我们将使用 `pidof` 将其范围限定为属于 `docker`
+    的树：
+- en: '[PRE6]'
+  id: totrans-34
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: This doesn’t show us PIDs and therefore is useful only for getting a sense of
+    how things are connected. But this is conceptually clear output when there are
+    a lot of processes running on a host. It’s far more concise and provides a nice
+    high-level map of how things connect. Here we can see the same containers that
+    were shown in the previous `ps` output, but the tree is collapsed so we get multipliers
+    like `7*` when there are seven duplicate processes.
+  id: totrans-35
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这不会显示PIDs，因此只能用于了解连接方式。但是，当主机上运行大量进程时，这个概念上清晰的输出会更加简洁，提供了一个很好的高级地图，展示了事物如何连接。在这里，我们可以看到与先前的`ps`输出中显示的相同的容器，但是树被折叠了，所以当有七个重复的进程时会得到`7*`这样的倍增器。
+- en: 'We can get a full tree with PIDs if we run `pstree`, as shown here:'
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果我们运行`pstree`，我们可以得到一个带有PIDs的完整树，如下所示：
+- en: '[PRE7]'
+  id: totrans-37
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: This output provides us with a very good look at all the processes attached
+    to Docker and what they are running.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此输出为我们提供了一个非常好的视角，查看Docker上所有的进程及其运行情况。
+- en: 'If you wanted to inspect a single container and its processes, you could determine
+    the container’s main process ID and then use `pstree` to see all the related subprocesses:'
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你想要检查单个容器及其进程，你可以确定容器的主进程ID，然后使用`pstree`来查看所有相关的子进程：
+- en: '[PRE8]'
+  id: totrans-40
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: Process Inspection
+  id: totrans-41
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 进程检查
+- en: 'If you’re logged in to the Docker server, you can inspect running processes
+    using all of the standard debugging tools. Common debugging tools like `strace`
+    work as expected. In the following code, we’ll inspect an `nginx` process running
+    inside a container:'
+  id: totrans-42
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你登录到Docker服务器，你可以使用所有标准的调试工具来检查运行中的进程。像`strace`这样的常见调试工具按预期工作。在下面的代码中，我们将检查运行在容器中的`nginx`进程：
+- en: '[PRE9]'
+  id: totrans-43
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: Warning
+  id: totrans-44
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: If you run `strace`, you will need to type Ctrl-C to exit the `strace` process.
+  id: totrans-45
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你运行`strace`，你需要输入Ctrl-C来退出`strace`进程。
+- en: 'You can see that we get the same output that we would from noncontainerized
+    processes on the host. Likewise, an `lsof` shows us that the files and sockets
+    open in a process work as expected:'
+  id: totrans-46
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可以看到，我们得到的输出与主机上非容器化进程的输出相同。同样，`lsof`显示了进程中打开的文件和套接字的预期工作方式：
+- en: '[PRE10]'
+  id: totrans-47
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: Note that the paths to the files are all relative to the container’s view of
+    the backing filesystem, which is not the same as the host view. Due to this, if
+    you are on the host system, you may not be able to easily find a specific file
+    from one of your running containers. In most cases, it’s probably best to enter
+    the container using `docker container exec` to look at the files with the same
+    view that the processes inside it have.
+  id: totrans-48
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，文件的路径都是相对于容器对后备文件系统的视图，这与主机视图不同。因此，如果你在主机系统上，可能无法轻松地找到正在运行的容器中的特定文件。在大多数情况下，最好使用`docker
+    container exec`进入容器，以便使用与其中进程具有相同视图的方式查看文件。
+- en: It’s possible to run the GNU debugger (`gdb`) and other process inspection tools
+    in the same manner as long as you’re `root` and have proper permissions to do
+    so.
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 只要你是`root`并且有适当的权限，就可以像这样运行GNU调试器（`gdb`）和其他进程检查工具。
+- en: 'It is worth mentioning here that it is also possible to run a new debugging
+    container that can see the processes of an existing container and therefore provide
+    additional tools to debug issues. We will discuss the underlying details of this
+    command later, in [“Namespaces”](ch11.html#namespaces) and [“Security”](ch11.html#security):'
+  id: totrans-50
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 值得一提的是，也可以运行一个新的调试容器，可以查看现有容器的进程，从而提供额外的工具来调试问题。我们稍后将在[“命名空间”](ch11.html#namespaces)和[“安全性”](ch11.html#security)中讨论该命令的底层细节。
+- en: '[PRE11]'
+  id: totrans-51
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: Warning
+  id: totrans-52
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: You will need to type Ctrl-C to exit the `strace` process.
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你需要输入Ctrl-C来退出`strace`进程。
+- en: Controlling Processes
+  id: totrans-54
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 控制进程
+- en: When you have a shell directly on the Docker server, you can, in many ways,
+    treat containerized processes just like any other process running on the system.
+    If you’re remote, you might send signals with `docker container kill` because
+    it’s expedient. But if you’re already logged in to a Docker server for a debugging
+    session or because the Docker daemon is not responding, you can just `kill` the
+    process like you would any other.
+  id: totrans-55
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当你直接在Docker服务器上有一个shell时，你可以通过多种方式处理容器化的进程，就像处理系统上运行的任何其他进程一样。如果你是远程的，你可能会使用`docker
+    container kill`发送信号，因为这样做更方便。但是如果你已经登录到一个Docker服务器进行调试会话，或者因为Docker守护进程没有响应，你可以像处理任何其他进程一样直接`kill`这个进程。
+- en: Unless you kill the top-level process in the container (PID 1 inside the container),
+    killing a process will not terminate the container itself. That *might* be desirable
+    if you were killing a runaway process, but it might leave the container in an
+    unexpected state. Developers probably expect that all the processes are running
+    if they can see their container in `docker container ls`. It could also confuse
+    a scheduler like Mesos or Kubernetes or any other system that is health-checking
+    your application. Keep in mind that containers are supposed like a single bundle
+    to the outside world. If you need to kill off something inside the container,
+    it’s best to replace the whole container. Containers offer an abstraction that
+    tools interoperate with. They expect the internals of the container to be predictable
+    and remain consistent.
+  id: totrans-56
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除非您终止容器中顶级进程（容器内部的 PID 1），否则终止一个进程不会终止容器本身。如果终止一个失控的进程可能是有意义的，但这可能会使容器处于意外的状态。开发人员可能期望看到他们的容器在
+    `docker container ls` 中列出所有进程都在运行。这也可能会让像 Mesos 或 Kubernetes 这样的调度器或其他健康检查您应用程序的系统感到困惑。请记住，容器对外界表现为一个单一的整体。如果需要终止容器内部的某些内容，最好是替换整个容器。容器提供了一个工具可以进行交互的抽象。它们期望容器内部是可预测和一致的。
+- en: Terminating processes is not the only reason to send signals. And since containerized
+    processes are just normal processes in many respects, they can be passed the whole
+    array of Unix signals listed in the manpage for the Linux `kill` command. Many
+    Unix programs will perform special actions when they receive certain predefined
+    signals. For example, `nginx` will reopen its logs when receiving a `SIGUSR1`
+    signal. Using the Linux `kill` command, you can send any Unix signal to a container
+    process on the local server.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 终止进程并不是发送信号的唯一原因。由于容器化的进程在许多方面都像普通进程一样，因此它们可以接收到 Linux `kill` 命令手册中列出的整套 Unix
+    信号。许多 Unix 程序在接收到特定的预定义信号时会执行特殊操作。例如，当接收到 `SIGUSR1` 信号时，`nginx` 会重新打开其日志。使用 Linux
+    `kill` 命令，您可以向本地服务器上的容器进程发送任何 Unix 信号。
+- en: Because containers work just like any other process, it’s important to understand
+    how they can interact with your application in less than helpful ways. There are
+    some special needs in a container for processes that spawn background children—that
+    is, anything that forks and daemonizes so the parent no longer manages the child
+    process lifecycle. Jenkins build containers are one common example where people
+    see this go wrong. When daemons fork into the background, they become children
+    of PID 1 on Unix systems. Process 1 is special and is usually an `init` process
+    of some kind.
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 因为容器的工作方式与其他进程类似，所以了解它们如何与您的应用程序进行交互是非常重要的，特别是在一些会生成后台子进程的情况下，即任何进行分叉和守护化以使父进程不再管理子进程生命周期的情况。Jenkins
+    构建容器就是人们常见的一个例子，他们在这种情况下可能会出现问题。当守护进程分叉到后台时，它们会成为 Unix 系统上 PID 1 的子进程。进程 1 是特殊的，通常是某种
+    `init` 进程。
+- en: PID 1 is responsible for making sure that children are reaped. In your container,
+    by default, your main process will be PID 1\. Since you probably won’t be handling
+    the reaping of children from your application, you can end up with zombie processes
+    in your container. There are a few solutions to this problem. The first is to
+    run an init system in the container of your own choosing—​one that is capable
+    of handling PID 1 responsibilities. `s6`, `runit`, and others described in the
+    preceding note can be easily used inside the container.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: PID 1 负责确保子进程被回收。在您的容器中，默认情况下，您的主进程将是 PID 1。由于您可能不会处理应用程序中子进程的回收，因此可能会在容器中产生僵尸进程。对于这个问题有几种解决方案。首先是在容器中运行一个您自己选择的
+    init 系统，这个系统能够处理 PID 1 的责任。像 `s6`、`runit` 以及前面笔记中描述的其他系统可以很容易地在容器内部使用。
+- en: But Docker itself provides an even simpler option that solves just this one
+    case without taking on all the capabilities of a full init system. If you provide
+    the `--init` flag to `docker container run`, Docker will launch a very small init
+    process based on the [`tini` project](https://github.com/krallin/tini) that will
+    act as PID 1 inside the container on startup. Whatever you specify in your *Dockerfile*
+    as the `CMD` is passed to `tini` and otherwise works in the same way you would
+    expect. It does, however, replace anything you might have in the `ENTRYPOINT`
+    section of your *Dockerfile*.
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 但是 Docker 本身提供了一个更简单的选项，仅解决这一个情况而不需要具备完整 init 系统的所有功能。如果您在 `docker container
+    run` 命令中提供 `--init` 标志，Docker 将启动一个非常小的 init 进程，基于 [`tini` 项目](https://github.com/krallin/tini)，该进程将在容器启动时作为
+    PID 1 运行。无论您在 *Dockerfile* 中指定的 `CMD` 是什么，都将传递给 `tini` 并且工作方式与您期望的相同。然而，它会取代您在
+    *Dockerfile* 的 `ENTRYPOINT` 部分可能设置的任何内容。
+- en: 'When you launch a Linux container without the `--init` flag, you get something
+    like this in your process list:'
+  id: totrans-61
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您在启动 Linux 容器时没有使用 `--init` 标志，您的进程列表中会得到类似这样的内容：
+- en: '[PRE12]'
+  id: totrans-62
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: 'Notice that in this case, the `CMD` we launched is PID 1\. That means it is
+    responsible for child reaping. If we are launching a container where that is important,
+    we can pass `--init` to make sure that when the parent process exits, children
+    are reaped:'
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注意，在这种情况下，我们启动的 `CMD` 是 PID 1。这意味着它负责子进程的收割。如果我们启动的容器中这一点很重要，我们可以传递 `--init`
+    来确保当父进程退出时，子进程被收割：
+- en: '[PRE13]'
+  id: totrans-64
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: Here, you can see that the PID 1 process is `/sbin/docker-init`. That has in
+    turn launched the shell binary for us as specified on the command line. Because
+    we now have an init system inside the container, the PID 1 responsibilities fall
+    to it rather than the command we used to invoke the container. In most cases,
+    this is what you want. You may not need an init system, but it’s small enough
+    that you should consider having at least `tini` inside your containers in production.
+  id: totrans-65
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里，您可以看到 PID 1 进程是 `/sbin/docker-init`。这反过来启动了作为命令行指定的 shell 二进制文件。因为现在容器内部有一个
+    init 系统，PID 1 的责任落在它身上，而不是我们用来调用容器的命令。在大多数情况下，这是您想要的。您可能不需要一个 init 系统，但是在生产环境中至少考虑在您的容器内部包含
+    `tini`。
+- en: In general, you probably only need an init process inside your container if
+    you are running multiple parent processes or you have processes that do not respond
+    to Unix signals properly.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一般来说，如果您在容器内运行多个父进程或者有不正确响应 Unix 信号的进程，可能只有在容器内部需要一个 init 进程。
+- en: Network Inspection
+  id: totrans-67
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 网络检查
+- en: 'Compared to process inspection, debugging containerized applications at the
+    network level can be more complicated. Unlike traditional processes running on
+    the host, Linux containers can be connected to the network in multiple ways. If
+    you are running the default setup, as the vast majority of people are, then your
+    containers are all connected to the network via the default bridge network that
+    Docker creates. This is a virtual network where the host is the gateway to the
+    rest of the world. We can inspect these virtual networks with the tooling that
+    ships with Docker. You can get it to show you which networks exist by calling
+    the `docker network ls` command:'
+  id: totrans-68
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与进程检查相比，调试容器化应用程序在网络层面可能更加复杂。与运行在主机上的传统进程不同，Linux 容器可以通过多种方式连接到网络。如果您正在运行默认设置，就像绝大多数人一样，那么您的所有容器都通过
+    Docker 创建的默认桥接网络连接到网络。这是一个虚拟网络，其中主机是通往世界其他地方的网关。我们可以使用 Docker 提供的工具检查这些虚拟网络。您可以通过调用
+    `docker network ls` 命令来显示存在的网络：
+- en: '[PRE14]'
+  id: totrans-69
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: Here we can see the default bridge network, the host network, which is for any
+    containers running in `host` network mode (see [“Host networking”](ch11.html#host_networking)),
+    and the none network, which disables network access entirely for the container.
+    If you use `docker compose` or other orchestration tools, they may create additional
+    networks here with different names.
+  id: totrans-70
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里我们可以看到默认的桥接网络、主机网络，用于任何以 `host` 网络模式运行的容器（参见 [“主机网络”](ch11.html#host_networking)），以及禁用容器完全的
+    none 网络。如果您使用 `docker compose` 或其他编排工具，它们可能会创建额外的网络，并使用不同的名称。
+- en: 'But seeing which networks exist doesn’t make it any easier to see what’s on
+    those networks. So, you can see which containers are attached to any particular
+    named network with the `docker network inspect` command. This produces a fair
+    amount of output. It shows you all of the containers that are attached to the
+    specified network and a number of details about the network itself. Let’s take
+    a look at the default bridge network:'
+  id: totrans-71
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 但是看到存在哪些网络并不能使我们更容易地看到这些网络上存在什么。因此，您可以使用`docker network inspect`命令查看连接到任何特定命名网络的容器。这会产生相当多的输出。它会显示连接到指定网络的所有容器以及有关网络本身的许多详细信息。让我们来看看默认桥接网络：
+- en: '[PRE15]'
+  id: totrans-72
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: '[PRE16]'
+  id: totrans-73
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: We’ve excluded some of the details here to shrink the output a bit. But what
+    we can see is that there are two containers on the bridge network, and they are
+    attached to the `docker0` bridge on the host. We can also see the IP addresses
+    of each container (`IPv4Address` and `IPv6Address`) and the host network address
+    they are bound to (`host_binding_ipv4`). This is useful when you are trying to
+    understand the internal structure of the bridged network. If you have containers
+    on different networks, they may not have connectivity to one another, depending
+    on how the networks were configured.
+  id: totrans-74
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 为了减少输出量，我们在这里省略了一些细节。但是我们可以看到的是，在桥接网络上有两个容器，它们附加到主机上的`docker0`桥接上。我们还可以看到每个容器的IP地址（`IPv4Address`和`IPv6Address`）以及它们绑定到的主机网络地址（`host_binding_ipv4`）。这在您试图理解桥接网络的内部结构时非常有用。如果您的容器位于不同的网络上，根据网络的配置方式，它们可能无法相互连通。
+- en: Tip
+  id: totrans-75
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: In general, we recommend leaving your containers on the default bridge network
+    until you have a good reason not to or are running `docker compose` or a scheduler
+    that manages container networks on its own. In addition, naming your containers
+    in some identifiable way helps here because we can’t see the image information.
+    The name and ID are the only references we have in this output that can tie us
+    back to a `docker container ls` listing. Some schedulers don’t do a good job of
+    naming containers, which is too bad because it can be really helpful for debugging.
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 一般情况下，我们建议保留容器在默认桥接网络上，直到有充分理由或者运行`docker compose`或者自动管理容器网络的调度程序为止。此外，以某种可识别的方式命名您的容器在这里也是有帮助的，因为我们无法看到镜像信息。在这个输出中，名称和ID是我们唯一能够在`docker
+    container ls`列表中找到的参考信息。一些调度程序在命名容器方面做得不好，这真是太糟糕了，因为这对调试非常有帮助。
+- en: As we’ve seen, containers will normally have their own network stack and their
+    own IP address, unless they are running in host networking mode, which we will
+    discuss further in [“Networking”](ch11.html#docker_net). But what about when we
+    look at them from the host machine itself? Because containers have their own network
+    and addresses, they won’t show up in all `netstat` output on the host. But we
+    know that the ports you map to your containers are bound to the host.
+  id: totrans-77
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如我们所见，容器通常会有自己的网络堆栈和IP地址，除非它们在主机网络模式下运行，我们将在[“网络”](ch11.html#docker_net)中进一步讨论这一点。但是当我们从主机机器自身查看它们时会怎么样？因为容器有自己的网络和地址，它们不会出现在主机上所有`netstat`输出中。但我们知道，您映射到容器的端口是绑定到主机的。
+- en: 'Running `netstat -an` on the Docker server works as expected, as shown here:'
+  id: totrans-78
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在Docker服务器上运行`netstat -an`正常工作，如下所示：
+- en: '[PRE17]'
+  id: totrans-79
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: Here we can see all of the interfaces that we’re listening on. Our container
+    is bound to port `8080` on IP address `0.0.0.0`. That shows up. But what happens
+    when we ask `netstat` to show us the process name that’s bound to the port?
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这里，我们可以看到我们正在监听的所有接口。我们的容器绑定到IP地址`0.0.0.0`的端口`8080`上。这显示出来了。但是当我们要求`netstat`显示绑定到端口的进程名称时会发生什么？
+- en: '[PRE18]'
+  id: totrans-81
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: 'We see the same output, but notice what is bound to the port: `docker-proxy`.
+    That’s because, in its default configuration, Docker has a proxy written in Go
+    that sits between all of the containers and the outside world. That means that
+    when we look at this output, all containers running via Docker will be associated
+    with `docker-proxy`. Notice that there is no clue here about which specific container
+    `docker-proxy` is handling. Fortunately, `docker container ls` shows us which
+    containers are bound to which ports, so this isn’t a big deal. But it’s not obvious,
+    and you probably want to be aware of it before you’re debugging a production failure.
+    Still, passing the `p` flag to `netstat` is helpful in identifying which ports
+    are tied to containers.'
+  id: totrans-82
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们看到相同的输出，但注意绑定到端口的是什么：`docker-proxy`。这是因为在其默认配置中，Docker有一个用Go编写的代理，位于所有容器和外部世界之间。这意味着当我们查看这个输出时，所有通过Docker运行的容器都将与`docker-proxy`关联。请注意，这里没有任何线索表明`docker-proxy`正在处理哪个特定的容器。幸运的是，`docker
+    container ls`显示了绑定到哪些端口的容器，所以这并不是什么大问题。但这并不明显，在你调试生产故障之前，你可能希望意识到这一点。然而，通过向`netstat`传递`p`标志有助于识别与容器关联的端口。
+- en: Note
+  id: totrans-83
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: If you’re using host networking in your container, then this layer is skipped.
+    There is no `docker-proxy`, and the process in the container can bind to the port
+    directly. It also shows up as a normal process in `netstat -anp` output.
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你在容器中使用主机网络，则会跳过此层。没有`docker-proxy`，容器中的进程可以直接绑定到端口。它还显示为`netstat -anp`输出中的正常进程。
+- en: Other network inspection commands work largely as expected, including `tcpdump`,
+    but it’s important to remember that `docker-proxy` is there, in between the host’s
+    network interface and the container, and that the containers have their own network
+    interfaces on a virtual network.
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 其他网络检查命令的工作大部分如预期，包括`tcpdump`，但重要的是要记住`docker-proxy`在这里，在主机的网络接口和容器之间，并且容器在虚拟网络上有它们自己的网络接口。
+- en: Image History
+  id: totrans-86
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 镜像历史
+- en: 'When you’re building and deploying a single container, it’s easy to keep track
+    of where it came from and what images it’s sitting on top of. But this rapidly
+    becomes unmanageable when you’re shipping many containers with images that are
+    built and maintained by different teams. How can you tell what layers are actually
+    underneath the one your container is running on? Your container’s image tag hopefully
+    makes it clear which build of your application you’re running, but the image tag
+    doesn’t reveal anything about the image layers that your application is built
+    on. `docker image history` does just that. You can see each layer that exists
+    in the inspected image, the sizes of each layer, and the commands that were used
+    to build it:'
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当你构建和部署单个容器时，很容易追踪它的来源以及它位于哪些镜像之上。但是当你运送许多由不同团队构建和维护的镜像的容器时，这很快变得难以管理。你怎么知道哪些层实际上是你的容器运行在其上面的？你的容器的镜像标签有希望清楚地表明你正在运行的应用程序的哪个构建，但是镜像标签并不透露任何关于构建你的应用程序的镜像层的信息。`docker
+    image history`正是为此而设。你可以看到检查的镜像中存在的每一层，每一层的大小以及用于构建它们的命令：
+- en: '[PRE19]'
+  id: totrans-88
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: Using `docker image history` can be useful, for example, when you are trying
+    to determine why the size of the final image is much larger than expected. The
+    layers are listed in order, with the first one at the bottom of the list and the
+    last one at the top.
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用`docker image history`可以很有用，例如，当你试图确定最终镜像大小比预期大得多的原因时。层按顺序列出，最底部的是列表的第一层，最顶部的是列表的最后一层。
+- en: Here we can see that the command output has been truncated in a few cases. For
+    long commands, adding the `--no-trunc` option to the `docker image history` command
+    will let you see the complete command that was used to build each layer. Just
+    be aware that `--no-trunc` will make the output much larger and more difficult
+    to visually scan in most cases.
+  id: totrans-90
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在一些情况下，我们可以看到命令输出已被截断。对于长命令，向`docker image history`命令添加`--no-trunc`选项将让您看到用于构建每个层的完整命令。只要注意`--no-trunc`会使输出在大多数情况下变得更大且更难以视觉扫描。
+- en: Inspecting a Container
+  id: totrans-91
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 检查容器
+- en: 'In [Chapter 4](ch04.html#docker_images), we showed you how to read the `docker
+    container inspect` output to see how a container is configured. But underneath
+    that is a directory on the host’s disk that is dedicated to the container. Usually
+    this is */var/lib/docker/containers*. If you look at that directory, it contains
+    very long SHA hashes, as shown here:'
+  id: totrans-92
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 [第4章](ch04.html#docker_images) 中，我们向您展示了如何查看 `docker container inspect` 输出以查看容器的配置。但在此之下是主机磁盘上专用于容器的目录。通常情况下，这是
+    */var/lib/docker/containers*。如果查看该目录，其中包含非常长的 SHA 哈希，如下所示：
+- en: '[PRE20]'
+  id: totrans-93
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: 'That’s a bit daunting. But those are just the container IDs in long form. If
+    you want to look at the configuration for a particular container, you just need
+    to use `docker container ls` to find its short ID, and then find the directory
+    that matches:'
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这有点令人生畏。但这些只是容器长形式的容器 ID。如果要查看特定容器的配置，只需使用 `docker container ls` 查找其短 ID，然后找到匹配的目录即可：
+- en: '[PRE21]'
+  id: totrans-95
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: 'You can view the short ID from `docker container ls`, then match it to the
+    `ls /var/lib/docker/containers` output to see that you want the directory beginning
+    with `c58bfeffb9e6`. Command-line tab completion is helpful here. If you need
+    exact matching, you can do a `docker container inspect c58bfeffb9e6` and grab
+    the long ID from the output. This directory contains some pretty interesting files
+    related to the container:'
+  id: totrans-96
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可以从 `docker container ls` 中查看短 ID，然后将其与 `ls /var/lib/docker/containers` 输出匹配，查看以
+    `c58bfeffb9e6` 开头的目录。命令行的选项卡完成在这里非常有帮助。如果需要精确匹配，可以执行 `docker container inspect
+    c58bfeffb9e6` 并从输出中获取长 ID。此目录包含与容器相关的一些非常有趣的文件：
+- en: '[PRE22]'
+  id: totrans-97
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: As we discussed in [Chapter 5](ch05.html#docker_containers), this directory
+    contains some files that are bind-mounted directly into your container, like *hosts*,
+    *resolv.conf*, and *hostname*. If you are running the default logging mechanism,
+    then this directory is also where Docker stores the JSON file containing the log
+    that is shown with the `docker container logs` command, the JSON configuration
+    that backs the `docker container inspect` output (*config.v2.json*), and the networking
+    configuration for the container (*hostconfig.json*). The *resolv.conf.hash* file
+    is used by Docker to determine when the container’s file has diverged from the
+    current one on the host so it can be updated.
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如我们在 [第5章](ch05.html#docker_containers) 中讨论的，此目录包含一些直接绑定到容器中的文件，如 *hosts*、*resolv.conf*
+    和 *hostname*。如果您正在运行默认的日志记录机制，那么此目录也是 Docker 存储显示在 `docker container logs` 命令中的日志的
+    JSON 文件的地方，支持 `docker container inspect` 输出的 JSON 配置文件 (*config.v2.json*)，以及容器的网络配置
+    (*hostconfig.json*)。*resolv.conf.hash* 文件由 Docker 使用，用于确定容器的文件与主机上当前文件有何不同，以便进行更新。
+- en: This directory can also be really helpful in the event of severe failure. Even
+    if we’re not able to enter the container, or if `docker` is not responding, we
+    can look at how the container was configured. It’s also pretty useful to understand
+    where those files are mounted from inside the container. Keep in mind that it’s
+    not a good idea to modify these files. Docker expects them to contain reality,
+    and if you alter that reality, you’re asking for trouble. But it’s another avenue
+    for information on what’s happening in your container.
+  id: totrans-99
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 即使我们无法进入容器，或者 `docker` 不响应时，此目录在严重故障事件中也非常有帮助。了解容器的配置方式也非常有用。请记住，修改这些文件并不是一个好主意。Docker
+    期望它们包含现实情况，如果您改变这种现实，会带来麻烦。但这是了解容器内发生的事情的另一途径。
+- en: Filesystem Inspection
+  id: totrans-100
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 文件系统检查
+- en: 'Docker, regardless of the backend actually in use, has a layered filesystem
+    that allows it to track the changes in any given container. This is how the images
+    are assembled when you do a build, but it is also useful when you’re trying to
+    figure out if a Linux container has changed anything and, if so, what. A common
+    problem with containerized applications is that they may continue to write things
+    into the container’s filesystem. Normally, you don’t want your containers to do
+    that, to the extent possible, and it can help debugging to figure out if your
+    processes have been writing into the container. Sometimes this is helpful in turning
+    up stray logfiles that exist in the container as well. As with most of the core
+    tools, this kind of inspection is built into the `docker` command-line tooling
+    and is also exposed via the API. Let’s take a look at what this shows us. Let’s
+    launch a quick container and use its name to explore this:'
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 无论实际使用的后端是什么，Docker都具有分层文件系统，允许跟踪任何给定容器中的更改。这就是在构建时如何组装镜像的方式，但当您试图确定Linux容器是否有任何更改时，它也很有用。容器化应用的一个常见问题是它们可能会继续向容器文件系统写入东西。通常情况下，您不希望您的容器这样做，尽可能地，并且弄清楚您的进程是否一直在容器中写入东西可以帮助调试。有时这对于找出容器中存在的杂乱日志文件也很有帮助。与大多数核心工具一样，这种检查方式内置于`docker`命令行工具和API中。让我们看看这给我们展示了什么。让我们启动一个快速容器，并使用它的名称来探索这个问题：
+- en: '[PRE23]'
+  id: totrans-102
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: Each line begins with either `A` or `C`, which is shorthand for *added* or *changed*,
+    respectively. We can see that this container is running `nginx`, that the `nginx`
+    configuration file has been written to, and that some temporary files have been
+    created in a new directory named `/var/cache/nginx`. Being able to find out how
+    the container filesystem is being used can be very useful when you are trying
+    to optimize and harden your container’s filesystem usage.
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每一行都以`A`或`C`开头，分别代表*新增*或*更改*。我们可以看到该容器正在运行`nginx`，`nginx`配置文件已被写入，并且在名为`/var/cache/nginx`的新目录中创建了一些临时文件。当您试图优化和加固容器的文件系统使用时，了解容器文件系统的使用方式非常有用。
+- en: Further detailed inspection requires exploring the container with `docker container
+    export`, `docker container exec`, or `nsenter` and the like, to see exactly what
+    is in the filesystem. But `docker container diff` gives you a good place to start.
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 进一步详细的检查需要使用`docker container export`、`docker container exec`或`nsenter`等方法来探索容器中的确切内容。但是，`docker
+    container diff`给了您一个很好的起点。
+- en: Wrap-Up
+  id: totrans-105
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Wrap-Up
+- en: 'At this point, you should have a good idea of how to deploy and debug individual
+    containers in development and production, but how do you start to scale this for
+    larger application ecosystems? In the next chapter, we’ll take a look at one of
+    the simpler Docker orchestration tools: Docker Compose. This tool is a nice bridge
+    between a single Linux container and a production orchestration system. It delivers
+    a lot of value in development environments and throughout the DevOps pipeline.'
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，您应该已经对如何在开发和生产中部署和调试单个容器有了很好的了解，但是如何开始为更大的应用程序生态系统扩展呢？在下一章中，我们将介绍一个较简单的Docker编排工具：Docker
+    Compose。这个工具是单个Linux容器和生产编排系统之间的良好桥梁。它在开发环境中提供了很多价值，并贯穿整个DevOps流水线。

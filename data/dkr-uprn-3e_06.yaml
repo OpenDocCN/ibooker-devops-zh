@@ -1,0 +1,2328 @@
+- en: Chapter 5\. Working with Containers
+  id: totrans-0
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 第5章。使用容器
+- en: In the previous chapter, we learned how to build a Docker image and the very
+    basic steps required for running the resulting image within a container. In this
+    chapter, we’ll first take a look at the history of container technology and then
+    dive deeper into running containers and exploring the Docker commands that control
+    the overall configuration, resources, and privileges that your container receives.
+  id: totrans-1
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在上一章中，我们学习了如何构建一个Docker镜像以及在容器中运行结果图像所需的基本步骤。在这一章中，我们首先将了解容器技术的历史，然后深入探讨运行容器和探索Docker命令的详细配置、资源和权限的内容。
+- en: What Are Containers?
+  id: totrans-2
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 什么是容器？
+- en: You might be familiar with virtualization systems like VMware or KVM that allow
+    you to run a complete Linux kernel and operating system on top of a virtualized
+    layer, commonly known as a *hypervisor*. This approach provides very strong isolation
+    between workloads because each VM hosts its own operating system kernel that sits
+    in a separate memory space on top of a hardware virtualization layer.
+  id: totrans-3
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可能对像VMware或KVM这样的虚拟化系统很熟悉，它们允许你在虚拟化层上运行完整的Linux内核和操作系统，通常称为*hypervisor*。这种方法提供了非常强大的工作负载隔离，因为每个虚拟机都托管着自己的操作系统内核，该内核位于硬件虚拟化层之上的一个单独的内存空间中。
+- en: Containers are fundamentally different since they all share a single kernel,
+    and isolation between workloads is implemented entirely within that one kernel.
+    This is called *operating system virtualization*.
+  id: totrans-4
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器在根本上是不同的，因为它们都共享一个单一的内核，并且工作负载之间的隔离完全在该内核中实现。这被称为*操作系统虚拟化*。
+- en: 'The [`libcontainer` README](https://github.com/opencontainers/runc/blob/main/libcontainer/README.md)
+    provides a good, short definition of a container:'
+  id: totrans-5
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[`libcontainer` README](https://github.com/opencontainers/runc/blob/main/libcontainer/README.md)
+    提供了一个很好的、简短的容器定义：'
+- en: A container is a self-contained execution environment that shares the kernel
+    of the host system and is (optionally) isolated from other containers in the system.
+  id: totrans-6
+  prefs:
+  - PREF_BQ
+  type: TYPE_NORMAL
+  zh: 容器是一个自包含的执行环境，它共享主机系统的内核，并且（可选地）与系统中的其他容器隔离开来。
+- en: One of the major advantages of containers is resource efficiency, because you
+    don’t need a whole operating system instance for each isolated workload. Since
+    you are sharing a kernel, there is one fewer layer of indirection between the
+    isolated task and the real hardware underneath. When a process is running inside
+    a container, there is only a little bit of code that sits inside the kernel managing
+    the container. Contrast this with a VM, where a second layer would be running.
+    In a VM, calls by the process to the hardware or hypervisor would require bouncing
+    in and out of privileged mode on the processor twice, thereby noticeably slowing
+    down many calls.
+  id: totrans-7
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器的一个主要优点是资源效率，因为对于每个隔离的工作负载，你不需要一个完整的操作系统实例。由于你共享一个内核，所以在隔离的任务和底层的真实硬件之间少了一层间接。当一个进程在容器内运行时，只有一小部分代码坐落在内核中管理容器。与虚拟机相比，这有很大的不同。在虚拟机中，第二层将会运行。在虚拟机中，进程对硬件或hypervisor的调用将需要在处理器上特权模式之间进行两次跳转，从而明显地减慢许多调用。
+- en: Note
+  id: totrans-8
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注
+- en: '[libcontainer](https://github.com/opencontainers/runc/tree/main/libcontainer)
+    is a Go library that is designed to provide a standard interface for managing
+    Linux containers from applications.'
+  id: totrans-9
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '[libcontainer](https://github.com/opencontainers/runc/tree/main/libcontainer)
+    是一个Go库，旨在为应用程序提供管理Linux容器的标准接口。'
+- en: But the container approach does mean that you can only run processes that are
+    compatible with the underlying kernel. For example, unlike hardware virtualization
+    provided by technologies like VMware or KVM, Windows applications cannot run natively
+    inside a Linux container on a Linux host. Windows applications can, however, run
+    inside Windows containers on a Windows host. So containers are best thought of
+    as an OS-specific technology where you can run any of your favorite applications
+    or daemons that are compatible with the container server’s kernel. When thinking
+    of containers, you should try very hard to throw out what you might already know
+    about VMs and instead conceptualize a container as a wrapper around a normal process
+    that runs on the server.
+  id: totrans-10
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 但是容器的方法意味着你只能运行与底层内核兼容的进程。例如，与VMware或KVM等技术提供的硬件虚拟化不同，Windows应用程序无法在Linux主机上的Linux容器中本地运行。但是，Windows应用程序可以在Windows主机上的Windows容器中运行。因此，容器最好被视为一种特定于操作系统的技术，其中你可以运行与容器服务器的内核兼容的任何你喜欢的应用程序或守护进程。在考虑容器时，你应该尽量放弃你可能已经了解的有关虚拟机的知识，并将容器概念化为在服务器上运行的正常进程的封装。
+- en: Note
+  id: totrans-11
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: In addition to being able to run containers inside VMs, it is completely feasible
+    to run a VM inside a container. If you do this, then it is indeed possible to
+    run a Windows application inside a Windows VM that is running inside a Linux container.
+  id: totrans-12
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 除了能在虚拟机内运行容器外，完全可以在容器内运行虚拟机。如果这样做，确实可以在运行在 Linux 容器内的 Windows 虚拟机中运行 Windows
+    应用程序。
+- en: History of Containers
+  id: totrans-13
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 容器的历史
+- en: It is often the case that a revolutionary technology is an older technology
+    that has finally arrived in the spotlight. Technology goes in waves, and some
+    of the ideas from the 1960s are back in vogue. Similarly, Docker is a newer technology,
+    and it has an ease of use that has made it an instant hit, but it doesn’t exist
+    in a vacuum. Much of what underpins Docker comes from work done over the last
+    30 years in a few different areas. We can easily trace the conceptual evolution
+    of containers from a simple system call that was added to the Unix kernel in the
+    late 1970s to the modern container tooling that powers many huge internet firms,
+    like Google, Twitter, and Meta. It’s worth taking some time for a quick tour through
+    how the technology evolved and led to the creation of Docker, because understanding
+    this helps you place it within the context of other things that you might be familiar
+    with.
+  id: totrans-14
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常情况下，一项革命性技术往往是一个老技术终于引起关注的结果。技术发展如波浪般起伏，上世纪六十年代的一些概念如今再度流行起来。同样，Docker 是一项较新的技术，其易用性使其迅速成为热门，但它并非孤立存在。Docker
+    的许多基础理念源自过去三十年在几个不同领域的工作。我们可以轻松追溯容器的概念演变，从上世纪七十年代末添加到 Unix 内核的一个简单系统调用，到如今支持许多大型互联网公司如谷歌、Twitter
+    和 Meta 的现代容器工具。快速了解这项技术如何演进并导致 Docker 的诞生是值得的，因为理解这一点有助于将其置于你熟悉的其他技术背景中。
+- en: 'Containers are not a new idea. They are a way to isolate and encapsulate a
+    part of the running system. The oldest technology in this area includes the very
+    first batch processing systems. When using these early computers, the system would
+    only run one program at a time, switching to run another program once the previous
+    program had finished or a predefined time span had elapsed. With this design there
+    was enforced isolation: you could make sure your program didn’t step on anyone
+    else’s program because it was only possible to run one thing at a time. Although
+    modern computers still switch tasks constantly, it is incredibly fast and completely
+    unnoticeable to most users.'
+  id: totrans-15
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器并非新概念。它们是隔离和封装正在运行系统的一部分的一种方法。在这一领域，最古老的技术包括最早的批处理系统。在使用这些早期计算机时，系统一次只能运行一个程序，直到前一个程序完成或预定义的时间段结束后，才切换到运行另一个程序。这种设计强制实现了隔离：你可以确保你的程序不会干扰其他程序，因为一次只能运行一件事。虽然现代计算机仍在不断切换任务，但对大多数用户来说，这是非常快速且完全不可察觉的。
+- en: We would argue that the seeds for today’s containers were planted in 1979 with
+    the addition of the `chroot` system call to Version 7 Unix. `chroot` restricts
+    a process’s view of the underlying filesystem to a single subtree. The `chroot`
+    system call is commonly used to protect the operating system from untrusted server
+    processes like FTP, BIND, and Sendmail, which are publicly exposed and susceptible
+    to compromise.
+  id: totrans-16
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们认为今天容器的种子在 1979 年种下，当时在 Version 7 Unix 中加入了 `chroot` 系统调用。`chroot` 限制了进程对底层文件系统的视图，仅限于单个子树。`chroot`
+    系统调用通常用于保护操作系统免受像 FTP、BIND 和 Sendmail 这样的不受信任的服务器进程的影响，这些进程可能会公开暴露并易受到威胁。
+- en: In the 1980s and 1990s, various Unix variants were created with mandatory access
+    controls for security reasons.^([1](ch05.html#idm46803149032576)) This meant you
+    had tightly controlled domains running on the same Unix kernel. Processes in each
+    domain had an extremely limited view of the system that precluded them from interacting
+    across domains. A popular commercial version of Unix that implemented this idea
+    was the Sidewinder firewall built on top of BSDI Unix, but this was not possible
+    with most mainstream Unix implementations.
+  id: totrans-17
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 1980 年代和 1990 年代，出于安全原因，各种 Unix 变种创建了强制访问控制。^([1](ch05.html#idm46803149032576))
+    这意味着你可以在同一个 Unix 内核上运行具有严格控制域的系统。每个域中的进程对系统的视图极其有限，防止它们在域之间进行交互。一个实现了这一理念的流行商业
+    Unix 版本是基于 BSDI Unix 的 Sidewinder 防火墙，但大多数主流 Unix 实现无法实现这一点。
+- en: That changed in 2000 when FreeBSD 4.0 was released with a new command, called
+    `jail`, which was designed to allow shared-environment hosting providers to easily
+    and securely create a separation between their processes and those that belonged
+    to each of their customers. FreeBSD `jail` expanded `chroot`’s capabilities and
+    also restricted everything a process could do with the underlying system and other
+    jailed processes.
+  id: totrans-18
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 2000年，随着FreeBSD 4.0的发布，引入了一个名为`jail`的新命令，旨在允许共享环境托管提供商轻松且安全地在其进程和属于每个客户的进程之间创建隔离。FreeBSD的`jail`扩展了`chroot`的能力，并限制了进程在底层系统和其他受限进程中的操作。
+- en: In 2004, Sun released an early build of Solaris 10, which included Solaris containers,
+    which later evolved into Solaris Zones. This was the first major commercial implementation
+    of container technology and is still used today to support many commercial container
+    implementations. In 2005, OpenVZ for Linux was released by the company Virtuozzo,
+    followed in 2007 by HP’s Secure Resource Partitions for HP-UX, which was later
+    renamed HP-UX Containers.
+  id: totrans-19
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 2004年，Sun发布了Solaris 10的早期版本，其中包括Solaris容器，后来演变为Solaris Zones。这是容器技术的第一个主要商业实现，并且今天仍然用于支持许多商业容器实现。2005年，Virtuozzo公司发布了用于Linux的OpenVZ，随后在2007年HP发布了用于HP-UX的安全资源分区（后来更名为HP-UX容器）。
+- en: Companies like Google, which had to deal with scaling applications for broad
+    internet consumption and/or hosting untrusted user code, started pushing container
+    technology in the early 2000s to facilitate reliably and securely distributing
+    their applications across global data centers. A few companies maintained their
+    own patched Linux kernels with container support for internal use, but as the
+    need for these features became more evident within the Linux community, Google
+    contributed some of its work supporting containers into the mainline Linux kernel,
+    and in 2008, Linux Containers (LXC) were released in version 2.6.24 of the Linux
+    kernel. The phenomenal growth of Linux Containers across the community did not
+    truly start to grow until 2013, with the inclusion of user namespaces in version
+    3.8 of the Linux kernel and the release of Docker one month later.
+  id: totrans-20
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 像谷歌这样的公司，必须处理广泛互联网消费和/或托管不受信任的用户代码，从2000年代初开始推动容器技术，以确保可靠和安全地在全球数据中心分发其应用程序。少数公司在内部使用自己维护的带有容器支持的修补过的Linux内核，但随着Linux社区内对这些特性需求的显现，谷歌将其支持容器的一些工作贡献到了主流Linux内核中，2008年，在Linux内核的2.6.24版本中发布了Linux容器（LXC）。Linux容器的显著增长直到2013年才真正开始，当时在Linux内核的3.8版本中包含了用户命名空间，并在一个月后发布了Docker。
+- en: Nowadays, containers are used almost everywhere. Docker and OCI images provide
+    the packaging format for a significant and growing amount of software that is
+    delivered into production environments, and provide the basis for many production
+    systems, including, but not limited to, Kubernetes and most “serverless” cloud
+    technologies.
+  id: totrans-21
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如今，容器几乎无处不在。Docker 和 OCI 图像提供了一个重要且不断增长的软件打包格式，用于交付到生产环境，并为许多生产系统提供基础，包括但不限于
+    Kubernetes 和大多数“无服务器”云技术。
+- en: Note
+  id: totrans-22
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: So-called serverless technologies are not actually serverless; they simply rely
+    on other people’s servers to get work done so that the application owner does
+    not have to worry about managing the hardware and operating system.
+  id: totrans-23
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 所谓的无服务器技术实际上并不是真正的无服务器；它们只是依赖于其他人的服务器来完成工作，这样应用程序所有者就不必担心硬件和操作系统的管理。
+- en: Creating a Container
+  id: totrans-24
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 创建一个容器
+- en: So far we’ve started containers using the handy `docker container run` command.
+    But `docker container run` is really a convenience command that wraps two separate
+    steps into one. The first thing it does is create a container from the underlying
+    image. We can accomplish this separately using the `docker container create` command.
+    The second thing `docker container run` does is execute the container, which we
+    can also do separately with the `docker container start` command.
+  id: totrans-25
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，我们一直使用方便的`docker container run`命令来启动容器。但是，`docker container run`实际上是一个方便的命令，将两个单独的步骤合并为一个。它的第一步是从底层镜像创建一个容器。我们可以使用`docker
+    container create`命令单独完成这一步。`docker container run`的第二步是执行容器，我们也可以使用`docker container
+    start`命令单独执行这一步。
+- en: The `docker container create` and `docker container start` commands both contain
+    all the options that pertain to how a container is initially set up. In [Chapter 4](ch04.html#docker_images),
+    we demonstrated that with the `docker container run` command you could map network
+    ports in the underlying container to the host using the `-p/--publish` argument,
+    and that `-e/--env` could be used to pass environment variables into the container.
+  id: totrans-26
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`docker container create` 和 `docker container start` 命令都包含了有关如何初始设置容器的所有选项。在
+    [第四章](ch04.html#docker_images) 中，我们演示了使用 `docker container run` 命令可以使用 `-p/--publish`
+    参数将底层容器中的网络端口映射到主机上，并且可以使用 `-e/--env` 将环境变量传递到容器中。'
+- en: This only just begins to touch on the array of things that you can configure
+    when you first create a container. So let’s take a look at some of the options
+    that `docker` supports.
+  id: totrans-27
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这只是开始接触到在创建容器时可以配置的一系列事物。所以让我们看看一些 `docker` 支持的选项。
+- en: Basic Configuration
+  id: totrans-28
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 基本配置
+- en: Let’s start by exploring some of the ways we can tell Docker to configure our
+    container when we create it.
+  id: totrans-29
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们从探索一些告诉 Docker 在创建容器时如何配置的方式开始。
+- en: Container name
+  id: totrans-30
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 容器名称
+- en: When you create a container, it is built from the underlying image, but various
+    command-line arguments can affect the final settings. Settings specified in the
+    *Dockerfile* are always used as defaults, but you can override many of them at
+    creation time.
+  id: totrans-31
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当你创建一个容器时，它是从底层镜像构建的，但各种命令行参数可以影响最终的设置。在 *Dockerfile* 中指定的设置始终作为默认值使用，但你可以在创建时覆盖其中的许多设置。
+- en: 'By default, [Docker randomly names your container](https://github.com/moby/moby/blob/master/pkg/namesgenerator/names-generator.go)
+    by combining an adjective with the name of a famous person. This results in names
+    like *ecstatic-babbage* and *serene-albattani*. If you want to give your container
+    a specific name, you can use the `--name` argument:'
+  id: totrans-32
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，[Docker 随机为你的容器命名](https://github.com/moby/moby/blob/master/pkg/namesgenerator/names-generator.go)，通常是将一个形容词与一个名人的名字结合起来。这样会生成诸如
+    *ecstatic-babbage* 和 *serene-albattani* 这样的名称。如果你想为你的容器指定一个特定的名称，可以使用 `--name`
+    参数：
+- en: '[PRE0]'
+  id: totrans-33
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE0]'
+- en: After creating this container, you can then start it by using the `docker container
+    start awesome-service`. It will automatically exit after 120 seconds, but you
+    can stop it before then by running `docker container stop awesome-service`. We
+    will dive a bit more into each of these commands a little later in the chapter.
+  id: totrans-34
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 创建此容器后，你可以使用 `docker container start awesome-service` 启动它。它将在 120 秒后自动退出，但你可以在此之前通过运行
+    `docker container stop awesome-service` 停止它。我们稍后将在本章更深入地介绍每个命令。
+- en: Warning
+  id: totrans-35
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: You can only have one container with any given name on a Docker host. If you
+    run the preceding command twice in a row, you will get an error. You must either
+    delete the previous container using `docker container rm` or change the name of
+    the new container.
+  id: totrans-36
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Docker 主机上只能有一个具有特定名称的容器。如果连续两次运行上述命令，将会出错。你必须使用 `docker container rm` 删除先前的容器，或者更改新容器的名称。
+- en: Labels
+  id: totrans-37
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 标签
+- en: As mentioned in [Chapter 4](ch04.html#docker_images), labels are key/value pairs
+    that can be applied to Docker images and containers as metadata. When new Linux
+    containers are created, they automatically inherit all the labels from their parent
+    image.
+  id: totrans-38
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正如在 [第四章](ch04.html#docker_images) 中提到的，标签是可以作为元数据应用于 Docker 镜像和容器的键/值对。当创建新的
+    Linux 容器时，它们会自动继承其父镜像的所有标签。
+- en: 'It is also possible to add new labels to the containers so that you can apply
+    metadata that might be specific to that single container:'
+  id: totrans-39
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你也可以向容器添加新的标签，以便为单个容器应用可能特定于其的元数据：
+- en: '[PRE1]'
+  id: totrans-40
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE1]'
+- en: 'You can then search for and filter containers based on this metadata, using
+    commands like `docker container ls`:'
+  id: totrans-41
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 之后，你可以使用像 `docker container ls` 这样的命令基于这些元数据搜索和过滤容器：
+- en: '[PRE2]'
+  id: totrans-42
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE2]'
+- en: 'You can use the `docker container inspect` command to see all the labels that
+    a container has:'
+  id: totrans-43
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可以使用 `docker container inspect` 命令查看容器的所有标签：
+- en: '[PRE3]'
+  id: totrans-44
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE3]'
+- en: '[PRE4]'
+  id: totrans-45
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE4]'
+- en: '[PRE5]'
+  id: totrans-46
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE5]'
+- en: This container runs the command `sleep 1000`, so after 1,000 seconds it will
+    stop running.
+  id: totrans-47
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此容器运行命令 `sleep 1000`，因此在 1,000 秒后将停止运行。
+- en: Hostname
+  id: totrans-48
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 主机名
+- en: 'By default, when you start a container, Docker copies certain system files
+    on the host, including */etc/hostname*, into the container’s configuration directory
+    on the host,^([2](ch05.html#idm46803148782320)) and then uses a bind mount to
+    link that copy of the file into the container. We can launch a default container
+    with no special configuration, like this:'
+  id: totrans-49
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，当启动容器时，Docker会将主机上的某些系统文件（包括*/etc/hostname*）复制到主机上容器的配置目录中，然后使用绑定挂载将该文件的副本链接到容器中。我们可以像这样启动一个默认容器，没有特殊配置：
+- en: '[PRE6]'
+  id: totrans-50
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE6]'
+- en: This command uses the `docker container run` command, which runs `docker container
+    create` and `docker container start` in the background. Since we want to be able
+    to interact with the container that we are going to create for demonstration purposes,
+    we pass in a few useful arguments. The `--rm` argument tells Docker to delete
+    the container when it exits, the `-t` argument tells Docker to allocate a pseudo-TTY,
+    and the `-i` argument tells Docker that this is going to be an interactive session
+    and that we want to keep STDIN open. If there is no `ENTRYPOINT` defined in the
+    image, then the final argument in the command is the executable and command-line
+    arguments that we want to run within the container, which in this case is the
+    ever-useful `/bin/bash`. If there is an `ENTRYPOINT` defined in the image, then
+    the final argument is passed to the `ENTRYPOINT` process as a list of command-line
+    arguments to that command.
+  id: totrans-51
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此命令使用`docker container run`命令，在后台运行`docker container create`和`docker container
+    start`。由于我们希望能够与将要为演示目的创建的容器进行交互，我们传入了一些有用的参数。`--rm`参数告诉Docker在退出时删除容器，`-t`参数告诉Docker分配一个伪TTY，`-i`参数告诉Docker这将是一个交互式会话，并且我们希望保持STDIN打开。如果镜像中没有定义`ENTRYPOINT`，那么命令中的最后一个参数将是我们希望在容器内运行的可执行文件和命令行参数，本例中是常用的`/bin/bash`。如果镜像中定义了`ENTRYPOINT`，那么最后一个参数将作为命令行参数列表传递给`ENTRYPOINT`进程的命令。
+- en: Note
+  id: totrans-52
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: You might have noticed that the preceding paragraph talks about `-i` and `-t`,
+    but the command is using the argument `-ti`. There is a lot of Unix history that
+    explains why this is, but a [quick overview](https://nullprogram.com/blog/2020/08/01)
+    can be found online if you are curious.
+  id: totrans-53
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可能已经注意到上一段提到了`-i`和`-t`，但命令中使用的是`-ti`参数。这背后有很多Unix历史可以解释为什么会这样，但如果你感兴趣，可以在网上找到一个[快速概述](https://nullprogram.com/blog/2020/08/01)。
+- en: 'If we now run the `mount` command from within the resulting container, we’ll
+    see something similar to this:'
+  id: totrans-54
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果现在在生成的容器中运行`mount`命令，我们将看到类似这样的结果：
+- en: '[PRE7]'
+  id: totrans-55
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE7]'
+- en: Note
+  id: totrans-56
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: When you see any examples with a prompt that looks something like *root@hashID*,
+    it means that you are running a command within the container instead of on the
+    local host.
+  id: totrans-57
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当你看到任何类似*root@hashID*的提示示例时，意味着你正在容器内运行命令，而不是在本地主机上。
+- en: There are occasions when a container will have been configured with a different
+    hostname instead (e.g., using `--name` on the CLI), but in the default case, it’s
+    the container ID hash.
+  id: totrans-58
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有时容器将配置为使用不同的主机名（例如，在CLI上使用`--name`参数），但默认情况下是容器ID的哈希值。
+- en: It is also possible to change the user that is used inside the container with
+    `--user`, but by default, it will be *root*.
+  id: totrans-59
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用`--user`选项可以更改容器内部使用的用户，但默认情况下将使用*root*用户。
+- en: 'There are quite a few bind mounts in a container, but in this case, we are
+    interested in this one:'
+  id: totrans-60
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器中有很多绑定挂载，但在这种情况下，我们对此感兴趣：
+- en: '[PRE8]'
+  id: totrans-61
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE8]'
+- en: While the device number will be different for each container, the part we care
+    about is that the mount point is */etc/hostname*. This links the container’s */etc/hostname*
+    to the hostname file that Docker has prepared for the container, which by default
+    contains the container’s ID and is not fully qualified with a domain name.
+  id: totrans-62
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然每个容器的设备编号都不同，但我们关心的部分是挂载点为*/etc/hostname*。这将容器的*/etc/hostname*链接到Docker为容器准备的主机名文件，默认情况下包含容器的ID，并且没有完全合格的域名。
+- en: 'We can check this in the container by running the following:'
+  id: totrans-63
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以通过运行以下命令在容器中检查这一点：
+- en: '[PRE9]'
+  id: totrans-64
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE9]'
+- en: Note
+  id: totrans-65
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Don’t forget to `exit` the container shell to return to the local host when
+    finished.
+  id: totrans-66
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 完成后不要忘记通过`exit`命令退出容器Shell返回本地主机。
+- en: 'To set the hostname specifically, we can use the `--hostname` argument to pass
+    in a more specific value:'
+  id: totrans-67
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要特别设置主机名，我们可以使用`--hostname`参数传递更具体的值：
+- en: '[PRE10]'
+  id: totrans-68
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE10]'
+- en: 'Then, from within the container, we’ll see that the fully qualified hostname
+    is defined as requested:'
+  id: totrans-69
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后，在容器内部，我们将看到完全合格的主机名定义如请求：
+- en: '[PRE11]'
+  id: totrans-70
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE11]'
+- en: Domain Name Service
+  id: totrans-71
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 域名服务
+- en: 'Just like */etc/hostname*, the *resolv.conf* file that configures Domain Name
+    Service (DNS) resolution is managed via a bind mount between the host and container:'
+  id: totrans-72
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 就像 */etc/hostname* 一样，配置域名服务（DNS）解析的 *resolv.conf* 文件是通过主机和容器之间的绑定挂载来管理的：
+- en: '[PRE12]'
+  id: totrans-73
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE12]'
+- en: Note
+  id: totrans-74
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Details about the *resolve.conf* file can be found [online](https://sslhow.com/understanding-etc-resolv-conf-file-in-linux).
+  id: totrans-75
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以在 [在线](https://sslhow.com/understanding-etc-resolv-conf-file-in-linux) 找到有关
+    *resolve.conf* 文件的详细信息。
+- en: 'By default, this is an exact copy of the Docker host’s *resolv.conf* file.
+    If you didn’t want this, you could use a combination of the `--dns` and `--dns-search`
+    arguments to override this behavior in the container:'
+  id: totrans-76
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 默认情况下，这是 Docker 主机的 *resolv.conf* 文件的精确副本。如果您不希望这样，可以在容器中使用 `--dns` 和 `--dns-search`
+    参数的组合来覆盖此行为：
+- en: '[PRE13]'
+  id: totrans-77
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE13]'
+- en: Note
+  id: totrans-78
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: If you want to leave the search domain completely unset, then use `--dns-search=.`
+  id: totrans-79
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您希望完全不设置搜索域，那么可以使用 `--dns-search=.`。
+- en: 'Within the container, you would still see a bind mount, but the file contents
+    would no longer reflect the host’s *resolv.conf*; instead, it would now look like
+    this:'
+  id: totrans-80
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在容器内部，您仍然会看到一个绑定挂载，但文件内容不再反映主机的 *resolv.conf*；相反，它现在看起来是这样的：
+- en: '[PRE14]'
+  id: totrans-81
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE14]'
+- en: MAC address
+  id: totrans-82
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: MAC 地址
+- en: Another important piece of information that you can configure is the media access
+    control (MAC) address for the container.
+  id: totrans-83
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以配置容器的媒体访问控制（MAC）地址，这也是另一个重要的信息。
+- en: Without any configuration, a container will receive a calculated MAC address
+    that starts with the *02:42:ac:11* prefix.
+  id: totrans-84
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 没有任何配置时，容器将获得一个以 *02:42:ac:11* 前缀开头的计算出的 MAC 地址。
+- en: 'If you need to specifically set this to a value, you can do so by running something
+    similar to this:'
+  id: totrans-85
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您需要明确将其设置为一个值，可以运行类似这样的命令：
+- en: '[PRE15]'
+  id: totrans-86
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE15]'
+- en: Normally, you will not need to do that. But sometimes you want to reserve a
+    particular set of MAC addresses for your containers to avoid conflicting with
+    other virtualization layers that use the same private block as Docker.
+  id: totrans-87
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常情况下，您不需要这样做。但有时您希望为您的容器保留一组特定的 MAC 地址，以避免与使用与 Docker 相同的私有块的其他虚拟化层冲突。
+- en: Warning
+  id: totrans-88
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Be very careful when customizing the MAC address settings. It is possible to
+    cause ARP contention on your network if two systems advertise the same MAC address.
+    If you have a strong need to do this, try to keep your locally administered address
+    ranges within some of the official ranges, like *x2-xx-xx-xx-xx-xx*, *x6-xx-xx-xx-xx-xx*,
+    *xA-xx-xx-xx-xx-xx*, and *xE-xx-xx-xx-xx-xx* (with *x* being any valid hexadecimal
+    character).
+  id: totrans-89
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在自定义 MAC 地址设置时要非常小心。如果两个系统广播相同的 MAC 地址，可能会导致网络上的 ARP 冲突。如果您确实有这样的强烈需求，请尽量将本地管理的地址范围保持在一些官方范围内，例如
+    *x2-xx-xx-xx-xx-xx*、*x6-xx-xx-xx-xx-xx*、*xA-xx-xx-xx-xx-xx* 和 *xE-xx-xx-xx-xx-xx*（其中
+    *x* 是任何有效的十六进制字符）。
+- en: Storage Volumes
+  id: totrans-90
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 存储卷
+- en: There are times when the default disk space allocated to a container, or the
+    container’s ephemeral nature, is not appropriate for the job at hand, so you’ll
+    need storage that can persist between container deployments.
+  id: totrans-91
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有时，分配给容器的默认磁盘空间或容器的临时性质并不适合手头的工作，因此您需要一种可以在容器部署之间持久存在的存储。
+- en: Warning
+  id: totrans-92
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Mounting storage from the Docker host is not generally advisable because it
+    ties your container to a particular Docker host for its persistent state. But
+    for cases like temporary cache files or other semi-ephemeral states, it can make
+    sense.
+  id: totrans-93
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 通常不建议从 Docker 主机挂载存储，因为这会将您的容器与特定的 Docker 主机绑定在一起以获取其持久状态。但对于临时缓存文件或其他半临时状态的情况，这是有道理的。
+- en: 'For times like this, you can leverage the `--mount/-v` command to mount directories
+    and individual files from the host server into the container. It is important
+    that you use fully qualified paths in the `--mount/-v` argument. The following
+    example mounts */mnt/session_data* to */data* within the container:'
+  id: totrans-94
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这种情况下，您可以利用 `--mount/-v` 命令将主机服务器上的目录和单个文件挂载到容器中。在 `--mount/-v` 参数中使用完全限定路径是很重要的。以下示例将
+    */mnt/session_data* 挂载到容器内部的 */data*：
+- en: '[PRE16]'
+  id: totrans-95
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE16]'
+- en: Tip
+  id: totrans-96
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: For bind mounts specifically, you can use the `-v` argument to shorten the command.
+    When using the `-v` argument, you will notice here that the source and target
+    files/directories are separated by a colon(:).
+  id: totrans-97
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 对于绑定挂载，您可以使用 `-v` 参数来缩短命令。在使用 `-v` 参数时，您会注意到源文件和目标文件/目录之间用冒号（:）分隔。
+- en: It is also important to note that volumes are mounted read-write by default.
+    You can easily make `docker` mount the file or directory read-only by adding `,readonly`
+    to end the of the `--mount` arguments, or by adding `:ro` to the end of the `-v`
+    arguments.
+  id: totrans-98
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 还需注意，默认情况下挂载的卷是读写的。您可以通过在`--mount`参数末尾添加`,readonly`或在`-v`参数末尾添加`:ro`来轻松使`docker`挂载文件或目录为只读。
+- en: '[PRE17]'
+  id: totrans-99
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE17]'
+- en: Neither the host mount point nor the mount point in the container needs to preexist
+    for this command to work properly. If the host mount point does not exist already,
+    then it will be created as a directory. This could cause you some issues if you
+    were trying to point to a file instead of a directory.
+  id: totrans-100
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此命令正常工作时，主机挂载点和容器内的挂载点都无需预先存在。如果主机挂载点尚不存在，则将其创建为目录。如果您尝试指向文件而不是目录，则可能会遇到问题。
+- en: In the mount options, you can see that the filesystem was mounted read-write
+    on */data* as expected.
+  id: totrans-101
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在挂载选项中，可以看到文件系统像预期的那样以读写方式挂载到*/data*。
+- en: If the container application is designed to write into */data*, then this data
+    will be visible on the host filesystem in */mnt/session_data* and will remain
+    available when this container stops and a new container starts with the same volume
+    mounted.
+  id: totrans-102
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果容器应用程序设计为写入*/data*，那么这些数据将在*/mnt/session_data*中对主机文件系统可见，并且在停止此容器并使用相同卷挂载启动新容器时，这些数据仍然可用。
+- en: It is possible to tell Docker that the root volume of your container should
+    be mounted read-only so that processes within the container cannot write anything
+    to the root filesystem. This prevents things like logfiles, which a developer
+    may be unaware of, from filling up the container’s allocated disk in production.
+    When it’s used in conjunction with a mounted volume, you can ensure that data
+    is written only into expected locations.
+  id: totrans-103
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以告诉 Docker，容器的根卷应该以只读方式挂载，这样容器内的进程就无法向根文件系统写入任何内容。这可以防止像日志文件这样的东西在生产环境中填满容器分配的磁盘，开发人员可能对此不了解。与挂载卷一起使用时，可以确保数据仅写入到预期位置。
+- en: 'In the previous example, we could accomplish this simply by adding `--read-only=true`
+    to the command:'
+  id: totrans-104
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在上一个示例中，我们只需在命令中添加`--read-only=true`即可实现此目的：
+- en: '[PRE18]'
+  id: totrans-105
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE18]'
+- en: If you look closely at the mount options for the root directory, you’ll notice
+    that they are mounted with the `ro` option, which makes it read-only. However,
+    the */session_data* mount is still mounted with the `rw` option so that our application
+    can successfully write to the one volume to which it’s designed to write.
+  id: totrans-106
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果仔细查看根目录的挂载选项，您会注意到它们以`ro`选项挂载，这使其为只读。但是，*/session_data*挂载仍然以`rw`选项挂载，以便我们的应用程序可以成功写入其设计为写入的一个卷。
+- en: 'Sometimes it is necessary to make a directory like */tmp* writable, even when
+    the rest of the container is read-only. For this use case, you can use the `--mount
+    type=tmpfs` argument with `docker container run` so that you can mount a *tmpfs*
+    filesystem into the container. The *tmpfs* filesystems are completely in-memory.
+    They will be very fast, but they are also ephemeral and will utilize additional
+    system memory. Any data in these *tmpfs* directories will be lost when the container
+    is stopped. The following example shows a container being launched with a 256
+    MB *tmpfs* filesystem mounted at */tmp*:'
+  id: totrans-107
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有时需要将*/tmp*等目录设置为可写，即使容器的其余部分是只读的。对于这种用例，您可以使用`docker container run`命令中的`--mount
+    type=tmpfs`参数，以便将*tmpfs*文件系统挂载到容器中。*tmpfs*文件系统完全存储在内存中。它们非常快，但也是临时的，并且会利用额外的系统内存。这些*tmpfs*目录中的任何数据在停止容器时都会丢失。以下示例显示使用256
+    MB *tmpfs*文件系统在*/tmp*处挂载容器：
+- en: '[PRE19]'
+  id: totrans-108
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE19]'
+- en: Warning
+  id: totrans-109
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Containers should be designed to be stateless whenever possible. Managing storage
+    creates undesirable dependencies and can easily make deployment scenarios much
+    more complicated.
+  id: totrans-110
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽可能设计容器为无状态是很重要的。管理存储会创建不必要的依赖关系，并且可以使部署场景变得更加复杂。
+- en: Resource Quotas
+  id: totrans-111
+  prefs:
+  - PREF_H2
+  type: TYPE_NORMAL
+  zh: 资源配额
+- en: When people discuss the types of problems they must often cope with when working
+    in the cloud, the “noisy neighbor” is often near the top of the list. The basic
+    problem this term refers to is that other applications running on the same physical
+    system as yours can have a noticeable impact on your performance and resource
+    availability.
+  id: totrans-112
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当人们讨论在云中工作时必须经常应对的问题类型时，“喧闹的邻居”通常是问题列表中的前几位。这个术语所指的基本问题是，与您的物理系统上运行的其他应用程序相比，它们对您的性能和资源可用性可能会产生显著影响。
+- en: VMs have the advantage that you can easily and very tightly control how much
+    memory and CPU, among other resources, are allocated to the VM. When using Docker,
+    you must instead leverage the cgroup functionality in the Linux kernel to control
+    the resources that are available to a Linux container. The `docker container create`
+    and `docker container run` commands directly support configuring CPU, memory,
+    swap, and storage I/O restrictions when you create a container.
+  id: totrans-113
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虚拟机的优点在于您可以轻松而且非常严格地控制分配给虚拟机的内存、CPU等资源。当使用Docker时，您必须利用Linux内核中的cgroup功能来控制可用于Linux容器的资源。`docker
+    container create`和`docker container run`命令直接支持在创建容器时配置CPU、内存、交换空间和存储I/O限制。
+- en: Note
+  id: totrans-114
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Constraints are normally applied at the time of container creation. If you need
+    to change them, you can use the `docker container update` command or deploy a
+    new container with the adjustments.
+  id: totrans-115
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 约束通常在创建容器时应用。如果您需要更改它们，可以使用`docker container update`命令或部署一个具有调整的新容器。
+- en: 'There is an important caveat here. While Docker supports various resource limits,
+    you must have these capabilities enabled in your kernel for Docker to take advantage
+    of them. You might need to add these as command-line parameters to your kernel
+    on startup. To figure out if your kernel supports these limits, run `docker system
+    info`. If you are missing any support, you will get warning messages at the bottom,
+    like this:'
+  id: totrans-116
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这里有一个重要的警告。虽然Docker支持各种资源限制，但您必须在内核中启用这些功能，以便Docker利用它们。您可能需要在启动时将这些功能添加为命令行参数到您的内核中。要确定您的内核是否支持这些限制，请运行`docker
+    system info`。如果您缺少任何支持，底部将会收到警告信息，例如：
+- en: '[PRE20]'
+  id: totrans-117
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE20]'
+- en: Note
+  id: totrans-118
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: The details regarding getting cgroup support configured for your kernel are
+    distribution specific, so you should consult the [Docker documentation](https://oreil.ly/Z70ZO)^([3](ch05.html#idm46803147988272))
+    if you need help configuring things.
+  id: totrans-119
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 关于为您的内核配置cgroup支持的详细信息因发行版而异，因此如果您需要帮助配置，请参阅[Docker文档](https://oreil.ly/Z70ZO)^([3](ch05.html#idm46803147988272))。
+- en: CPU shares
+  id: totrans-120
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: CPU份额
+- en: Docker has several ways to limit CPU usage by applications in containers. The
+    original method, still commonly used, is the concept of *CPU shares*. We’ll present
+    other options as well.
+  id: totrans-121
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Docker有几种方法可以限制容器中应用程序的CPU使用率。最初的方法仍然广泛使用，称为*CPU shares*。我们还将介绍其他选项。
+- en: The computing power of all the CPU cores in a system is considered to be the
+    full pool of shares. Docker assigns the number 1,024 to represent the full pool.
+    By configuring a container’s CPU shares, you can dictate how much time the container
+    gets to use the CPU. If you want the container to be able to use at most half
+    of the computing power of the system, then you would allocate it 512 shares. These
+    are not exclusive shares, meaning that assigning all 1,024 shares to a container
+    does not prevent all other containers from running. Rather, it’s a hint to the
+    scheduler about how long each container should be able to run each time it’s scheduled.
+    If we have one container that is allocated 1,024 shares (the default) and two
+    that are allocated 512, they will all get scheduled the same number of times.
+    But if the normal amount of CPU time for each process is 100 microseconds, the
+    containers with 512 shares will run for 50 microseconds each time, whereas the
+    container with 1,024 shares will run for 100 microseconds.
+  id: totrans-122
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 系统中所有CPU核心的计算能力被视为完整的份额池。Docker分配数字1024来表示完整的池。通过配置容器的CPU份额，您可以决定容器可以使用CPU的时间。如果您希望容器最多使用系统计算能力的一半，则分配512份额。这些不是排他性份额，这意味着将所有1024份额分配给一个容器并不会阻止其他所有容器运行。而是一个提示调度程序关于每次调度时每个容器应该运行多长时间的提示。如果我们有一个分配了1024份额（默认）的容器和两个分配了512份额的容器，它们将同样次数被调度。但是如果每个进程的正常CPU时间为100微秒，那么分配512份额的容器每次运行50微秒，而分配1024份额的容器每次运行100微秒。
+- en: Let’s explore a little bit how this works in practice. For the following examples,
+    we’ll use a new Docker image that contains the [`stress` command](https://linux.die.net/man/1/stress)
+    for pushing a system to its limits.
+  id: totrans-123
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们稍微探讨一下这在实践中是如何运作的。在接下来的例子中，我们将使用一个包含[`stress`命令](https://linux.die.net/man/1/stress)的新Docker镜像来推动系统的极限。
+- en: When we run `stress` without any cgroup constraints, it will use as many resources
+    as we tell it to. The following command creates a load average of around five
+    by creating two CPU-bound processes, one I/O-bound process, and two memory allocation
+    processes. For all of the following examples, we are running on a system with
+    two CPUs.
+  id: totrans-124
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当我们在没有 cgroup 约束的情况下运行`stress`时，它将使用我们指定的所有资源。以下命令通过创建两个 CPU 绑定进程、一个 I/O 绑定进程和两个内存分配进程来创建大约五的负载平均数。在所有以下示例中，我们都在一个拥有两个
+    CPU 的系统上运行。
+- en: 'Note that in the following command, everything following the container image
+    name is related to the `stress` command, not the `docker` command:'
+  id: totrans-125
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请注意，在以下命令中，容器映像名称之后的所有内容都与`stress`命令相关，而不是`docker`命令：
+- en: '[PRE21]'
+  id: totrans-126
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE21]'
+- en: Warning
+  id: totrans-127
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: This should be a reasonable command to run on any modern computer system, but
+    be aware that it is going to stress the host system. So don’t do this in a location
+    that can’t take the additional load, or even a possible failure, due to resource
+    starvation.
+  id: totrans-128
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这应该是在任何现代计算机系统上运行的合理命令，但请注意，它将会对主机系统造成压力。因此，请不要在无法承受额外负载甚至可能由于资源匮乏导致的可能故障的地方执行此操作。
+- en: 'If you run the `top` or `htop` command on the Docker host, near the end of
+    the two-minute run, you can see how the system is affected by the load created
+    by the `stress` program:'
+  id: totrans-129
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您在 Docker 主机上运行`top`或`htop`命令，在两分钟运行结束时，您可以看到由`stress`程序创建的负载对系统的影响：
+- en: '[PRE22]'
+  id: totrans-130
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE22]'
+- en: Note
+  id: totrans-131
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: 'Docker Desktop users on non-Linux systems may discover that Docker has made
+    the VM filesystem read-only, and it does not contain many useful tools for monitoring
+    the VM. For these demos where you want to be able to monitor the resource usage
+    of various processes, you can work around this by doing something like this:'
+  id: totrans-132
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在非 Linux 系统上使用 Docker Desktop 的用户可能会发现 Docker 已将 VM 文件系统设置为只读，并且不包含许多用于监视 VM
+    的实用工具。对于这些演示，您希望能够监视各种进程的资源使用情况，可以通过执行类似以下操作来解决：
+- en: '[PRE23]'
+  id: totrans-133
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE23]'
+- en: Be aware that the preceding `htop` command will give you an error unless `stress`
+    is actively running when you launch `htop`, since no processes will be returned
+    by the `pgrep` command.
+  id: totrans-134
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 注意，在启动`htop`时，前面的`htop`命令会报错，除非在启动`htop`时正在运行`stress`，因为`pgrep`命令不会返回任何进程。
+- en: You will also want to exit and rerun `htop` each time you run a new `stress`
+    instance.
+  id: totrans-135
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 每次运行新的`stress`实例时，您也需要退出并重新运行`htop`。
+- en: 'If you want to run the same `stress` command again, with only half the amount
+    of available CPU time, you can do so like this:'
+  id: totrans-136
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您想再次运行相同的`stress`命令，并且只使用半数可用的 CPU 时间，可以像这样操作：
+- en: '[PRE24]'
+  id: totrans-137
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE24]'
+- en: The `--cpu-shares 512` is the flag that does the magic, allocating 512 CPU shares
+    to this container. The effect of this argument might not be noticeable on a system
+    that is not very busy. That’s because the container will continue to be scheduled
+    for the same time-slice length whenever it has work to do unless the system is
+    constrained for resources. So in our case, the results of a `top` command on the
+    host system will likely look the same, unless you run a few more containers to
+    give the CPU something else to do.
+  id: totrans-138
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`--cpu-shares 512`是执行魔术的标志，为该容器分配了 512 个 CPU 分享。在不是非常繁忙的系统上，可能看不到这个参数的效果。这是因为除非系统资源受到限制，否则容器在有工作要做时会继续被调度为相同的时间片长度。因此，在我们的情况下，在主机系统上运行`top`命令的结果可能看起来相同，除非您运行了更多的容器来给
+    CPU 其他事务处理。'
+- en: Warning
+  id: totrans-139
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Unlike VMs, Docker’s cgroup-based constraints on CPU shares can have unexpected
+    consequences. They are not hard limits; they are relative limits, similar to the
+    `nice` command. An example is a container that is constrained to half the CPU
+    shares but is on a system that is not very busy. Since the CPU is not busy, the
+    limit on the CPU shares would have only a limited effect because there is no competition
+    in the scheduler pool. When a second container that uses a lot of CPU is deployed
+    to the same system, suddenly the effect of the constraint on the first container
+    will be noticeable. Consider this carefully when constraining containers and allocating
+    resources.
+  id: totrans-140
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与虚拟机不同，Docker 基于 cgroup 的 CPU 分享限制可能会产生意想不到的后果。它们不是硬限制；它们是相对限制，类似于`nice`命令。例如，一个容器被限制为一半的
+    CPU 分享，但在一个不是很忙碌的系统上。由于 CPU 不忙，对 CPU 分享的限制只会有限的影响，因为调度池中没有竞争。当部署第二个使用大量 CPU 的容器到同一系统时，突然间第一个容器的限制效果就会显现出来。在约束容器和分配资源时要仔细考虑这一点。
+- en: CPU pinning
+  id: totrans-141
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: CPU 固定
+- en: It is also possible to pin a container to one or more CPU cores. This means
+    that work for this container will be scheduled only on the cores that have been
+    assigned to this container. That is useful if you want to hard-shard CPUs between
+    applications or if you have applications that need to be pinned to a particular
+    CPU for things like cache efficiency.
+  id: totrans-142
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 也可以将容器固定到一个或多个 CPU 核心上。这意味着此容器的工作仅在已分配给此容器的核心上调度。如果您想要在应用程序之间硬分配 CPU，或者如果您有需要固定到特定
+    CPU 的应用程序，比如缓存效率等，这是非常有用的。
+- en: 'In the following example, we are running a stress container pinned to the first
+    of two CPUs, with 512 CPU shares:'
+  id: totrans-143
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在以下示例中，我们正在运行一个固定到两个 CPU 中的第一个 CPU 核心的 stress 容器，并设置了 512 CPU 分享：
+- en: '[PRE25]'
+  id: totrans-144
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE25]'
+- en: Warning
+  id: totrans-145
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: The `--cpuset-cpus` argument is zero-indexed, so your first CPU core is 0\.
+    If you tell Docker to use a CPU core that does not exist on the host system, you
+    will get a `Cannot start container` error. On a two-CPU example host, you could
+    test this by using `--cpuset-cpus=0-2`.
+  id: totrans-146
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`--cpuset-cpus` 参数是从零开始索引的，因此您的第一个 CPU 核心是 0。如果您告诉 Docker 使用主机系统上不存在的 CPU 核心，您将收到
+    `Cannot start container` 错误。在一个双 CPU 示例主机上，您可以通过使用 `--cpuset-cpus=0-2` 进行测试。'
+- en: 'If you run `top` again, you should notice that the percentage of CPU time spent
+    in user space (`us`) is lower than it previously was, since we have restricted
+    two CPU-bound processes to a single CPU:'
+  id: totrans-147
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您再次运行 `top` 命令，您应该注意到用户空间中 CPU 时间百分比（`us`）比以前低，因为我们已将两个 CPU 密集型进程限制到一个单独的
+    CPU 上：
+- en: '[PRE26]'
+  id: totrans-148
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE26]'
+- en: Note
+  id: totrans-149
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: When you use CPU pinning, additional CPU sharing restrictions on the container
+    only take into account other containers running on the same set of cores.
+  id: totrans-150
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您使用 CPU pinning 时，容器上的额外 CPU 共享限制仅考虑运行在相同核心集上的其他容器。
+- en: Using the CPU Completely Fair Scheduler (CFS) within the Linux kernel, you can
+    alter the CPU quota for a given container by setting the `--cpu-quota` flag to
+    a valid value when launching the container with `docker container run`.
+  id: totrans-151
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用 Linux 内核中的 CPU 完全公平调度器（CFS），您可以通过在使用 `docker container run` 启动容器时将 `--cpu-quota`
+    标志设置为有效值来改变给定容器的 CPU 配额。
+- en: Simplifying CPU quotas
+  id: totrans-152
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 简化 CPU 配额
+- en: While CPU shares were the original mechanism in Docker for managing CPU limits,
+    Docker has evolved a great deal since, and one of the ways that it now makes users’
+    lives easier is by greatly simplifying how CPU quotas can be set. Instead of trying
+    to set correct CPU shares and quotas yourself, you can now simply tell Docker
+    how much CPU you would like to be available to your container, and it will do
+    the math required to set the underlying cgroups correctly.
+  id: totrans-153
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然 CPU 分享是 Docker 中管理 CPU 限制的原始机制，但 Docker 自进化以来已经有了很大发展，现在它使用户生活更轻松的一种方式是极大地简化了如何设置
+    CPU 配额。现在，您不再需要自己尝试设置正确的 CPU 分享和配额，只需告诉 Docker 您希望容器可用多少 CPU，它将执行必要的数学运算来正确设置底层的
+    cgroups。
+- en: 'The `--cpus` command can be set to a floating-point number between 0.01 and
+    the number of CPU cores on the Docker server:'
+  id: totrans-154
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`--cpus` 命令可以设置为介于 0.01 和 Docker 服务器上 CPU 核心数之间的浮点数：'
+- en: '[PRE27]'
+  id: totrans-155
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE27]'
+- en: 'If you try to set the value too high, you’ll get an error message from Docker
+    (not the `stress` application) that will give you the correct range of CPU cores
+    that you have to work with:'
+  id: totrans-156
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您尝试设置一个过高的值，您将收到 Docker（而不是 `stress` 应用程序）的错误消息，该消息将给出您必须使用的正确 CPU 核心范围：
+- en: '[PRE28]'
+  id: totrans-157
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE28]'
+- en: 'The `docker container update` command can be used to dynamically adjust the
+    resource limits of one or more containers. You could adjust the CPU allocation
+    on two containers simultaneously, for example, like so:'
+  id: totrans-158
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`docker container update` 命令可用于动态调整一个或多个容器的资源限制。例如，您可以同时调整两个容器的 CPU 分配，如下所示：'
+- en: '[PRE29]'
+  id: totrans-159
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE29]'
+- en: Tip
+  id: totrans-160
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: Docker sees CPUs the same way that Linux sees them. Hyper-threading and cores
+    are interpreted by Linux and exposed via the special file */proc/cpuinfo*. When
+    you use the `--cpus` command in Docker, you are referring to how many of the entries
+    in this file you want the container to have access to, whether they refer to a
+    standard core or a hyper-threaded core.
+  id: totrans-161
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Docker 与 Linux 相同视 CPU。超线程和核心由 Linux 解释，并通过特殊文件 */proc/cpuinfo* 公开。当您在 Docker
+    中使用 `--cpus` 命令时，您指的是希望容器访问的此文件中的条目数，无论它们是指标准核心还是超线程核心。
+- en: Memory
+  id: totrans-162
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 内存
+- en: 'We can control how much memory a container can access in a manner similar to
+    constraining the CPU. There is, however, one fundamental difference: while constraining
+    the CPU only impacts the application’s priority for CPU time, the memory limit
+    is a *hard* limit. Even on an unconstrained system with 96 GB of free memory,
+    if we tell a container that it may have access only to 24 GB, then it will only
+    ever get to use 24 GB regardless of the free memory on the system. Because of
+    the way the virtual memory system works on Linux, it’s possible to allocate more
+    memory to a container than the system has actual RAM. In this case, the container
+    will resort to using swap, just like a normal Linux process.'
+  id: totrans-163
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以控制容器可以访问的内存量，方式与限制CPU类似。然而，有一个基本区别：尽管限制CPU只影响应用程序对CPU时间的优先级，但内存限制是一个*硬*限制。即使在一个没有限制的系统上，有96
+    GB的空闲内存，如果我们告诉一个容器只能访问24 GB，那么它只能使用24 GB，而不管系统上的空闲内存有多少。由于Linux上虚拟内存系统的工作方式，可以为容器分配比系统实际RAM更多的内存。在这种情况下，容器将像普通的Linux进程一样使用交换空间。
+- en: 'Let’s start a container with a memory constraint by passing the `--memory`
+    option to the `docker container run` command:'
+  id: totrans-164
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 让我们通过将`--memory`选项传递给`docker container run`命令来启动一个带有内存约束的容器：
+- en: '[PRE30]'
+  id: totrans-165
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE30]'
+- en: When you use the `--memory` option alone, you are setting both the amount of
+    RAM and the amount of swap that the container will have access to. So by using
+    `--memory 512m` here, we’ve constrained the container to 512 MB of RAM and 512
+    MB of additional swap space. Docker supports `b`, `k`, `m`, or `g`, representing
+    bytes, kilobytes, megabytes, or gigabytes, respectively. If your system somehow
+    runs Linux and Docker and has multiple terabytes of memory, then unfortunately
+    you’re going to have to specify it in gigabytes.
+  id: totrans-166
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当您仅使用`--memory`选项时，您正在设置容器将访问的RAM和交换空间量。因此，通过在这里使用`--memory 512m`，我们将容器限制为512
+    MB的RAM和512 MB的额外交换空间。Docker支持`b`、`k`、`m`或`g`，分别表示字节、千字节、兆字节或千兆字节。如果您的系统在某种方式下运行Linux和Docker，并且具有多个TB的内存，则不幸的是，您将不得不以GB为单位指定它。
+- en: 'If you would like to set the swap separately or disable it altogether, you
+    need to also use the `--memory-swap` option. This defines the total amount of
+    memory and swap available to the container. If we rerun our previous command,
+    like so:'
+  id: totrans-167
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您希望单独设置交换空间或完全禁用它，则还需要使用`--memory-swap`选项。这定义了容器可用的总内存和交换空间量。如果我们重新运行以前的命令，如下所示：
+- en: '[PRE31]'
+  id: totrans-168
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE31]'
+- en: then we’re telling the kernel that this container can have access to 512 MB
+    of memory and 256 MB of additional swap space. Setting the `--memory-swap` option
+    to `-1` will allow the container to use as much swap as is available on the underlying
+    system and if `--memory-swap` and `--memory` are set to the same positive value,
+    then the container will not have any access to swap.
+  id: totrans-169
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后我们告诉内核，此容器可以访问512 MB的内存和256 MB的额外交换空间。将`--memory-swap`选项设置为`-1`将允许容器使用底层系统上可用的所有交换空间，并且如果`--memory-swap`和`--memory`设置为相同的正值，则容器将无法访问交换空间。
+- en: Warning
+  id: totrans-170
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Again, unlike CPU shares, memory is a hard limit! This is good because the constraint
+    doesn’t suddenly have a noticeable effect on the container when another container
+    is deployed to the system. But it means you need to be careful that the limit
+    closely matches your container’s needs because there is no wiggle room. An out-of-memory
+    container causes the kernel to behave just like it would if the system were out
+    of memory. It will try to find a process to kill so that it can free up space.
+    This is a common failure case where containers have their memory limits set too
+    low. The telltale sign of this issue is a container exit code of 137 and kernel
+    out-of-memory (OOM) messages in the Docker server’s `dmesg` output.
+  id: totrans-171
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与CPU份额不同，内存是一个硬限制！这很好，因为约束对容器的影响不会突然在系统部署另一个容器时显现。但这意味着您需要小心，确保限制与容器的需求紧密匹配，因为没有任何余地。内存不足的容器会导致内核表现得就像系统内存不足一样。它将尝试找到一个进程以杀死它，以便释放空间。这是一个常见的失败案例，其中容器的内存限制设置得太低。此问题的显著标志是容器退出码为137，以及在Docker服务器的`dmesg`输出中看到的内核内存不足（OOM）消息。
+- en: 'So, what happens if a container reaches its memory limit? Well, let’s give
+    it a try by modifying one of our previous commands and lowering the memory significantly:'
+  id: totrans-172
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 那么，如果容器达到其内存限制会发生什么？好吧，让我们试试修改我们以前的某个命令，并显著降低内存：
+- en: '[PRE32]'
+  id: totrans-173
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE32]'
+- en: 'While all of our other runs of the `stress` container ended with a line like
+    this:'
+  id: totrans-174
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 虽然我们的其他`stress`容器运行结束时会显示如下一行：
+- en: '[PRE33]'
+  id: totrans-175
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE33]'
+- en: 'we see that this run quickly fails with a line similar to this:'
+  id: totrans-176
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们看到，此次运行迅速失败，并显示类似于以下内容的行：
+- en: '[PRE34]'
+  id: totrans-177
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE34]'
+- en: This is because the container tries to allocate more memory than it is allowed,
+    and the Linux OOM killer is invoked and starts killing processes within the cgroup
+    to reclaim memory. In this case, our container has a single-parent process that
+    has spawned a few children processes, and when the OOM killer kills one of the
+    children processes, the parent process cleans everything up and exits with an
+    error.
+  id: totrans-178
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这是因为容器尝试分配超出允许的内存，Linux的OOM杀手被调用并开始终止cgroup内的进程以释放内存。在此情况下，我们的容器具有一个单父进程生成了几个子进程，当OOM杀手终止其中一个子进程时，父进程将清理所有内容并以错误退出。
+- en: Warning
+  id: totrans-179
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: Docker has features that allow you to tune and disable the Linux OOM killer
+    by using the `--oom-kill-disable` and the `--oom-score-adj` arguments to `docker
+    container run`, but they are not recommended for almost any use cases.
+  id: totrans-180
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Docker具有一些功能，允许您通过使用`docker container run`命令的`--oom-kill-disable`和`--oom-score-adj`参数来调整和禁用Linux的OOM杀手，但几乎不推荐用于任何用例。
+- en: 'If you access your Docker server, you can see the kernel message related to
+    this event by running `dmesg`. The output will look something like this:'
+  id: totrans-181
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果您访问Docker服务器，可以通过运行`dmesg`查看与此事件相关的内核消息。输出将类似于以下内容：
+- en: '[PRE35]'
+  id: totrans-182
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE35]'
+- en: 'This OOM event will also be recorded by Docker and viewable via `docker system
+    events`:'
+  id: totrans-183
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 此OOM事件也将由Docker记录，并可以通过`docker system events`查看：
+- en: '[PRE36]'
+  id: totrans-184
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE36]'
+- en: Block I/O
+  id: totrans-185
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: 块I/O
+- en: Many containers are just stateless applications and won’t need block I/O restrictions.
+    But Docker also supports limiting block I/O in a few different ways via the cgroups
+    mechanism.
+  id: totrans-186
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 许多容器只是无状态应用程序，并且不需要块I/O限制。但是，Docker还通过cgroups机制支持几种不同的限制块I/O的方式。
+- en: The first way is applying some prioritization to a container’s use of block
+    device I/O. You enable this by manipulating the default setting of the `blkio.weight`
+    cgroup attribute. This attribute can have a value of 0 (disabled) or a number
+    between 10 and 1,000, the default being 500\. This limit acts a bit like CPU shares,
+    in that the system will divide all of the available I/O between every process
+    within a cgroup slice by 1,000, with the assigned weights impacting how much available
+    I/O is available to each process.
+  id: totrans-187
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 第一种方法是对容器的块设备I/O使用应用一些优先级。您可以通过操纵`blkio.weight` cgroup属性的默认设置来启用此功能。此属性可以设置为0（禁用）或介于10和1,000之间的数字，默认为500。此限制有点像CPU份额，系统将所有可用的I/O分割为每个cgroup切片内的每个进程/容器的权重总和除以1,000，并根据分配的权重决定每个进程/容器可用的I/O量。
+- en: To set this weight on a container, you need to pass the `--blkio-weight` to
+    your `docker container run` command with a valid value. You can also target a
+    specific device using the `--blkio-weight-device` option.
+  id: totrans-188
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要在容器上设置此权重，您需要通过`docker container run`命令传递`--blkio-weight`参数，并指定有效值。您还可以使用`--blkio-weight-device`选项针对特定设备进行设置。
+- en: 'As with CPU shares, tuning the weights is hard to get right in practice, but
+    we can make it vastly simpler by limiting the maximum number of bytes or operations
+    per second that are available to a container via its cgroup. The following settings
+    let us control that:'
+  id: totrans-189
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 与CPU份额一样，实际调整权重是难以正确实现的，但通过限制容器通过其cgroup可用的每秒最大字节数或操作数，我们可以大大简化这一过程。以下设置使我们能够控制：
+- en: '[PRE37]'
+  id: totrans-190
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE37]'
+- en: 'You can test how these impact the performance of a container by running some
+    of the following commands, which use the Linux I/O tester [`bonnie`](https://www.coker.com.au/bonnie):'
+  id: totrans-191
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以通过运行以下一些使用Linux I/O测试工具[`bonnie`](https://www.coker.com.au/bonnie)的命令来测试这些对容器性能的影响：
+- en: '[PRE38]'
+  id: totrans-192
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE38]'
+- en: Tip
+  id: totrans-193
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: PowerShell users should be able to use the [`Measure-Command`](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.utility/measure-command?view=powershell-7.3)
+    function to replace the Unix `time` command used in these examples.
+  id: totrans-194
+  prefs: []
+  type: TYPE_NORMAL
+  zh: PowerShell用户应该能够使用[`Measure-Command`](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.utility/measure-command?view=powershell-7.3)函数来替代这些示例中使用的Unix
+    `time`命令。
+- en: In our experience, the `--device-read-iops` and `--device-write-iops` arguments
+    are the most effective way to set block I/O limits and are the ones we recommend.
+  id: totrans-195
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 根据我们的经验，`--device-read-iops`和`--device-write-iops`参数是设置块I/O限制的最有效方式，也是我们推荐的方式。
+- en: ulimits
+  id: totrans-196
+  prefs:
+  - PREF_H3
+  type: TYPE_NORMAL
+  zh: ulimits
+- en: 'Before Linux cgroups, there was another way to place a limit on the resources
+    available to a process: the application of user limits via the `ulimit` command.
+    That mechanism is still available and still useful for all of the [use cases](https://www.linuxhowtos.org/Tips%20and%20Tricks/ulimit.htm)
+    where it was traditionally used.'
+  id: totrans-197
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在Linux cgroups出现之前，有另一种方法可以对进程可用的资源施加限制：通过`ulimit`命令应用用户限制。这种机制仍然可用，并且对于传统上使用它的所有[用例](https://www.linuxhowtos.org/Tips%20and%20Tricks/ulimit.htm)仍然很有用。
+- en: 'The following code is a list of the types of system resources that you can
+    usually constrain by setting soft and hard limits via the `ulimit` command:'
+  id: totrans-198
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 下面的代码列出了通过设置软限制和硬限制可以通常约束的系统资源类型，通过`ulimit`命令：
+- en: '[PRE39]'
+  id: totrans-199
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE39]'
+- en: 'It is possible to configure the Docker daemon with the default user limits
+    that you want to apply to every container. The following command tells the Docker
+    daemon to start all containers with a soft limit of 50 open files and a hard limit
+    of 150 open files:'
+  id: totrans-200
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 可以配置Docker守护程序以应用您希望应用于每个容器的默认用户限制。以下命令告诉Docker守护程序以50个打开文件的软限制和150个打开文件的硬限制启动所有容器：
+- en: '[PRE40]'
+  id: totrans-201
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE40]'
+- en: 'You can then override these ulimits on a specific container by passing in values
+    using the `--ulimit` argument:'
+  id: totrans-202
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后，您可以通过使用`--ulimit`参数传递值来覆盖特定容器上的这些ulimits：
+- en: '[PRE41]'
+  id: totrans-203
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE41]'
+- en: There are some additional advanced commands that you can use when creating containers,
+    but this covers many of the more common use cases. The [Docker client documentation](https://dockr.ly/2ME0ygi)
+    lists all the available options and is updated with each Docker release.
+  id: totrans-204
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在创建容器时，还有一些其他高级命令可供使用，但这涵盖了许多更常见的用例。[Docker客户端文档](https://dockr.ly/2ME0ygi)列出了所有可用选项，并且在每个Docker发布中都会更新。
+- en: Starting a Container
+  id: totrans-205
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 启动容器
+- en: Before we got into the details of containers and constraints, we created our
+    container using the `docker container create` command. That container is just
+    sitting there without doing anything. There is a configuration but no running
+    process. When we’re ready to start the container, we can do so using the `docker
+    container start` command.
+  id: totrans-206
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在深入讨论容器和约束细节之前，我们使用`docker container create`命令创建了我们的容器。该容器只是闲置在那里，没有做任何事情。有一个配置但没有运行的进程。当我们准备启动容器时，可以使用`docker
+    container start`命令来启动。
+- en: 'Let’s say that we needed to run a copy of Redis, a common key/value store.
+    We won’t do anything with this Redis container, but it’s a lightweight, long-lived
+    process and serves as an example of something we might do in a real environment.
+    We could first create the container:'
+  id: totrans-207
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 假设我们需要运行Redis的副本，这是一个常见的键/值存储。我们不会对这个Redis容器做任何操作，但它是一个轻量级的长期运行进程，并且作为我们在实际环境中可能进行的操作的示例。我们可以首先创建容器：
+- en: '[PRE42]'
+  id: totrans-208
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE42]'
+- en: 'The result of the command is some output, the last line of which is the full
+    hash that was generated for the container. We could use that long hash to start
+    it, but if we failed to note it down, we could also list all the containers on
+    the system, whether they are running or not, using the following:'
+  id: totrans-209
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 命令的结果是一些输出，其中最后一行是为容器生成的完整哈希值。我们可以使用这个长哈希来启动它，但如果我们没有记下它，我们也可以使用以下命令列出系统上的所有容器，无论它们是否正在运行：
+- en: '[PRE43]'
+  id: totrans-210
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE43]'
+- en: 'We can confirm the identity of our container by filtering the output by the
+    image that we used and examining the container’s creation time. We can then start
+    the container with the following command:'
+  id: totrans-211
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以通过按照我们使用的镜像过滤输出并检查容器的创建时间来确认我们容器的身份。然后，我们可以使用以下命令启动容器：
+- en: '[PRE44]'
+  id: totrans-212
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE44]'
+- en: Note
+  id: totrans-213
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Most Docker commands will work with the container name, the full hash, the short
+    hash, or even just enough of the hash to make it unique. In the previous example,
+    the full hash for the container is `092c5dc850446324e…a37299d35fc67a042`, but
+    the short hash that is shown in most command output is `092c5dc85044`. This short
+    hash consists of the first 12 characters of the full hash. In the previous example,
+    running `docker container start 6b7` would have worked just fine.
+  id: totrans-214
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 大多数Docker命令将使用容器名称、完整哈希、短哈希，甚至只需要足够的哈希来使其唯一。在上一个示例中，容器的完整哈希是`092c5dc850446324e…a37299d35fc67a042`，但大多数命令输出中显示的短哈希是`092c5dc85044`。这个短哈希由完整哈希的前12个字符组成。在前一个示例中，运行`docker
+    container start 6b7`也可以正常工作。
+- en: 'That *should* have started the container, but with it running in the background
+    we won’t necessarily know if something went wrong. To verify that it’s running,
+    we can run the following:'
+  id: totrans-215
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 应该已经启动了容器，但由于其在后台运行，我们不一定知道是否出了问题。为了验证它是否在运行，我们可以运行以下命令：
+- en: '[PRE45]'
+  id: totrans-216
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE45]'
+- en: 'And, there it is: running as expected. We can tell because the status says
+    `Up` and shows how long the container has been running.'
+  id: totrans-217
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后，就是它：如预期运行。我们可以通过状态显示 `Up` 以及容器运行的时间长短来判断。
+- en: Auto-Restarting a Container
+  id: totrans-218
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 自动重新启动容器
+- en: In many cases, we want our containers to restart if they exit. Some containers
+    are very short-lived and come and go quickly. But for production applications,
+    for instance, you expect them to be up and running at all times after you’ve told
+    them to run. If you are running a more complex system, a scheduler may do this
+    for you.
+  id: totrans-219
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在许多情况下，我们希望容器在退出后重新启动。某些容器生命周期非常短暂，快速启动和停止。但是对于生产应用程序来说，例如，您希望告诉它们运行后始终处于运行状态。如果您运行的是更复杂的系统，调度程序可能会为您执行此操作。
+- en: 'In the simple case, we can tell Docker to manage restarts on our behalf by
+    passing the `--restart` argument to the `docker container run` command. It takes
+    four values: `no`, `always`, `on-failure`, or `unless-stopped`. If `restart` is
+    set to `no`, the container will never restart if it exits. If it is set to `always`,
+    the container will restart whenever it exits, with no regard to the exit code.
+    If `restart` is set to `on-failure`, whenever the container exits with a nonzero
+    exit code, Docker will try to restart the container. If we set `restart` to `on-failure:3`,
+    Docker will try and restart the container three times before giving up. `unless-stopped`
+    is the most common choice and will restart the container unless it is intentionally
+    stopped with something like `docker container stop`.'
+  id: totrans-220
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在简单情况下，我们可以通过将 `--restart` 参数传递给 `docker container run` 命令来告诉 Docker 代表我们管理重启。它接受四个值：`no`、`always`、`on-failure`
+    或 `unless-stopped`。如果将 `restart` 设置为 `no`，则容器在退出后永远不会重新启动。如果设置为 `always`，则容器在退出时将无条件重新启动，不考虑退出代码。如果
+    `restart` 设置为 `on-failure`，则每当容器以非零退出代码退出时，Docker 将尝试重新启动容器。如果将 `restart` 设置为
+    `on-failure:3`，Docker 将尝试在放弃之前重新启动容器三次。`unless-stopped` 是最常见的选择，除非通过像 `docker
+    container stop` 这样的方式明确停止容器，否则将重新启动容器。
+- en: 'We can see this in action by rerunning our last memory-constrained stress container
+    without the `--rm` argument but with the `--restart` argument:'
+  id: totrans-221
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以通过重新运行上次的内存受限压力容器（不带 `--rm` 参数，但带 `--restart` 参数）来实现此目的：
+- en: '[PRE46]'
+  id: totrans-222
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE46]'
+- en: 'In this example, we’ll see the output from the first run appear on the console
+    before it dies. If we run a `docker container ls` immediately after the container
+    dies, we’ll likely see that Docker has restarted the container:'
+  id: totrans-223
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这个示例中，我们将看到第一次运行的输出在控制台上出现后再消失。如果容器死掉后立即运行 `docker container ls`，我们很可能会看到 Docker
+    已经重新启动了容器：
+- en: '[PRE47]'
+  id: totrans-224
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE47]'
+- en: It will continue to fail because we haven’t given it enough memory to function
+    properly. After three attempts, Docker will give up, and we’ll see the container
+    disappear from the output of `docker container ls`.
+  id: totrans-225
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 它将继续失败，因为我们没有为其提供足够的内存以正确运行。经过三次尝试后，Docker 将放弃，我们将看到 `docker container ls` 输出中的容器消失。
+- en: Stopping a Container
+  id: totrans-226
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 停止容器
+- en: 'Containers can be stopped and started at will. You might think that starting
+    and stopping a container is analogous to pausing and resuming a normal process,
+    but it’s not quite the same in reality. When stopped, the process is not paused;
+    it exits. And when a container is stopped, it no longer shows up in the normal
+    `docker container ls` output. On reboot, Docker will attempt to start all of the
+    containers that were running at shutdown. If you need to prevent a container from
+    doing any additional work, without actually stopping the process, then you can
+    pause the Linux container with `docker container pause` and `unpause`, which will
+    be discussed in more detail later. For now, go ahead and stop the Redis container
+    that we started a little earlier:'
+  id: totrans-227
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 容器可以随时停止和启动。您可能会认为启动和停止容器类似于暂停和恢复正常进程，但实际上并非完全相同。停止时，进程不是暂停状态，而是退出状态。当容器停止时，它将不再显示在正常的
+    `docker container ls` 输出中。在重新启动时，Docker 将尝试启动关闭时运行的所有容器。如果需要阻止容器继续执行任何额外工作而不实际停止进程，则可以使用
+    `docker container pause` 和 `unpause` 暂停 Linux 容器，稍后将更详细地讨论。现在，让我们停止一下之前启动的 Redis
+    容器：
+- en: '[PRE48]'
+  id: totrans-228
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE48]'
+- en: 'Now that we have stopped the container, nothing is in the running container
+    list! We can start it back up with the container ID, but it would be inconvenient
+    to have to remember that. So `docker container ls` has an additional option `(-a)`
+    to show all containers, not just the running ones:'
+  id: totrans-229
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在我们已经停止了容器，在运行的容器列表中什么都没有了！我们可以通过容器 ID 将其重新启动，但记住这点会很不方便。因此，`docker container
+    ls` 还有一个附加选项 `(-a)`，显示所有容器，而不仅仅是运行中的容器：
+- en: '[PRE49]'
+  id: totrans-230
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE49]'
+- en: 'That `STATUS` field now shows that our container exited with a status code
+    of 0 (no errors). We can start it back up with the same configuration it had before:'
+  id: totrans-231
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在`STATUS`字段显示我们的容器以状态码0（无错误）退出。我们可以使用相同的配置重新启动它：
+- en: '[PRE50]'
+  id: totrans-232
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE50]'
+- en: Voilà, our container is back up and running and configured just as it was before.
+  id: totrans-233
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 啊，我们的容器已经重新启动并配置好了，就像之前一样。
+- en: Note
+  id: totrans-234
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: Remember that containers exist as a blob of configuration in the Docker system
+    even when they are not started. This means that as long as the container has not
+    been deleted, you can restart it without needing to re-create it. Although memory
+    and temporary file system (tmpfs) contents will have been lost, all of the container’s
+    other filesystem contents and metadata, including environment variables and port
+    bindings, are saved and will still be in place when you restart the container.
+  id: totrans-235
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请记住，即使未启动，容器作为Docker系统中的一块配置存在。这意味着只要容器未被删除，您可以重新启动它而无需重新创建它。尽管内存和临时文件系统（tmpfs）内容已丢失，但容器的所有其他文件系统内容和元数据，包括环境变量和端口绑定，在重新启动容器时仍然保存并将保持不变。
+- en: By now we’ve probably thumped on enough about the idea that containers are just
+    a tree of processes that interact with the system in essentially the same way
+    as any other process on the server. But it’s important to point it out here again
+    because it means that we can send Unix signals to our process in the containers
+    that they can then respond to. In the previous `docker container stop` example,
+    we’re sending the container a `SIGTERM` signal and waiting for the container to
+    exit gracefully. Containers follow the same process group signal propagation that
+    any other process group would receive on Linux.
+  id: totrans-236
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，我们可能已经大谈特谈过容器只是与服务器上的任何其他进程基本相同地交互的进程树的概念。但在这里再次指出这一点是很重要的，因为这意味着我们可以向容器中的进程发送Unix信号，然后它们可以响应。在前面的`docker
+    container stop`示例中，我们发送给容器一个`SIGTERM`信号，并等待容器正常退出。容器遵循与Linux上任何其他进程组接收到的相同的进程组信号传播。
+- en: 'A normal `docker container stop` sends a `SIGTERM` to the process. If you want
+    to force a container to be killed if it hasn’t stopped after a certain amount
+    of time, you can use the `-t` argument, like this:'
+  id: totrans-237
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 正常情况下，`docker container stop`会发送`SIGTERM`给进程。如果你想在一定时间后强制终止容器，可以使用`-t`参数，像这样：
+- en: '[PRE51]'
+  id: totrans-238
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE51]'
+- en: This tells Docker to initially send a `SIGTERM` signal as before, but if the
+    container has not stopped within 25 seconds (the default is 10), it tells Docker
+    to send a `SIGKILL` signal to forcefully kill it.
+  id: totrans-239
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这告诉Docker首先像以前一样发送`SIGTERM`信号，但如果容器在25秒内未停止（默认为10秒），则告诉Docker发送`SIGKILL`信号来强制终止它。
+- en: Although `stop` is the best way to shut down your containers, there are times
+    when it doesn’t work and you’ll need to forcefully kill a container, just as you
+    might have to do with any process outside of a container.
+  id: totrans-240
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尽管`stop`是关闭容器的最佳方式，但有时它不起作用，你需要强制结束容器，就像你可能需要对容器外的任何进程做的那样。
+- en: Killing a Container
+  id: totrans-241
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 终止容器
+- en: When a process is misbehaving, `docker container stop` might not cut it. You
+    might just want the container to exit immediately.
+  id: totrans-242
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当一个进程表现不良时，`docker container stop`可能无法解决问题。你可能希望容器立即退出。
+- en: 'In these circumstances, you can use `docker container kill`. As you’d expect,
+    it looks a lot like `docker container stop`:'
+  id: totrans-243
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在这些情况下，您可以使用`docker container kill`。正如您所期望的那样，它看起来与`docker container stop`非常相似：
+- en: '[PRE52]'
+  id: totrans-244
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE52]'
+- en: 'A `docker container ls` command now shows that the container is no longer running,
+    as expected:'
+  id: totrans-245
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，`docker container ls`命令显示容器已停止运行，正如预期的那样：
+- en: '[PRE53]'
+  id: totrans-246
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE53]'
+- en: 'Just because it was killed rather than stopped does not mean you can’t start
+    it again, though. You can just issue a `docker container start` like you would
+    for a nicely stopped container. Sometimes you might want to send another signal
+    to a container, one that is not `stop` or `kill`. Like the Linux `kill` command,
+    `docker container kill` supports sending any Unix signal. Let’s say we wanted
+    to send a `USR1` signal to our container to tell it to do something like reconnect
+    a remote logging session. We could do the following:'
+  id: totrans-247
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 只因为它被杀死而不是停止，并不意味着你不能再次启动它。你可以像对待一个正常停止的容器一样，发出`docker container start`命令。有时候，你可能想向容器发送另一个信号，而不是`stop`或`kill`。与Linux的`kill`命令一样，`docker
+    container kill`支持发送任何Unix信号。假设我们想发送一个`USR1`信号给我们的容器，告诉它执行一些像重新连接远程日志会话之类的操作。我们可以这样做：
+- en: '[PRE54]'
+  id: totrans-248
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE54]'
+- en: If our container process was designed to do something with the `USR1` signal,
+    it would now do it. Any standard Unix signal can be sent to a container using
+    this method.
+  id: totrans-249
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果我们的容器进程设计为使用`USR1`信号执行某些操作，现在将执行该操作。可以使用此方法向容器发送任何标准Unix信号。
+- en: Pausing and Unpausing a Container
+  id: totrans-250
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 暂停和取消暂停容器
+- en: There are a few reasons why we might not want to completely stop our container.
+    We might want to pause it, leave its resources allocated, and leave its entries
+    in the process table. That could be because we’re taking a snapshot of its filesystem
+    to create a new image or just because we need some CPU on the host for a while.
+    If you are used to normal Unix process handling, you might wonder how this works
+    since containerized processes are just processes.
+  id: totrans-251
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有几个原因可能不希望完全停止容器。我们可能希望将其暂停，保留其分配的资源，并在进程表中保留其条目。这可能是因为我们正在对其文件系统进行快照以创建新镜像，或者只是因为我们需要主机上一些CPU一段时间。如果您习惯于正常的Unix进程处理方式，您可能会想知道这是如何工作的，因为容器化的进程只是进程。
+- en: 'Pausing leverages the [cgroup freezer](https://www.kernel.org/doc/Documentation/cgroup-v1/freezer-subsystem.txt),
+    which essentially just prevents your process from being scheduled until you unfreeze
+    it. This will prevent the container from doing anything while maintaining its
+    overall state, including memory contents. Unlike stopping a container, where the
+    processes are made aware that they are stopping via the `SIGSTOP` signal, pausing
+    a container doesn’t send any information to the container about its state change.
+    That’s an important distinction. Several Docker commands use pausing and unpausing
+    internally as well. Here is how we pause a container:'
+  id: totrans-252
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 暂停利用[cgroup freezer](https://www.kernel.org/doc/Documentation/cgroup-v1/freezer-subsystem.txt)，基本上只是阻止进程被调度，直到您取消冻结。这将防止容器执行任何操作，同时保持其整体状态，包括内存内容。与停止容器不同，停止时进程会通过`SIGSTOP`信号得知它们正在停止，而暂停容器不会向容器发送任何关于其状态变化的信息。这是一个重要的区别。几个Docker命令也会在内部使用暂停和取消暂停。以下是如何暂停容器：
+- en: '[PRE55]'
+  id: totrans-253
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE55]'
+- en: Note
+  id: totrans-254
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: To pause and unpause containers in Windows, you must be using Hyper-V or WSL2
+    as the underlying virtualization technology.
+  id: totrans-255
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 若要在Windows中暂停和取消暂停容器，必须使用Hyper-V或WSL2作为底层虚拟化技术。
+- en: 'If we look at the list of running containers, we will now see that the Redis
+    container status is listed as `(Paused)`:'
+  id: totrans-256
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果查看正在运行的容器列表，现在可以看到Redis容器状态显示为`(Paused)`：
+- en: '[PRE56]'
+  id: totrans-257
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE56]'
+- en: 'Attempting to use the container in this paused state would fail. It’s present,
+    but nothing is running. We can now resume the container by using the `docker container
+    unpause` command:'
+  id: totrans-258
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 尝试在此暂停状态下使用容器将失败。它存在，但没有任何运行中的内容。现在我们可以使用`docker container unpause`命令恢复容器：
+- en: '[PRE57]'
+  id: totrans-259
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE57]'
+- en: It’s back to running, and `docker container ls` correctly reflects the new state.
+    It shows `Up 55 seconds` now because Docker still considers the container to be
+    running even when it is paused.
+  id: totrans-260
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在恢复运行，并且`docker container ls`正确地反映了新状态。现在它显示`Up 55 seconds`，因为即使容器处于暂停状态，Docker仍然认为它在运行。
+- en: Cleaning Up Containers and Images
+  id: totrans-261
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 清理容器和镜像
+- en: After running all these commands to build images, create containers, and run
+    them, we have accumulated a lot of image layers and container folders on our system.
+  id: totrans-262
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在运行所有这些命令来构建镜像、创建容器并运行它们之后，我们在系统上积累了大量的镜像层和容器文件夹。
+- en: 'We can list all the containers on our system using the `docker container ls
+    -a` command and then delete any of the containers in the list. We must stop all
+    containers that are using an image before removing the image itself. Assuming
+    we’ve done that, we can remove it as follows, using the `docker container rm`
+    command:'
+  id: totrans-263
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以使用`docker container ls -a`命令列出系统上的所有容器，然后删除列表中的任何容器。在删除镜像本身之前，必须停止使用该镜像的所有容器。假设我们已经完成了这些操作，可以使用`docker
+    container rm`命令删除它：
+- en: '[PRE58]'
+  id: totrans-264
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE58]'
+- en: Note
+  id: totrans-265
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: It is possible to remove a running container if you use the `-f` or `--force`
+    flag with `docker container rm`.
+  id: totrans-266
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 使用`docker container rm`命令和`-f`或`--force`标志可以删除正在运行的容器。
+- en: 'We can then list all the images on our system using the following:'
+  id: totrans-267
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以通过以下方式列出系统上的所有镜像：
+- en: '[PRE59]'
+  id: totrans-268
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE59]'
+- en: 'We can then delete an image and all associated filesystem layers by running
+    the following:'
+  id: totrans-269
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 然后，我们可以通过运行以下命令来删除一个镜像及其所有相关的文件系统层：
+- en: '[PRE60]'
+  id: totrans-270
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE60]'
+- en: Warning
+  id: totrans-271
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: If you try to delete an image that is in use by a container, you will get a
+    `Conflict, cannot delete` error. You should stop and delete the container(s) first.
+  id: totrans-272
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果尝试删除正在容器中使用的镜像，将会收到`Conflict, cannot delete`错误。您应该先停止和删除容器。
+- en: 'There are times, especially during development cycles when it makes sense to
+    completely purge all the images or containers from your system. The easiest way
+    to do this is by running the `docker system prune` command:'
+  id: totrans-273
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 有时，在开发周期中特别是在完全清除系统中所有镜像或容器时，这是有意义的。运行 `docker system prune` 命令是最简单的方法：
+- en: '[PRE61]'
+  id: totrans-274
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE61]'
+- en: Tip
+  id: totrans-275
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: To remove all unused images, instead of only dangling images, try `docker system
+    prune -a`.
+  id: totrans-276
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 若要删除所有未使用的镜像，而不仅仅是悬空的镜像，请尝试 `docker system prune -a`。
+- en: It is also possible to craft more specific commands to accomplish similar goals.
+  id: totrans-277
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 也可以编写更具体的命令来实现类似的目标。
+- en: 'To delete all of the containers on your Docker hosts, use the following command:'
+  id: totrans-278
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 若要删除 Docker 主机上的所有容器，请使用以下命令：
+- en: '[PRE62]'
+  id: totrans-279
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE62]'
+- en: 'And to delete all the images on your Docker host, this command will get the
+    job done:'
+  id: totrans-280
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要删除 Docker 主机上的所有镜像，可以使用以下命令完成任务：
+- en: '[PRE63]'
+  id: totrans-281
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE63]'
+- en: The `docker container ls` and `docker images` commands both support a `filter`
+    argument that can make it easy to fine-tune your delete commands for certain circumstances.
+  id: totrans-282
+  prefs: []
+  type: TYPE_NORMAL
+  zh: '`docker container ls` 和 `docker images` 命令都支持 `filter` 参数，可以轻松调整删除命令以适应特定情况。'
+- en: 'To remove all containers that exited with a nonzero state, you can use this
+    filter:'
+  id: totrans-283
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 若要删除所有退出状态为非零的容器，可以使用此过滤器：
+- en: '[PRE64]'
+  id: totrans-284
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE64]'
+- en: 'And to remove all untagged images, you can type this:'
+  id: totrans-285
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 若要删除所有未标记的镜像，可以键入以下内容：
+- en: '[PRE65]'
+  id: totrans-286
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE65]'
+- en: Note
+  id: totrans-287
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: You can read the [official Docker documentation](https://docs.docker.com/engine/reference/commandline/ps/#filtering)
+    to explore the filtering options. At the moment, there are very few filters to
+    choose from, but more will likely be added over time.
+  id: totrans-288
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您可以阅读 [官方 Docker 文档](https://docs.docker.com/engine/reference/commandline/ps/#filtering)
+    来探索过滤选项。目前，可以选择的过滤器非常少，但随着时间的推移可能会增加更多过滤器。
+- en: You can also make your own very creative filters by stringing together commands
+    using pipes (|) and other similar techniques.
+  id: totrans-289
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您还可以通过使用管道（|）和其他类似技术将命令串联起来，制作自己非常创造性的过滤器。
+- en: In production systems that see a lot of deployments, you can sometimes end up
+    with old containers or unused images lying around and filling up disk space. It
+    can be useful to script the `docker system prune` command to run on a schedule
+    (e.g., running under `cron` or via a `systemd` timer).
+  id: totrans-290
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在经常部署的生产系统中，有时会出现旧容器或未使用的镜像仍然存在并占用磁盘空间的情况。将 `docker system prune` 命令脚本化以按计划运行（例如在
+    `cron` 下运行或通过 `systemd` 定时器运行）可能会很有用。
+- en: Windows Containers
+  id: totrans-291
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: Windows 容器
+- en: Up to now we have focused entirely on Docker commands for Linux containers,
+    since this is the most common use case and works on all Docker platforms. However,
+    since 2016, the Microsoft Windows platform has supported running Windows containers
+    that include native Windows applications and can be managed with the usual set
+    of Docker commands.
+  id: totrans-292
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 到目前为止，我们完全专注于 Linux 容器的 Docker 命令，因为这是最常见的用例，并在所有 Docker 平台上都能工作。然而，自 2016 年以来，Microsoft
+    Windows 平台已经支持运行包括本机 Windows 应用程序的 Windows 容器，并可以通过常规的 Docker 命令集进行管理。
+- en: Windows containers are not the focus of this book, since they still only make
+    up a small portion of production containers and aren’t 100% compatible with the
+    rest of the Docker ecosystem because they require Windows-specific container images.
+    However, they’re a growing and important part of the Docker world, so we’ll take
+    a brief look at how they work. In fact, except for the actual contents of the
+    containers, almost everything else works the same as Linux containers. In this
+    section, we’ll run through a quick example of how you can run a Windows container
+    on Windows 10+ with Hyper-V and Docker.
+  id: totrans-293
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 本书不专注于 Windows 容器，因为它们在生产容器中仍然只占很小一部分，并且与 Docker 生态系统的其他部分不完全兼容，因为它们需要 Windows
+    特定的容器映像。然而，它们是 Docker 世界中增长和重要的一部分，所以我们将简要介绍它们的工作原理。事实上，除了容器的实际内容之外，几乎所有其他内容都与
+    Linux 容器相同。在本节中，我们将快速演示如何在 Windows 10+ 上通过 Hyper-V 和 Docker 运行 Windows 容器的示例。
+- en: Tip
+  id: totrans-294
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: For this to work, you must be using Docker Desktop on a compatible 64-bit edition
+    of Windows 10 or later.
+  id: totrans-295
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 要使此功能正常工作，您必须在兼容的 64 位版 Windows 10 或更高版本上使用 Docker Desktop。
+- en: The first thing you’ll need to do is switch Docker from Linux containers to
+    Windows containers. To do this, right-click on the Docker whale icon in your taskbar,
+    select “Switch to Windows Containers…,” and then confirm the switch (Figures [5-1](#figure5-1)
+    and [5-2](#figure5-2)).
+  id: totrans-296
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 您需要做的第一件事是将 Docker 从 Linux 容器切换到 Windows 容器。为此，请右键单击任务栏中的 Docker 鲸鱼图标，选择“切换到
+    Windows 容器…”，然后确认切换（见图 [5-1](#figure5-1) 和 [5-2](#figure5-2)）。
+- en: '![Switch to Windows containers](assets/dur3_0501.png)'
+  id: totrans-297
+  prefs: []
+  type: TYPE_IMG
+  zh: '![切换到 Windows 容器](assets/dur3_0501.png)'
+- en: Figure 5-1\. Switch to Windows containers
+  id: totrans-298
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-1\. 切换到 Windows 容器
+- en: '![Switch to Windows containers confirmation](assets/dur3_0502.png)'
+  id: totrans-299
+  prefs: []
+  type: TYPE_IMG
+  zh: '![切换到 Windows 容器确认](assets/dur3_0502.png)'
+- en: Figure 5-2\. Switch to Windows containers confirmation
+  id: totrans-300
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 图 5-2\. 切换到 Windows 容器确认
+- en: This process might take some time, although it usually happens almost immediately.
+    Unfortunately, there is no notification that the switch has completed. If you
+    right-click on the Docker icon again, you should now see “Switch to Linux Containers…”
+    in place of the original option.
+  id: totrans-301
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这个过程可能需要一些时间，尽管通常几乎是立即完成的。不幸的是，没有通知显示切换已完成。如果再次右键单击 Docker 图标，现在应该看到“切换到 Linux
+    容器…”替换了原始选项。
+- en: Note
+  id: totrans-302
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: If the first time you right-click on the Docker icon, it reads “Switch to Linux
+    Containers…,” then you are already configured for Windows containers.
+  id: totrans-303
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果第一次右键单击 Docker 图标时，它显示“切换到 Linux 容器…”，那么你已经配置为 Windows 容器。
+- en: 'We can test a simple Windows container by opening up [PowerShell](https://oreil.ly/SiTXP)^([4](ch05.html#idm46803145899968))
+    and trying to run the following command:'
+  id: totrans-304
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 我们可以通过打开 [PowerShell](https://oreil.ly/SiTXP)^([4](ch05.html#idm46803145899968))
+    并尝试运行以下命令来测试一个简单的 Windows 容器：
+- en: '[PRE66]'
+  id: totrans-305
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE66]'
+- en: This will download and launch a [base container for PowerShell](https://hub.docker.com/_/microsoft-powershell)
+    and then use scripting to print `Hello World from Windows (True)` to the screen.
+  id: totrans-306
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 这将下载并启动一个 [PowerShell 基础容器](https://hub.docker.com/_/microsoft-powershell)，然后使用脚本打印
+    `Hello World from Windows (True)` 到屏幕上。
+- en: Note
+  id: totrans-307
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 注意
+- en: If the output from the preceding command prints `Hello World from Windows (false)`,
+    then you have not switched over to Windows Container mode, or you are running
+    this command on a non-Windows platform.
+  id: totrans-308
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果前面命令的输出打印 `Hello World from Windows (false)`，那么你还没有切换到 Windows 容器模式，或者你正在非
+    Windows 平台上运行此命令。
+- en: 'If you want to build a Windows container image that accomplishes roughly the
+    same task, you can create the following *Dockerfile*:'
+  id: totrans-309
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果你想构建一个完成大致相同任务的 Windows 容器镜像，可以创建以下的 *Dockerfile*：
+- en: '[PRE67]'
+  id: totrans-310
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE67]'
+- en: When you build this *Dockerfile*, it will base the image on `mcr.microsoft.com/`
+    `powershell`, create a small PowerShell script, and then configure the image to
+    run that script when this image is used to launch a container.
+  id: totrans-311
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 当你构建这个 *Dockerfile* 时，它将基于 `mcr.microsoft.com/` `powershell` 创建镜像，创建一个小的 PowerShell
+    脚本，然后配置镜像以在启动容器时运行该脚本。
+- en: Warning
+  id: totrans-312
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 警告
+- en: You may have noticed that we had to escape the backslash (`\`) with an additional
+    backslash in the preceding *Dockerfile*’s `CMD` line. This is because Docker has
+    its roots in Unix, and the backslash has a special meaning in Unix shells. So,
+    even though we [changed the escape character](https://docs.docker.com/engine/reference/builder/#escape)
+    for the *Dockerfile* to match what is used in PowerShell by default (which we
+    set via [the `SHELL` directive](https://docs.docker.com/engine/reference/builder/#shell-form-entrypoint-example)),
+    we still need to escape some backslashes to ensure that Docker does not misinterpret
+    them.
+  id: totrans-313
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 你可能注意到，在前述 *Dockerfile* 的 `CMD` 行中，我们不得不用额外的反斜杠（`\`）转义反斜杠。这是因为 Docker 的根源是 Unix，而反斜杠在
+    Unix shell 中有特殊意义。因此，尽管我们已经通过 [SHELL 指令](https://docs.docker.com/engine/reference/builder/#shell-form-entrypoint-example)
+    将 *Dockerfile* 的转义字符设置为与 PowerShell 默认使用的相匹配的字符，我们仍然需要转义一些反斜杠，以确保 Docker 不会误解它们。
+- en: 'If you build this *Dockerfile* now, you’ll see something similar to this:'
+  id: totrans-314
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 如果现在构建这个 *Dockerfile*，你会看到类似于这样的结果：
+- en: '[PRE68]'
+  id: totrans-315
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE68]'
+- en: 'And now if you run the resulting image, you’ll see this:'
+  id: totrans-316
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 现在，如果你运行生成的镜像，你会看到这个：
+- en: '[PRE69]'
+  id: totrans-317
+  prefs: []
+  type: TYPE_PRE
+  zh: '[PRE69]'
+- en: Microsoft maintains good [documentation about Windows containers](https://oreil.ly/fYMHl)^([5](ch05.html#idm46803145707776))
+    that also includes an [example of building a container that launches a .NET application](https://oreil.ly/WG2W2).^([6](ch05.html#idm46803145685248))
+  id: totrans-318
+  prefs: []
+  type: TYPE_NORMAL
+  zh: Microsoft 维护了关于 [Windows 容器的良好文档](https://oreil.ly/fYMHl)^([5](ch05.html#idm46803145707776))，其中还包括一个
+    [构建启动 .NET 应用程序容器的示例](https://oreil.ly/WG2W2).^([6](ch05.html#idm46803145685248))
+- en: Tip
+  id: totrans-319
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 提示
+- en: On the Windows platform, it is also useful to know that you can get improved
+    isolation for your container by launching it inside a dedicated and very lightweight
+    Hyper-V VM. You can do this very easily by simply adding the `--isolation=hyperv`
+    option to your `docker container create` and `docker container run` commands.
+    There is a small performance and resource penalty for this, but it significantly
+    improves the isolation of your container. You can read more about this in the
+    [documentation](https://learn.microsoft.com/en-us/virtualization/windowscontainers/manage-containers/hyperv-container).
+  id: totrans-320
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在 Windows 平台上，还需要了解，通过在专用且非常轻量级的 Hyper-V VM 内启动容器，可以获得改进的隔离性。你只需简单地在 `docker
+    container create` 和 `docker container run` 命令中添加 `--isolation=hyperv` 选项即可完成此操作。尽管这样做会稍微降低性能和资源效率，但显著提高了容器的隔离性。你可以在[文档](https://learn.microsoft.com/en-us/virtualization/windowscontainers/manage-containers/hyperv-container)中了解更多详情。
+- en: Even if you plan to mostly work with Windows containers, for the rest of the
+    book you should switch back to Linux containers so that all the examples work
+    as expected. When you are done reading and are ready to dive into building your
+    containers, you can always switch back.
+  id: totrans-321
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 即使你计划主要使用 Windows 容器，在本书的其余部分中，为了确保所有示例的正常运行，请切换回 Linux 容器。阅读完毕并准备好开始构建容器后，你随时可以再次切换回来。
+- en: Tip
+  id: totrans-322
+  prefs:
+  - PREF_H6
+  type: TYPE_NORMAL
+  zh: 小贴士
+- en: Remember that you can re-enable Linux containers by right-clicking on the Docker
+    icon and selecting “Switch to Linux Containers….”
+  id: totrans-323
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 请记住，你可以右键点击 Docker 图标，然后选择“切换到 Linux 容器…”来重新启用 Linux 容器。
+- en: Wrap-Up
+  id: totrans-324
+  prefs:
+  - PREF_H1
+  type: TYPE_NORMAL
+  zh: 总结
+- en: In the next chapter, we’ll continue our exploration of what Docker brings to
+    the table. For now, it’s probably worth doing a little experimentation on your
+    own. We suggest exercising some of the container control commands we covered here
+    so that you’re familiar with the command-line options and the overall syntax.
+    Now would even be a great time to try to design and build a small image and then
+    launch it as a new container. When you are ready to continue, head on to [Chapter 6](ch06.html#exploring_docker)!
+  id: totrans-325
+  prefs: []
+  type: TYPE_NORMAL
+  zh: 在下一章中，我们将继续探讨 Docker 带来的内容。目前，值得进行一些自己的实验。我们建议你练习一些我们在这里介绍的容器控制命令，以便熟悉命令行选项和整体语法。现在是一个很好的时机，尝试设计和构建一个小镜像，然后将其作为新容器启动。当你准备好继续时，请前往[第
+    6 章](ch06.html#exploring_docker)！
+- en: ^([1](ch05.html#idm46803149032576-marker)) SELinux is one current implementation.
+  id: totrans-326
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([1](ch05.html#idm46803149032576-marker)) SELinux 是当前的一种实现方式。
+- en: ^([2](ch05.html#idm46803148782320-marker)) Typically under */var/lib/docker/containers*.
+  id: totrans-327
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([2](ch05.html#idm46803148782320-marker)) 通常位于 */var/lib/docker/containers*
+    下。
+- en: '^([3](ch05.html#idm46803147988272-marker)) Full URL: [*https://docs.docker.com/engine/install/linux-postinstall/#your-kernel-does-not-support-cgroup-swap-limit-capabilities*](https://docs.docker.com/engine/install/linux-postinstall/#your-kernel-does-not-support-cgroup-swap-limit-capabilities)'
+  id: totrans-328
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([3](ch05.html#idm46803147988272-marker)) 完整网址：[*https://docs.docker.com/engine/install/linux-postinstall/#your-kernel-does-not-support-cgroup-swap-limit-capabilities*](https://docs.docker.com/engine/install/linux-postinstall/#your-kernel-does-not-support-cgroup-swap-limit-capabilities)
+- en: '^([4](ch05.html#idm46803145899968-marker)) Full URL: [*https://learn.microsoft.com/en-us/powershell/scripting/overview?view=powershell-7.3&viewFallbackFrom=powershell-6*](https://learn.microsoft.com/en-us/powershell/scripting/overview?view=powershell-7.3&viewFallbackFrom=powershell-6)'
+  id: totrans-329
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([4](ch05.html#idm46803145899968-marker)) 完整网址：[*https://learn.microsoft.com/en-us/powershell/scripting/overview?view=powershell-7.3&viewFallbackFrom=powershell-6*](https://learn.microsoft.com/en-us/powershell/scripting/overview?view=powershell-7.3&viewFallbackFrom=powershell-6)
+- en: '^([5](ch05.html#idm46803145707776-marker)) Full URL: [*https://learn.microsoft.com/en-us/virtualization/windowscontainers/about*](https://learn.microsoft.com/en-us/virtualization/windowscontainers/about)'
+  id: totrans-330
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([5](ch05.html#idm46803145707776-marker)) 完整网址：[*https://learn.microsoft.com/en-us/virtualization/windowscontainers/about*](https://learn.microsoft.com/en-us/virtualization/windowscontainers/about)
+- en: '^([6](ch05.html#idm46803145685248-marker)) Full URL: [*https://learn.microsoft.com/en-us/virtualization/windowscontainers/quick-start/building-sample-app*](https://learn.microsoft.com/en-us/virtualization/windowscontainers/quick-start/building-sample-app)'
+  id: totrans-331
+  prefs: []
+  type: TYPE_NORMAL
+  zh: ^([6](ch05.html#idm46803145685248-marker)) 完整网址：[*https://learn.microsoft.com/en-us/virtualization/windowscontainers/quick-start/building-sample-app*](https://learn.microsoft.com/en-us/virtualization/windowscontainers/quick-start/building-sample-app)
